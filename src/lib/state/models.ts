@@ -27,6 +27,8 @@ const permOpts = [
 // ★ 这句话必须**自足**：它长在模型下拉里，别再写「见下方警告」——下面那个红框已经撤了，
 //   指过去就是指向空气（这坑踩过一次）。
 export const CODEX_SSH_NOTE = '拦不住它绕开 Pilot 的确认卡';
+/** GitHub 仓库会话里用 Codex：它没有逐命令确认，推送 / 提 PR 等对外操作会直接执行。 */
+export const CODEX_GITHUB_NOTE = 'Codex 不支持逐条确认：在这个仓库里推送分支、提 PR 等操作不会弹窗，会直接执行。要每一步都先问你，请改用 Claude 或 Grok。';
 export function isCodexSsh(b: string, ssh: boolean): boolean { return ssh && b === 'codex'; }
 
 // 权限档位按风险给下拉文字上色：自动=警告色、全自动(全程不拦)=危险色，计划/询问保持中性。

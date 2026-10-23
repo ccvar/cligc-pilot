@@ -13,7 +13,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
-  import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive } from '$lib/state/models';
+  import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
   import { permits, permitDesc, togglePermitCmd, respondPermit } from '$lib/state/permits.svelte.js';
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
@@ -389,10 +389,12 @@
         </div>
       </div>
     </div>
+    {#if meta.conn?.kind==='github' && activeConv?.brain==='codex'}<p class="gh-codex-note">{CODEX_GITHUB_NOTE}</p>{/if}
   </div>
 {/snippet}
 
 <style>
+  .gh-codex-note{margin:6px 4px 0;color:var(--warn);font-size:11.5px;line-height:1.5}
   .pane-close{position:static;flex:none;align-self:center}
   .thread-head.conversation-thread-head{align-items:center}
   .thread-head.multi{padding:7px 16px;min-height:38px;align-items:center}

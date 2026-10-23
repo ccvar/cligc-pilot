@@ -11,7 +11,7 @@
   import { launcher, STYLE_OPTS, chooseWorkspaceFolder, workspaceFolderName, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
   import { autogrow, composer, onComposerKey } from '$lib/state/composer.svelte.js';
   import { startChat } from '$lib/state/turns.svelte.js';
-  import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint } from '$lib/state/models';
+  import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint, CODEX_GITHUB_NOTE } from '$lib/state/models';
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -69,6 +69,7 @@
     {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
     {#if app.isWorkspaceChat && app.brains && !app.anyBrainUsable}<CliGuide />{/if}
     {#if app.isCfConn && app.brains?.wrangler && !app.brains.wrangler.found}<WranglerNote />{/if}
+    {#if app.isGhConn && launcher.lBrain === 'codex'}<p class="hint warn-text">{CODEX_GITHUB_NOTE}</p>{/if}
     {#if app.isGhConn && gh.reposErr}<p class="hint warn-text">读取仓库失败：{gh.reposErr} <button class="link-btn" type="button" onclick={() => app.activeConnId && loadGhRepos(app.activeConnId, true)}>重试</button></p>{/if}
     {#if app.isGhConn && launcher.lSite && gh.repos.find((r) => r.full_name === launcher.lSite)?.can_push === false}<p class="hint">这枚 Token 对该仓库只有读权限：可以读代码、在本地改，但推不了分支、提不了 PR。</p>{/if}
   </div>
