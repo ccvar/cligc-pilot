@@ -206,9 +206,12 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
 }
 
 #[tauri::command]
-pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>) -> Result<LaunchStatus, String> {
+/// `probe=false` 只读当前状态（快，打开页面先用它）；默认会按域名去已连接账号里找资源（较慢，有 10 分钟节流）；
+/// `force=true` 是手动刷新，不受节流。
+pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
     let site = state.sites.get(&id)?;
-    let (auto_bound, probe_errs) = probe_bindings(&state, &site, force.unwrap_or(false)).await;
+    let force = force.unwrap_or(false);
+    let (auto_bound, probe_errs) = if force || probe.unwrap_or(true) { probe_bindings(&state, &site, force).await } else { (Vec::new(), Vec::new()) };
     let site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
     let mut st = LaunchStatus {
         github: site.source == "github" || !site.repo.is_empty(),

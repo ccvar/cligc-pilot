@@ -12,7 +12,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4 } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4 } from '$lib/state/launch.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { void loadLaunch(site.id); });
@@ -30,15 +30,35 @@
   $effect(() => { if (!repoName) repoName = site.deploy.project || site.name.replace(/[^a-zA-Z0-9._-]+/g, '-'); });
   const checking = $derived(!!launch.checking[site.id]);
   const manage = $derived(st?.google_manage_conn ?? '');
-  const allDone = $derived(!!st && st.github && st.pages && (st.domain_attached || !site.domain) && st.deployed && st.ga4 && st.gsc && st.indexnow);
+  const steps = $derived(st ? launchSteps(site, st) : []);
+  const doneN = $derived(steps.filter((x) => x.done).length);
+  const allDone = $derived(!!st && doneN === steps.length);
+  const next = $derived(steps.find((x) => !x.done));
+  const isOpen = $derived(launch.open.has(site.id));
 </script>
 
-{#if st && !allDone}
-  <div class="card launch">
-    <h3><Icon name="checks" />上线向导 <span class="sub">从零到可运营，每一步都由你点了才执行</span><span class="grow"></span>
-      <button class="ic-btn" onclick={() => loadLaunch(site.id, true)} disabled={checking} aria-label="重新检查" data-tip={checking ? '检查中…' : '重新检查：读取最新状态，并按域名到已连接的 Google / Bing 账号里找现成的资源绑上'}><RefreshIcon spinning={checking} /></button></h3>
-    {#each st.errors as e (e)}<p class="hint warn-text">{e}</p>{/each}
+{#if !st}
+  {#if !launch.done.has(site.id)}
+    <div class="card launch skel" aria-busy="true">
+      <div class="lhead static"><Icon name="checks" /><b>上线向导</b><span class="sub"><span class="spin"></span>检查中…</span></div>
+      <div class="bars"><i style="width:62%"></i><i style="width:38%"></i></div>
+    </div>
+  {/if}
+{:else if !allDone}
+  <div class="card launch" class:open={isOpen}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="lhead" role="button" tabindex="0" aria-expanded={isOpen} onclick={() => toggleLaunchOpen(site.id)} onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggleLaunchOpen(site.id))}>
+      <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      <Icon name="checks" /><b>上线向导</b>
+      <span class="prog"><span class="meter"><i style="width:{(doneN / steps.length) * 100}%"></i></span>{doneN}/{steps.length}</span>
+      {#if next && !isOpen}<span class="next">下一步：{next.label}</span>{:else if isOpen}<span class="sub">每一步都由你点了才执行</span>{/if}
+      <span class="grow"></span>
+      <button class="ic-btn" onclick={(e) => { e.stopPropagation(); void loadLaunch(site.id, true); }} disabled={checking} aria-label="重新检查" data-tip={checking ? '检查中…' : '重新检查：读取最新状态，并按域名到已连接的 Google / Bing 账号里找现成的资源绑上'}><RefreshIcon spinning={checking} /></button>
+    </div>
     {#if st.auto_bound?.length}<p class="ok-note">已按域名自动绑定：{st.auto_bound.join('、')}</p>{/if}
+    {#if isOpen}
+    <div class="lbody">
+    {#each st.errors as e (e)}<p class="hint warn-text">{e}</p>{/each}
 
     <div class="lstep" class:done={st.github}>
       <span class="n">{st.github ? '✓' : 1}</span>
@@ -132,13 +152,34 @@
         {#if !st.bing}<div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>去绑定</button></div>{/if}
       </div>
     </div>
+    </div>
+    {/if}
   </div>
 {/if}
 
 <style>
-  .launch { display: flex; flex-direction: column; gap: 2px; }
+  .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) both; }
+  .lhead { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: -2px -6px; padding: 2px 6px; border-radius: 8px; cursor: pointer; user-select: none; transition: background-color .12s; }
+  .lhead:not(.static):hover { background: var(--su-hover); }
+  .lhead .grow { flex: 1; }
+  .lhead.static { cursor: default; }
+  .lhead b { font-size: 13.5px; font-weight: 600; }
+  .lhead :global(.ico) { color: var(--dim); }
+  .lhead .chev { flex: none; color: var(--faint); transition: transform .16s var(--su-ease); }
+  .launch.open .lhead .chev { transform: rotate(90deg); }
+  .lhead .sub { font-size: 12px; color: var(--faint); display: inline-flex; align-items: center; gap: 6px; }
+  .prog { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .meter { width: 56px; height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s var(--su-ease); }
+  .next { font-size: 12px; color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lbody { margin-top: 8px; animation: su-in .18s var(--su-ease) both; }
+  .launch > .ok-note { margin-top: 8px; }
+  .skel .bars { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 4px 26px; }
+  .skel .bars i { display: block; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft) 25%, #f6f5f1 50%, var(--accent-soft) 75%); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  @media (prefers-reduced-motion: reduce) { .skel .bars i, .launch, .lbody { animation: none; } }
   .lstep { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
-  .lstep:first-of-type { border-top: none; }
+  .lbody > .lstep:first-of-type { border-top: none; }
   .lstep .n { width: 20px; height: 20px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--dim); margin-top: 1px; }
   .lstep.done .n { background: var(--ok); color: #fff; }
   .lb { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }

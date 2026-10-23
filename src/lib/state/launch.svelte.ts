@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { untrack } from 'svelte';
 import type { Site } from '$lib/types';
 import { app, say } from './app.svelte.js';
 import { sites, refreshSites, openSite, SITE_PREFIX } from './sites.svelte.js';
@@ -22,26 +23,68 @@ export interface LaunchStatus {
   errors: string[];
 }
 
+const DONE_KEY = 'cligc.pilot.launchDone';
+const OPEN_KEY = 'cligc.pilot.launchOpen';
+const loadSet = (k: string) => { try { return new Set<string>(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set<string>(); } };
+const saveSet = (k: string, v: Set<string>) => { try { localStorage.setItem(k, JSON.stringify([...v])); } catch { /* */ } };
+
+/** 向导的必做步骤（Bing 可选，不计入「全部完成」）。 */
+export function launchSteps(site: Site, st: LaunchStatus) {
+  const pagesStep = site.deploy.mode !== 'workers' && site.deploy.mode !== 'vps';
+  return [
+    { key: 'github', label: '代码放到 GitHub', done: st.github },
+    ...(pagesStep ? [{ key: 'pages', label: 'Cloudflare Pages 项目与域名', done: st.pages && (st.domain_attached || !site.domain) }] : []),
+    { key: 'deploy', label: '在 Pilot 里上线一次', done: st.deployed },
+    { key: 'ga4', label: 'GA4', done: st.ga4 },
+    { key: 'gsc', label: 'Search Console', done: st.gsc },
+    { key: 'indexnow', label: 'IndexNow', done: st.indexnow },
+  ];
+}
+
 class LaunchState {
   status = $state<Record<string, LaunchStatus>>({});
   busy = $state<Record<string, string>>({});
   notes = $state<Record<string, Record<string, string>>>({});
   measurement = $state<Record<string, string>>({});
   checking = $state<Record<string, boolean>>({});
+  /** 记住「已经全部完成」的站点：再打开时不先闪一下加载中的向导。 */
+  done = $state<Set<string>>(loadSet(DONE_KEY));
+  /** 展开着的向导（默认收起，只看进度和下一步）。 */
+  open = $state<Set<string>>(loadSet(OPEN_KEY));
 }
 
 export const launch = new LaunchState();
 
-/** 读向导状态。顺带按域名去已连接的 Google / Bing 账号里找资源，唯一命中就绑上（force=手动刷新，不受 10 分钟节流）。 */
+export function toggleLaunchOpen(id: string) {
+  const n = new Set(launch.open);
+  if (n.has(id)) n.delete(id); else n.add(id);
+  launch.open = n; saveSet(OPEN_KEY, n);
+}
+
+function remember(id: string, v: LaunchStatus) {
+  launch.status = { ...launch.status, [id]: v };
+  const site = sites.list.find((x) => x.id === id);
+  if (!site) return;
+  const all = launchSteps(site, v).every((x) => x.done);
+  if (all === launch.done.has(id)) return;
+  const n = new Set(launch.done);
+  if (all) n.add(id); else n.delete(id);
+  launch.done = n; saveSet(DONE_KEY, n);
+}
+
+/** 读向导状态：先只读当前状态（快），再在后台按域名去已连接的 Google / Bing 账号里找资源，
+ *  唯一命中就绑上（force=手动刷新：直接带上查找，不受 10 分钟节流）。 */
 export async function loadLaunch(id: string, force = false) {
-  if (force) launch.checking = { ...launch.checking, [id]: true };
+  // 由 $effect 调用：同步读写 checking 不能被追踪，否则写回后会再次触发，无限循环
+  untrack(() => { launch.checking = { ...launch.checking, [id]: true }; });
   try {
-    const v = await invoke<LaunchStatus>('launch_status', { id, force });
-    launch.status = { ...launch.status, [id]: v };
+    if (!force) remember(id, await invoke<LaunchStatus>('launch_status', { id, probe: false }));
+    const v = await invoke<LaunchStatus>('launch_status', { id, force, probe: true });
+    remember(id, v);
     if (v.auto_bound?.length) { await refreshSites(); say(`已按域名绑定：${v.auto_bound.join('、')}`); }
     else if (force) say('状态已是最新');
   } catch (e) { say(String(e), 'err'); }
-  finally { if (force) launch.checking = { ...launch.checking, [id]: false }; }
+  finally { launch.checking = { ...launch.checking, [id]: false }; }
 }
 
 function note(id: string, step: string, text: string) {
