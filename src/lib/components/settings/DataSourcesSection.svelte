@@ -10,6 +10,7 @@
   import { connections, toggleConnCtx, openConnCtx } from '$lib/state/connections.svelte.js';
   import { refreshSites } from '$lib/state/sites.svelte.js';
   import { loadFleet } from '$lib/state/fleet.svelte.js';
+  import { oauth, loadOauthClient } from '$lib/state/oauth.svelte.js';
 
   // 数据源是全局的：一个 Google / Bing 账号可以服务任意多个站点；站点里只选用哪个资源。
   // 版式与上面的「连接」分区一致：小标题 + 「+」菜单 + 卡片行。
@@ -21,7 +22,7 @@
   async function load() {
     try { const v = await invoke<DataSourceRow[]>('data_sources_overview'); rows = v; } catch (e) { say(String(e), 'err'); }
   }
-  $effect(() => { void app.conns.length; void load(); });
+  $effect(() => { void app.conns.length; void load(); void loadOauthClient(); });
   $effect(() => {
     if (!addOpen) return;
     const close = (e: MouseEvent) => { if (addEl && !addEl.contains(e.target as Node)) addOpen = false; };
@@ -37,7 +38,8 @@
     } catch (e) { say(String(e), 'err'); }
     finally { busy = ''; }
   }
-  function add(kind: 'google' | 'bing') { addOpen = false; openDataConnect(kind); }
+  function add(kind: 'google' | 'bing', mode: 'oauth' | 'service_account' = 'oauth') { addOpen = false; openDataConnect(kind, mode); }
+  const changeClient = () => openDataConnect('google', 'oauth', { editClient: true });
 </script>
 
 <div class="sec-head">
@@ -47,8 +49,9 @@
       data-tip={addOpen ? undefined : '添加数据源'} onclick={() => (addOpen = !addOpen)}><PlusIcon /></button>
     {#if addOpen}
       <div class="add-menu" role="menu">
-        <button role="menuitem" onclick={() => add('google')}><GoogleMark size={15} /><span>Google（GA4 + Search Console）</span></button>
-        <button role="menuitem" onclick={() => add('bing')}><BingMark size={15} /><span>Bing Webmaster</span></button>
+        <button role="menuitem" onclick={() => add('google')}><GoogleMark size={15} /><span>Google 账号<small>浏览器授权，可添加多个</small></span></button>
+        <button role="menuitem" onclick={() => add('google', 'service_account')}><GoogleMark size={15} /><span>Google 服务账号<small>JSON 密钥</small></span></button>
+        <button role="menuitem" onclick={() => add('bing')}><BingMark size={15} /><span>Bing Webmaster<small>API Key</small></span></button>
       </div>
     {/if}
   </div>
@@ -89,6 +92,9 @@
     {/each}
   </div>
 {/if}
+{#if oauth.client?.configured}
+  <div class="client"><span>Google 登录用的 OAuth 客户端</span><code title={oauth.client.client_id}>{oauth.client.client_id}</code><button onclick={changeClient}>更改</button></div>
+{/if}
 
 <style>
   .sec-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin: 12px 0 1px; }
@@ -101,6 +107,13 @@
   .add-menu { position: absolute; z-index: 8; top: calc(100% + 5px); right: 0; width: 236px; padding: 5px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 28px rgba(30, 25, 15, .15); }
   .add-menu button { width: 100%; min-height: 34px; padding: 7px 9px; border: 0; border-radius: 7px; background: none; display: flex; align-items: center; gap: 9px; color: var(--text); cursor: pointer; text-align: left; font: inherit; font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; }
   .add-menu button:hover { background: #f4f3ef; }
+  .add-menu button span { display: flex; flex-direction: column; line-height: 1.35; }
+  .add-menu small { font-size: 10.5px; color: var(--faint); font-weight: 400; }
+  .client { display: flex; align-items: center; gap: 8px; margin: 8px 2px 0; font-size: 11px; color: var(--faint); min-width: 0; }
+  .client span { flex: none; }
+  .client code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--dim); }
+  .client button { flex: none; border: none; background: none; padding: 0; font: inherit; font-size: 11px; color: var(--dim); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .client button:hover { color: var(--text); }
   .empty { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px; }
   .empty button { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px dashed var(--border2); border-radius: 11px; background: none; cursor: pointer; text-align: left; font: inherit; color: var(--text); }
   .empty button:hover { background: #faf9f6; border-style: solid; }

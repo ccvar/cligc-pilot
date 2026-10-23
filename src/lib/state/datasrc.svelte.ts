@@ -25,14 +25,12 @@ type DataForm = {
   err: string;
   google: GoogleResources | null;
   bing: BingSite[] | null;
-  // OAuth（新站闭环时用）
-  clientId: string;
-  clientSecret: string;
+  /** OAuth：同时申请管理权限（新站闭环用）。客户端本身是全局的，见 oauth.svelte.ts。 */
   manage: boolean;
 };
 
 function blank(): DataForm {
-  return { open: false, kind: 'google', mode: 'service_account', updateId: '', name: '', secret: '', busy: false, err: '', google: null, bing: null, clientId: '', clientSecret: '', manage: false };
+  return { open: false, kind: 'google', mode: 'service_account', updateId: '', name: '', secret: '', busy: false, err: '', google: null, bing: null, manage: false };
 }
 
 class DataSrcState {
@@ -46,14 +44,17 @@ class DataSrcState {
 
 export const datasrc = new DataSrcState();
 
-export function openDataConnect(kind: 'google' | 'bing', mode: 'service_account' | 'oauth' = 'service_account') {
+export function openDataConnect(kind: 'google' | 'bing', mode: 'service_account' | 'oauth' = 'oauth', opts: { manage?: boolean; editClient?: boolean } = {}) {
   connections.switcherOpen = false;
-  datasrc.form = { ...blank(), open: true, kind, mode };
+  datasrc.form = { ...blank(), open: true, kind, mode, manage: !!opts.manage };
+  // oauth.svelte.ts 反过来依赖本文件，这里按需加载避免循环引用
+  if (kind === 'google') void import('./oauth.svelte.js').then(async (m) => { await m.loadOauthClient(); m.editOauthClient(!!opts.editClient); });
 }
 export function openDataUpdate(c: Connection) {
   connections.connCtx = null;
   connections.switcherOpen = false;
   datasrc.form = { ...blank(), open: true, kind: c.kind as 'google' | 'bing', mode: c.key_kind === 'oauth' ? 'oauth' : 'service_account', updateId: c.id, name: c.name };
+  if (c.key_kind === 'oauth') void import('./oauth.svelte.js').then((m) => { m.editOauthClient(false); return m.loadOauthClient(); });
 }
 export function closeDataConnect() {
   if (datasrc.form.busy) return;

@@ -204,30 +204,108 @@ pub fn read_key_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(p).map_err(|e| format!("读取文件失败：{e}"))
 }
 
-/// Google 账号登录（OAuth）：在浏览器里授权后新建连接；`update_id` 非空时替换那条连接的凭据。
+// ---------- Google OAuth 客户端（全局一份） ----------
+//
+// OAuth 客户端回答的是「哪个应用在申请授权」：整个 Pilot 配一次就够了，存在钥匙串里。
+// 每次「在浏览器中登录」只是再授权一个 Google 账号，生成一条数据源连接；可以有任意多个账号。
+// 每条连接的凭据里仍各自带一份 client_id / secret：之后改了全局客户端，已授权的账号照常刷新令牌。
+
+const OAUTH_CLIENT_ACCOUNT: &str = "google-oauth-client";
+
+#[derive(serde::Deserialize, Serialize, Clone)]
+struct OAuthClient {
+    client_id: String,
+    client_secret: String,
+}
+
+#[derive(Serialize)]
+pub struct OAuthClientInfo {
+    pub configured: bool,
+    /// 只回给前端客户端 ID（不是机密）；密钥永远不出钥匙串。
+    pub client_id: String,
+}
+
+fn load_client(state: &AppState) -> Option<OAuthClient> {
+    if let Some(c) = crate::keychain::get_named_secret(OAUTH_CLIENT_ACCOUNT).ok().and_then(|raw| serde_json::from_str::<OAuthClient>(&raw).ok()) {
+        return Some(c);
+    }
+    // 老版本是每条连接各填一次：沿用已授权账号里的那份客户端，免得用户再填。
+    let adopted = state.conns.list().into_iter().filter(|c| c.kind == "google" && c.key_kind == "oauth").find_map(|c| {
+        let raw = crate::keychain::get_key(&c.id).ok()?;
+        match google::parse_credential("oauth", &raw).ok()? {
+            google::Credential::OAuth(o) if !o.client_id.is_empty() && !o.client_secret.is_empty() => Some(OAuthClient { client_id: o.client_id, client_secret: o.client_secret }),
+            _ => None,
+        }
+    })?;
+    if let Ok(raw) = serde_json::to_string(&adopted) {
+        let _ = crate::keychain::set_named_secret(OAUTH_CLIENT_ACCOUNT, &raw);
+    }
+    Some(adopted)
+}
+
+pub fn valid_client_id(id: &str) -> bool {
+    let id = id.trim();
+    id.ends_with(".apps.googleusercontent.com") && id.len() > ".apps.googleusercontent.com".len() && !id.contains(char::is_whitespace)
+}
+
+#[tauri::command]
+pub fn google_oauth_client(state: tauri::State<'_, AppState>) -> OAuthClientInfo {
+    match load_client(&state) {
+        Some(c) => OAuthClientInfo { configured: true, client_id: c.client_id },
+        None => OAuthClientInfo { configured: false, client_id: String::new() },
+    }
+}
+
+/// 保存全局 OAuth 客户端。密钥留空表示只改 ID、沿用原来的密钥。
+#[tauri::command]
+pub fn save_google_oauth_client(state: tauri::State<'_, AppState>, client_id: String, client_secret: String) -> Result<OAuthClientInfo, String> {
+    let client_id = client_id.trim().to_string();
+    if !valid_client_id(&client_id) {
+        return Err("客户端 ID 应该形如 1234-xxxx.apps.googleusercontent.com".into());
+    }
+    let secret = match client_secret.trim() {
+        "" => load_client(&state).map(|c| c.client_secret).ok_or("请填写客户端密钥")?,
+        s => s.to_string(),
+    };
+    let raw = serde_json::to_string(&OAuthClient { client_id: client_id.clone(), client_secret: secret }).map_err(|e| e.to_string())?;
+    crate::keychain::set_named_secret(OAUTH_CLIENT_ACCOUNT, &raw)?;
+    Ok(OAuthClientInfo { configured: true, client_id })
+}
+
+/// Google 账号登录（OAuth）：用全局客户端在浏览器里授权一个账号。
+/// 新账号 → 新建连接；已经授权过的同一个账号 → 原地更新凭据（比如补授管理权限、授权过期后重登）。
+/// `update_id` 非空时固定更新那条连接。
 #[tauri::command]
 pub async fn google_oauth_login(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     name: String,
-    client_id: String,
-    client_secret: String,
     manage: bool,
     update_id: String,
 ) -> Result<crate::conns::Connection, String> {
     use tauri_plugin_opener::OpenerExt;
-    let cred = crate::google_oauth::login(&client_id, &client_secret, manage, |url| {
+    let client = load_client(&state).ok_or("还没有配置 Google OAuth 客户端")?;
+    let cred = crate::google_oauth::login(&client.client_id, &client.client_secret, manage, |url| {
         app.opener().open_url(url, None::<&str>).map_err(|e| format!("打开浏览器失败：{e}"))
     })
     .await?;
     let raw = serde_json::to_string(&cred).map_err(|e| e.to_string())?;
     let email = cred.email.clone();
-    if update_id.is_empty() {
-        let name = if name.trim().is_empty() { format!("Google · {}", if email.is_empty() { "OAuth" } else { &email }) } else { name };
-        state.conns.add_data_source("google", &name, &raw, "oauth", &email, "", &format!("oauth:{email}"))
+    let dedupe = format!("oauth:{email}");
+    let target = if update_id.is_empty() {
+        state.conns.list().into_iter().find(|c| c.kind == "google" && !email.is_empty() && c.key_prefix == dedupe).map(|c| c.id)
     } else {
-        crate::google::forget_token(&update_id);
-        state.conns.replace_data_secret(&update_id, &raw, "oauth", &email, &format!("oauth:{email}"))
+        Some(update_id)
+    };
+    match target {
+        Some(id) => {
+            google::forget_token(&id);
+            state.conns.replace_data_secret(&id, &raw, "oauth", &email, &dedupe)
+        }
+        None => {
+            let name = if name.trim().is_empty() { format!("Google · {}", if email.is_empty() { "OAuth" } else { &email }) } else { name };
+            state.conns.add_data_source("google", &name, &raw, "oauth", &email, "", &dedupe)
+        }
     }
 }
 
@@ -247,5 +325,19 @@ pub fn google_can_manage(state: tauri::State<'_, AppState>, conn_id: String) -> 
     match crate::google::parse_credential("oauth", &raw)? {
         crate::google::Credential::OAuth(o) => Ok(crate::google_oauth::can_manage(&o)),
         _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_client_id;
+
+    #[test]
+    fn oauth_client_id_must_look_like_a_google_desktop_client() {
+        assert!(valid_client_id("1234-abcd.apps.googleusercontent.com"));
+        assert!(valid_client_id("  1234-abcd.apps.googleusercontent.com "));
+        assert!(!valid_client_id(".apps.googleusercontent.com"));
+        assert!(!valid_client_id("1234 abcd.apps.googleusercontent.com"));
+        assert!(!valid_client_id("GOCSPX-secret"));
     }
 }

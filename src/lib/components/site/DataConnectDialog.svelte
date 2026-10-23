@@ -4,10 +4,14 @@
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import { datasrc, closeDataConnect, pickJsonFile, verifyData, confirmData } from '$lib/state/datasrc.svelte.js';
-  import { oauthLogin, oauth } from '$lib/state/oauth.svelte.js';
+  import { oauthLogin, oauth, oauthAccounts, editOauthClient, saveOauthClient } from '$lib/state/oauth.svelte.js';
 
   const f = $derived(datasrc.form);
   const verified = $derived(f.kind === 'google' ? !!f.google : !!f.bing);
+  const accounts = $derived(oauthAccounts());
+  // OAuth 页的两种状态：先配客户端（全局一次），或直接授权账号
+  const setup = $derived(!!oauth.client && (!oauth.client.configured || oauth.editing));
+  const loginReady = $derived(f.kind === 'google' && f.mode === 'oauth' && !!oauth.client?.configured && !oauth.editing);
 </script>
 
 {#if f.open}
@@ -21,8 +25,8 @@
       {#if f.kind === 'google'}
         {#if !f.updateId}
           <div class="seg">
-            <button class:on={f.mode === 'service_account'} onclick={() => (f.mode = 'service_account')}>服务账号</button>
-            <button class:on={f.mode === 'oauth'} onclick={() => (f.mode = 'oauth')}>Google 账号登录（OAuth）</button>
+            <button class:on={f.mode === 'oauth'} onclick={() => (f.mode = 'oauth')}>Google 账号</button>
+            <button class:on={f.mode === 'service_account'} onclick={() => (f.mode = 'service_account')}>服务账号（JSON 密钥）</button>
           </div>
         {/if}
         {#if f.mode === 'service_account'}
@@ -38,20 +42,38 @@
             <textarea class="tin" rows="4" bind:value={f.secret} placeholder={'{"type": "service_account", ...}'} spellcheck="false" oninput={() => { f.google = null; f.err = ''; }}></textarea>
             <div class="row"><button class="btn small" onclick={pickJsonFile}>选择 JSON 文件…</button><span style="flex:1"></span><button class="btn small primary" onclick={verifyData} disabled={f.busy || !f.secret.trim()}>{f.busy && !verified ? '验证中…' : '验证'}</button></div>
           </div>
-        {:else}
-          <p class="hint">用你自己的 Google 账号在浏览器里授权：能看到账号下的全部 GA4 媒体资源和 Search Console 资源，Pilot 会自动列出让你选。需要先在 Google Cloud 建一个「桌面应用」类型的 OAuth 客户端。</p>
+        {:else if !oauth.client}
+          <p class="hint">读取中…</p>
+        {:else if setup}
+          <p class="hint">{oauth.client.configured ? '更改 OAuth 客户端：之后新授权的账号用新的客户端；已授权的账号不受影响。' : '先配置一次 OAuth 客户端。它是整个 Pilot 共用的「应用身份」，配好以后添加账号只需要在浏览器里点同意。'}</p>
           <ol class="steps-list">
-            <li>在 Google Cloud 启用上面三个 API，然后在「API 和服务 → 凭据」里新建 OAuth 客户端 ID，类型选 <b>桌面应用</b>。
+            <li>在 Google Cloud 启用 <b>Google Analytics Data API</b>、<b>Google Analytics Admin API</b> 和 <b>Google Search Console API</b>。
+              <button class="link-btn" onclick={() => openUrl('https://console.cloud.google.com/apis/library')}>打开 API 库 ↗</button></li>
+            <li>在「API 和服务 → 凭据」里新建 OAuth 客户端 ID，类型选 <b>桌面应用</b>。
               <button class="link-btn" onclick={() => openUrl('https://console.cloud.google.com/apis/credentials')}>打开凭据页 ↗</button></li>
-            <li>OAuth 同意屏幕保持「测试」状态时授权 7 天过期；改为「正式发布」后不过期（登录时会提示“未经验证的应用”，选继续即可）。</li>
+            <li>同意屏幕保持「测试」时授权 7 天过期；改为「正式发布」后不过期（登录时提示“未经验证的应用”，选继续即可）。</li>
           </ol>
           <div class="grid2">
-            <div class="field"><label for="oa-id">客户端 ID</label><input id="oa-id" class="tin mono" bind:value={f.clientId} spellcheck="false" /></div>
-            <div class="field"><label for="oa-secret">客户端密钥</label><input id="oa-secret" class="tin mono" type="password" bind:value={f.clientSecret} autocomplete="off" /></div>
+            <div class="field"><label for="oa-id">客户端 ID</label><input id="oa-id" class="tin mono" bind:value={oauth.draftId} placeholder="….apps.googleusercontent.com" spellcheck="false" /></div>
+            <div class="field"><label for="oa-secret">客户端密钥</label><input id="oa-secret" class="tin mono" type="password" bind:value={oauth.draftSecret} autocomplete="off" placeholder={oauth.client.configured ? '留空则沿用原来的密钥' : 'GOCSPX-…'} /></div>
           </div>
-          <label class="check"><input type="checkbox" bind:checked={f.manage} /><span>同时授予管理权限：用于「新站闭环」里自动创建 GA4 媒体资源、添加 Search Console 资源并用 DNS 验证所有权、提交 sitemap。不勾选则只读。</span></label>
-          <div class="row-end"><button class="btn small primary" onclick={() => oauthLogin()} disabled={oauth.busy || !f.clientId.trim() || !f.clientSecret.trim()}>{oauth.busy ? '等待浏览器授权…' : '在浏览器中登录'}</button></div>
-          {#if oauth.busy}<p class="hint">已打开浏览器。完成授权后这里会自动继续；不想继续可以关掉这个窗口。</p>{/if}
+          <p class="hint">只存进钥匙串，模型拿不到。</p>
+        {:else}
+          <div class="client-line">
+            <span class="dim">OAuth 客户端</span>
+            <span class="mono cid" title={oauth.client.client_id}>{oauth.client.client_id}</span>
+            <button class="link-btn" onclick={() => editOauthClient()}>更改</button>
+          </div>
+          {#if f.updateId}
+            <p class="hint">重新授权这个账号：授权过期了，或者要补授 / 收回管理权限时用。</p>
+          {:else}
+            <p class="hint">每次登录授权一个 Google 账号，可以添加多个；各站点分别选用其中的 GA4 / Search Console 资源。再次登录已授权的账号会直接更新它。</p>
+            {#if accounts.length}
+              <div class="accts"><span class="dim">已授权</span>{#each accounts as a (a.id)}<span class="pill line">{a.login || a.name}</span>{/each}</div>
+            {/if}
+          {/if}
+          <label class="check"><input type="checkbox" bind:checked={f.manage} /><span>同时授予管理权限：「新站闭环」里自动创建 GA4 媒体资源、添加 Search Console 资源并用 DNS 验证所有权、提交 sitemap。不勾选则只读。</span></label>
+          {#if oauth.busy}<p class="hint">已打开浏览器：选好账号并同意后，这里会自动继续。</p>{/if}
         {/if}
         {#if f.google}
           <div class="ok-note">
@@ -82,7 +104,17 @@
       {#if f.err}<div class="err-note">{f.err}</div>{/if}
       {#if oauth.err && f.mode === 'oauth'}<div class="err-note">{oauth.err}</div>{/if}
     </div>
-    {#if f.mode === 'service_account' || f.kind === 'bing'}
+    {#if f.kind === 'google' && f.mode === 'oauth' && (setup || loginReady)}
+      <footer class="sheet-foot">
+        {#if setup}
+          <button class="btn small ghost" onclick={() => (oauth.client?.configured ? editOauthClient(false) : closeDataConnect())} disabled={oauth.saving}>取消</button>
+          <button class="btn small primary" onclick={saveOauthClient} disabled={oauth.saving || !oauth.draftId.trim() || (!oauth.client?.configured && !oauth.draftSecret.trim())}>{#if oauth.saving}<span class="spin"></span>保存中{:else}保存客户端{/if}</button>
+        {:else}
+          <button class="btn small ghost" onclick={closeDataConnect}>取消</button>
+          <button class="btn small primary" onclick={() => oauthLogin()} disabled={oauth.busy}>{#if oauth.busy}<span class="spin"></span>等待浏览器授权{:else}{f.updateId ? '重新授权' : accounts.length ? '再授权一个账号' : '在浏览器中登录'}{/if}</button>
+        {/if}
+      </footer>
+    {:else if f.mode === 'service_account' || f.kind === 'bing'}
       <footer class="sheet-foot">
         <button class="btn small ghost" onclick={closeDataConnect} disabled={f.busy}>取消</button>
         <button class="btn small primary" onclick={confirmData} disabled={f.busy || !verified}>{f.busy && verified ? '保存中…' : f.updateId ? '更新此连接' : '连接'}</button>
@@ -93,4 +125,10 @@
 
 <style>
   .steps-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; line-height: 1.6; }
+  .client-line { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px; border-radius: 9px; background: var(--rail); border: 1px solid var(--border); font-size: 12px; }
+  .client-line .dim { flex: none; }
+  .cid { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text); }
+  .client-line .link-btn { flex: none; font-size: 12px; }
+  .accts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+  .accts .dim { margin-right: 2px; }
 </style>

@@ -4481,6 +4481,8 @@ pub fn run() {
             data_cmds::setup_indexnow,
             data_cmds::read_key_file,
             data_cmds::google_oauth_login,
+            data_cmds::google_oauth_client,
+            data_cmds::save_google_oauth_client,
             data_cmds::google_oauth_cancel,
             data_cmds::google_can_manage,
             ops_cmds::site_queue,

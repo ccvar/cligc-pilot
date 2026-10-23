@@ -85,7 +85,7 @@
         <small>{st.ga4 ? `已绑定 ${site.data.ga4_property_name || site.data.ga4_property}` : manage ? '用你的 Google 账号新建一个 GA4 媒体资源和网页数据流。' : '自动创建需要授予管理权限的 Google 账号登录；也可以在设置里绑定已有的媒体资源。'}</small>
         <div class="row">
           {#if !st.ga4 && manage}<button class="btn tiny" onclick={() => createGa4(site, manage)} disabled={!!busy || !site.domain}>{busy === 'ga4' ? '创建中…' : '自动创建'}</button>{/if}
-          {#if !st.ga4 && !manage}<button class="btn tiny" onclick={() => openDataConnect('google', 'oauth')}>用 Google 账号登录…</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>绑定已有的</button>{/if}
+          {#if !st.ga4 && !manage}<button class="btn tiny" onclick={() => openDataConnect('google', 'oauth', { manage: true })}>用 Google 账号登录…</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>绑定已有的</button>{/if}
           {#if launch.measurement[site.id]}<button class="btn tiny primary" onclick={() => askAiForGa4(site, launch.measurement[site.id])}>让 AI 把统计代码加进站点</button>{/if}
         </div>
         {#if notes.ga4}<small class:err={notes.ga4.startsWith('失败')}>{notes.ga4}</small>{/if}
