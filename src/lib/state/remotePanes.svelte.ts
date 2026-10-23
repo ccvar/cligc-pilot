@@ -19,6 +19,8 @@ class RemotePanesState {
   focused = $state('');
   /** 拖动中的机器（连接 id） */
   dragId = $state('');
+  /** 拖动中鼠标的位置：画跟着鼠标走的那张机器卡片 */
+  dragPoint = $state<{ x: number; y: number } | null>(null);
   /** 已经分屏时：落点窗格 + 边 */
   preview = $state<{ id: string; edge: Edge } | null>(null);
   /** 还没分屏时：落在主区的哪条边 */
@@ -83,17 +85,19 @@ export function closeRemotePane(paneId: string) {
 
 export function resizeRemoteLayout(l: Layout) { setLayout(l); }
 
-export function endRemoteDrag() { remotePanes.dragId = ''; remotePanes.preview = null; remotePanes.singleEdge = null; }
+export function endRemoteDrag() { remotePanes.dragId = ''; remotePanes.dragPoint = null; remotePanes.preview = null; remotePanes.singleEdge = null; }
 
 /** 从左栏拖一台机器（按住拖动，超过 6px 才算拖；Esc 取消）。 */
 export function startRemoteDrag(e: PointerEvent, connId: string) {
   if (e.button !== 0 || e.isPrimary === false) return;
+  e.preventDefault(); // 别在拖的时候选中左栏的字
   const startX = e.clientX, startY = e.clientY;
   let moved = false;
   const move = (ev: PointerEvent) => {
     if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
     moved = true;
     remotePanes.dragId = connId; remotePanes.preview = null; remotePanes.singleEdge = null;
+    remotePanes.dragPoint = { x: ev.clientX, y: ev.clientY };
     const el = document.elementFromPoint(ev.clientX, ev.clientY);
     const target = el?.closest<HTMLElement>('[data-pilot-pane]');
     if (remotePanes.visible && target && remotePanes.layout) {

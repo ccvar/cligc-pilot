@@ -45,7 +45,8 @@
   import { panes, splitConversation, singleConversationDragOver, endConversationDrag, addSplit, focusSplit, initPanes } from '$lib/state/panes.svelte.js';
   import { modelIcon } from '$lib/state/models';
   import { badImgUrls, initMessages } from '$lib/state/messages.svelte.js';
-  import { initConnections } from '$lib/state/connections.svelte.js';
+  import { initConnections, distroOf, connectionDisplayName } from '$lib/state/connections.svelte.js';
+  import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import { initSettings } from '$lib/state/settings.svelte.js';
   import { initLauncher } from '$lib/state/launcher.svelte.js';
   import { initPermits } from '$lib/state/permits.svelte.js';
@@ -141,6 +142,17 @@
   {#if app.flash}<div class="flash {app.flashKind}" role="status" aria-live="polite">{app.flash}</div>{/if}
 
   <Sidebar />
+
+  {#if remotePanes.dragId && remotePanes.dragPoint}
+    {@const dragConn=app.conns.find((c)=>c.id===remotePanes.dragId)}
+    {#if dragConn}
+      <div class="conversation-drag-ghost" style={`--drag-x:${remotePanes.dragPoint.x}px;--drag-y:${remotePanes.dragPoint.y}px`} aria-hidden="true">
+        <span class="conversation-drag-icon"><DistroMark id={distroOf(dragConn)} size={13} /></span>
+        <span class="conversation-drag-title">{connectionDisplayName(dragConn)}</span>
+        <small class="conversation-drag-sub">{dragConn.ssh_user}@{dragConn.ssh_host}</small>
+      </div>
+    {/if}
+  {/if}
 
   {#if panes.splitDragId && panes.splitDragPoint}
     {@const dragConversation=splitConversation(panes.splitDragId)}
@@ -240,6 +252,7 @@
 <style>
   .conversation-drag-ghost{position:fixed;z-index:1000;left:clamp(12px,calc(var(--drag-x) + 14px),calc(100vw - 312px))!important;top:clamp(12px,calc(var(--drag-y) + 12px),calc(100vh - 50px))!important;width:300px;max-width:calc(100vw - 24px);height:38px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 12px;background:color-mix(in srgb,var(--bg,#fff) 96%,transparent);border:1px solid var(--border,#e7e5df);border-radius:8px;box-shadow:0 8px 24px #2d29231c;pointer-events:none;color:var(--fg,#282723)}
   .conversation-drag-icon{display:inline-flex;align-items:center;line-height:0;flex:none}
+  .conversation-drag-sub{flex:none;margin-left:auto;font-size:11px;color:var(--faint,#9a958c)}
   .conversation-drag-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500}
   .single-split-preview{position:absolute;z-index:100;pointer-events:none;box-sizing:border-box;display:grid;place-items:center;background:color-mix(in srgb,var(--bg,#fff) 60%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border:2px solid #2f80ed;border-radius:8px;box-shadow:0 0 0 1px #2f80ed24}
   .single-split-preview.left{inset:0 50% 0 0}
