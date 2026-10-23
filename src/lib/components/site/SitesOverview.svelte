@@ -72,7 +72,9 @@
           <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
         {/if}
       </div>
-      {#if !fleet.rows.length}
+      {#if !fleet.loaded && !fleet.rows.length}
+        <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>
+      {:else if !fleet.rows.length}
         <div class="card"><p class="hint">还没有站点。导入一个用代码管理的静态站，或在 Cloudflare 建站会话里点「转为站点」。</p></div>
       {:else}
         <div class="card tbl-card">
@@ -193,6 +195,14 @@
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
   .kind { margin-left: 8px; color: var(--faint); font-size: 11.5px; }
   .pager { gap: 8px; }
+  .skel { padding: 6px 16px; }
+  .sk-row { display: flex; align-items: center; gap: 12px; height: 52px; border-top: 1px solid var(--border); }
+  .sk-row:first-child { border-top: none; }
+  .sk-row .grow { flex: 1; }
+  .sk-row i { display: block; height: 9px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft) 25%, #f6f5f1 50%, var(--accent-soft) 75%); background-size: 200% 100%; animation: sk 1.2s linear infinite; }
+  .sk-row .sk-ic { width: 16px; height: 16px; border-radius: 4px; }
+  @keyframes sk { to { background-position: -200% 0; } }
+  @media (prefers-reduced-motion: reduce) { .sk-row i { animation: none; } }
   @container page (max-width: 760px) {
     .c-when { display: none; }
     .lvl-t { display: none; }

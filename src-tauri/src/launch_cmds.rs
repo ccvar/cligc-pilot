@@ -90,8 +90,41 @@ pub struct LaunchStatus {
     pub errors: Vec<String>,
 }
 
-/// 上次「按域名找资源」的时间：向导每次打开都会检查，但去 Google / Bing 查列表 10 分钟最多一次（点刷新不受限）。
-static PROBED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> = std::sync::LazyLock::new(Default::default);
+/// 向导的磁盘缓存（站点数据目录 `launch.json`）：重启后打开站点不用再等网络。
+/// - `probed`：上次「按域名找资源」的时间，10 分钟最多一次（点刷新不受限）；
+/// - `pages`：上次查到的 Cloudflare Pages 项目情况，快速读取时直接用（后台那次会刷新它）。
+#[derive(Serialize, serde::Deserialize, Default, Clone)]
+struct LaunchCache {
+    #[serde(default)]
+    probed: u64,
+    #[serde(default)]
+    pages: Option<PagesCache>,
+}
+
+#[derive(Serialize, serde::Deserialize, Default, Clone)]
+struct PagesCache {
+    project: String,
+    exists: bool,
+    domains: Vec<String>,
+    at: u64,
+}
+
+static CACHE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn read_cache(state: &AppState, id: &str) -> LaunchCache {
+    std::fs::read(state.sites.data_dir(id).join("launch.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn update_cache(state: &AppState, id: &str, f: impl FnOnce(&mut LaunchCache)) {
+    let _g = CACHE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut c = read_cache(state, id);
+    f(&mut c);
+    let dir = state.sites.data_dir(id);
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(raw) = serde_json::to_vec(&c) {
+        let _ = std::fs::write(dir.join("launch.json"), raw);
+    }
+}
 
 /// 站点还没绑 Search Console / Bing 时，到已连接的账号里按域名找一遍，唯一命中就直接绑上。
 /// 规则和「按域名绑定」一致；Google 只在站点已用的那个账号里找（一个站点的 GA4 和 Search Console 共用一条连接），
@@ -101,14 +134,11 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
     if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty()) {
         return (bound, errs);
     }
-    {
-        let now = crate::now_secs();
-        let mut m = PROBED.lock().unwrap_or_else(|e| e.into_inner());
-        if !force && m.get(&site.id).is_some_and(|t| now.saturating_sub(*t) < 600) {
-            return (bound, errs);
-        }
-        m.insert(site.id.clone(), now);
+    let now = crate::now_secs();
+    if !force && now.saturating_sub(read_cache(state, &site.id).probed) < 600 {
+        return (bound, errs);
     }
+    update_cache(state, &site.id, |c| c.probed = now);
     if site.data.ga4_property.is_empty() {
         // GA4：按媒体资源里网页数据流的网址匹配域名。站点已在用的账号先找；名字里带域名的媒体资源先查，命中即停。
         let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
@@ -211,6 +241,7 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
 pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
     let site = state.sites.get(&id)?;
     let force = force.unwrap_or(false);
+    let quick = !force && !probe.unwrap_or(true);
     let (auto_bound, probe_errs) = if force || probe.unwrap_or(true) { probe_bindings(&state, &site, force).await } else { (Vec::new(), Vec::new()) };
     let site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
     let mut st = LaunchStatus {
@@ -229,15 +260,22 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
         // Workers / VPS 的路由、域名由项目自己的配置管，不走 Pages 这一步。 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
         st.pages = true;
         st.domain_attached = true;
+    } else if let Some(pc) = read_cache(&state, &id).pages.filter(|p| quick && p.project == site.deploy.project && crate::now_secs().saturating_sub(p.at) < 86_400) {
+        // 快速读取：用上次查到的结果，后台那次再去 Cloudflare 刷新
+        st.pages = pc.exists;
+        st.domain_attached = !site.domain.is_empty() && pc.domains.iter().any(|d| d == &site.domain);
+        st.pages_domains = pc.domains;
     } else if let Ok(cf) = state.conns.get(&site.deploy.cf_conn_id) {
         if let Ok(token) = crate::keychain::get_key(&cf.id) {
             match crate::cf::get_pages_project(&token, &cf.account_id, &site.deploy.project).await {
-                Ok(Some(p)) => {
-                    st.pages = true;
-                    st.domain_attached = !site.domain.is_empty() && p.domains.iter().any(|d| d == &site.domain);
-                    st.pages_domains = p.domains;
+                Ok(p) => {
+                    let (exists, domains) = p.map(|p| (true, p.domains)).unwrap_or((false, Vec::new()));
+                    st.pages = exists;
+                    st.domain_attached = !site.domain.is_empty() && domains.iter().any(|d| d == &site.domain);
+                    st.pages_domains = domains.clone();
+                    let project = site.deploy.project.clone();
+                    update_cache(&state, &id, |c| c.pages = Some(PagesCache { project, exists, domains, at: crate::now_secs() }));
                 }
-                Ok(None) => {}
                 Err(e) => st.errors.push(format!("Cloudflare：{e}")),
             }
         }

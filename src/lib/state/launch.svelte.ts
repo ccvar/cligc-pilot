@@ -24,6 +24,8 @@ export interface LaunchStatus {
 }
 
 const DONE_KEY = 'cligc.pilot.launchDone';
+const STATUS_KEY = 'cligc.pilot.launchStatus';
+function loadStatus(): Record<string, LaunchStatus> { try { return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}'); } catch { return {}; } }
 const OPEN_KEY = 'cligc.pilot.launchOpen';
 const loadSet = (k: string) => { try { return new Set<string>(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set<string>(); } };
 const saveSet = (k: string, v: Set<string>) => { try { localStorage.setItem(k, JSON.stringify([...v])); } catch { /* */ } };
@@ -42,7 +44,8 @@ export function launchSteps(site: Site, st: LaunchStatus) {
 }
 
 class LaunchState {
-  status = $state<Record<string, LaunchStatus>>({});
+  /** 上次的向导状态（本机缓存）：打开站点先显示它，后台再刷新，重启后不用等。 */
+  status = $state<Record<string, LaunchStatus>>(loadStatus());
   busy = $state<Record<string, string>>({});
   notes = $state<Record<string, Record<string, string>>>({});
   measurement = $state<Record<string, string>>({});
@@ -63,6 +66,8 @@ export function toggleLaunchOpen(id: string) {
 
 function remember(id: string, v: LaunchStatus) {
   launch.status = { ...launch.status, [id]: v };
+  // 一次性提示（自动绑定说明、错误）不进缓存，下次打开不再重复出现
+  try { localStorage.setItem(STATUS_KEY, JSON.stringify(Object.fromEntries(Object.entries(launch.status).map(([k, x]) => [k, { ...x, auto_bound: [], errors: [] }])))); } catch { /* */ }
   const site = sites.list.find((x) => x.id === id);
   if (!site) return;
   const all = launchSteps(site, v).every((x) => x.done);
