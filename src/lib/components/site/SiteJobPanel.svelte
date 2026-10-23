@@ -6,8 +6,9 @@
   import { cancelSiteJob } from '$lib/state/sites.svelte.js';
 
   // bare：外层卡片已经有同名标题时不再重复显示作业名。
-  let { job, compact = false, bare = false }: { job: SiteJob; compact?: boolean; bare?: boolean } = $props();
-  let showLog = $state(false);
+  let { job, compact = false, bare = false, logOpen = false }: { job: SiteJob; compact?: boolean; bare?: boolean; logOpen?: boolean } = $props();
+  // svelte-ignore state_referenced_locally
+  let showLog = $state(logOpen);
   let logEl: HTMLPreElement | undefined = $state();
   const mark = (s: string) => (s === 'ok' ? '✓' : s === 'failed' ? '!' : '');
   const elapsed = $derived(job.finished_at ? job.finished_at - job.started_at : 0);

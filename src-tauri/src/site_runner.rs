@@ -1356,13 +1356,29 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         hist = if history.is_empty() { "（暂无）".to_string() } else { history.join("\n") },
         kinds = kinds.join("|"),
     );
+    job.line(&format!(
+        "交给 AI：先读站点（首页、导航、栏目、主要页面）和数据，再按「{}」阶段制定本周计划{}",
+        crate::site_stage::label(&stage.stage),
+        rules.as_ref().map(|g| format!("，方案「{}」", g.name)).unwrap_or_default()
+    ));
     let (conv_id, conv) = run_conversation(ctx, site, "plan", "", msg).await?;
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
     let (positioning, mut tasks) = crate::managed::parse_plan_full(&reply)?;
     crate::site_stage::update_from_ai(&site_dir, &positioning);
     // 模型偶尔会安排方案不允许的动作：直接丢掉
     if let Some(g) = &rules {
+        let before = tasks.len();
         tasks.retain(|t| g.allows(&t.change));
+        if tasks.len() < before {
+            job.line(&format!("去掉 {} 项方案不允许的动作", before - tasks.len()));
+        }
+    }
+    if !positioning.trim().is_empty() {
+        job.line(&format!("站点定位：{}", positioning.trim().chars().take(80).collect::<String>()));
+    }
+    job.line(&format!("计划 {} 项：", tasks.len()));
+    for t in &tasks {
+        job.line(&format!("· [{}] {}", crate::managed::action_label(&t.change), t.title));
     }
     let week = chrono::Local::now().format("%G-W%V").to_string();
     let opps: Vec<Opportunity> = tasks

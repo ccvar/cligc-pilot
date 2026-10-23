@@ -4,7 +4,9 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { say } from '$lib/state/app.svelte.js';
+  import { app } from '$lib/state/app.svelte.js';
+  import { sites, loadSiteStatus } from '$lib/state/sites.svelte.js';
+  import SiteJobPanel from './SiteJobPanel.svelte';
   import { mdRender } from '$lib/state/messages.svelte.js';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
@@ -40,9 +42,28 @@
   const siteName = (id: string) => sitesById.get(id)?.name ?? id;
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
   const groups = $derived(o?.groups ?? []);
+  // 立即执行的过程：作业步骤和日志（site-job 事件实时更新 sites.jobs），以及 AI 的那条会话
+  let progress = $state<Set<string>>(new Set());
+  function toggleProgress(id: string) {
+    const n = new Set(progress);
+    if (n.has(id)) n.delete(id); else { n.add(id); if (!sites.jobs[id]) void loadSiteStatus(id); }
+    progress = n;
+  }
+  const opsConvOf = (id: string, since: number) =>
+    app.convos.filter((c) => c.conn_id === `site:${id}` && c.origin === 'ops' && c.updated_at >= since - 5).sort((a, b) => b.updated_at - a.updated_at)[0];
+  // 托管方案页打开时取一下各站点正在跑的作业（之后由 site-job 事件实时更新）
+  let jobsFor = '';
+  $effect(() => {
+    if (managed.tab !== 'groups') return;
+    const ids = groups.flatMap((g) => g.sites);
+    const key = ids.join(',');
+    if (key === jobsFor) return;
+    jobsFor = key;
+    for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
+  });
   async function runNow(id: string) {
     await runTask(id, 'plan');
-    say(`已开始为 ${siteName(id)} 制定本周计划，完成后在「计划」里查看`);
+    progress = new Set([...progress, id]);
     void loadManaged();
   }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
@@ -232,8 +253,10 @@
                   <button class="gs-name" onclick={() => openSite(id)}><SiteIcon {id} size={15} /><span>{siteName(id)}</span></button>
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
                   {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting} · <span class="warn-text">需要你 {s.waiting}</span>{/if}</span>{/if}
-                  {#if s?.job}
-                    <span class="pill run gs-job"><span class="spin"></span>{s.job}中</span>
+                  {#if s?.job || sites.jobs[id]?.status === 'running'}
+                    <button class="pill run gs-job" onclick={() => toggleProgress(id)} aria-expanded={progress.has(id)} data-tip="看进度"><span class="spin"></span>{s?.job || sites.jobs[id]?.title}中<Icon name={progress.has(id) ? 'x' : 'arrow'} size={10} /></button>
+                  {:else if progress.has(id) && sites.jobs[id]}
+                    <button class="btn tiny gs-run" onclick={() => toggleProgress(id)}>收起结果</button>
                   {:else}
                     <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在就让 AI 读数据和站点、制定本周计划；结果在「计划」里，各项进入站点的「待处理」"><Icon name="play" size={10} />立即执行</button>
                   {/if}
@@ -241,6 +264,16 @@
                   <span class="gs-state" class:on={on && !g.paused}>{g.paused ? '方案已暂停' : on ? '托管中' : '已停止'}</span>
                   <button class="switch" class:on class:dim={g.paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
+                {#if progress.has(id) && sites.jobs[id]}
+                  {@const conv = opsConvOf(id, sites.jobs[id].started_at)}
+                  <div class="li gs-prog">
+                    <SiteJobPanel job={sites.jobs[id]} logOpen />
+                    <div class="row gp-acts">
+                      {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />{conv.status === 'running' ? '看 AI 正在做什么' : '打开 AI 的会话'}</button>{/if}
+                      {#if sites.jobs[id].status !== 'running'}<button class="btn tiny" onclick={() => { managed.tab = 'plans'; }}><Icon name="checks" size={11} />看计划</button><button class="btn tiny" onclick={() => openSite(id, 'queue')}><Icon name="inbox" size={11} />看待处理</button>{/if}
+                    </div>
+                  </div>
+                {/if}
               {/each}
             </div>
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
@@ -289,7 +322,10 @@
   .pos p { margin: 4px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .gs-run { opacity: .55; transition: opacity .12s; }
   .gs:hover .gs-run, .gs-run:focus-visible { opacity: 1; }
-  .gs-job { flex: none; }
+  .gs-job { flex: none; border: none; cursor: pointer; gap: 5px; }
+  .gs-prog { padding-top: 4px; padding-bottom: 14px; background: #fcfbf9; }
+  .gs-prog :global(pre.log) { max-height: 200px; }
+  .gp-acts { margin-top: 10px; gap: 6px; }
   .gs-meta { font-size: 11.5px; white-space: nowrap; }
   .gs .grow { flex: 1; }
   .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
