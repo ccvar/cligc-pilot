@@ -244,7 +244,7 @@ export function opsTask(text: string): OpsTask | null {
   if (m) return { kind: m[1], site: '', stage: '', title: m[2].trim() };
   return null;
 }
-export interface OpsPlanTask { title: string; page?: string; change: string; why?: string; source?: string; query?: string; priority?: number }
+export interface OpsPlanTask { title: string; page?: string; change: string; why?: string; source?: string; query?: string; priority?: number; expect?: { metric?: string; query?: string; note?: string } }
 export interface OpsPlan { notes: string; positioning: string; tasks: OpsPlanTask[] }
 /** 从回复里拆出计划 JSON（最后一个带 tasks 的 ```json 块），返回去掉它之后的正文和解析出的计划。 */
 export function splitPlanJson(text: string): { body: string; plan: OpsPlan | null } {

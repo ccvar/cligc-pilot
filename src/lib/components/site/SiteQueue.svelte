@@ -123,6 +123,7 @@
             </div>
             <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>
             <p class="it-ev">{i.opp.evidence}</p>
+            {#if i.opp.expect_note}<p class="it-expect"><Icon name="target" size={11} />预期：{i.opp.expect_note}<span class="faint">（上线 4 周后按数据对比）</span></p>{/if}
             {#if i.ai_summary || i.files?.length}
               <button class="how-t" class:open={openWhy.has(i.id)} onclick={() => toggleWhy(i.id)} aria-expanded={openWhy.has(i.id)}>
                 <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -233,6 +234,7 @@
   .how { padding: 8px 12px; border-left: 2px solid var(--border2); margin-left: 4px; font-size: 12.5px; color: var(--dim); }
   .how p { margin: 0 0 6px; line-height: 1.65; white-space: pre-wrap; }
   .files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--faint); }
+  .it-expect { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--dim); }
   .it-ev { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; max-width: 80ch; }
   .meta { gap: 8px; }
   .br { font-size: 11.5px; }

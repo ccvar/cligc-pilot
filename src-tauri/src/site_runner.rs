@@ -1024,6 +1024,21 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
 // ---------------------------------------------------------------------------
 
 /// 上线时页面近 28 天的表现快照（效果复盘的「之前」）。
+/// 目标查询词在这个页面上的近 28 天表现（Search Console 查询词 × 页面）。
+fn query_snapshot(site_dir: &Path, query: &str, page: &str) -> Option<crate::site_data::Row> {
+    if query.trim().is_empty() || page.is_empty() {
+        return None;
+    }
+    let rows: Vec<crate::site_data::Row> = crate::site_data::read_json(&crate::site_data::cache_dir(site_dir), "gsc_query_page.json");
+    rows.into_iter().find(|r| r.key.eq_ignore_ascii_case(query.trim()) && r.key2 == page)
+}
+
+/// 全站近 28 天的点击和展现（复盘时用来扣掉整体变化）。
+fn site_snapshot(site_dir: &Path) -> crate::site_data::Row {
+    let s = crate::site_data::summary(site_dir);
+    crate::site_data::Row { key: "site".into(), clicks: s.gsc_clicks, impressions: s.gsc_impressions, position: s.gsc_position, ..Default::default() }
+}
+
 fn page_snapshot(site_dir: &Path, page: &str) -> Option<crate::site_data::Row> {
     let rows: Vec<crate::site_data::Row> = crate::site_data::read_json(&crate::site_data::cache_dir(site_dir), "gsc_pages.json");
     rows.into_iter().find(|r| r.key == page)
@@ -1307,11 +1322,14 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     };
     job.step("merge", "ok", merge_sha.get(..7).unwrap_or(""));
     let before = page_snapshot(&site_dir, &item.opp.page);
+    let (before_query, before_site) = (query_snapshot(&site_dir, &item.opp.expect_query, &item.opp.page), Some(site_snapshot(&site_dir)));
     site_ops::update_item(&site_dir, item_id, now(), |i| {
         i.status = "merged".into();
         i.merge_sha = merge_sha.clone();
         i.auto = auto;
         i.before = before.clone();
+        i.before_query = before_query.clone();
+        i.before_site = before_site.clone();
     })?;
     ctx.emit_queue(&site.id);
     if site.deploy.mode == "none" {
@@ -1562,34 +1580,71 @@ async fn report(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
 }
 
 /// 复盘结论：点击或点击率提升 ≥10% 为正面，点击下降 ≥15% 为负面。
-pub fn judge(before: &crate::site_data::Row, after: &crate::site_data::Row) -> &'static str {
-    let clicks = if before.clicks > 0.0 { (after.clicks - before.clicks) / before.clicks } else if after.clicks > 0.0 { 1.0 } else { 0.0 };
-    let ctr = if before.ctr > 0.0 { (after.ctr - before.ctr) / before.ctr } else { 0.0 };
-    if clicks <= -0.15 {
-        "negative"
-    } else if clicks >= 0.10 || ctr >= 0.10 {
-        "positive"
+/// 复盘的输入：这条改动上线时和 4 周后的数据。
+pub struct ReviewInput<'a> {
+    /// 看哪个指标：ctr / position / impressions / clicks / health
+    pub metric: &'a str,
+    /// 新页面（上线时还没有数据）
+    pub is_new: bool,
+    pub page_before: &'a crate::site_data::Row,
+    pub page_after: &'a crate::site_data::Row,
+    /// 目标查询词在这个页面上的表现（AI 写了预期查询词、两头都有数据时才用）
+    pub query: &'a str,
+    pub query_before: Option<&'a crate::site_data::Row>,
+    pub query_after: Option<&'a crate::site_data::Row>,
+    /// 全站近 28 天：扣掉整体变化（全站都跌时，单个页面跌得少不算改动的错）
+    pub site_before: Option<&'a crate::site_data::Row>,
+    pub site_after: &'a crate::site_data::Row,
+    /// 新页面 4 周内带来展现的查询词个数
+    pub new_queries: usize,
+}
+
+fn rel(a: f64, b: f64) -> f64 {
+    if b > 0.0 {
+        (a - b) / b
+    } else if a > 0.0 {
+        1.0
     } else {
-        "neutral"
+        0.0
     }
 }
 
-/// 按托管方案的衡量标准复盘。不管看什么，点击跌 15% 以上都算负面（安全底线）。
-/// 页面级拿不到转化和体检数据，这两种按点击判断。
-pub fn judge_for(metric: &str, before: &crate::site_data::Row, after: &crate::site_data::Row) -> &'static str {
-    let rel = |a: f64, b: f64| if b > 0.0 { (a - b) / b } else if a > 0.0 { 1.0 } else { 0.0 };
-    let clicks = rel(after.clicks, before.clicks);
-    if clicks <= -0.15 {
-        return "negative";
+fn pct(v: f64) -> String {
+    format!("{}{:.0}%", if v >= 0.0 { "+" } else { "" }, v * 100.0)
+}
+
+/// 按这条改动的预期指标复盘，返回（结论 positive / neutral / negative，给人看的说明）。
+/// 底线：页面点击扣掉全站变化后跌 15% 以上，不管看什么都是负面。
+pub fn judge_expect(r: &ReviewInput) -> (&'static str, String) {
+    let site_clicks = r.site_before.map(|s| rel(r.site_after.clicks, s.clicks)).unwrap_or(0.0);
+    let site_impr = r.site_before.map(|s| rel(r.site_after.impressions, s.impressions)).unwrap_or(0.0);
+    let site_note = if r.site_before.is_some() { format!("；全站点击同期 {}", pct(site_clicks)) } else { String::new() };
+    let (pb, pa) = (r.page_before, r.page_after);
+    if r.is_new {
+        let n = format!("新页面 4 周：展现 {:.0}、点击 {:.0}、{} 个查询词", pa.impressions, pa.clicks, r.new_queries);
+        return if pa.impressions >= 30.0 { ("positive", format!("看展现：{n}，已经被搜到")) } else if pa.impressions > 0.0 { ("neutral", format!("看展现：{n}，被搜到的还很少")) } else { ("neutral", "看展现：新页面 4 周内还没有搜索展现（新页面通常要更久，下次复盘再看）".into()) };
     }
-    let good = match metric {
-        "ctr" => rel(after.ctr, before.ctr) >= 0.10,
-        "impressions" => rel(after.impressions, before.impressions) >= 0.15 || clicks >= 0.10,
-        // 排名数字越小越好：前进 1 位以上
-        "position" => before.position > 0.0 && after.position > 0.0 && before.position - after.position >= 1.0 || clicks >= 0.10,
-        _ => return judge(before, after),
+    let adj_clicks = rel(pa.clicks, pb.clicks) - site_clicks;
+    if pb.clicks >= 5.0 && adj_clicks <= -0.15 {
+        return ("negative", format!("点击 {:.0} → {:.0}，扣掉全站变化后 {}，跌幅超过 15%{site_note}", pb.clicks, pa.clicks, pct(adj_clicks)));
+    }
+    if r.metric == "health" {
+        return ("neutral", format!("看体检：技术修复不按搜索流量判断，体检里这个问题没再出现就算修好（点击 {:.0} → {:.0}）", pb.clicks, pa.clicks));
+    }
+    let (b, a, label) = match (r.query_before, r.query_after) {
+        (Some(qb), Some(qa)) if !r.query.is_empty() => (qb, qa, format!("查询词「{}」", r.query)),
+        _ => (pb, pa, "页面".to_string()),
     };
-    if good { "positive" } else { "neutral" }
+    if b.impressions < 30.0 && a.impressions < 30.0 {
+        return ("neutral", format!("{label}的数据太少，还判断不了（展现 {:.0} → {:.0}）", b.impressions, a.impressions));
+    }
+    let (good, note) = match r.metric {
+        "ctr" => (rel(a.ctr, b.ctr) >= 0.10, format!("看{label}点击率：{:.1}% → {:.1}%", b.ctr * 100.0, a.ctr * 100.0)),
+        "position" => (b.position > 0.0 && a.position > 0.0 && b.position - a.position >= 1.0, format!("看{label}排名：{:.1} → {:.1}", b.position, a.position)),
+        "impressions" => (rel(a.impressions, b.impressions) - site_impr >= 0.15, format!("看{label}展现：{:.0} → {:.0}（全站同期 {}）", b.impressions, a.impressions, pct(site_impr))),
+        _ => (rel(a.clicks, b.clicks) - site_clicks >= 0.10, format!("看{label}点击：{:.0} → {:.0}，扣掉全站变化后 {}", b.clicks, a.clicks, pct(rel(a.clicks, b.clicks) - site_clicks))),
+    };
+    (if good { "positive" } else { "neutral" }, format!("{note}{site_note}"))
 }
 
 async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
@@ -1597,29 +1652,43 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     refresh_data(ctx, site, job).await;
     job.step("review", "running", "");
-    let rows: Vec<crate::site_data::Row> = crate::site_data::read_json(&crate::site_data::cache_dir(&site_dir), "gsc_pages.json");
+    let cache = crate::site_data::cache_dir(&site_dir);
+    let rows: Vec<crate::site_data::Row> = crate::site_data::read_json(&cache, "gsc_pages.json");
     let by_page: HashMap<&str, &crate::site_data::Row> = rows.iter().map(|r| (r.key.as_str(), r)).collect();
+    let qp: Vec<crate::site_data::Row> = crate::site_data::read_json(&cache, "gsc_query_page.json");
+    let site_after = site_snapshot(&site_dir);
     let t = now();
-    // 上线满 28 天（近 28 天窗口全部落在上线之后）才复盘；60 天后不再补。
+    // 上线满 28 天（近 28 天窗口全部落在上线之后）才复盘；60 天后不再补。新页面上线时没有数据，也复盘。
     let items: Vec<QueueItem> = site_ops::load_queue(&site_dir)
         .into_iter()
-        .filter(|i| i.status == "deployed" && i.review.is_empty() && i.before.is_some() && t.saturating_sub(i.deployed_at) >= 28 * DAY + 3 * DAY && t.saturating_sub(i.deployed_at) <= 60 * DAY)
+        .filter(|i| i.status == "deployed" && i.review.is_empty() && (i.before.is_some() || !i.new_pages.is_empty() || i.opp.change == "new_content") && t.saturating_sub(i.deployed_at) >= 28 * DAY + 3 * DAY && t.saturating_sub(i.deployed_at) <= 60 * DAY)
         .collect();
     let mut state = load_state(&site_dir);
     let mut lines = Vec::new();
+    let mut facts = Vec::new();
     let mut downgraded = site.ops.downgraded.clone();
-    let metric = group_rules(ctx, site).map(|g| g.metric);
     for i in &items {
+        let is_new = i.before.is_none();
+        let page = if i.opp.page.starts_with("https://") { i.opp.page.clone() } else { i.new_pages.first().cloned().unwrap_or_default() };
         let before = i.before.clone().unwrap_or_default();
-        let after = by_page.get(i.opp.page.as_str()).map(|r| (*r).clone()).unwrap_or_default();
-        let verdict = match &metric {
-            Some(m) => judge_for(m, &before, &after),
-            None => judge(&before, &after),
-        };
-        let note = format!(
-            "点击 {:.0} → {:.0}，点击率 {:.1}% → {:.1}%，排名 {:.1} → {:.1}",
-            before.clicks, after.clicks, before.ctr * 100.0, after.ctr * 100.0, before.position, after.position
-        );
+        let after = by_page.get(page.as_str()).map(|r| (*r).clone()).unwrap_or_default();
+        let query = i.opp.expect_query.trim().to_string();
+        let query_after = qp.iter().find(|r| !query.is_empty() && r.key.eq_ignore_ascii_case(&query) && r.key2 == page).cloned();
+        let metric = if i.opp.expect_metric.is_empty() { crate::managed::default_metric_for(&i.opp.change).to_string() } else { i.opp.expect_metric.clone() };
+        let (verdict, note) = judge_expect(&ReviewInput {
+            metric: &metric,
+            is_new,
+            page_before: &before,
+            page_after: &after,
+            query: &query,
+            query_before: i.before_query.as_ref(),
+            query_after: query_after.as_ref(),
+            site_before: i.before_site.as_ref(),
+            site_after: &site_after,
+            new_queries: qp.iter().filter(|r| r.key2 == page).count(),
+        });
+        let note = if i.opp.expect_note.is_empty() { note } else { format!("{note}（预期：{}）", i.opp.expect_note) };
+        facts.push(format!("- {}｜{}｜{}", i.opp.title, match verdict { "positive" => "有效", "negative" => "负面", _ => "持平" }, note));
         let kind = i.change_kind.split(',').next().unwrap_or("").to_string();
         let neg = state.negatives.entry(kind.clone()).or_insert(0);
         if verdict == "negative" {
@@ -1634,6 +1703,7 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         site_ops::update_item(&site_dir, &i.id, t, |x| {
             x.review = verdict.into();
             x.review_note = note.clone();
+            x.review_metric = metric.clone();
             x.after = Some(after.clone());
         })?;
         lines.push(format!("{}：{}（{note}）", i.opp.title, match verdict { "positive" => "正面", "negative" => "负面", _ => "持平" }));
@@ -1653,11 +1723,34 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         })?;
     }
     if !lines.is_empty() {
-        let md = format!("# {} 效果复盘 · {}\n\n{}\n", site.name, today(), lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n"));
+        let mut md = format!("# {} 效果复盘 · {}\n\n{}\n", site.name, today(), lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n"));
+        // 结论由 Pilot 按数据算；AI 只帮着解释原因（不改结论）
+        if !facts.is_empty() {
+            if let Some(why) = explain_review(ctx, site, &facts, &site_after).await {
+                md.push_str(&format!("\n## 原因分析\n\n{why}\n"));
+            }
+        }
         write_report(&site_dir, &format!("{}-review", today()), &md)?;
     }
     job.step("review", "ok", &format!("复盘 {} 条", items.len()));
     Ok(format!("复盘 {} 条改动", items.len()))
+}
+
+/// 让 AI 解释这批复盘结果的原因（全站趋势、季节、算法更新、页面本身）。结论不变，失败就不写。
+async fn explain_review(ctx: &Ctx, site: &Site, facts: &[String], site_after: &crate::site_data::Row) -> Option<String> {
+    if over_budget(&budget(site, &ctx.site_dir(&site.id), &ctx.state().convos)).is_some() {
+        return None;
+    }
+    let msg = format!(
+        "【托管运营 · 效果复盘】你是「{}」（{}）的运营负责人。下面是 Pilot 按 Search Console 数据算出的复盘结论（上线 4 周后对比；已经扣掉全站的整体变化）。结论不用改，也不用读代码。\n请用中文写几句话解释原因：哪些可能和全站趋势、季节或搜索引擎更新有关，哪些更可能是改动本身起了作用或没起作用；对「持平」和「负面」的，各给一条下一步建议。不要编造这里没有的数据。\n\n全站近 28 天：点击 {:.0}、展现 {:.0}\n{}\n",
+        site.name,
+        site.domain,
+        site_after.clicks,
+        site_after.impressions,
+        facts.join("\n")
+    );
+    let (_, conv) = run_conversation(ctx, site, "plan", "", msg).await.ok()?;
+    conv.messages.iter().rev().find(|m| m.role == "assistant" && !m.error).map(|m| m.text.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -1721,7 +1814,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let health = crate::site_stage::latest_health(&site_dir, if stage.stage == "new" { 2000 } else { 600 });
     let health = if health.is_empty() { String::new() } else { format!("【最近一次体检】\n{health}\n\n") };
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面，然后制定本周最多 {n} 项具体工作。\n读站点要省：先看目录结构、导航和首页，再挑流量最大或这周要动的几个页面看，一共读 15 个文件左右就够，不要逐篇通读所有文章；需要更细的数据（某个页面的查询词、某类查询词）用站点数据工具查，不要靠读文件猜。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排撑不起一个完整页面的窄题（页面厚度见上）。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要改推荐链接、邀请码、本站自己的价格和优惠、法律页面、依赖或部署配置。文章里引用的第三方工具价格可以更新，但要标明核对日期和来源。\n- 这是无人值守任务，没人回答问题：规则之间有冲突时（比如阶段建议和运营目标不一致），以「允许的动作」和运营目标为准，自己做出判断，把判断和需要运营人员留意的事写进 notes。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"notes\":\"给运营人员的说明：冲突怎么处理的、需要留意或确认的事（没有就留空）\",\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1}}]}}\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面，然后制定本周最多 {n} 项具体工作。\n读站点要省：先看目录结构、导航和首页，再挑流量最大或这周要动的几个页面看，一共读 15 个文件左右就够，不要逐篇通读所有文章；需要更细的数据（某个页面的查询词、某类查询词）用站点数据工具查，不要靠读文件猜。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排撑不起一个完整页面的窄题（页面厚度见上）。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要改推荐链接、邀请码、本站自己的价格和优惠、法律页面、依赖或部署配置。文章里引用的第三方工具价格可以更新，但要标明核对日期和来源。\n- 这是无人值守任务，没人回答问题：规则之间有冲突时（比如阶段建议和运营目标不一致），以「允许的动作」和运营目标为准，自己做出判断，把判断和需要运营人员留意的事写进 notes。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"notes\":\"给运营人员的说明：冲突怎么处理的、需要留意或确认的事（没有就留空）\",\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1,\"expect\":{{\"metric\":\"ctr|position|impressions|clicks|health\",\"query\":\"看哪个查询词（看整个页面就留空）\",\"note\":\"一句话写预期，比如：点击率从 2.2% 提到 3% 以上\"}}}}]}}\nexpect 是这条改动预期影响的指标：改标题和描述一般看点击率（ctr），补内容看目标查询词的排名（position），新页面看展现（impressions），修技术问题看体检（health）；按这条任务的实际意图选，上线 4 周后 Pilot 会拿数据对比。\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
@@ -1769,6 +1862,9 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             change: t.change.clone(),
             source: t.source.clone(),
             target: t.query.clone(),
+            expect_metric: if crate::managed::EXPECT_METRICS.contains(&t.expect.metric.as_str()) { t.expect.metric.clone() } else { String::new() },
+            expect_query: t.expect.query.trim().to_string(),
+            expect_note: t.expect.note.trim().to_string(),
             score: 1000.0 - (t.priority.max(1) as f64) * 10.0 - i as f64,
             ..Default::default()
         })
@@ -1973,17 +2069,36 @@ mod tests {
     }
 
     #[test]
-    fn reviews_judge_clicks_and_ctr() {
-        let r = |c: f64, ctr: f64| Row { clicks: c, ctr, ..Default::default() };
-        assert_eq!(judge(&r(100.0, 0.02), &r(80.0, 0.02)), "negative");
-        assert_eq!(judge(&r(100.0, 0.02), &r(115.0, 0.02)), "positive");
-        assert_eq!(judge(&r(100.0, 0.02), &r(100.0, 0.025)), "positive");
-        assert_eq!(judge(&r(100.0, 0.02), &r(95.0, 0.02)), "neutral");
-        assert_eq!(judge(&r(0.0, 0.0), &r(3.0, 0.01)), "positive");
-        // 衡量标准：点击率涨了就算正面；点击跌 15% 不管看什么都是负面
-        assert_eq!(judge_for("ctr", &r(100.0, 0.02), &r(100.0, 0.023)), "positive");
-        assert_eq!(judge_for("impressions", &r(100.0, 0.02), &r(80.0, 0.02)), "negative");
-        assert_eq!(judge_for("conversions", &r(100.0, 0.02), &r(115.0, 0.02)), "positive");
+    fn reviews_follow_the_expected_metric_and_subtract_site_trend() {
+        let r = |c: f64, i: f64, ctr: f64, p: f64| Row { clicks: c, impressions: i, ctr, position: p, ..Default::default() };
+        let site = r(1000.0, 50000.0, 0.02, 10.0);
+        let base = |metric: &'static str| ReviewInput { metric, is_new: false, page_before: &DEF, page_after: &DEF, query: "", query_before: None, query_after: None, site_before: None, site_after: &DEF, new_queries: 0 };
+        static DEF: Row = Row { key: String::new(), key2: String::new(), clicks: 0.0, impressions: 0.0, ctr: 0.0, position: 0.0 };
+        // 改标题：点击率涨 10% 以上算有效
+        let (b, a) = (r(100.0, 5000.0, 0.020, 7.9), r(105.0, 4800.0, 0.023, 7.9));
+        assert_eq!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, ..base("ctr") }).0, "positive");
+        // 排名前进 1 位以上
+        let (b, a) = (r(50.0, 3000.0, 0.017, 12.4), r(52.0, 3100.0, 0.017, 9.8));
+        assert_eq!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, ..base("position") }).0, "positive");
+        // 页面点击跌 20%，但全站同期跌了 25%：扣掉之后不算负面
+        let (b, a) = (r(100.0, 5000.0, 0.02, 8.0), r(80.0, 4500.0, 0.018, 8.0));
+        let (sb, sa) = (site.clone(), r(750.0, 45000.0, 0.017, 10.0));
+        assert_ne!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, site_before: Some(&sb), site_after: &sa, ..base("ctr") }).0, "negative");
+        // 全站没变，页面点击跌 20%：负面
+        assert_eq!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, site_before: Some(&sb), site_after: &sb, ..base("ctr") }).0, "negative");
+        // 目标查询词：两头都有数据时看查询词
+        let (qb, qa) = (r(2.0, 400.0, 0.005, 21.0), r(9.0, 900.0, 0.01, 8.5));
+        let v = judge_expect(&ReviewInput { page_before: &b, page_after: &b, query: "gate kyc", query_before: Some(&qb), query_after: Some(&qa), ..base("position") });
+        assert_eq!(v.0, "positive");
+        assert!(v.1.contains("gate kyc"), "{}", v.1);
+        // 新页面：4 周有 30 以上展现算被搜到
+        let a = r(3.0, 120.0, 0.025, 18.0);
+        assert_eq!(judge_expect(&ReviewInput { is_new: true, page_after: &a, new_queries: 6, ..base("impressions") }).0, "positive");
+        // 数据太少：持平
+        let (b, a) = (r(0.0, 10.0, 0.0, 30.0), r(0.0, 12.0, 0.0, 25.0));
+        assert_eq!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, ..base("position") }).0, "neutral");
+        // 技术修复不按流量判断
+        assert_eq!(judge_expect(&ReviewInput { page_before: &b, page_after: &a, ..base("health") }).0, "neutral");
     }
 
     #[test]

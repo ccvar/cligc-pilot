@@ -6,7 +6,7 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, METRIC_LABEL, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
+  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
 
   const g = $derived(managed.editor);
@@ -123,12 +123,12 @@
       </div>
 
      {:else if step === 2}
-      <div class="field"><span class="lbl">目标预设 <span class="faint cnt">点选会填好目标、勾上推荐的动作、定好衡量标准，都可以再改；可以多选</span></span>
+      <div class="field"><span class="lbl">目标预设 <span class="faint cnt">点选会填好目标、勾上推荐的动作，都可以再改；可以多选</span></span>
         <div class="presets">
           {#each GOAL_PRESETS as p (p.key)}
             <button class="preset" class:on={picked.includes(p.key)} onclick={() => togglePreset(p.key)} aria-pressed={picked.includes(p.key)}>
               <span class="pr-top"><Icon name={p.icon} size={13} /><b>{p.name}</b>{#if p.key === suggested && !picked.length}<span class="rec">推荐</span>{/if}{#if picked.includes(p.key)}<Icon name="check" size={12} />{/if}</span>
-              <small>{p.fits} · 看{METRIC_LABEL[p.metric]}</small>
+              <small>{p.fits}</small>
             </button>
           {/each}
         </div>
@@ -136,9 +136,6 @@
       <div class="field"><label for="ge-goal">运营目标</label>
         <textarea id="ge-goal" class="tin plain" rows="2" bind:value={g.goal} maxlength="500" placeholder="例如：提升中文页的 Google 自然流量，重点是费率、邀请和下载相关的查询词"></textarea>
         <small>一两句话。每次制定计划、每个改动都会围绕它。</small>
-      </div>
-      <div class="field"><span class="lbl">衡量标准 <span class="faint cnt">效果复盘按它判断改动有没有用；点击跌 15% 以上始终算负面</span></span>
-        <div class="seg metric">{#each Object.entries(METRIC_LABEL) as [k, l] (k)}<button class:on={g.metric === k} onclick={() => g && (g.metric = k)}>{l}</button>{/each}</div>
       </div>
       <div class="field"><span class="lbl">允许的动作 <span class="faint cnt">健康巡查始终开启</span></span>
         <div class="acts">
@@ -167,7 +164,7 @@
       <div class="chosen">
         <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="link-btn" onclick={() => (step = 1)}>修改</button></div>
         <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
-        <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 看{METRIC_LABEL[g.metric] ?? '点击'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
+        <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
       </div>
       <div class="sec"><Icon name="gauge" size={13} />AI 自主程度</div>
       <div class="auto">
@@ -286,7 +283,6 @@
   .pr-top :global(.ico) { color: var(--dim); }
   .preset small { font-size: 11px; color: var(--faint); }
   .rec { font-size: 10px; font-weight: 600; color: var(--ok); background: var(--su-ok-soft); border-radius: 999px; padding: 1px 6px; }
-  .seg.metric { flex-wrap: wrap; }
   .acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
   .act { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 9px; cursor: pointer; transition: border-color .12s, background-color .12s; }
   .act:hover { background: var(--su-hover); }

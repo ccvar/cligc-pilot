@@ -312,6 +312,10 @@ export interface Opportunity {
   source?: string;
   /** 目标查询词 */
   target?: string;
+  /** AI 计划时写下的预期效果（复盘按它对比） */
+  expect_metric?: string;
+  expect_query?: string;
+  expect_note?: string;
   key: string;
   kind: string;
   title: string;
@@ -387,6 +391,8 @@ export interface OpsItem {
   retry_note?: string;
   watch_stage?: number;
   watched?: string;
+  /** 复盘看的是哪个指标 */
+  review_metric?: string;
 }
 
 // ---- 多站点 ----
@@ -465,7 +471,7 @@ export interface ManagedSite {
 }
 export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }
 export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string; change?: string; source?: string }
-export interface PlanTask { title: string; page: string; change: string; why: string; priority: number; source?: string; query?: string }
+export interface PlanTask { title: string; page: string; change: string; why: string; priority: number; source?: string; query?: string; expect?: { metric?: string; query?: string; note?: string } }
 export interface StageInfo { stage: string; auto_stage: string; reason: string; manual: string }
 /** AI 归纳的站点定位；by=user 表示运营人员改过，AI 不再覆盖。 */
 export interface Positioning { text: string; by: string; updated: number }

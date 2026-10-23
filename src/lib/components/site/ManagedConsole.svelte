@@ -16,7 +16,7 @@
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -162,7 +162,7 @@
           {#if p}
             <ol class="plan">
               {#each p.plan.tasks as t, i (i)}
-                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b></div><div class="pw"><WhyChips change={t.change} source={t.source || (t.change === 'new_content' ? 'positioning' : t.change === 'technical' ? 'health' : 'data')} target={t.query} /></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
+                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b></div><div class="pw"><WhyChips change={t.change} source={t.source || (t.change === 'new_content' ? 'positioning' : t.change === 'technical' ? 'health' : 'data')} target={t.query} /></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.expect?.note}<small class="expect"><Icon name="target" size={11} />预期：{t.expect.note}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
               {/each}
             </ol>
           {:else}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
@@ -218,7 +218,6 @@
           </h3>
           {#if g.goal?.trim()}<p class="goal">{g.goal}</p>{/if}
           <div class="rules">
-            <span><Icon name="gauge" size={12} />看{METRIC_LABEL[g.metric] ?? '点击'}</span>
             <span><Icon name="checks" size={12} />{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span>
             {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
@@ -304,6 +303,7 @@
 </div>
 
 <style>
+  .expect { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
   .nsite { width: 150px; min-width: 150px; max-width: 150px; vertical-align: top; }
   .nsite span { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
   .stuck { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.6; }

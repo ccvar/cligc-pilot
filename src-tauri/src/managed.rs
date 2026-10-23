@@ -158,16 +158,6 @@ fn default_metric() -> String {
     "clicks".into()
 }
 pub const METRICS: &[&str] = &["clicks", "ctr", "impressions", "position", "conversions", "health"];
-pub fn metric_label(m: &str) -> &'static str {
-    match m {
-        "ctr" => "点击率",
-        "impressions" => "展现和覆盖的查询词",
-        "position" => "平均排名",
-        "conversions" => "GA4 转化事件",
-        "health" => "体检问题数",
-        _ => "点击",
-    }
-}
 
 pub const ACTIONS: &[&str] = &["meta", "content", "internal_links", "new_content", "technical"];
 fn all_actions() -> Vec<String> {
@@ -225,7 +215,6 @@ impl ManagedGroup {
         if !self.goal.trim().is_empty() {
             out.push_str(&format!("【运营目标】\n{}\n\n", self.goal.trim()));
         }
-        out.push_str(&format!("【衡量标准】主要看{}；效果复盘按它判断改动有没有用。\n\n", metric_label(&self.metric)));
         if self.min_page_chars > 0 {
             out.push_str(&format!(
                 "【页面厚度】新页面正文不少于 {} 字（不算标题、导航和代码）；不同类型参考：完整教程 / 指南 2000–4000 字并配真实截图，对比 / 评测 2500 字以上并有对比表，单个问题解答 1200–2000 字，术语 / 概念解释 800–1500 字。长度跟着把问题讲完整走，不为凑字数加内容；撑不起的选题换掉或并进已有页面。\n\n",
@@ -834,6 +823,34 @@ pub struct PlanTask {
     /// 目标查询词
     #[serde(default)]
     pub query: String,
+    /// AI 写下的预期效果：上线 4 周后 Pilot 拿它和数据对比。
+    #[serde(default)]
+    pub expect: Expect,
+}
+
+/// 一条任务预期影响什么：哪个指标（ctr / position / impressions / clicks / health）、
+/// 哪个查询词（空＝整个页面）、一句话说预期从多少到多少。
+#[derive(Clone, Serialize, Deserialize, Debug, Default, PartialEq)]
+pub struct Expect {
+    #[serde(default)]
+    pub metric: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+pub const EXPECT_METRICS: &[&str] = &["ctr", "position", "impressions", "clicks", "health"];
+
+/// 没写预期时按改动类型兜底：改标题描述看点击率，补内容 / 内链看排名，新内容看展现，技术问题看体检。
+pub fn default_metric_for(change: &str) -> &'static str {
+    match change {
+        "meta" | "title" | "meta_description" => "ctr",
+        "content" | "internal_links" => "position",
+        "new_content" => "impressions",
+        "technical" => "health",
+        _ => "clicks",
+    }
 }
 
 /// 从模型回复里取出计划 JSON（```json … ``` 代码块，或回复里第一个 JSON 数组）。
@@ -1065,6 +1082,16 @@ mod tests {
         // 本地文件的导入、样式文件，小改动可以自动上线
         let ok = "diff --git a/src/components/A.astro b/src/components/A.astro\n--- a/src/components/A.astro\n+++ b/src/components/A.astro\n@@ -1 +1 @@\n+import Links from './Links.astro';\n+<Links items={block.links} />\ndiff --git a/src/styles/a.css b/src/styles/a.css\n--- a/src/styles/a.css\n+++ b/src/styles/a.css\n@@ -1 +1 @@\n+.links { margin: 0; }\n";
         assert!(managed_verdict(ok, true, 0, "small").is_empty(), "{:?}", managed_verdict(ok, true, 0, "small"));
+    }
+
+    #[test]
+    fn plan_tasks_carry_the_expected_effect() {
+        let r = "```json\n{\"notes\":\"\",\"positioning\":\"x\",\"tasks\":[{\"title\":\"改 /zh/fees/ 标题\",\"page\":\"https://x.com/zh/fees/\",\"change\":\"meta\",\"why\":\"点击率低\",\"priority\":1,\"expect\":{\"metric\":\"ctr\",\"query\":\"gate 手续费\",\"note\":\"点击率从 2.2% 提到 3% 以上\"}},{\"title\":\"补内容\",\"change\":\"content\",\"priority\":2}]}\n```";
+        let (_, t) = parse_plan_full(r).unwrap();
+        assert_eq!(t[0].expect, Expect { metric: "ctr".into(), query: "gate 手续费".into(), note: "点击率从 2.2% 提到 3% 以上".into() });
+        assert_eq!(t[1].expect, Expect::default());
+        assert_eq!(default_metric_for("meta"), "ctr");
+        assert_eq!(default_metric_for("new_content"), "impressions");
     }
 
     #[test]

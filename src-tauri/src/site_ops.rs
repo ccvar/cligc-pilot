@@ -38,6 +38,13 @@ pub struct Opportunity {
     /// 目标查询词（新内容、计划项里 AI 给的）。
     #[serde(default)]
     pub target: String,
+    /// AI 计划时写下的预期效果（见 managed::Expect）：复盘按它对比。
+    #[serde(default)]
+    pub expect_metric: String,
+    #[serde(default)]
+    pub expect_query: String,
+    #[serde(default)]
+    pub expect_note: String,
 }
 
 /// 各排名位置的大致点击率（用于判断「点击率是否明显偏低」，只求量级正确）。
@@ -117,6 +124,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             prev_clicks: 0.0,
             score: p.impressions * (exp - p.ctr),
             change: "meta".into(),
+            expect_metric: String::new(),
+            expect_query: String::new(),
+            expect_note: String::new(),
         });
     }
     // 2) 排名 8–20（第一页边缘 / 第二页）→ 补内容、加内链
@@ -147,6 +157,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             prev_clicks: 0.0,
             score: impr * (expected_ctr(5.0) - expected_ctr(pos)).max(0.0),
             change: "content".into(),
+            expect_metric: String::new(),
+            expect_query: String::new(),
+            expect_note: String::new(),
         });
     }
     // 3) 点击明显下滑（与前 28 天比）
@@ -176,6 +189,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             prev_clicks: old.clicks,
             score: old.clicks - p.clicks,
             change: "content".into(),
+            expect_metric: String::new(),
+            expect_query: String::new(),
+            expect_note: String::new(),
         });
     }
     // 4) 有需求但没有像样的页面（所有页面都排在 20 名以后）
@@ -207,6 +223,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             prev_clicks: 0.0,
             score: q.impressions * expected_ctr(8.0),
             change: "new_content".into(),
+            expect_metric: String::new(),
+            expect_query: String::new(),
+            expect_note: String::new(),
         });
     }
     // 5) 技术问题：Bing 抓取错误、Search Console sitemap 报错
@@ -345,6 +364,14 @@ pub struct QueueItem {
     /// 因为线上验收严重失败被回滚的次数（同类改动累计 2 次就不再自动上线）。
     #[serde(default)]
     pub verify_rollbacks: u32,
+    /// 上线时目标查询词在这个页面上的表现、全站近 28 天的点击和展现（复盘时扣掉全站的整体变化）。
+    #[serde(default)]
+    pub before_query: Option<Row>,
+    #[serde(default)]
+    pub before_site: Option<Row>,
+    /// 复盘看的是哪个指标（ctr / position / impressions / clicks / health）。
+    #[serde(default)]
+    pub review_metric: String,
 }
 
 /// 这一条要不要人来处理：待确认、失败，或者上线了但线上验收有待核对的问题。

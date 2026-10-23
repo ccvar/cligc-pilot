@@ -141,7 +141,7 @@
   <div class="tool"><span class="tcode">{h.verb}</span><span class="tdetail" title={h.full}>{h.target}</span>{#if (t.count ?? 0) > 1}<span class="tool-count">×{t.count}</span>{/if}</div>
 {/snippet}
 
-{#snippet planCard(plan: { notes: string; positioning: string; tasks: { title: string; page?: string; change: string; why?: string; source?: string; query?: string }[] })}
+{#snippet planCard(plan: { notes: string; positioning: string; tasks: { title: string; page?: string; change: string; why?: string; source?: string; query?: string; expect?: { note?: string } }[] })}
   <div class="su plan-card">
     <div class="pc-head"><b>本周计划 · {plan.tasks.length} 项</b><span>已放进这个站点的「待处理」</span></div>
     {#if plan.notes}<div class="pc-notes"><b>给你的说明</b><div>{plan.notes}</div></div>{/if}
@@ -153,6 +153,7 @@
             <b>{t.title}</b>
             <div class="pc-why"><WhyChips change={t.change} source={t.source} target={t.query} /></div>
             {#if t.why}<p>{t.why}</p>{/if}
+            {#if t.expect?.note}<p class="pc-expect">预期：{t.expect.note}</p>{/if}
             {#if t.page}<small>{t.page}</small>{/if}
           </div>
         </li>
@@ -800,6 +801,7 @@
   .pc-body { min-width: 0; flex: 1; }
   .pc-body b { font-size: 13px; font-weight: 550; line-height: 1.5; }
   .pc-why { margin: 4px 0 2px; }
+  .pc-expect { color: var(--dim); font-size: 12.5px; }
   .pc-body p { margin: 3px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .pc-body small { display: block; margin-top: 2px; font-size: 11px; color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
   .pc-pos { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
