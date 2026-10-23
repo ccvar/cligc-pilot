@@ -873,7 +873,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 读站点要省：只看这次要改的页面、它的模板，以及准备互相链接的两三篇，不要逐篇通读；需要查询词等数据用站点数据工具查。\n\
 1. 找到这个页面对应的源文件，按上面的依据修改。改动方向：{guide}\n\
 2. 改动小而集中，只处理这一个机会；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
-   能用站点现有的数据字段和组件做到，就只改内容和数据，不要改代码；确实要动页面模板，只做最小的改动。不要为这一条新增功能、改类型定义、校验规则或 src/lib 之类的程序代码——这类改动不能自动上线，做不到的写在说明里，留给运营人员决定。\n\
+   {code_rule}\n\
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
 不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；需要确认的操作在这里会被自动拒绝。\n\
@@ -884,6 +884,8 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         ev = evidence_block(&item.opp),
         base = site.default_branch,
         guide = change_guidance(&item.opp.change),
+        // 托管方案里写了代码改动的规则（见 plan_brief 的【代码改动】）；没托管就按保守的来
+        code_rule = if group_rules(ctx, site).is_some() { "代码能不能改、改多少，按上面【代码改动】的规则。" } else { "能用站点现有的数据字段和组件做到，就只改内容和数据；确实要改代码，只做最小的改动。" },
         build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
     );
     job.line(&format!("交给 AI：{}", item.opp.title));
@@ -939,7 +941,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize) } else { cls.reasons.clone() };
+    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes) } else { cls.reasons.clone() };
     let mut verdict = if let Err(e) = &built {
         format!("检查没通过：{}", e.lines().next().unwrap_or(""))
     } else if reasons.is_empty() {

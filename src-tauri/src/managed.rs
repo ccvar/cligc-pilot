@@ -115,9 +115,21 @@ pub struct ManagedGroup {
     /// 衡量标准（效果复盘看什么）：clicks / ctr / impressions / position / conversions / health。
     #[serde(default = "default_metric")]
     pub metric: String,
+    /// 代码改动（很多站点的文章、页面写在代码里）：review＝留给你确认；small＝小改动自动上线；all＝都自动上线。
+    /// 依赖、构建 / 部署配置、Worker / 服务端、读环境变量或调外部服务的代码，任何一档都不自动上线。
+    #[serde(default = "default_code")]
+    pub code_changes: String,
     #[serde(default)]
     pub created_at: u64,
 }
+
+fn default_code() -> String {
+    "small".into()
+}
+pub const CODE_CHANGES: &[&str] = &["review", "small", "all"];
+/// 「小改动」的上限：代码文件改动的总行数和文件数。
+pub const SMALL_CODE_LINES: usize = 80;
+pub const SMALL_CODE_FILES: usize = 5;
 
 fn default_autonomy() -> String {
     "auto".into()
@@ -195,6 +207,7 @@ impl ManagedGroup {
             topics: String::new(),
             metric: default_metric(),
             min_page_chars: default_min_page(),
+            code_changes: default_code(),
             created_at: 0,
         }
     }
@@ -222,6 +235,11 @@ impl ManagedGroup {
         let allowed: Vec<&str> = ACTIONS.iter().filter(|a| self.allows(a)).map(|a| action_label(a)).collect();
         let denied: Vec<&str> = ACTIONS.iter().filter(|a| !self.allows(a)).map(|a| action_label(a)).collect();
         out.push_str(&format!("【允许的动作】{}{}\n\n", allowed.join("、"), if denied.is_empty() { String::new() } else { format!("（不要做：{}）", denied.join("、")) }));
+        out.push_str(&match self.code_changes.as_str() {
+            "review" => "【代码改动】能用站点现有的数据字段和组件做到，就只改内容和数据；需要改模板、组件或其它代码时可以改，但这类改动要运营人员确认后才上线，改动越小越好。\n\n".to_string(),
+            "all" => "【代码改动】文章和页面写在代码里时，可以直接改模板、组件和站点代码来完成任务，改动要集中。不要加依赖、改构建 / 部署配置、改 Worker / 服务端代码，也不要读环境变量或调用外部服务——这些不会自动上线。\n\n".to_string(),
+            _ => format!("【代码改动】文章和页面写在代码里时，可以改模板、组件和站点代码来完成任务，但要小而集中：代码文件合计不超过 {SMALL_CODE_LINES} 行、{SMALL_CODE_FILES} 个文件（文章正文这类数据不算），超过就留给运营人员确认。不要加依赖、改构建 / 部署配置、改 Worker / 服务端代码，也不要读环境变量或调用外部服务——这些不会自动上线。\n\n"),
+        });
         let topics = self.topic_list();
         if !topics.is_empty() {
             out.push_str(&format!("【选题清单】新内容优先从这里选（已经有页面覆盖的跳过）：\n{}\n\n", topics.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")));
@@ -339,6 +357,9 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     if !matches!(g.new_content.as_str(), "auto" | "review") {
         return Err("新内容发布方式只能是自动发布或审核后发布".into());
     }
+    if !CODE_CHANGES.contains(&g.code_changes.as_str()) {
+        return Err(format!("未知的代码改动设置：{}", g.code_changes));
+    }
     if g.daily_changes > 50 {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
     }
@@ -435,22 +456,78 @@ pub fn digests_dir(data_dir: &Path) -> PathBuf {
 // 全托管的自动上线判定（比第 4 档白名单宽，但有硬边界）
 // ---------------------------------------------------------------------------
 
-/// 永远不自动改的文件：依赖、构建 / 部署配置、Worker / 函数代码、脚本、CI。
-pub fn forbidden_path(path: &str) -> bool {
+
+/// 任何代码设置下都不自动改的文件：依赖、构建 / 部署配置、CI、Worker / 函数 / 服务端、脚本、密钥配置，
+/// 以及站点代码以外的后端语言。
+pub fn hard_forbidden(path: &str) -> bool {
     let p = path.trim_start_matches("./");
     let name = p.rsplit('/').next().unwrap_or(p);
     let first = p.split('/').next().unwrap_or("");
+    let segs: Vec<&str> = p.split('/').collect();
     matches!(
         name,
         "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json"
-            | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_redirects" | "_worker.js" | "tsconfig.json"
-    ) || name.starts_with("astro.config")
+            | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_redirects" | "_worker.js" | "tsconfig.json" | "middleware.ts" | "middleware.js"
+    ) || name.starts_with(".env")
+        || name.starts_with("astro.config")
         || name.starts_with("vite.config")
         || name.starts_with("next.config")
         || name.starts_with("svelte.config")
-        || matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin")
+        || name.starts_with("tailwind.config")
+        || matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin" | "migrations")
+        || segs.iter().any(|s| matches!(*s, "api" | "server" | "functions" | "middleware"))
         || matches!(name, "go.mod" | "go.sum" | "Makefile" | "Dockerfile")
-        || ["js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "sh", "rs", "go", "toml", "yml", "yaml"].iter().any(|e| name.ends_with(&format!(".{e}")))
+        || ["py", "sh", "rs", "go", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}")))
+}
+
+/// 站点代码（模板、组件、样式、前端脚本）：按方案的「代码改动」设置决定能不能自动上线。
+fn site_code_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    ["ts", "tsx", "js", "jsx", "mjs", "cjs", "css", "scss", "less"].iter().any(|e| name.ends_with(&format!(".{e}")))
+}
+
+/// 模板类文件（.astro / .vue / .svelte）里写着代码，和代码文件一样查危险写法。
+fn template_file(path: &str) -> bool {
+    ["astro", "vue", "svelte", "jsx", "tsx"].iter().any(|e| path.ends_with(&format!(".{e}")))
+}
+
+/// 新加的代码里不该自动上线的写法：读环境变量 / 密钥、调外部服务、执行命令、动态执行、引入新的外部包。
+pub fn risky_code(line: &str) -> Option<&'static str> {
+    let t = line.trim();
+    if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
+        return None;
+    }
+    for (pat, why) in [
+        ("process.env", "读环境变量"),
+        ("import.meta.env", "读环境变量"),
+        ("Astro.locals.runtime", "读运行环境（密钥、数据库）"),
+        ("child_process", "执行命令"),
+        ("eval(", "动态执行代码"),
+        ("new Function(", "动态执行代码"),
+        ("fetch(", "请求外部服务"),
+        ("XMLHttpRequest", "请求外部服务"),
+        ("document.cookie", "读写 cookie"),
+        ("dangerouslySetInnerHTML", "直接插入 HTML"),
+        ("set:html", "直接插入 HTML"),
+        ("<script src=\"http", "引入外部脚本"),
+    ] {
+        if t.contains(pat) {
+            return Some(why);
+        }
+    }
+    // 新引入的外部包（不是本地文件 / 路径别名 / astro: 虚拟模块）
+    let import_from = t.strip_prefix("import ").and_then(|r| r.rsplit_once(" from ").map(|x| x.1)).or_else(|| t.strip_prefix("import ").filter(|r| r.starts_with('\'') || r.starts_with('"')));
+    if let Some(spec) = import_from {
+        let spec = spec.trim().trim_end_matches(';').trim_matches(['\'', '"']);
+        let local = spec.starts_with('.') || spec.starts_with('/') || spec.starts_with("~/") || spec.starts_with("@/") || spec.starts_with("$lib") || spec.starts_with("astro:") || spec.starts_with("astro/") || spec == "astro";
+        if !local && !spec.is_empty() {
+            return Some("引入了外部包");
+        }
+    }
+    if t.contains("require(") {
+        return Some("引入了外部包");
+    }
+    None
 }
 
 /// 推荐 / 邀请 / 返佣相关的内容：改动里只要删改了带这些标记的行，就不自动上线。
@@ -649,20 +726,33 @@ const MAX_CHANGED_LINES: usize = 400;
 const MAX_NEW_FILE_LINES: usize = 3000;
 
 /// `min_page`：新页面正文下限（字，0＝不检查），见 ManagedGroup.min_page_chars。
-pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize) -> Vec<String> {
+/// `code`：方案的「代码改动」设置（review / small / all），见 ManagedGroup.code_changes。
+pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str) -> Vec<String> {
     let mut reasons = Vec::new();
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
+    let (mut code_lines, mut code_files) = (0usize, 0usize);
     for f in split_diff(diff) {
         let file = &f.file;
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
-        if data_file(file) && !data {
-            let line = f.added.iter().chain(&f.removed).find(|l| !data_line(l)).map(|l| l.trim().chars().take(60).collect::<String>()).unwrap_or_default();
-            reasons.push(format!("{file}：数据文件里有像代码的改动（比如「{line}」），留给你确认"));
-        } else if !data && forbidden_path(file) {
-            reasons.push(format!("{file}：依赖、配置或代码文件不自动改"));
+        // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本
+        let is_code = !data && !hard_forbidden(file) && (data_file(file) || site_code_file(file));
+        if hard_forbidden(file) {
+            reasons.push(format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改"));
+        } else if is_code {
+            code_files += 1;
+            code_lines += f.added.len() + f.removed.len();
+            if code == "review" {
+                let line = f.added.iter().chain(&f.removed).find(|l| !data_line(l)).map(|l| l.trim().chars().take(60).collect::<String>()).unwrap_or_default();
+                reasons.push(format!("{file}：改了代码（比如「{line}」），这个方案设成代码改动留给你确认"));
+            }
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
             reasons.push(format!("{file}：不是页面内容文件"));
+        }
+        if is_code || template_file(file) {
+            if let Some((why, l)) = f.added.iter().find_map(|l| risky_code(l).map(|w| (w, l))) {
+                reasons.push(format!("{file}：新加的代码{why}（「{}」），留给你确认", l.trim().chars().take(60).collect::<String>()));
+            }
         }
         if f.deleted {
             reasons.push(format!("{file}：删除文件不自动执行"));
@@ -710,6 +800,9 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize) -> 
                 }
             }
         }
+    }
+    if code == "small" && (code_lines > SMALL_CODE_LINES || code_files > SMALL_CODE_FILES) {
+        reasons.push(format!("代码改动 {code_lines} 行、{code_files} 个文件，超过「小改动」的上限（{SMALL_CODE_LINES} 行、{SMALL_CODE_FILES} 个文件）"));
     }
     if changed > MAX_CHANGED_LINES {
         reasons.push(format!("改动已有文件 {changed} 行，超过自动上线的上限（{MAX_CHANGED_LINES} 行）"));
@@ -831,14 +924,14 @@ mod group_tests {
     #[test]
     fn thin_new_pages_and_leaked_internal_notes_are_not_auto_shipped() {
         let thin = "diff --git a/src/content/a.md b/src/content/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/a.md\n@@ -0,0 +1,4 @@\n+---\n+title: 很短的页面\n+---\n+只有一句话。\n";
-        let r = managed_verdict(thin, true, 1500);
+        let r = managed_verdict(thin, true, 1500, "review");
         assert!(r.iter().any(|x| x.contains("低于这个方案的下限")), "{r:?}");
-        assert!(managed_verdict(thin, true, 0).is_empty(), "下限 0＝不检查");
+        assert!(managed_verdict(thin, true, 0, "review").is_empty(), "下限 0＝不检查");
         let body: String = "这是一段足够长的正文，讲清楚了具体步骤、注意事项和常见错误。".repeat(60);
         let full = format!("diff --git a/src/content/b.md b/src/content/b.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/b.md\n@@ -0,0 +1,4 @@\n+---\n+title: 完整的页面\n+---\n+{body}\n");
-        assert!(managed_verdict(&full, true, 1500).is_empty(), "{:?}", managed_verdict(&full, true, 1500));
+        assert!(managed_verdict(&full, true, 1500, "review").is_empty(), "{:?}", managed_verdict(&full, true, 1500, "review"));
         let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
-        assert!(managed_verdict(leak, true, 1500).iter().any(|x| x.contains("待补图")));
+        assert!(managed_verdict(leak, true, 1500, "review").iter().any(|x| x.contains("待补图")));
         assert_eq!(text_units("Gate KYC 认证"), 4);
     }
 
@@ -913,24 +1006,24 @@ mod tests {
     #[test]
     fn verdict_blocks_code_config_money_and_optionally_new_pages() {
         let ok = "diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -3 +3,2 @@\n-旧段落\n+新段落，补充了水温的说明。\n+还加了一段。\n";
-        assert!(managed_verdict(ok, false, 1500).is_empty());
+        assert!(managed_verdict(ok, false, 1500, "review").is_empty());
         let code = "diff --git a/worker/index.ts b/worker/index.ts\n--- a/worker/index.ts\n+++ b/worker/index.ts\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(code, true, 1500).is_empty());
+        assert!(!managed_verdict(code, true, 1500, "review").is_empty());
         let cfg = "diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(cfg, true, 1500).is_empty());
+        assert!(!managed_verdict(cfg, true, 1500, "review").is_empty());
         let money = "diff --git a/src/pages/a.astro b/src/pages/a.astro\n--- a/src/pages/a.astro\n+++ b/src/pages/a.astro\n@@ -9 +9 @@\n-<a href=\"/go/gate\">邀请码 ABC</a>\n+<a href=\"/go/gate\">邀请码 XYZ</a>\n";
-        assert!(managed_verdict(money, true, 1500).iter().any(|r| r.contains("推荐")));
+        assert!(managed_verdict(money, true, 1500, "review").iter().any(|r| r.contains("推荐")));
         let newpage = "diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+# 新页面\n";
-        assert!(managed_verdict(newpage, false, 1500).iter().any(|r| r.contains("新内容")));
+        assert!(managed_verdict(newpage, false, 1500, "review").iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
-        assert!(managed_verdict(newpage, true, 1500).iter().all(|r| r.contains("低于这个方案的下限")));
+        assert!(managed_verdict(newpage, true, 1500, "review").iter().all(|r| r.contains("低于这个方案的下限")));
     }
 
     #[test]
     fn data_files_with_only_text_count_as_content() {
         // 已有数据文件：加导入、加一段文字、加一个 slug、展开一个数组
         let edit = "diff --git a/src/data/articles.ts b/src/data/articles.ts\n--- a/src/data/articles.ts\n+++ b/src/data/articles.ts\n@@ -5 +5,2 @@\n+import { transitionArticles } from './articles-transitions';\n+    'ai-video-transition-prompts',\n+          '想把两个镜头接起来（遮挡、甩镜），可以看本页末尾的转场指南。',\n+  ...transitionArticles,\n";
-        assert!(managed_verdict(edit, false, 1500).is_empty(), "{:?}", managed_verdict(edit, false, 1500));
+        assert!(managed_verdict(edit, false, 1500, "review").is_empty(), "{:?}", managed_verdict(edit, false, 1500, "review"));
         assert!(data_line("const viduSources = [") && data_line("    sources: viduSources,"));
         assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
         assert!(data_line("  seoTitle?: string;") && data_line("  kind: 'a' | 'b';") && data_line("  links?: { label: string; href: string }[];"));
@@ -944,16 +1037,34 @@ mod tests {
         // 新的数据文件：按新内容规则和正文下限判断
         let body: String = (0..40).map(|_| "+      '遮挡转场要让前景物体把画面整个挡住，再在被挡住的那一帧切到下一段素材，两段的运动方向要一致。',\n").collect();
         let newfile = format!("diff --git a/src/data/articles-x.ts b/src/data/articles-x.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/data/articles-x.ts\n@@ -0,0 +1,50 @@\n+import type {{ ArticleSeed }} from './article-types';\n+export const xArticles: ArticleSeed[] = [\n+  {{\n+    slug: 'x',\n+    datePublished: '2026-10-22',\n+    body: [\n{body}+    ],\n+  }},\n+];\n");
-        assert!(managed_verdict(&newfile, true, 1500).is_empty(), "{:?}", managed_verdict(&newfile, true, 1500));
-        assert!(managed_verdict(&newfile, false, 1500).iter().any(|r| r.contains("新内容")));
+        assert!(managed_verdict(&newfile, true, 1500, "review").is_empty(), "{:?}", managed_verdict(&newfile, true, 1500, "review"));
+        assert!(managed_verdict(&newfile, false, 1500, "review").iter().any(|r| r.contains("新内容")));
         // 数据文件里混了代码：函数、模板字符串插值、外部导入
         for bad in ["+export function pick(a) { return a; }", "+  title: `${name} 指南`,", "+import fs from 'node:fs';", "+  run: () => fetch('/x'),", "+const x = process.env.TOKEN;"] {
             let d = format!("diff --git a/src/data/a.ts b/src/data/a.ts\n--- a/src/data/a.ts\n+++ b/src/data/a.ts\n@@ -1 +1 @@\n{bad}\n");
-            assert!(managed_verdict(&d, true, 0).iter().any(|r| r.contains("像代码的改动")), "{bad}");
+            assert!(managed_verdict(&d, true, 0, "review").iter().any(|r| r.contains("改了代码")), "{bad}");
         }
         // 不在 data / content 目录下的 .ts 仍然是代码
         let code = "diff --git a/src/lib/seo.ts b/src/lib/seo.ts\n--- a/src/lib/seo.ts\n+++ b/src/lib/seo.ts\n@@ -1 +1 @@\n+  title: 'x',\n";
-        assert!(managed_verdict(code, true, 0).iter().any(|r| r.contains("代码文件")));
+        assert!(managed_verdict(code, true, 0, "review").iter().any(|r| r.contains("改了代码")));
+    }
+
+    #[test]
+    fn code_changes_follow_the_plan_setting() {
+        let lines = |n: usize| (0..n).map(|i| format!("+  const a{i} = {i};\n")).collect::<String>();
+        let lib = |n: usize| format!("diff --git a/src/lib/types.ts b/src/lib/types.ts\n--- a/src/lib/types.ts\n+++ b/src/lib/types.ts\n@@ -1 +1 @@\n{}", lines(n));
+        assert!(managed_verdict(&lib(10), true, 0, "review").iter().any(|r| r.contains("留给你确认")));
+        assert!(managed_verdict(&lib(10), true, 0, "small").is_empty(), "{:?}", managed_verdict(&lib(10), true, 0, "small"));
+        assert!(managed_verdict(&lib(100), true, 0, "small").iter().any(|r| r.contains("小改动")));
+        assert!(managed_verdict(&lib(100), true, 0, "all").is_empty());
+        // 任何一档都拦：依赖 / 配置、服务端、读环境变量、外部请求、新的外部包
+        for (path, line) in [("package.json", "+  \"x\": \"1\""), ("astro.config.mjs", "+  site: 'x',"), ("src/pages/api/hook.ts", "+export const a = 1;"), ("src/lib/a.ts", "+const k = process.env.KEY;"), ("src/components/A.astro", "+const r = await fetch('https://x.com');"), ("src/lib/a.ts", "+import lodash from 'lodash';")] {
+            let d = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n{line}\n");
+            assert!(!managed_verdict(&d, true, 0, "all").is_empty(), "{path} {line}");
+        }
+        // 本地文件的导入、样式文件，小改动可以自动上线
+        let ok = "diff --git a/src/components/A.astro b/src/components/A.astro\n--- a/src/components/A.astro\n+++ b/src/components/A.astro\n@@ -1 +1 @@\n+import Links from './Links.astro';\n+<Links items={block.links} />\ndiff --git a/src/styles/a.css b/src/styles/a.css\n--- a/src/styles/a.css\n+++ b/src/styles/a.css\n@@ -1 +1 @@\n+.links { margin: 0; }\n";
+        assert!(managed_verdict(ok, true, 0, "small").is_empty(), "{:?}", managed_verdict(ok, true, 0, "small"));
     }
 
     #[test]

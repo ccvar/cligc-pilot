@@ -182,7 +182,16 @@
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
-        <small>{g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}标题、描述、内链和已有页面的改动，检查通过就自动上线；依赖、配置、代码、推荐 / 邀请相关内容、超过 400 行的改动永远不自动上线。</small>
+        <small>{g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}标题、描述、内链和已有页面的改动，检查通过就自动上线。</small>
+      </div>
+      <div class="field"><span class="lbl">代码改动（文章、页面写在代码里的站点会用到）</span>
+        <div class="seg">
+          <button class:on={g.code_changes === 'review'} onclick={() => g && (g.code_changes = 'review')}>留给你确认</button>
+          <button class:on={(g.code_changes ?? 'small') === 'small'} onclick={() => g && (g.code_changes = 'small')}>小改动自动上线</button>
+          <button class:on={g.code_changes === 'all'} onclick={() => g && (g.code_changes = 'all')}>都自动上线</button>
+        </div>
+        <small>{g.code_changes === 'review' ? '改到模板、组件、样式或站点脚本的，都放进「需要你」等你看过再上线。' : g.code_changes === 'all' ? '改模板、组件、样式和站点脚本，构建、检查和上线后验收都通过就自动上线；单次改动超过 400 行的除外。' : '改模板、组件、样式和站点脚本，代码部分合计不超过 80 行、5 个文件（文章正文这类数据不算），构建、检查和上线后验收都通过就自动上线；更大的留给你确认。'}
+          不管选哪一档，依赖、构建 / 部署配置、Worker 和服务端代码、读环境变量或调外部服务、引入新的外部包、推荐 / 邀请相关内容，都不会自动上线；上线后验收没过会自动回滚。</small>
       </div>
       <div class="grid2">
         <div class="field"><label for="ge-daily">每站每天自动上线上限（条）</label><input id="ge-daily" class="tin" type="number" min="0" max="50" bind:value={g.daily_changes} />

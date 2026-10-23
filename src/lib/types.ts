@@ -440,6 +440,8 @@ export interface ManagedGroup {
   fallback_brain: string;
   fallback_model: string;
   new_content: 'auto' | 'review';
+  /** 代码改动：review 留给你确认 | small 小改动自动上线 | all 都自动上线（依赖和部署配置除外） */
+  code_changes: 'review' | 'small' | 'all';
   daily_changes: number;
   tokens_per_week: number;
   /** 运营目标（一两句话） */

@@ -16,7 +16,7 @@
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -224,6 +224,7 @@
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
             <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}</span>
             <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}{g.min_page_chars ? ` · ≥ ${g.min_page_chars} 字` : ''}</span>
+            {#if g.autonomy === 'auto'}<span><Icon name="code" size={12} />{CODE_LABEL[g.code_changes ?? 'small']}</span>{/if}
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
             <span><Icon name="gauge" size={12} />每站每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限 token'}</span>
           </div>
