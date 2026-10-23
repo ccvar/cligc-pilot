@@ -69,8 +69,6 @@
 
   {#if full && counts.open && (filter === 'open' || filter === 'todo')}
     <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>
-  {:else if myPlan && myPlan.autonomy !== 'suggest' && filter === 'open' && counts.open}
-    <div class="qnote"><Icon name="sparkles" size={13} /><span>托管每轮按优先级处理排在前面的几条（{AUTONOMY_LABEL[myPlan.autonomy]}），其余的排着等下一轮；想现在做哪一条，点「让 AI 改」。</span></div>
   {/if}
 
   {#if !shown.length}
@@ -79,19 +77,19 @@
       <p class="hint">{filter === 'open' ? '可以「立即扫描」，或在「数据」页把机会加进来。' : filter === 'todo' ? 'AI 改好的提案、失败的任务会出现在这里。' : ''}</p>
     </div>
   {:else}
-    {#if filter === 'open' && shown.length > 1}
-      <div class="batch" class:on={pickedItems.length > 0}>
-        <label class="ck"><input type="checkbox" checked={allPicked} indeterminate={pickedItems.length > 0 && !allPicked} onchange={pickAll} />{pickedItems.length ? `已选 ${pickedItems.length} 条` : '全选'}</label>
-        <span class="grow"></span>
-        {#if pickedItems.length}
-          <button class="btn tiny primary" onclick={batchWork} disabled={busy} data-tip="一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下"><Icon name="sparkles" size={11} />让 AI 改 {pickedItems.length} 条</button>
-          <button class="btn tiny quiet" onclick={batchDismiss} disabled={busy}><Icon name="x" size={11} />驳回 {pickedItems.length} 条</button>
-        {:else}
-          <span class="faint hint-sm">勾选几条，可以一起让 AI 改或驳回</span>
-        {/if}
-      </div>
-    {/if}
     <div class="card items">
+      {#if filter === 'open'}
+        <div class="list-head" class:on={pickedItems.length > 0}>
+          {#if shown.length > 1}<label class="ck"><input type="checkbox" checked={allPicked} indeterminate={pickedItems.length > 0 && !allPicked} onchange={pickAll} />{pickedItems.length ? `已选 ${pickedItems.length} 条` : '全选'}</label>{/if}
+          {#if pickedItems.length}
+            <span class="grow"></span>
+            <button class="btn tiny primary" onclick={batchWork} disabled={busy} data-tip="一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下"><Icon name="sparkles" size={11} />让 AI 改 {pickedItems.length} 条</button>
+            <button class="btn tiny quiet" onclick={batchDismiss} disabled={busy}><Icon name="x" size={11} />驳回 {pickedItems.length} 条</button>
+          {:else}
+            <span class="faint lh-hint">{myPlan && myPlan.autonomy !== 'suggest' ? `托管每轮按优先级处理排在前面的几条，其余的排着等下一轮；想现在做，勾选后点「让 AI 改」或用单条的按钮。` : '勾选几条，可以一起让 AI 改或驳回。'}</span>
+          {/if}
+        </div>
+      {/if}
       <div class="list">
         {#each shown as i (i.id)}
           <div class="li item" class:picked={picked.has(i.id)}>
@@ -157,11 +155,12 @@
 {/if}
 
 <style>
-  .batch { display: flex; align-items: center; gap: 8px; padding: 6px 14px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; min-height: 40px; }
-  .batch.on { background: var(--su-run-soft); border-color: transparent; }
-  .batch .ck { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
-  .batch .grow { flex: 1; }
-  .hint-sm { font-size: 12px; }
+  .list-head { display: flex; align-items: center; gap: 12px; margin: 0 -18px; padding: 9px 18px; min-height: 42px; border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; font-size: 12.5px; }
+  .list-head.on { background: var(--su-run-soft); }
+  .list-head .ck { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex: none; font-weight: 500; }
+  .list-head .ck input { margin: 0 2px 0 0; }
+  .list-head .grow { flex: 1; }
+  .lh-hint { font-size: 12px; line-height: 1.5; min-width: 0; }
   .pick { margin: 0 2px 0 0; flex: none; cursor: pointer; }
   .item.picked { background: var(--su-hover); }
   .qnote { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--dim); padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
