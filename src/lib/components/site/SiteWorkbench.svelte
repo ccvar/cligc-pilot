@@ -3,7 +3,7 @@
   import Icon from './Icon.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
-  import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import SiteSwitcher from './SiteSwitcher.svelte';
   import SiteOverview from './SiteOverview.svelte';
   import SiteDeployTab from './SiteDeployTab.svelte';
@@ -36,7 +36,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <header class="page-head wb-head" data-tauri-drag-region onmousedown={startDrag}>
       <div class="wb-title">
-        <span class="wb-ic"><SiteMark size={16} /></span>
+        <span class="wb-ic"><SiteIcon id={site.id} size={18} /></span>
         <div class="wb-name">
           <SiteSwitcher />
           <small>

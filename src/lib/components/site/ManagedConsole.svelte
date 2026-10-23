@@ -1,6 +1,7 @@
 <script lang="ts">
   import './site.css';
   import Icon from './Icon.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { mdRender } from '$lib/state/messages.svelte.js';
@@ -94,7 +95,7 @@
         <div class="sites">
           {#each o.sites as s (s.id)}
             <button class="sc" onclick={() => openSite(s.id)}>
-              <span class="sc-top"><span class="sc-ic"><Icon name="globe" size={14} /></span><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{/if}</span>
+              <span class="sc-top"><span class="sc-ic"><SiteIcon id={s.id} size={16} /></span><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{/if}</span>
               <small>{s.plan_date ? `本周计划 ${s.plan_count} 项 · ${md(s.plan_date)}制定` : '还没有计划'}</small>
               <span class="sc-nums">
                 <span><b>{s.shipped_week}</b>本周上线</span>
@@ -116,7 +117,7 @@
               <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
                 <b>{a.title}</b>
-                <small>{#if a.site_name}<button class="link-btn plain" onclick={() => openSite(a.site_id)}>{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
+                <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
               </div>
               <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
             </div>
@@ -246,6 +247,7 @@
   .ev-main { flex: 1; min-width: 0; }
   .ev-main b { display: block; font-size: 13px; font-weight: 550; line-height: 1.5; }
   .ev-main small { display: block; font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; line-height: 1.55; }
+  .site-l { display: inline-flex; align-items: center; gap: 5px; vertical-align: -1px; }
   .sep { margin: 0 6px; color: var(--border2); }
   .ev .t { flex: none; font-size: 11.5px; white-space: nowrap; margin-top: 2px; }
   .link-btn.plain { text-decoration: none; color: var(--dim); font-size: inherit; }

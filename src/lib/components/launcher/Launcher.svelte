@@ -3,7 +3,7 @@
   import ModelFx from '$lib/ModelFx.svelte';
   import UsageRing from '$lib/UsageRing.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
-  import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteBoard, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { gh, loadGhRepos } from '$lib/state/github.svelte.js';
   import CliGuide from '$lib/components/launcher/CliGuide.svelte';
@@ -20,7 +20,7 @@
     const rank = new Map(sites.recent.map((id, i) => [id, i]));
     return [...sites.list]
       .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'))
-      .map((s) => ({ value: s.id, label: s.name, sub: s.domain && s.domain !== s.name ? s.domain : (DEPLOY_LABEL[s.deploy.mode] ?? '').split('（')[0] }));
+      .map((s) => ({ value: s.id, label: s.name, img: sites.icons[s.id] ?? '', sub: s.domain && s.domain !== s.name ? s.domain : (DEPLOY_LABEL[s.deploy.mode] ?? '').split('（')[0] }));
   });
   const hubSite = $derived(sites.list.find((s) => s.id === launcher.lSite));
 </script>
@@ -58,7 +58,7 @@
             {#if app.isSitesHub}
               <Dropdown compact searchable bind:value={launcher.lSite} options={siteOpts} placeholder={sites.list.length ? '选择站点' : '还没有站点'} />
             {:else if app.isSiteConn}
-              <button type="button" class="ssh-target site-target" onclick={() => openSiteBoard()} data-tip="打开站点看板"><SiteMark size={13} />{sites.active?.name}</button>
+              <button type="button" class="ssh-target site-target" onclick={() => openSiteBoard()} data-tip="打开站点看板"><SiteIcon id={sites.active?.id ?? ''} size={13} />{sites.active?.name}</button>
             {:else if app.isSshConn}
               <!-- 远程连接没有站点/项目可选：对象就是那台机器 -->
               <span class="ssh-target"><SshMark size={13} />{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port}</span>

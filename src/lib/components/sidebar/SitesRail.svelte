@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import type { Conversation, SiteRow } from '$lib/types';
-  import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { app } from '$lib/state/app.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import { siteIdOf, openSite } from '$lib/state/sites.svelte.js';
@@ -38,7 +38,7 @@
 {#snippet siteRow(s: SiteRow)}
   <div class="site" class:on={s.id === activeId && app.view === 'site'} class:ctx={s.id === activeId && app.view !== 'site'} role="button" tabindex="0" title={s.id === activeId ? '打开站点看板' : s.domain || s.name}
     onclick={() => openSite(s.id)} onkeydown={(e) => e.key === 'Enter' && openSite(s.id)}>
-    <span class="ic"><SiteMark size={14} /></span>
+    <span class="ic"><SiteIcon id={s.id} size={14} /></span>
     <span class="name">{s.name}</span>
     <span class="badges">
       {#if s.job}<span class="run" title={s.job}></span>{/if}

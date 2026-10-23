@@ -79,6 +79,8 @@ class SitesState {
   envKeys = $state<string[]>([]);
   dash = $state<Record<string, Dashboard>>({});
   dataBusy = $state<Record<string, boolean>>({});
+  /** 站点图标（data URL），按站点 id；没有图标的站点不在里面。 */
+  icons = $state<Record<string, string>>({});
   activeId = $derived(siteIdOf(app.activeConnId));
   active = $derived(this.list.find((s) => s.id === this.activeId) ?? null);
 }
@@ -89,6 +91,16 @@ export async function refreshSites() {
   try { sites.list = await invoke<Site[]>('list_sites'); }
   catch (e) { say(String(e), 'err'); }
   finally { sites.loaded = true; }
+  void loadSiteIcons();
+}
+
+let iconsFor = '';
+/** 站点图标：站点集合变了才重新取（本地文件优先，线上结果后端缓存）。 */
+export async function loadSiteIcons(force = false) {
+  const key = sites.list.map((x) => `${x.id}:${x.domain}`).join(',');
+  if (!force && key === iconsFor) return;
+  iconsFor = key;
+  try { sites.icons = (await invoke<Record<string, string>>('site_icons')) ?? {}; } catch { /* 图标拿不到就用默认标识 */ }
 }
 
 export function openSite(id: string, tab: SiteTab = 'overview') {

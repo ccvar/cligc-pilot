@@ -551,3 +551,27 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         out = site.build.out_dir,
     )
 }
+
+/// 全部站点的图标（data URL，没有就不出现在结果里）。各站并行查，本地文件优先，线上结果缓存 7 天。
+#[tauri::command]
+pub async fn site_icons(state: tauri::State<'_, AppState>) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut set = tokio::task::JoinSet::new();
+    for site in state.sites.list() {
+        let gh = state.conns.get(&site.gh_conn_id).ok();
+        let code = crate::site_git::code_dir(&site, gh.as_ref()).ok();
+        let dir = state.sites.data_dir(&site.id);
+        set.spawn(async move {
+            let url = crate::site_icon::icon_for(&site, &dir, code).await;
+            (site.id, url)
+        });
+    }
+    let mut out = std::collections::HashMap::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok((id, url)) = r {
+            if !url.is_empty() {
+                out.insert(id, url);
+            }
+        }
+    }
+    Ok(out)
+}

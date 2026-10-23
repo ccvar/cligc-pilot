@@ -1,6 +1,7 @@
 <script lang="ts">
   import './site.css';
   import Icon from './Icon.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
@@ -92,7 +93,7 @@
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td><button class="pin" class:on={r.pinned} title={r.pinned ? '取消置顶' : '置顶'} onclick={(e) => { e.stopPropagation(); void setPinned(r.id, !r.pinned); }}>★</button></td>
                   <td class="site-cell">
-                    <b>{r.name}</b>
+                    <b><SiteIcon id={r.id} size={15} />{r.name}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
@@ -133,7 +134,7 @@
             <tbody>
               {#each fleet.pending as p (p.item.id)}
                 <tr class="clickable" onclick={() => openSite(p.site_id, 'queue')}>
-                  <td class="sn-cell"><b class="sn">{p.site_name}</b></td>
+                  <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
                   <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
                   <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>
                   <td class="faint when">{when(p.item.updated_at)}</td>
@@ -166,7 +167,8 @@
   .site-cell b { display: block; font-size: 13px; font-weight: 600; }
   .site-cell { max-width: 0; width: 34%; }
   .site-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .site-cell small { display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+  .site-cell b { display: flex !important; align-items: center; gap: 8px; }
+  .site-cell small { padding-left: 23px; display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
   .site-cell small span + span:not(.tag)::before { content: '·'; margin-right: 8px; color: var(--border2); }
   .tag { color: var(--dim); }
   .dm { display: inline-flex; align-items: center; gap: 5px; }
@@ -183,7 +185,7 @@
   .pin:hover { color: var(--dim); transform: scale(1.12); }
   .pin.on { color: #c28a12; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sn { font-weight: 600; font-size: 12.5px; }
+  .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
   .kind { margin-left: 8px; color: var(--faint); font-size: 11.5px; }
   .pager { gap: 8px; }
   @container page (max-width: 760px) {

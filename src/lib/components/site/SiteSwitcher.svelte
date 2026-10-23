@@ -1,6 +1,7 @@
 <script lang="ts">
   // 站点页标题上的切换器：点站名弹出可搜索的站点列表，选中后留在同一个标签页。
   import Icon from './Icon.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
@@ -66,8 +67,9 @@
         {#each items as s, i (s.id)}
           <button type="button" class="sw-opt" class:hi={i === hi} class:cur={s.id === cur?.id} role="option" aria-selected={s.id === cur?.id}
             onmouseenter={() => (hi = i)} onclick={() => pick(s.id)}>
-            <span class="ic">{#if s.deploy.mode === 'vps'}<Icon name="server" size={13} />{:else if s.deploy.mode === 'none'}<Icon name="globe" size={13} />{:else}<CfMark size={13} />{/if}</span>
+            <span class="ic"><SiteIcon id={s.id} size={16} /></span>
             <span class="txt"><b>{s.name}</b>{#if s.domain && s.domain !== s.name}<small>{s.domain}</small>{/if}</span>
+            <span class="dep" data-tip={s.deploy.mode === 'vps' ? 'VPS' : s.deploy.mode === 'none' ? '未配置部署' : s.deploy.mode === 'workers' ? 'Cloudflare Workers' : 'Cloudflare Pages'}>{#if s.deploy.mode === 'vps'}<Icon name="server" size={11} />{:else if s.deploy.mode !== 'none'}<CfMark size={11} />{/if}</span>
             {#if s.pinned}<span class="pin" aria-label="已置顶">★</span>{/if}
             {#if s.id === cur?.id}<Icon name="check" size={13} />{/if}
           </button>
@@ -103,6 +105,7 @@
   .sw-opt .txt b { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sw-opt.cur .txt b { font-weight: 600; }
   .sw-opt .txt small { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-opt .dep { flex: none; display: inline-flex; width: 14px; justify-content: center; color: var(--faint); opacity: .8; }
   .sw-opt .pin { flex: none; font-size: 11px; color: #c28a12; }
   .sw-opt :global(.ico:last-child) { color: var(--text); }
   .empty { margin: 14px 8px; text-align: center; font-size: 12px; color: var(--faint); }

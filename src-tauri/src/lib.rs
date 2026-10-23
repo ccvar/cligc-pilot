@@ -36,6 +36,7 @@ mod site_cmds;
 mod site_data;
 mod site_deploy;
 mod site_git;
+mod site_icon;
 mod site_github;
 mod site_jobs;
 mod site_ops;
@@ -4457,6 +4458,7 @@ pub fn run() {
             site_cmds::site_env_keys,
             site_cmds::set_site_env,
             site_cmds::site_status,
+            site_cmds::site_icons,
             site_cmds::site_deploys,
             site_cmds::site_job,
             site_cmds::cancel_site_job,

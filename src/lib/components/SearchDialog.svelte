@@ -6,6 +6,7 @@
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { search, pickEntry } from '$lib/state/search.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
   import { brainLabel, modelIcon } from '$lib/state/models';
@@ -53,7 +54,7 @@
                   <span class="si-main"><b>{it.t.name}</b><small>{catOf(it.t)}{it.t.desc ? ` · ${it.t.desc}` : ''}</small></span>
                   {#if it.t.builtin}<span class="si-tag">内置</span>{/if}
                 {:else if it.kind === 'site'}
-                  <ConnectionMark kind="site" size={15} />
+                  <SiteIcon id={it.s.id} size={15} />
                   <span class="si-main"><b>{it.s.name}</b><small>{it.s.domain && it.s.domain !== it.s.name ? it.s.domain : it.s.source === 'github' ? it.s.repo : '本地文件夹'}{it.s.tags.length ? ` · ${it.s.tags.map((t) => `#${t}`).join(' ')}` : ''}{it.s.proposed ? ` · ${it.s.proposed} 条待确认` : ''}</small></span>
                   {#if app.activeConnId === `site:${it.s.id}`}<span class="si-tag">当前</span>{/if}
                 {:else}

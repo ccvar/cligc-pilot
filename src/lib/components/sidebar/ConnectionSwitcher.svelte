@@ -16,6 +16,7 @@
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
@@ -64,7 +65,7 @@
     </div>
   {/if}
 <button class="rail-foot" class:open={connections.switcherOpen} onclick={() => { connections.switcherOpen = !connections.switcherOpen; }}>
-  {#if app.isSitesMode}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
+  {#if app.isSiteConn && sites.active}<SiteIcon id={sites.active.id} size={18} />{:else if app.isSitesMode}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
   <span class="foot-main">
     <b>{app.activeConn ? connectionDisplayName(app.activeConn) : '未连接'}</b>
     {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{sites.list.length} 个站点{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {sites.list.length} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
