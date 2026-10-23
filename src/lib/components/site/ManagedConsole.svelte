@@ -4,7 +4,7 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { app } from '$lib/state/app.svelte.js';
+  import { app, confirmDialog } from '$lib/state/app.svelte.js';
   import { sites, loadSiteStatus } from '$lib/state/sites.svelte.js';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { mdRender } from '$lib/state/messages.svelte.js';
@@ -68,7 +68,15 @@
     await setManagedSites([id], true, to);
   }
   async function runNow(id: string) {
-    await runTask(id, 'plan');
+    const g = groups.find((x) => x.sites.includes(id));
+    const name = siteName(id);
+    const what = g?.autonomy === 'auto'
+      ? `现在为 ${name} 执行一整轮：AI 制定本周计划，然后按方案改排在前面的几条（每次最多 3 条）、跑构建和检查，符合发布规则的改动会直接上线到 ${name}；新页面${g.new_content === 'auto' ? '也会自动发布' : '会留给你确认'}，其余的放进「需要你」。继续吗？`
+      : g?.autonomy === 'review'
+        ? `现在为 ${name} 执行一整轮：AI 制定本周计划，然后改排在前面的几条（每次最多 3 条）、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
+        : `现在为 ${name} 制定本周计划（只出建议，不改代码）。继续吗？`;
+    if (!(await confirmDialog(what, { title: '立即执行', kind: g?.autonomy === 'auto' ? 'warning' : 'info', confirmText: g?.autonomy === 'auto' ? '执行并自动上线' : '执行' }))) return;
+    await runTask(id, 'cycle');
     progress = new Set([...progress, id]);
     void loadManaged();
   }
@@ -218,7 +226,7 @@
                   {:else if progress.has(id) && sites.jobs[id]}
                     <button class="btn tiny gs-run" onclick={() => toggleProgress(id)}>收起结果</button>
                   {:else}
-                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在就让 AI 读数据和站点、制定本周计划；结果在「计划」里，各项进入站点的「待处理」"><Icon name="play" size={10} />立即执行</button>
+                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在执行一整轮：制定本周计划，再按方案改排在前面的几条（全自动的会自动上线）"><Icon name="play" size={10} />立即执行</button>
                   {/if}
                   <span class="grow"></span>
                   <div class="gs-move" data-tip="把这个站点移到别的方案，或退出托管">

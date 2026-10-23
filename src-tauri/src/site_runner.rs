@@ -164,6 +164,7 @@ pub fn task_label(task: &str) -> &'static str {
         "review" => "效果复盘",
         "accept" => "确认改动",
         "plan" => "AI 制定计划",
+        "cycle" => "立即执行一轮",
         "watch" => "上线后检查",
         "rollback" => "回滚",
         _ => "运营任务",
@@ -252,6 +253,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "处理机会"), ("ship", "提交 / 上线")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
+        "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认")],
         "watch" => &[("watch", "上线后检查")],
         _ => &[],
     }
@@ -274,6 +276,7 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
             "review" => review(&ctx, &site, &job).await,
             "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
             "plan" => plan(&ctx, &site, &job).await,
+            "cycle" => cycle(&ctx, &site, &job).await,
             "watch" => watch(&ctx, &site, &job).await,
             "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
             "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
@@ -281,7 +284,7 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         job.finish(&res);
-        if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan") {
+        if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
             record_run(
                 &site_dir,
                 RunRecord {
@@ -338,7 +341,18 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         job.step("ship", "skipped", "");
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
-    // 处理：按分数挑前 N 个还没处理的
+    let (done, notes) = work_queue(ctx, site, job, trigger).await;
+    job.step("work", "ok", &format!("处理了 {done} 个"));
+    let proposed = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "proposed").count();
+    if trigger == "schedule" && done > 0 {
+        ctx.notify(&format!("{} · 机会扫描完成", site.name), &format!("处理了 {done} 个机会，{proposed} 条等你确认"));
+    }
+    Ok(format!("新入队 {} 个，处理 {done} 个。{}", added.len(), notes.join("；")))
+}
+
+/// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明）。
+async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>) {
+    let site_dir = ctx.site_dir(&site.id);
     // 全托管：只挑方案允许的动作
     let rules = group_rules(ctx, site);
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
@@ -376,12 +390,28 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         }
         ctx.emit_queue(&site.id);
     }
-    job.step("work", "ok", &format!("处理了 {done} 个"));
-    let proposed = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "proposed").count();
-    if trigger == "schedule" && done > 0 {
-        ctx.notify(&format!("{} · 机会扫描完成", site.name), &format!("处理了 {done} 个机会，{proposed} 条等你确认"));
+    (done, notes)
+}
+
+/// 立即执行一整轮（托管方案里「立即执行」）：制定本周计划 → 按方案处理排在前面的几条
+/// （全自动按发布规则自动上线，改好等你确认停在等你确认，只出建议只出计划）。
+async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
+    let t0 = now();
+    let planned = plan(ctx, site, job).await?;
+    if site.ops.level < 2 {
+        job.step("work", "skipped", "只出建议：只出计划，不改代码");
+        job.step("ship", "skipped", "");
+        return Ok(planned);
     }
-    Ok(format!("新入队 {} 个，处理 {done} 个。{}", added.len(), notes.join("；")))
+    let (done, notes) = work_queue(ctx, site, job, "manual").await;
+    job.step("work", "ok", &format!("处理了 {done} 个"));
+    let q = site_ops::load_queue(&ctx.site_dir(&site.id));
+    let shipped = q.iter().filter(|i| i.status == "deployed" && i.deployed_at >= t0).count();
+    let waiting = q.iter().filter(|i| i.status == "proposed").count();
+    if shipped == 0 {
+        job.step("ship", if waiting > 0 { "ok" } else { "skipped" }, &format!("{waiting} 条等你确认"));
+    }
+    Ok(format!("{planned}；处理 {done} 个，上线 {shipped} 个，{waiting} 条等你确认。{}", notes.join("；")))
 }
 
 /// 手动对某一条机会立即按站点档位处理。

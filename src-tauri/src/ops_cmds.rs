@@ -35,7 +35,7 @@ pub fn queue_add(state: tauri::State<'_, AppState>, id: String, opp: Opportunity
 
 #[tauri::command]
 pub fn run_ops_task(app: tauri::AppHandle, id: String, task: String) -> Result<String, String> {
-    if !site_runner::TASKS.contains(&task.as_str()) {
+    if !site_runner::TASKS.contains(&task.as_str()) && task != "cycle" {
         return Err("未知的运营任务".into());
     }
     site_runner::start(ctx(&app), &id, &task, "manual", None)
