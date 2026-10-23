@@ -40,6 +40,7 @@
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
 
+<!-- 找站点走顶部的全局搜索（名称 / 域名 / 仓库 / #标签，直接跳转），这里只留筛选。 -->
 <div class="su page ov">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
@@ -62,7 +63,6 @@
    <div class="pane">
     {#if fleet.tab === 'sites'}
       <div class="ov-tools">
-        <input class="tin search" bind:value={fleet.query} placeholder="搜索名称、域名、仓库、标签" spellcheck="false" />
         <div class="chips">{#each FILTERS as f (f.v)}<button class:on={fleet.filter === f.v} onclick={() => (fleet.filter = f.v)}>{f.l}</button>{/each}</div>
         {#if fleet.tags.length}
           <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
@@ -150,7 +150,6 @@
 <style>
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
   .ov-tools { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
-  .search { width: 260px; max-width: 100%; }
   .tagsel { width: auto; height: var(--ctl-h); padding: 0 8px; }
   .chips { display: flex; gap: 2px; flex-wrap: wrap; }
   .chips button { border: none; background: none; height: 26px; padding: 0 9px; border-radius: 7px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; font-variant-numeric: tabular-nums; transition: background-color .12s, color .12s; }
