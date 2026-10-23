@@ -6,6 +6,14 @@ import { launcher } from './launcher.svelte.js';
 import { SITE_PREFIX } from './sites.svelte.js';
 import { selectConn } from './connections.svelte.js';
 
+/** 一条改动的来源（为什么做它）。 */
+export const SOURCE_LABEL: Record<string, string> = {
+  data: '数据', gap: '内容缺口', topic: '选题清单', positioning: '按站点定位推导', health: '体检', manual: '手动加入',
+};
+export function sourceOf(o: { source?: string; kind: string }): string {
+  if (o.source) return o.source;
+  return o.kind === 'crawl_issue' || o.kind === 'sitemap_error' ? 'health' : o.kind === 'content_gap' ? 'gap' : o.kind === 'plan' ? 'data' : 'data';
+}
 export const STAGE_LABEL: Record<string, string> = { new: '新站', growing: '成长期', established: '成熟期' };
 export const STAGE_FOCUS: Record<string, string> = {
   new: '没有或很少搜索数据：不做数据调优，重点是体检修复和按站点定位补内容（支柱页、读者常问的问题、教程 / 对比 / 术语页），再补站内链接。',

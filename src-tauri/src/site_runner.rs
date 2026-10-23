@@ -430,7 +430,35 @@ fn log(ctx: &Ctx, site: &Site, kind: &str, title: &str, detail: &str, item_id: &
         title: title.into(),
         detail: detail.into(),
         item_id: item_id.into(),
+        ..Default::default()
     });
+}
+
+/// 和某条改动有关的动态：带上它的动作类型和来源。
+fn log_item(ctx: &Ctx, site: &Site, kind: &str, item: &QueueItem, detail: &str) {
+    crate::managed::log(&ctx.state().data_dir, crate::managed::Activity {
+        ts: now(),
+        site_id: site.id.clone(),
+        site_name: site.name.clone(),
+        kind: kind.into(),
+        title: item.opp.title.clone(),
+        detail: detail.into(),
+        item_id: item.id.clone(),
+        change: item.opp.change.clone(),
+        source: source_of(&item.opp).into(),
+    });
+}
+
+/// 机会的来源；老数据没有 source 字段时按规则类型推断。
+pub fn source_of(o: &Opportunity) -> &str {
+    if !o.source.is_empty() {
+        return &o.source;
+    }
+    match o.kind.as_str() {
+        "crawl_issue" | "sitemap_error" => "health",
+        "content_gap" => "gap",
+        _ => "data",
+    }
 }
 
 /// 今天（本地时间）已经自动上线了几条。
@@ -543,7 +571,7 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
                 kind: "fallback".into(),
                 title: format!("主模型失败，改用备用模型 {}", format!("{} · {}", fb.0, fb.1)),
                 detail: e.lines().next().unwrap_or("").to_string(),
-                item_id: String::new(),
+                ..Default::default()
             });
             let note = format!("\n\n（上一次由另一个模型执行时中断了：{}。工作区里可能已有部分改动，先查看现状再继续。）", e.lines().next().unwrap_or(""));
             run_conversation_with(ctx, site, perm, work_dir, format!("{message}{note}"), &fb).await
@@ -694,9 +722,11 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     );
     job.line(&format!("交给 AI：{}", item.opp.title));
     let (conv_id, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
+    let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(800).collect()).unwrap_or_default();
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.conv_id = conv_id.clone();
         i.model_used = format!("{} · {}", conv.brain, conv.model);
+        i.ai_summary = summary.clone();
     })?;
     // 收尾：没提交的改动由 Pilot 提交；完全没改动就算失败。
     if !crate::site_git::is_clean(&wt).await || crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
@@ -711,6 +741,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         return Err("AI 没有做出任何改动（详见会话）".into());
     }
     let head_sha = crate::site_git::head_sha(&wt).await;
+    if let Ok(out) = crate::site_git::git_ok(&wt, &["diff", "--name-only", &base_sha, &head_sha], "").await {
+        let files: Vec<String> = out.lines().map(str::trim).filter(|l| !l.is_empty()).take(30).map(str::to_string).collect();
+        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.files = files.clone());
+    }
     // 检查：构建 + 站点自带的检查命令
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
@@ -761,12 +795,12 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     ctx.emit_queue(&site.id);
     if !checks_ok {
         if level >= 5 {
-            log(ctx, site, "failed", &item.opp.title, &verdict, &item.id);
+            log_item(ctx, site, "failed", item, &verdict);
         }
         return Err(verdict);
     }
     if level >= 5 && verdict != "auto" {
-        log(ctx, site, "proposed", &item.opp.title, &verdict, &item.id);
+        log_item(ctx, site, "proposed", item, &verdict);
     }
     // 第 4 档：白名单内自动合并上线；第 5 档：判定通过即自动上线，上线 1 小时后再检查一次页面。
     if level >= 4 && verdict == "auto" {
@@ -775,7 +809,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
             Ok(m) => {
                 if level >= 5 {
                     site_ops::update_item(&site_dir, &item.id, now(), |i| i.watch_due = now() + 3600)?;
-                    log(ctx, site, "shipped", &item.opp.title, &m, &item.id);
+                    log_item(ctx, site, "shipped", item, &m);
                 }
                 return Ok(m);
             }
@@ -1210,8 +1244,8 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         // 全托管：效果负面的自动改动直接回滚，并记一笔。
         if verdict == "negative" && site.ops.level >= 5 && i.auto {
             match rollback(ctx, site, job, &i.id).await {
-                Ok(_) => log(ctx, site, "rolled_back", &i.opp.title, &format!("效果复盘负面（{note}），已自动回滚"), &i.id),
-                Err(e) => log(ctx, site, "failed", &i.opp.title, &format!("效果负面，自动回滚失败：{e}"), &i.id),
+                Ok(_) => log_item(ctx, site, "rolled_back", i, &format!("效果复盘负面（{note}），已自动回滚")),
+                Err(e) => log_item(ctx, site, "failed", i, &format!("效果负面，自动回滚失败：{e}")),
             }
         }
     }
@@ -1291,7 +1325,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let health = crate::site_stage::latest_health(&site_dir, if stage.stage == "new" { 2000 } else { 600 });
     let health = if health.is_empty() { String::new() } else { format!("【最近一次体检】\n{health}\n\n") };
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面（目录结构、导航、首页、各栏目、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据（数据，或它补的是定位里的哪一块、目标查询词）\",\"priority\":1}}]}}",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面（目录结构、导航、首页、各栏目、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1}}]}}\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
@@ -1317,6 +1351,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             page: t.page.clone(),
             evidence: t.why.clone(),
             change: t.change.clone(),
+            source: t.source.clone(),
+            target: t.query.clone(),
             score: 1000.0 - (t.priority.max(1) as f64) * 10.0 - i as f64,
             ..Default::default()
         })
@@ -1373,14 +1409,14 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         }
         if failure.is_empty() {
             site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = "ok".into())?;
-            log(ctx, site, "watch_ok", &i.opp.title, "上线后页面正常", &i.id);
+            log_item(ctx, site, "watch_ok", &i, "上线后页面正常");
             out.push(format!("{} 正常", i.opp.title));
         } else {
             site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = failure.clone())?;
-            log(ctx, site, "watch_failed", &i.opp.title, &failure, &i.id);
+            log_item(ctx, site, "watch_failed", &i, &failure);
             match rollback(ctx, site, job, &i.id).await {
-                Ok(_) => log(ctx, site, "rolled_back", &i.opp.title, &format!("上线后检查失败（{failure}），已自动回滚"), &i.id),
-                Err(e) => log(ctx, site, "failed", &i.opp.title, &format!("自动回滚失败：{e}"), &i.id),
+                Ok(_) => log_item(ctx, site, "rolled_back", &i, &format!("上线后检查失败（{failure}），已自动回滚")),
+                Err(e) => log_item(ctx, site, "failed", &i, &format!("自动回滚失败：{e}")),
             }
             ctx.notify(&format!("{} · 已自动回滚", site.name), &i.opp.title);
             out.push(format!("{} 已回滚", i.opp.title));

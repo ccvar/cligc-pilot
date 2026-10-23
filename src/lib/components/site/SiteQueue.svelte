@@ -5,8 +5,9 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { clock } from './fmt';
+  import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { ops, loadQueue, runTask, workItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL, LEVEL_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL, LEVEL_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
   let { site }: { site: Site } = $props();
@@ -26,6 +27,8 @@
   const when = clock;
   const tone = (s: string) => (s === 'proposed' ? 'warn' : s === 'deployed' || s === 'done' ? 'ok' : s === 'failed' ? 'err' : s === 'working' ? 'run' : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
+  let openWhy = $state<Set<string>>(new Set());
+  function toggleWhy(id: string) { const n = new Set(openWhy); if (n.has(id)) n.delete(id); else n.add(id); openWhy = n; }
 </script>
 
 <div class="qq">
@@ -58,10 +61,23 @@
               <b class="it-title" title={i.opp.title}>{i.opp.title}</b>
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
             </div>
+            <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>
             <p class="it-ev">{i.opp.evidence}</p>
+            {#if i.ai_summary || i.files?.length}
+              <button class="how-t" class:open={openWhy.has(i.id)} onclick={() => toggleWhy(i.id)} aria-expanded={openWhy.has(i.id)}>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                AI 怎么改的{#if i.files?.length}<span class="faint"> · {i.files.length} 个文件</span>{/if}{#if i.model_used}<span class="faint"> · {i.model_used}</span>{/if}
+              </button>
+              {#if openWhy.has(i.id)}
+                <div class="how">
+                  {#if i.ai_summary}<p>{i.ai_summary}</p>{/if}
+                  {#if i.files?.length}<ul class="files">{#each i.files as f (f)}<li class="mono">{f}</li>{/each}</ul>{/if}
+                </div>
+              {/if}
+            {/if}
             {#if i.branch || i.change_kind}
               <div class="row wrap meta">
-                {#if i.change_kind}<span class="pill line">{i.change_kind.split(',').map((k) => CHANGE_LABEL[k] ?? k).join(' + ')}</span>{/if}
+                {#if i.change_kind}<span class="pill line" data-tip="Pilot 按实际文件差异判定的改动类型">实际改动：{i.change_kind.split(',').map((k) => CHANGE_LABEL[k] ?? k).join(' + ')}</span>{/if}
                 {#if i.auto}<span class="pill ok">自动上线</span>{/if}
                 {#if i.branch}<span class="mono faint br">{i.branch}</span>{/if}
                 {#if i.pr_url}<button class="link-btn" onclick={() => openUrl(i.pr_url)}>PR #{i.pr_number} ↗</button>{/if}
@@ -116,6 +132,14 @@
   .it-head .pill { flex: none; }
   .it-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .it-meta { flex: none; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+  .why-row { margin: -1px 0 0; }
+  .how-t { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .how-t:hover { color: var(--text); }
+  .how-t svg { transition: transform .16s var(--su-ease); }
+  .how-t.open svg { transform: rotate(90deg); }
+  .how { padding: 8px 12px; border-left: 2px solid var(--border2); margin-left: 4px; font-size: 12.5px; color: var(--dim); }
+  .how p { margin: 0 0 6px; line-height: 1.65; white-space: pre-wrap; }
+  .files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--faint); }
   .it-ev { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; max-width: 80ch; }
   .meta { gap: 8px; }
   .br { font-size: 11.5px; }

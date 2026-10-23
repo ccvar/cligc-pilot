@@ -8,10 +8,11 @@
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
-  import { runTask, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
+  import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
+  import WhyChips from './WhyChips.svelte';
   import { managed, ACTIONS, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
@@ -114,9 +115,13 @@
               <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
                 <b>{a.title}</b>
+                {#if a.change || a.source}<div class="ev-why"><WhyChips change={a.change} source={a.source} /></div>{/if}
                 <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
               </div>
-              <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
+              <span class="ev-r">
+                <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
+                {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
+              </span>
             </div>
           {/each}
         </div>
@@ -138,7 +143,7 @@
           {#if p}
             <ol class="plan">
               {#each p.plan.tasks as t, i (i)}
-                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b><span class="pill">{CHANGE_LABEL[t.change] ?? t.change}</span></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
+                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b></div><div class="pw"><WhyChips change={t.change} source={t.source || (t.change === 'new_content' ? 'positioning' : t.change === 'technical' ? 'health' : 'data')} target={t.query} /></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
               {/each}
             </ol>
           {:else}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
@@ -154,7 +159,7 @@
             {#each needs as n (n.item.id)}
               <tr class="clickable" onclick={() => openSite(n.site_id, 'queue')}>
                 <td style="width:140px" class="trunc">{n.site_name}</td>
-                <td class="trunc">{n.item.opp.title}<div class="faint" style="font-size:11.5px">{n.item.verdict && n.item.verdict !== 'auto' ? n.item.verdict : n.item.note}</div></td>
+                <td class="trunc">{n.item.opp.title}<div class="nw"><WhyChips change={n.item.opp.change} source={sourceOf(n.item.opp)} kind={n.item.opp.kind} target={n.item.opp.target} /></div><div class="faint" style="font-size:11.5px">{n.item.verdict && n.item.verdict !== 'auto' ? n.item.verdict : n.item.note}</div></td>
                 <td style="width:90px"><span class="pill {n.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[n.item.status]}</span></td>
               </tr>
             {/each}
@@ -280,7 +285,13 @@
   .ev-main small { display: block; font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; line-height: 1.55; }
   .site-l { display: inline-flex; align-items: center; gap: 5px; vertical-align: -1px; }
   .sep { margin: 0 6px; color: var(--border2); }
-  .ev .t { flex: none; font-size: 11.5px; white-space: nowrap; margin-top: 2px; }
+  .ev .t { flex: none; font-size: 11.5px; white-space: nowrap; }
+  .ev-r { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-top: 2px; }
+  .see { font-size: 11.5px; opacity: 0; transition: opacity .12s; }
+  .ev:hover .see { opacity: 1; }
+  .ev-why { margin: 3px 0 2px; }
+  .pw { margin: 4px 0 2px; }
+  .nw { margin: 3px 0; }
   .link-btn.plain { text-decoration: none; color: var(--dim); font-size: inherit; }
   .link-btn.plain:hover { color: var(--text); text-decoration: underline; }
   .plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }

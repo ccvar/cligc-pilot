@@ -306,6 +306,10 @@ export interface ComparedRow extends DataRow { prev_clicks: number; prev_impress
 export interface GaRow { key: string; key2?: string; sessions: number; users: number; views: number; engaged: number }
 export interface EventRow { event: string; dim: string; value: string; count: number; users: number }
 export interface Opportunity {
+  /** data | gap | topic | positioning | health | manual（空＝老数据，按 kind 推断） */
+  source?: string;
+  /** 目标查询词 */
+  target?: string;
   key: string;
   kind: string;
   title: string;
@@ -344,6 +348,12 @@ export interface Dashboard {
 
 // ---- 运营 ----
 export interface OpsItem {
+  /** AI 自己对这次改动的说明 */
+  ai_summary?: string;
+  /** 实际执行的模型（主 / 备用） */
+  model_used?: string;
+  /** 这次改动涉及的文件 */
+  files?: string[];
   id: string;
   opp: Opportunity;
   /** open | working | proposed | merged | deployed | dismissed | rolled_back | failed */
@@ -429,8 +439,8 @@ export interface ManagedSite {
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
 }
 export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }
-export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string }
-export interface PlanTask { title: string; page: string; change: string; why: string; priority: number }
+export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string; change?: string; source?: string }
+export interface PlanTask { title: string; page: string; change: string; why: string; priority: number; source?: string; query?: string }
 export interface StageInfo { stage: string; auto_stage: string; reason: string; manual: string }
 /** AI 归纳的站点定位；by=user 表示运营人员改过，AI 不再覆盖。 */
 export interface Positioning { text: string; by: string; updated: number }

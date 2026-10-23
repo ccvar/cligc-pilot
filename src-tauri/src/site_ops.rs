@@ -31,6 +31,13 @@ pub struct Opportunity {
     pub change: String,
     /// 给人和模型看的依据（不含凭据；数字只用于判断，不写进仓库）。
     pub evidence: String,
+    /// 这条是从哪来的：data（数据规则 / 数据）| gap（内容缺口）| topic（选题清单）| positioning（按站点定位推导）
+    /// | health（体检）| manual（手动加入）。空＝老数据，按 kind 推断。
+    #[serde(default)]
+    pub source: String,
+    /// 目标查询词（新内容、计划项里 AI 给的）。
+    #[serde(default)]
+    pub target: String,
 }
 
 /// 各排名位置的大致点击率（用于判断「点击率是否明显偏低」，只求量级正确）。
@@ -96,6 +103,8 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             kind: "low_ctr".into(),
             title: format!("{} 排名靠前但点击率偏低", path_of(&p.key)),
             page: p.key.clone(),
+            source: "data".into(),
+            target: String::new(),
             evidence: format!(
                 "近 28 天平均排名 {:.1}、展现 {:.0}、点击率 {}，同排名的常见点击率约 {}。标题和描述可能没有回应搜索意图。",
                 p.position, p.impressions, pct(p.ctr), pct(exp)
@@ -125,6 +134,8 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             kind: "striking".into(),
             title: format!("{} 有 {} 个查询词排在 8–20 位", path_of(&p.key), qs.len()),
             page: p.key.clone(),
+            source: "data".into(),
+            target: String::new(),
             evidence: format!(
                 "这些查询词近 28 天合计展现 {impr:.0}、平均排名 {pos:.1}。补充对应内容、加站内链接，有机会进到前几位。"
             ),
@@ -151,6 +162,8 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             kind: "declining".into(),
             title: format!("{} 点击下滑 {:.0}%", path_of(&p.key), (1.0 - p.clicks / old.clicks) * 100.0),
             page: p.key.clone(),
+            source: "data".into(),
+            target: String::new(),
             evidence: format!(
                 "近 28 天点击 {:.0}（前 28 天 {:.0}），平均排名 {:.1} → {:.1}。先查是内容过时、排名被挤还是季节性。",
                 p.clicks, old.clicks, old.position, p.position
@@ -183,6 +196,8 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             kind: "content_gap".into(),
             title: format!("「{}」有搜索需求，但没有页面排进前 20", q.key),
             page: String::new(),
+            source: "gap".into(),
+            target: q.key.clone(),
             evidence: format!("近 28 天展现 {:.0}，最好的页面排在 {:.0} 位左右。可以考虑写一篇专门回应它的内容。", q.impressions, q.position),
             queries: vec![q.clone()],
             clicks: q.clicks,
@@ -285,6 +300,12 @@ pub struct QueueItem {
     /// 交给 AI 处理的时间（算每周改动预算）。
     #[serde(default)]
     pub worked_at: u64,
+    /// AI 自己对这次改动的说明（改了哪些文件、为什么这样改），截断保存。
+    #[serde(default)]
+    pub ai_summary: String,
+    /// 这次改动涉及的文件。
+    #[serde(default)]
+    pub files: Vec<String>,
     /// 上线时这个页面近 28 天的表现（效果复盘的「之前」）。
     #[serde(default)]
     pub before: Option<Row>,

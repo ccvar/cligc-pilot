@@ -278,6 +278,11 @@ pub struct Activity {
     pub detail: String,
     #[serde(default)]
     pub item_id: String,
+    /// 关联改动的动作类型和来源（见 Opportunity.change / source），动态里显示「为什么做」。
+    #[serde(default)]
+    pub change: String,
+    #[serde(default)]
+    pub source: String,
 }
 
 static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -402,6 +407,12 @@ pub struct PlanTask {
     pub why: String,
     #[serde(default)]
     pub priority: u32,
+    /// data | gap | topic | positioning | health
+    #[serde(default)]
+    pub source: String,
+    /// 目标查询词
+    #[serde(default)]
+    pub query: String,
 }
 
 /// 从模型回复里取出计划 JSON（```json … ``` 代码块，或回复里第一个 JSON 数组）。
@@ -438,6 +449,10 @@ pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
             t.change = "content".into();
         }
         t.title = t.title.chars().take(80).collect();
+        if !matches!(t.source.as_str(), "data" | "gap" | "topic" | "positioning" | "health") {
+            t.source = if t.change == "technical" { "health" } else if t.change == "new_content" { "positioning" } else { "data" }.into();
+        }
+        t.query = t.query.chars().take(80).collect();
     }
     tasks.truncate(12);
     Ok(tasks)
