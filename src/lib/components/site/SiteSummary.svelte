@@ -2,39 +2,41 @@
   import './site.css';
   import type { Site } from '$lib/types';
   import OpportunityRow from './OpportunityRow.svelte';
+  import { num as n, delta } from './fmt';
   import { sites, loadDashboard } from '$lib/state/sites.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { if (!sites.dash[site.id]) void loadDashboard(site.id); });
   const d = $derived(sites.dash[site.id]);
-  const n = (v: number) => Math.round(v).toLocaleString();
-  const delta = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : 0);
+  const stats = $derived.by(() => {
+    if (!d) return [];
+    const out: { l: string; v: string; dl?: ReturnType<typeof delta> }[] = [];
+    if (site.data.gsc_site) {
+      out.push({ l: 'Google 点击', v: n(d.gsc_totals.clicks), dl: delta(d.gsc_totals.clicks, d.gsc_prev_totals.clicks) });
+      out.push({ l: '展现', v: n(d.gsc_totals.impressions), dl: delta(d.gsc_totals.impressions, d.gsc_prev_totals.impressions) });
+    }
+    if (site.data.ga4_property) out.push({ l: '浏览量', v: n(d.ga4_totals.views), dl: delta(d.ga4_totals.views, d.ga4_prev_views) });
+    if (site.data.bing_site) out.push({ l: 'Bing 点击', v: n(d.bing_totals.clicks) });
+    out.push({ l: '运营机会', v: String(d.opportunities.length) });
+    return out;
+  });
 </script>
 
 {#if d}
   <div class="card">
-    <h3>近 28 天 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'data')}>看板</button></h3>
-    <div class="sum">
-      {#if site.data.gsc_site}
-        <span><small>Google 点击</small><b>{n(d.gsc_totals.clicks)}</b><em class:up={d.gsc_totals.clicks >= d.gsc_prev_totals.clicks}>{delta(d.gsc_totals.clicks, d.gsc_prev_totals.clicks)}%</em></span>
-        <span><small>展现</small><b>{n(d.gsc_totals.impressions)}</b><em class:up={d.gsc_totals.impressions >= d.gsc_prev_totals.impressions}>{delta(d.gsc_totals.impressions, d.gsc_prev_totals.impressions)}%</em></span>
-      {/if}
-      {#if site.data.ga4_property}<span><small>浏览量</small><b>{n(d.ga4_totals.views)}</b><em class:up={d.ga4_totals.views >= d.ga4_prev_views}>{delta(d.ga4_totals.views, d.ga4_prev_views)}%</em></span>{/if}
-      {#if site.data.bing_site}<span><small>Bing 点击</small><b>{n(d.bing_totals.clicks)}</b></span>{/if}
-      <span><small>运营机会</small><b>{d.opportunities.length}</b></span>
+    <h3>近 28 天 <span class="sub">与前 28 天对比</span><span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'data')}>完整数据</button></h3>
+    <div class="stats">
+      {#each stats as k (k.l)}
+        <div class="stat"><small>{k.l}</small><b>{k.v}</b>{#if k.dl}<em class:up={k.dl.dir > 0} class:down={k.dl.dir < 0}>{k.dl.text || '—'}</em>{:else}<em>&nbsp;</em>{/if}</div>
+      {/each}
     </div>
     {#if d.opportunities.length}
-      <div class="opps">{#each d.opportunities.slice(0, 3) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
+      <div class="opps-t">优先处理</div>
+      <div class="list">{#each d.opportunities.slice(0, 3) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
     {/if}
   </div>
 {/if}
 
 <style>
-  .sum { display: flex; flex-wrap: wrap; gap: 8px 28px; margin-bottom: 10px; }
-  .sum span { display: flex; flex-direction: column; }
-  .sum small { color: var(--dim); font-size: 11.5px; }
-  .sum b { font-size: 18px; font-variant-numeric: tabular-nums; }
-  .sum em { font-style: normal; font-size: 11px; color: var(--err); }
-  .sum em.up { color: var(--ok); }
-  .opps { display: flex; flex-direction: column; gap: 6px; }
+  .opps-t { margin: 14px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
 </style>

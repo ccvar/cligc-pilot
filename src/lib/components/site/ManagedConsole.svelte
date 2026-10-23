@@ -8,6 +8,7 @@
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
+  import { ago, clock } from './fmt';
   import { managed, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, setManagedSites } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
@@ -51,12 +52,15 @@
     failed: { l: '失败', c: 'err' }, watch_ok: { l: '检查通过', c: '' }, watch_failed: { l: '检查失败', c: 'err' }, fallback: { l: '备用模型', c: 'warn' },
     budget: { l: '预算', c: 'warn' }, digest: { l: '日报', c: '' }, paused: { l: '暂停', c: 'warn' }, resumed: { l: '恢复', c: 'ok' }, joined: { l: '开始托管', c: 'ok' }, left: { l: '退出托管', c: '' },
   };
-  const when = (ts: number) => { const s = Date.now() / 1000 - ts; return s < 3600 ? `${Math.max(1, Math.round(s / 60))} 分钟前` : s < 86400 ? `${Math.round(s / 3600)} 小时前` : new Date(ts * 1000).toLocaleDateString(); };
+  const when = ago;
+  const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
+  const kTok = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}K` : String(v));
+  const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };
 </script>
 
-<div class="su mc">
+<div class="su page mc">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <header class="mc-head" data-tauri-drag-region onmousedown={startDrag}>
+  <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div>
       <h1>托管运营 {#if paused}<span class="pill warn">已暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
@@ -66,11 +70,13 @@
       {#if o}<button class="btn small {paused ? 'primary' : ''}" onclick={() => setPaused(!paused)}>{paused ? '恢复托管' : '暂停托管'}</button>{/if}
     </div>
   </header>
-  <nav class="mc-tabs">
+  <nav class="tabs">
     {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}>{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{/if}</button>{/each}
   </nav>
 
-  <div class="mc-body">
+  <div class="page-body">
+   {#key managed.tab}
+   <div class="pane">
     {#if o && !o.sites.length && managed.tab !== 'settings'}
       <div class="card intro">
         <h3>把站点交给 AI 全托管</h3>
@@ -87,13 +93,15 @@
         <div class="sites">
           {#each o.sites as s (s.id)}
             <button class="sc" onclick={() => openSite(s.id)}>
-              <b>{s.name}</b>
-              <small>{s.job ? `${s.job}中` : s.plan_date ? `计划 ${s.plan_count} 项（${s.plan_date}）` : '还没有计划'}</small>
-              <span class="row">
-                <span class="pill ok">本周上线 {s.shipped_week}</span>
-                {#if s.waiting}<span class="pill warn">需要你 {s.waiting}</span>{/if}
-                {#if s.failed}<span class="pill err">失败 {s.failed}</span>{/if}
+              <span class="sc-top"><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{/if}</span>
+              <small>{s.plan_date ? `本周计划 ${s.plan_count} 项 · ${md(s.plan_date)}制定` : '还没有计划'}</small>
+              <span class="sc-nums">
+                <span><b>{s.shipped_week}</b>本周上线</span>
+                <span class:warn={s.waiting > 0}><b>{s.waiting}</b>需要你</span>
+                <span class:bad={s.failed > 0}><b>{s.failed}</b>失败</span>
               </span>
+              <span class="meter" title="本周改动 {s.budget.changes_used} / {s.budget.changes_limit} 条"><i style="width:{ratio(s.budget.changes_used, s.budget.changes_limit) * 100}%"></i></span>
+              <span class="meter-l"><span>改动 {s.budget.changes_used}/{s.budget.changes_limit}</span><span>模型 {kTok(s.budget.tokens_used)}{s.budget.tokens_limit ? ` / ${kTok(s.budget.tokens_limit)}` : ''}</span></span>
             </button>
           {/each}
         </div>
@@ -101,15 +109,15 @@
       <div class="card">
         <h3>动态</h3>
         {#if !managed.activity.length}<p class="hint">还没有动态。托管站点的计划、上线、检查、回滚都会记在这里。</p>{/if}
-        <div class="feed">
+        <div class="list feed">
           {#each managed.activity as a, i (i)}
-            <div class="ev">
+            <div class="li ev">
               <span class="pill {KIND[a.kind]?.c ?? ''}">{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
-                <b>{#if a.site_name}<button class="link-btn plain" onclick={() => openSite(a.site_id)}>{a.site_name}</button> · {/if}{a.title}</b>
-                {#if a.detail}<small>{a.detail}</small>{/if}
+                <b>{a.title}</b>
+                <small>{#if a.site_name}<button class="link-btn plain" onclick={() => openSite(a.site_id)}>{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
               </div>
-              <span class="faint t">{when(a.ts)}</span>
+              <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
             </div>
           {/each}
         </div>
@@ -118,14 +126,14 @@
       {#each o?.sites ?? [] as s (s.id)}
         {@const p = managed.plans.find((x) => x.site_id === s.id)}
         <div class="card">
-          <h3>{s.name} <span class="faint" style="font-weight:400;font-size:12px">{p ? `${p.plan.date} 制定` : '还没有计划'}</span><span class="grow"></span>
+          <h3>{s.name} <span class="sub">{p ? `${md(p.plan.date)}制定` : '还没有计划'}</span><span class="grow"></span>
             {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}>看 AI 的分析</button>{/if}
             <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}>{p ? '重新制定' : '现在制定'}</button>
           </h3>
           {#if p}
             <ol class="plan">
               {#each p.plan.tasks as t, i (i)}
-                <li><b>{t.title}</b> <span class="pill">{CHANGE_LABEL[t.change] ?? t.change}</span>{#if t.page}<small class="mono">{t.page}</small>{/if}{#if t.why}<small>{t.why}</small>{/if}</li>
+                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b><span class="pill">{CHANGE_LABEL[t.change] ?? t.change}</span></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
               {/each}
             </ol>
           {:else}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
@@ -152,7 +160,7 @@
       <div class="card">
         <h3>日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}>生成今日日报</button></h3>
         {#if !managed.digests.length}<p class="hint">还没有日报。每天{o?.config.digest_hour ?? 9} 点后自动生成一份，并发系统通知。</p>{/if}
-        <div class="row wrap">{#each managed.digests as n (n)}<button class="btn tiny" class:primary={managed.digest?.name === n} onclick={() => openDigest(n)}>{n}</button>{/each}</div>
+        <div class="seg digs">{#each managed.digests as n (n)}<button class:on={managed.digest?.name === n} onclick={() => openDigest(n)}>{md(n)}</button>{/each}</div>
         {#if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
       </div>
     {:else if d}
@@ -168,7 +176,7 @@
           <input class="tin" bind:value={siteQ} placeholder={`在 ${candidates.length} 个站点里搜索`} spellcheck="false" />
           <div class="pick">
             {#each candidates.slice(0, 200) as r (r.id)}
-              <label class="check"><input type="checkbox" checked={picked.has(r.id)} onchange={() => toggle(r.id)} /><span>{r.name}{#if !r.has_data} <span class="faint">· 未接数据</span>{/if}</span></label>
+              <label class="check"><input type="checkbox" checked={picked.has(r.id)} onchange={() => toggle(r.id)} /><span>{r.name}{#if !r.has_data}<span class="faint nd">未接数据</span>{/if}</span></label>
             {:else}<p class="hint">没有可加入的站点。</p>{/each}
           </div>
           <div class="row"><button class="btn small primary" onclick={async () => { await setManagedSites([...picked], true); picked = new Set(); }} disabled={!picked.size}>托管选中的 {picked.size} 个站点</button>
@@ -207,43 +215,55 @@
         <p class="hint">托管需要客户端在运行（关掉窗口后托盘常驻即可）；电脑关机期间不会运营，开机后补跑一次。</p>
       </div>
 
-      {#if dirty}<div class="row-end"><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存托管设置</button></div>{/if}
+      {#if dirty}<div class="savebar"><span>有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存托管设置</button></div>{/if}
     {/if}
+   </div>
+   {/key}
   </div>
 </div>
 
 <style>
-  .mc { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .mc-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 34px 28px 8px; }
-  .mc-head h1 { margin: 0; font-size: 20px; display: flex; align-items: center; gap: 8px; }
-  .mc-head .hint { margin: 2px 0 0; }
-  .mc-tabs { display: flex; gap: 2px; padding: 0 22px; border-bottom: 1px solid var(--border); }
-  .mc-tabs button { position: relative; border: none; background: none; padding: 8px 10px 9px; font: inherit; font-size: 13px; color: var(--dim); cursor: pointer; }
-  .mc-tabs button.on { color: var(--text); font-weight: 600; }
-  .mc-tabs button.on::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
-  .cnt { margin-left: 5px; display: inline-flex; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; align-items: center; justify-content: center; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; }
-  .mc-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 28px 40px; display: flex; flex-direction: column; gap: 14px; }
-  .mc-body > :global(*) { max-width: 1080px; }
-  .intro ul { margin: 6px 0 12px; padding-left: 18px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
-  .sites { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-  .sc { text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 10px 12px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 4px; }
-  .sc:hover { border-color: var(--border2); background: #faf9f6; }
-  .sc b { font-size: 13px; }
+  .intro ul { margin: 6px 0 14px; padding-left: 18px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
+  .sites { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .sc { text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px 16px; cursor: pointer; font: inherit; color: var(--text); display: flex; flex-direction: column; gap: 4px; transition: border-color .15s, box-shadow .15s, transform .15s var(--su-ease); }
+  .sc:hover { border-color: var(--border2); box-shadow: var(--shadow); transform: translateY(-1px); }
+  .sc:active { transform: none; box-shadow: var(--shadow-sm); }
+  .sc-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .sc-top b { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc small { font-size: 11.5px; color: var(--dim); }
-  .feed { display: flex; flex-direction: column; }
-  .ev { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); }
-  .ev:first-child { border-top: none; }
-  .ev .pill { flex: none; margin-top: 1px; }
+  .sc-nums { display: flex; gap: 18px; margin: 8px 0 10px; }
+  .sc-nums > span { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); }
+  .sc-nums b { font-size: 18px; font-weight: 600; line-height: 1.25; color: var(--text); font-variant-numeric: tabular-nums; }
+  .sc-nums .warn b { color: var(--su-warn-ink); }
+  .sc-nums .bad b { color: var(--err); }
+  .meter { height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s var(--su-ease); }
+  .meter-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .ev { display: flex; align-items: flex-start; gap: 12px; }
+  .ev .pill { flex: none; min-width: 64px; justify-content: center; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
-  .ev-main b { display: block; font-size: 12.5px; font-weight: 550; }
-  .ev-main small { display: block; font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; }
-  .ev .t { flex: none; font-size: 11px; }
-  .link-btn.plain { text-decoration: none; color: var(--text); font-weight: 600; }
-  .plan { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
-  .plan small { display: block; color: var(--dim); font-size: 11.5px; }
-  .pick { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px; display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
-  .x.mini { font-size: 13px; padding: 0 0 0 3px; }
+  .ev-main b { display: block; font-size: 13px; font-weight: 550; line-height: 1.5; }
+  .ev-main small { display: block; font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; line-height: 1.55; }
+  .sep { margin: 0 6px; color: var(--border2); }
+  .ev .t { flex: none; font-size: 11.5px; white-space: nowrap; margin-top: 2px; }
+  .link-btn.plain { text-decoration: none; color: var(--dim); font-size: inherit; }
+  .link-btn.plain:hover { color: var(--text); text-decoration: underline; }
+  .plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+  .plan li { display: flex; gap: 10px; align-items: flex-start; }
+  .plan .no { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--dim); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .plan .pt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .plan b { font-weight: 550; }
+  .plan small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .plan small.pg { color: var(--faint); font-size: 11px; }
+  .pick { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+  .nd { margin-left: 8px; font-size: 11.5px; }
+  .pick .check { padding: 2px 4px; border-radius: 6px; transition: background-color .12s; }
+  .pick .check:hover { background: var(--su-hover); }
+  .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
+  .digs { flex-wrap: wrap; margin-bottom: 4px; }
   tr.clickable { cursor: pointer; }
-  tr.clickable:hover td { background: #faf9f6; }
-  .md { margin-top: 12px; font-size: 13px; line-height: 1.7; border-top: 1px solid var(--border); padding-top: 10px; }
+  .md { margin-top: 14px; font-size: 13px; line-height: 1.75; border-top: 1px solid var(--border); padding-top: 12px; }
+  .md :global(h1) { font-size: 16px; margin: 0 0 8px; }
+  .md :global(h2) { font-size: 14px; margin: 16px 0 6px; }
+  .md :global(ul) { padding-left: 18px; margin: 6px 0; }
 </style>

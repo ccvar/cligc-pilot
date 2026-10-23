@@ -3,6 +3,9 @@
   import type { Site, Opportunity } from '$lib/types';
   import LineChart from './LineChart.svelte';
   import OpportunityRow from './OpportunityRow.svelte';
+  import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import BingMark from '$lib/components/icons/BingMark.svelte';
+  import { ago as agoTs, num, pct as pctF, delta as dlt } from './fmt';
   import { sites, loadDashboard, refreshSiteData } from '$lib/state/sites.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -13,11 +16,11 @@
 
   let qTab = $state<'gsc' | 'bing'>('gsc');
   let pTab = $state<'gsc' | 'ga4' | 'bing'>('gsc');
-  const n = (v: number) => Math.round(v).toLocaleString();
-  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-  const delta = (cur: number, prev: number) => (prev > 0 ? (cur - prev) / prev : cur > 0 ? 1 : 0);
+  const n = num;
+  const pct = pctF;
+  const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };
+  const fetched = $derived(Math.max(d?.meta.gsc.fetched_at ?? 0, d?.meta.ga4.fetched_at ?? 0, d?.meta.bing.fetched_at ?? 0));
   const path = (u: string) => { try { const x = new URL(u); return x.pathname + x.search; } catch { return u; } };
-  const ago = (ts: number) => { if (!ts) return '未拉取'; const m = Math.round((Date.now() / 1000 - ts) / 60); return m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`; };
   const events = $derived((d?.ga4_events ?? []).filter((e) => !['page_view', 'session_start', 'first_visit', 'user_engagement', 'scroll'].includes(e.event)));
   const evNames = $derived([...new Set(events.filter((e) => !e.dim).map((e) => e.event))]);
   const opps = $derived<Opportunity[]>(d?.opportunities ?? []);
@@ -33,43 +36,55 @@
     </div>
   {:else}
     <div class="bar">
-      <div class="srcs">
-        {#if site.data.gsc_site}<span class="pill {d?.meta.gsc.error ? 'err' : ''}" title={d?.meta.gsc.error}>Search Console · {d?.meta.gsc.end ? `截至 ${d.meta.gsc.end}` : ''} · {ago(d?.meta.gsc.fetched_at ?? 0)}</span>{/if}
-        {#if site.data.ga4_property}<span class="pill {d?.meta.ga4.error ? 'err' : ''}" title={d?.meta.ga4.error}>GA4 · {ago(d?.meta.ga4.fetched_at ?? 0)}</span>{/if}
-        {#if site.data.bing_site}<span class="pill {d?.meta.bing.error ? 'err' : ''}" title={d?.meta.bing.error}>Bing · {d?.meta.bing.end ? `截至 ${d.meta.bing.end}` : ''} · {ago(d?.meta.bing.fetched_at ?? 0)}</span>{/if}
-      </div>
-      <button class="btn small" onclick={() => refreshSiteData(site.id, true)} disabled={busy}>{busy ? '拉取中…' : '刷新数据'}</button>
+      <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'}</span>
+      <button class="btn small" onclick={() => refreshSiteData(site.id, true)} disabled={busy}>{#if busy}<span class="spin"></span>同步中{:else}同步数据{/if}</button>
     </div>
     {#each [['Search Console', d?.meta.gsc.error], ['GA4', d?.meta.ga4.error], ['Bing', d?.meta.bing.error]] as [label, err] (label)}
       {#if err}<div class="err-note">{label}：{err}</div>{/if}
     {/each}
 
     {#if d}
-      <div class="kpis">
+      <div class="card groups" style="--g:{[site.data.gsc_site && '4fr', site.data.ga4_property && '2fr', site.data.bing_site && '1.2fr'].filter(Boolean).join(' ')}">
         {#if site.data.gsc_site}
-          {#each [
-            { l: 'Google 点击', v: n(d.gsc_totals.clicks), dl: delta(d.gsc_totals.clicks, d.gsc_prev_totals.clicks) },
-            { l: 'Google 展现', v: n(d.gsc_totals.impressions), dl: delta(d.gsc_totals.impressions, d.gsc_prev_totals.impressions) },
-            { l: '平均点击率', v: pct(d.gsc_totals.ctr), dl: delta(d.gsc_totals.ctr, d.gsc_prev_totals.ctr) },
-          ] as k (k.l)}
-            <div class="kpi"><small>{k.l}</small><b>{k.v}</b><span class:up={k.dl > 0.005} class:down={k.dl < -0.005}>{k.dl > 0 ? '+' : ''}{(k.dl * 100).toFixed(0)}%</span></div>
-          {/each}
           {@const moved = d.gsc_prev_totals.position > 0 ? d.gsc_prev_totals.position - d.gsc_totals.position : 0}
-          <div class="kpi"><small>平均排名</small><b>{d.gsc_totals.position.toFixed(1)}</b><span class:up={moved > 0.05} class:down={moved < -0.05}>{moved > 0.05 ? `上升 ${moved.toFixed(1)} 位` : moved < -0.05 ? `下降 ${(-moved).toFixed(1)} 位` : '持平'}</span></div>
+          <section class="grp" style="--n:4">
+            <header><GoogleMark size={12} />Google 搜索<span class="faint">{d.meta.gsc.end ? `截至 ${md(d.meta.gsc.end)}` : ''}</span></header>
+            <div class="stats">
+              {#each [
+                { l: '点击', v: n(d.gsc_totals.clicks), dl: dlt(d.gsc_totals.clicks, d.gsc_prev_totals.clicks) },
+                { l: '展现', v: n(d.gsc_totals.impressions), dl: dlt(d.gsc_totals.impressions, d.gsc_prev_totals.impressions) },
+                { l: '点击率', v: pct(d.gsc_totals.ctr), dl: dlt(d.gsc_totals.ctr, d.gsc_prev_totals.ctr) },
+              ] as k (k.l)}
+                <div class="stat"><small>{k.l}</small><b>{k.v}</b><em class:up={k.dl.dir > 0} class:down={k.dl.dir < 0}>{k.dl.text || '—'}</em></div>
+              {/each}
+              <div class="stat"><small>平均排名</small><b>{d.gsc_totals.position.toFixed(1)}</b><em class:up={moved > 0.05} class:down={moved < -0.05}>{moved > 0.05 ? `↑${moved.toFixed(1)} 位` : moved < -0.05 ? `↓${(-moved).toFixed(1)} 位` : '持平'}</em></div>
+            </div>
+          </section>
         {/if}
         {#if site.data.ga4_property}
-          <div class="kpi"><small>浏览量</small><b>{n(d.ga4_totals.views)}</b><span class:up={d.ga4_totals.views > d.ga4_prev_views} class:down={d.ga4_totals.views < d.ga4_prev_views}>{(delta(d.ga4_totals.views, d.ga4_prev_views) * 100).toFixed(0)}%</span></div>
-          <div class="kpi"><small>会话</small><b>{n(d.ga4_totals.sessions)}</b><span class="faint">近 28 天</span></div>
+          {@const v = dlt(d.ga4_totals.views, d.ga4_prev_views)}
+          <section class="grp" style="--n:2">
+            <header><span class="ga">GA4</span>站内访问</header>
+            <div class="stats">
+              <div class="stat"><small>浏览量</small><b>{n(d.ga4_totals.views)}</b><em class:up={v.dir > 0} class:down={v.dir < 0}>{v.text || '—'}</em></div>
+              <div class="stat"><small>会话</small><b>{n(d.ga4_totals.sessions)}</b><em>用户 {n(d.ga4_totals.users)}</em></div>
+            </div>
+          </section>
         {/if}
         {#if site.data.bing_site}
-          <div class="kpi"><small>Bing 点击</small><b>{n(d.bing_totals.clicks)}</b><span class="faint">展现 {n(d.bing_totals.impressions)}</span></div>
+          <section class="grp" style="--n:1">
+            <header><BingMark size={12} />Bing<span class="faint">{d.meta.bing.end ? `截至 ${md(d.meta.bing.end)}` : ''}</span></header>
+            <div class="stats">
+              <div class="stat"><small>点击</small><b>{n(d.bing_totals.clicks)}</b><em>展现 {n(d.bing_totals.impressions)}</em></div>
+            </div>
+          </section>
         {/if}
       </div>
-      <p class="faint note">与前 28 天对比。Search Console 数据有 2–3 天延迟。</p>
+      <p class="faint note">Search Console 数据有 2–3 天延迟。</p>
 
       {#if d.gsc_daily.length || d.ga4_daily.length}
         <div class="card">
-          <h3>趋势（近 90 天）</h3>
+          <h3>趋势 <span class="sub">近 90 天</span></h3>
           {#if d.gsc_daily.length}
             <LineChart labels={d.gsc_daily.map((r) => r.key)} series={[
               { label: '点击', color: '#2f6fd8', values: d.gsc_daily.map((r) => r.clicks) },
@@ -77,7 +92,7 @@
             ]} />
           {/if}
           {#if d.ga4_daily.length}
-            <div style="margin-top:12px"><LineChart height={110} labels={d.ga4_daily.map((r) => r.key)} series={[
+            <div style="margin-top:18px"><LineChart height={110} labels={d.ga4_daily.map((r) => r.key)} series={[
               { label: '会话', color: '#12805c', values: d.ga4_daily.map((r) => r.sessions) },
               { label: '浏览量', color: '#b45309', values: d.ga4_daily.map((r) => r.views) },
             ]} /></div>
@@ -86,9 +101,9 @@
       {/if}
 
       <div class="card">
-        <h3>运营机会 <span class="faint" style="font-weight:400;font-size:12px">Pilot 按固定规则从数据里算出，可复现</span></h3>
+        <h3>运营机会 <span class="sub">按固定规则从数据里算出，可复现</span></h3>
         {#if opps.length}
-          <div class="opps">{#each opps.slice(0, 12) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
+          <div class="list">{#each opps.slice(0, 12) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
         {:else}
           <p class="hint">暂时没有发现明显的机会（或数据还不够）。阈值可以在「运营」里调低。</p>
         {/if}
@@ -105,7 +120,7 @@
               {#each (qTab === 'gsc' && site.data.gsc_site ? d.gsc_queries : d.bing_queries).slice(0, 25) as r (r.key)}
                 <tr>
                   <td class="trunc" title={r.key}>{r.key}</td>
-                  <td class="num">{n(r.clicks)}{#if prevOf(r) !== undefined && prevOf(r) !== r.clicks}<small class:up={r.clicks > (prevOf(r) ?? 0)} class:down={r.clicks < (prevOf(r) ?? 0)}> {r.clicks > (prevOf(r) ?? 0) ? '↑' : '↓'}</small>{/if}</td>
+                  <td class="num">{n(r.clicks)}{#if prevOf(r) !== undefined && prevOf(r) !== r.clicks}<small class="tr" class:up={r.clicks > (prevOf(r) ?? 0)} class:down={r.clicks < (prevOf(r) ?? 0)}>{r.clicks > (prevOf(r) ?? 0) ? '↑' : '↓'}</small>{/if}</td>
                   <td class="num">{n(r.impressions)}</td>
                   <td class="num">{pct(r.ctr)}</td>
                   <td class="num">{r.position.toFixed(1)}</td>
@@ -143,14 +158,14 @@
       {#if site.data.ga4_property}
         <div class="two">
           <div class="card">
-            <h3>流量来源（近 28 天）</h3>
+            <h3>流量来源 <span class="sub">近 28 天</span></h3>
             <table class="tbl">
               <thead><tr><th>来源 / 媒介</th><th class="num">会话</th><th class="num">用户</th></tr></thead>
               <tbody>{#each d.ga4_sources.slice(0, 15) as r (r.key)}<tr><td class="trunc">{r.key}</td><td class="num">{n(r.sessions)}</td><td class="num">{n(r.users)}</td></tr>{:else}<tr><td colspan="3" class="faint">没有数据</td></tr>{/each}</tbody>
             </table>
           </div>
           <div class="card">
-            <h3>转化事件（近 28 天）</h3>
+            <h3>转化事件 <span class="sub">近 28 天</span></h3>
             {#if evNames.length}
               {#each evNames as ev (ev)}
                 {@const total = events.find((e) => e.event === ev && !e.dim)}
@@ -176,19 +191,24 @@
 
 <style>
   .dt { display: flex; flex-direction: column; gap: 14px; }
-  .bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-  .srcs { display: flex; flex-wrap: wrap; gap: 6px; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-  .kpi { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; background: var(--card); }
-  .kpi small { color: var(--dim); font-size: 11.5px; }
-  .kpi b { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-  .kpi span { font-size: 11.5px; color: var(--faint); }
-  .up { color: var(--ok) !important; }
-  .down { color: var(--err) !important; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+  .groups { display: grid; grid-template-columns: var(--g); padding: 0; overflow: hidden; }
+  .grp { min-width: 0; padding: 14px 18px 16px; border-left: 1px solid var(--border); }
+  .grp:first-child { border-left: none; }
+  .grp header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; white-space: nowrap; }
+  .grp header .faint { font-weight: 400; margin-left: 2px; }
+  .grp .stats { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 12px 16px; }
+  @container page (max-width: 900px) {
+    .groups { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .grp:first-child { grid-column: 1 / -1; border-bottom: 1px solid var(--border); }
+    .grp:nth-child(2) { border-left: none; }
+  }
+  .ga { font-size: 9px; font-weight: 700; letter-spacing: .02em; color: #fff; background: #e37400; border-radius: 3px; padding: 1px 3px; line-height: 1.2; }
   .note { margin: -6px 0 0; font-size: 11.5px; }
+  .two :global(table.tbl th:first-child) { width: 44%; }
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
   .seg.mini button { padding: 2px 8px; font-size: 11.5px; }
-  .opps { display: flex; flex-direction: column; gap: 6px; }
+  .tr { font-size: 10.5px; margin-left: 2px; }
   .ev { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 8px; }
   .ev-dim { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 0 2px; }
   .ev-dim small { color: var(--dim); font-size: 11.5px; }

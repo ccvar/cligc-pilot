@@ -8,6 +8,7 @@
   import { sites, editSite, saveSiteDraft } from '$lib/state/sites.svelte.js';
   import { ops, loadOverview, loadReports, openReport, runTask, WHITELIST, LEVEL_LABEL, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openManaged, setManagedSites } from '$lib/state/managed.svelte.js';
+  import { clock, num } from './fmt';
 
   let { site }: { site: Site } = $props();
   $effect(() => { if (!sites.draft || sites.draft.id !== site.id) editSite(site); });
@@ -26,7 +27,8 @@
     { key: 'report' as const, label: '周报', sub: '数据变化与本周运营记录' },
     { key: 'review' as const, label: '效果复盘', sub: '上线满 4 周的改动前后对比，持续负面自动降档' },
   ];
-  const when = (ts: number) => (ts ? new Date(ts * 1000).toLocaleString() : '—');
+  const when = clock;
+  const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
   function toggleWl(k: string, on: boolean) {
     if (!d) return;
     d.ops.whitelist = on ? [...new Set([...d.ops.whitelist, k])] : d.ops.whitelist.filter((x) => x !== k);
@@ -39,14 +41,14 @@
       <h3>自动化档位</h3>
       <div class="levels">
         {#each [1, 2, 3, 4, 5] as lv (lv)}
-          <button class="lv" class:on={d.ops.level === lv} onclick={() => (lv === 5 ? void setManagedSites([site.id], true).then(() => { const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s); }) : (d.ops.level = lv))}>
-            <b>{LEVEL_LABEL[lv]}</b>
+          <button class="lv" class:on={d.ops.level === lv} aria-pressed={d.ops.level === lv} onclick={() => (lv === 5 ? void setManagedSites([site.id], true).then(() => { const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s); }) : (d.ops.level = lv))}>
+            <span class="lv-top"><span class="lv-n">{lv}</span><b>{(LEVEL_LABEL[lv] ?? '').replace(/^\d+\s*·\s*/, '')}</b>{#if d.ops.level === lv}<svg class="ok-ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}</span>
             <small>{lv === 1 ? '定期拉数据、出报告和机会列表，不动代码' : lv === 2 ? '对每个机会写改动建议，开成会话等你处理' : lv === 3 ? `直接改好、跑检查、${site.source === 'github' ? '提 PR' : '留在本地分支'}，你确认后合并上线` : lv === 4 ? '白名单内的改动自动合并并上线；其余按第 3 档' : 'AI 每周定计划、自动改动上线、上线后检查，变差自动回滚；只把例外交给你'}</small>
           </button>
         {/each}
       </div>
       {#if site.ops.level === 5}
-        <p class="hint">这个站点由「托管运营」统一管理：模型、新页面发布方式、每日上限都在那里设置。<button class="link-btn" onclick={() => openManaged('settings')}>打开托管运营</button></p>
+        <p class="hint after">这个站点由「托管运营」统一管理：模型、新页面发布方式、每日上限都在那里设置。<button class="link-btn" onclick={() => openManaged('settings')}>打开托管运营</button></p>
       {/if}
       {#if d.ops.level === 4}
         <div class="wl">
@@ -72,9 +74,9 @@
             <tr>
               <td><b>{t.label}</b><div class="faint" style="font-size:11.5px">{t.sub}</div></td>
               <td style="width:120px"><Dropdown compact bind:value={d.ops[t.key]} options={SCHED} /></td>
-              <td>{when(ov?.state.last[t.key] ?? 0)}</td>
-              <td>{ov?.next[t.key] ? when(ov.next[t.key]) : '—'}</td>
-              <td class="num"><button class="btn tiny" onclick={() => runTask(site.id, t.key)} disabled={busy}>立即运行</button></td>
+              <td class="t">{when(ov?.state.last[t.key] ?? 0)}</td>
+              <td class="t">{ov?.next[t.key] ? when(ov.next[t.key]) : '—'}</td>
+              <td class="act"><button class="btn tiny" onclick={() => runTask(site.id, t.key)} disabled={busy}>立即运行</button></td>
             </tr>
           {/each}
         </tbody>
@@ -97,19 +99,27 @@
         <div class="field"><label for="op-ir">每次最多处理</label><input id="op-ir" class="tin" type="number" min="1" bind:value={d.ops.budget.items_per_run} /></div>
         <div class="field"><label for="op-tw">每周模型用量上限（token，0＝不限）</label><input id="op-tw" class="tin" type="number" min="0" step="100000" bind:value={d.ops.budget.tokens_per_week} /></div>
       </div>
-      {#if ov}<p class="hint">本周已用：改动 {ov.budget.changes_used} / {ov.budget.changes_limit} 条，模型 {ov.budget.tokens_used.toLocaleString()}{ov.budget.tokens_limit ? ` / ${ov.budget.tokens_limit.toLocaleString()}` : ''} token。超出即暂停并通知。</p>{/if}
+      {#if ov}
+        <div class="used">
+          <div><span class="ul">本周改动<b>{ov.budget.changes_used} / {ov.budget.changes_limit}</b></span><span class="meter"><i style="width:{ratio(ov.budget.changes_used, ov.budget.changes_limit) * 100}%"></i></span></div>
+          <div><span class="ul">本周模型用量<b>{num(ov.budget.tokens_used)}{ov.budget.tokens_limit ? ` / ${num(ov.budget.tokens_limit)}` : ''}</b></span><span class="meter"><i style="width:{ratio(ov.budget.tokens_used, ov.budget.tokens_limit) * 100}%"></i></span></div>
+        </div>
+        <p class="hint">超出任一上限即暂停并通知。</p>
+      {/if}
     </div>
 
     {#if dirty}
-      <div class="row-end"><button class="btn small ghost" onclick={() => editSite(site)}>撤销</button><button class="btn small primary" onclick={saveSiteDraft} disabled={sites.saving}>保存运营设置</button></div>
+      <div class="savebar"><span>运营设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => editSite(site)}>撤销</button><button class="btn small primary" onclick={saveSiteDraft} disabled={sites.saving}>保存</button></div>
     {/if}
 
     <div class="card">
       <h3>报告</h3>
       {#if !reports.length}<p class="hint">还没有报告。运行一次周报或体检就会生成。</p>{/if}
-      <div class="reports">
-        {#each reports as r (r.name)}<button class="btn tiny" class:primary={ops.report?.name === r.name} onclick={() => openReport(site.id, r.name)}>{r.name}</button>{/each}
-      </div>
+      {#if reports.length}
+        <div class="seg reports">
+          {#each reports as r (r.name)}<button class:on={ops.report?.name === r.name} onclick={() => openReport(site.id, r.name)}>{r.name}</button>{/each}
+        </div>
+      {/if}
       {#if ops.report && ops.report.site === site.id}
         <div class="md">{@html mdRender(ops.report.text)}</div>
       {/if}
@@ -119,11 +129,11 @@
       <div class="card">
         <h3>运行记录</h3>
         <table class="tbl">
-          <thead><tr><th>时间</th><th>任务</th><th>触发</th><th>结果</th></tr></thead>
+          <thead><tr><th style="width:130px">时间</th><th style="width:90px">任务</th><th style="width:56px">触发</th><th>结果</th></tr></thead>
           <tbody>
             {#each ov.state.runs.slice(0, 20) as r (r.id)}
               <tr><td>{when(r.started)}</td><td>{TASKS.find((t) => t.key === r.task)?.label ?? r.task}</td><td>{r.trigger === 'schedule' ? '定时' : '手动'}</td>
-                <td class="trunc" title={r.error || r.summary}><span class="pill {r.ok ? 'ok' : 'err'}">{r.ok ? '完成' : '失败'}</span> {r.error || r.summary}</td></tr>
+                <td class="trunc" title={r.error || r.summary}><span class="pill {r.ok ? 'ok' : 'err'}">{r.ok ? '完成' : '失败'}</span><span class="rs">{r.error || r.summary}</span></td></tr>
             {/each}
           </tbody>
         </table>
@@ -134,14 +144,32 @@
 
 <style>
   .op { display: flex; flex-direction: column; gap: 14px; }
-  .levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
-  .lv { text-align: left; border: 1.5px solid var(--border2); border-radius: 10px; background: #fff; padding: 9px 11px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 3px; }
-  .lv b { font-size: 13px; }
-  .lv small { color: var(--dim); font-size: 11.5px; line-height: 1.5; }
-  .lv.on { border-color: var(--accent); background: var(--accent-soft); }
-  .wl { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
-  .reports { display: flex; flex-wrap: wrap; gap: 6px; }
-  .md { margin-top: 12px; font-size: 13px; line-height: 1.7; border-top: 1px solid var(--border); padding-top: 10px; }
-  .md :global(table) { border-collapse: collapse; }
-  .md :global(td), .md :global(th) { border: 1px solid var(--border); padding: 3px 8px; }
+  .levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 8px; }
+  .lv { text-align: left; border: 1px solid var(--border2); border-radius: 10px; background: #fff; padding: 10px 12px 11px; cursor: pointer; font: inherit; color: var(--text); display: flex; flex-direction: column; gap: 5px; transition: border-color .15s, background-color .15s, box-shadow .15s; }
+  .lv:hover:not(.on) { border-color: #cfcbc1; background: #fdfcfa; }
+  .lv:focus-visible { box-shadow: var(--su-ring); }
+  .lv-top { display: flex; align-items: center; gap: 7px; }
+  .lv-n { width: 18px; height: 18px; border-radius: 5px; background: var(--accent-soft); color: var(--dim); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; flex: none; font-variant-numeric: tabular-nums; transition: background-color .15s, color .15s; }
+  .lv b { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; }
+  .lv small { color: var(--dim); font-size: 11.5px; line-height: 1.55; }
+  .lv.on { border-color: var(--accent); box-shadow: inset 0 0 0 .5px var(--accent); background: #fcfbf8; }
+  .lv.on .lv-n { background: var(--accent); color: #fff; }
+  .ok-ic { color: var(--accent); flex: none; }
+  .after { margin-top: 12px; }
+  .wl { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .wl .lbl { font-size: 12px; font-weight: 550; }
+  .t { white-space: nowrap; color: var(--dim); }
+  .used { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 24px; margin-top: 16px; }
+  .ul { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); margin-bottom: 5px; }
+  .ul b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+  .meter { display: block; height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s var(--su-ease); }
+  .reports { flex-wrap: wrap; }
+  .rs { margin-left: 8px; color: var(--dim); }
+  .md { margin-top: 14px; font-size: 13px; line-height: 1.75; border-top: 1px solid var(--border); padding-top: 12px; }
+  .md :global(h1) { font-size: 16px; margin: 0 0 8px; }
+  .md :global(h2) { font-size: 14px; margin: 16px 0 6px; }
+  .md :global(table) { border-collapse: collapse; font-size: 12.5px; }
+  .md :global(td), .md :global(th) { border: 1px solid var(--border); padding: 4px 10px; }
+  .md :global(th) { background: var(--rail); font-weight: 550; }
 </style>

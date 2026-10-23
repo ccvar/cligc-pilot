@@ -66,7 +66,7 @@
       {#if managed.overview?.config.paused}<span class="nav-dim">已暂停</span>{:else if managed.overview?.waiting}<span class="nav-cnt" title="{managed.overview.waiting} 项需要你">{managed.overview.waiting}</span>{:else if managed.count}<span class="nav-dim">{managed.count}</span>{/if}
     </button>
     {/if}
-    {#if app.isSiteConn}
+    {#if app.isSiteConn && !app.isSitesMode}
     <button class="railnav {app.view === 'site' ? 'on' : ''}" onclick={() => openSiteBoard()}>
       <BoardIcon size={14} />
       站点看板

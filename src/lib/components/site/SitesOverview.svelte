@@ -5,6 +5,7 @@
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, setPinned, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { LEVEL_LABEL, STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
+  import { ago, num, delta } from './fmt';
 
   const filtered = $derived(sortRows(applyFilter(fleet.rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
@@ -21,8 +22,11 @@
     down: fleet.rows.filter(trafficDown).length,
     nodata: fleet.rows.filter((r) => !r.has_data).length,
   });
-  const n = (v: number) => Math.round(v).toLocaleString();
-  const when = (ts: number) => { if (!ts) return '—'; const d = Math.round((Date.now() / 1000 - ts) / 86400); return d <= 0 ? '今天' : d === 1 ? '昨天' : `${d} 天前`; };
+  const n = num;
+  const when = ago;
+  const total = $derived(delta(totals.clicks, totals.prev));
+  const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
+  const lvlName = (l: number) => (LEVEL_LABEL[l] ?? '').replace(/^\d+\s*·\s*/, '');
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
   const FILTERS = $derived([
@@ -36,30 +40,32 @@
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
 
-<div class="su ov">
+<div class="su page ov">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <header class="ov-head" data-tauri-drag-region onmousedown={startDrag}>
+  <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div>
       <h1>全部站点</h1>
-      <p class="hint">{totals.sites} 个站点 · 近 28 天 Google 点击 {n(totals.clicks)}{totals.prev ? `（${totals.clicks >= totals.prev ? '+' : ''}${Math.round(((totals.clicks - totals.prev) / totals.prev) * 100)}%）` : ''}</p>
+      <p class="hint">{totals.sites} 个站点 · 近 28 天 Google 点击 {n(totals.clicks)}{#if total.text} <span class:up={total.dir > 0} class:down={total.dir < 0}>{total.text}</span>{/if}</p>
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => openSiteImport()}>导入站点</button>
     </div>
   </header>
 
-  <div class="ov-tabs">
+  <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}>站点</button>
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}>待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
   </div>
 
-  <div class="ov-body">
+  <div class="page-body">
+   {#key fleet.tab}
+   <div class="pane">
     {#if fleet.tab === 'sites'}
       <div class="ov-tools">
-        <input class="tin" style="max-width:280px" bind:value={fleet.query} placeholder="搜索名称、域名、仓库、标签" spellcheck="false" />
+        <input class="tin search" bind:value={fleet.query} placeholder="搜索名称、域名、仓库、标签" spellcheck="false" />
         <div class="chips">{#each FILTERS as f (f.v)}<button class:on={fleet.filter === f.v} onclick={() => (fleet.filter = f.v)}>{f.l}</button>{/each}</div>
         {#if fleet.tags.length}
-          <select class="tin" style="width:auto" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
+          <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
         {/if}
       </div>
       {#if !fleet.rows.length}
@@ -68,14 +74,14 @@
         <div class="card tbl-card">
           <table class="tbl">
             <thead><tr>
-              <th style="width:26px"></th>
+              <th class="pin-col"></th>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
               <th class="num"><button class="th" onclick={() => sortBy('clicks')}>Google 点击{arrow('clicks')}</button></th>
               <th class="num"><button class="th" onclick={() => sortBy('change')}>变化{arrow('change')}</button></th>
-              <th class="num">机会</th>
+              <th class="num c-opp">机会</th>
               <th><button class="th" onclick={() => sortBy('pending')}>状态{arrow('pending')}</button></th>
-              <th>档位</th>
-              <th><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
+              <th class="c-lvl">档位</th>
+              <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
             </tr></thead>
             <tbody>
               {#each pageRows as r (r.id)}
@@ -85,14 +91,18 @@
                   <td><button class="pin" class:on={r.pinned} title={r.pinned ? '取消置顶' : '置顶'} onclick={(e) => { e.stopPropagation(); void setPinned(r.id, !r.pinned); }}>★</button></td>
                   <td class="site-cell">
                     <b>{r.name}</b>
-                    <small>{r.domain && r.domain !== r.name ? r.domain : r.source === 'github' ? r.repo : '本地文件夹'}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
+                    <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span>{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
-                  <td class="num">{r.has_data && r.summary.fetched_at ? n(r.summary.gsc_clicks) : '—'}</td>
-                  <td class="num"><span class:up={ch > 0.05} class:down={ch < -0.05}>{r.has_data && r.summary.gsc_clicks_prev ? `${ch > 0 ? '+' : ''}${Math.round(ch * 100)}%` : '—'}</span></td>
-                  <td class="num">{(r.has_data && r.summary.opportunities) || '—'}</td>
-                  <td><span class="pill {st.c}">{st.t}</span>{#if !r.has_data}<span class="faint" style="font-size:11px"> · 未接数据</span>{/if}</td>
-                  <td class="faint" style="font-size:12px">{LEVEL_LABEL[r.level]}</td>
-                  <td class="faint" style="font-size:12px">{when(r.active_at)}</td>
+                  {#if r.has_data}
+                    <td class="num">{r.summary.fetched_at ? n(r.summary.gsc_clicks) : '—'}</td>
+                    <td class="num"><span class:up={ch > 0.05} class:down={ch < -0.05}>{r.summary.gsc_clicks_prev ? `${ch > 0 ? '↑' : ch < 0 ? '↓' : ''}${Math.abs(Math.round(ch * 100))}%` : '—'}</span></td>
+                    <td class="num c-opp">{r.summary.opportunities || '—'}</td>
+                  {:else}
+                    <td class="num nodata" colspan="2">未接数据</td><td class="c-opp"></td>
+                  {/if}
+                  <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
+                  <td class="c-lvl"><span class="lvl" title={LEVEL_LABEL[r.level]}><span class="bars">{#each [1, 2, 3, 4, 5] as i (i)}<i class:on={i <= r.level}></i>{/each}</span><span class="lvl-t">{lvlName(r.level)}</span></span></td>
+                  <td class="faint when c-when">{when(r.active_at)}</td>
                 </tr>
               {:else}
                 <tr><td colspan="8" class="faint">没有符合条件的站点</td></tr>
@@ -117,14 +127,14 @@
       {:else}
         <div class="card tbl-card">
           <table class="tbl">
-            <thead><tr><th>站点</th><th>事项</th><th>状态</th><th>更新</th></tr></thead>
+            <thead><tr><th style="width:170px">站点</th><th>事项</th><th style="width:84px">状态</th><th style="width:96px">更新</th></tr></thead>
             <tbody>
               {#each fleet.pending as p (p.item.id)}
                 <tr class="clickable" onclick={() => openSite(p.site_id, 'queue')}>
-                  <td class="trunc" style="max-width:160px">{p.site_name}</td>
-                  <td class="trunc"><span class="faint">{KIND_LABEL[p.item.opp.kind] ?? ''}</span> {p.item.opp.title}</td>
+                  <td class="sn-cell"><b class="sn">{p.site_name}</b></td>
+                  <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
                   <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>
-                  <td class="faint" style="font-size:12px">{when(p.item.updated_at)}</td>
+                  <td class="faint when">{when(p.item.updated_at)}</td>
                 </tr>
               {/each}
             </tbody>
@@ -132,35 +142,51 @@
         </div>
       {/if}
     {/if}
+   </div>
+   {/key}
   </div>
 </div>
 
 <style>
-  .ov { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .ov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 34px 28px 8px; }
-  .ov-head h1 { margin: 0; font-size: 20px; }
-  .ov-head .hint { margin: 2px 0 0; }
-  .ov-tabs { display: flex; gap: 2px; padding: 0 22px; border-bottom: 1px solid var(--border); }
-  .ov-tabs button { position: relative; border: none; background: none; padding: 8px 10px 9px; font: inherit; font-size: 13px; color: var(--dim); cursor: pointer; }
-  .ov-tabs button.on { color: var(--text); font-weight: 600; }
-  .ov-tabs button.on::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
-  .cnt { margin-left: 5px; display: inline-flex; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; align-items: center; justify-content: center; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; }
-  .ov-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 28px 40px; display: flex; flex-direction: column; gap: 12px; }
-  .ov-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .chips { display: flex; gap: 3px; flex-wrap: wrap; }
-  .chips button { border: none; background: none; padding: 4px 9px; border-radius: 7px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
-  .chips button:hover { background: #f1efe9; }
+  .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
+  .ov-tools { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+  .search { width: 260px; max-width: 100%; }
+  .tagsel { width: auto; height: var(--ctl-h); padding: 0 8px; }
+  .chips { display: flex; gap: 2px; flex-wrap: wrap; }
+  .chips button { border: none; background: none; height: 26px; padding: 0 9px; border-radius: 7px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; font-variant-numeric: tabular-nums; transition: background-color .12s, color .12s; }
+  .chips button:hover:not(.on) { background: var(--su-hover); color: var(--text); }
   .chips button.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
-  .tbl-card { padding: 4px 6px; }
-  .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+  .tbl-card { padding: 2px 16px; overflow-x: auto; }
+  .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
+  .pin-col { width: 22px; }
+  .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; transition: color .12s; }
+  .th:hover { color: var(--text); }
   tr.clickable { cursor: pointer; }
-  tr.clickable:hover td { background: #faf9f6; }
-  .site-cell b { display: block; font-size: 12.5px; }
-  .site-cell small { display: flex; gap: 6px; font-size: 11px; color: var(--faint); }
+  .site-cell b { display: block; font-size: 13px; font-weight: 600; }
+  .site-cell { max-width: 0; width: 34%; }
+  .site-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .site-cell small { display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+  .site-cell small span + span:not(.tag)::before { content: '·'; margin-right: 8px; color: var(--border2); }
   .tag { color: var(--dim); }
-  .pin { border: none; background: none; padding: 0; color: var(--border2); cursor: pointer; font-size: 13px; }
+  .nodata { color: var(--faint); font-size: 12px; }
+  .lvl { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); white-space: nowrap; }
+  .bars { display: inline-flex; gap: 2px; align-items: flex-end; }
+  .bars i { width: 3px; border-radius: 1px; background: var(--border2); }
+  .bars i:nth-child(1) { height: 5px; } .bars i:nth-child(2) { height: 7px; } .bars i:nth-child(3) { height: 9px; } .bars i:nth-child(4) { height: 11px; } .bars i:nth-child(5) { height: 13px; }
+  .bars i.on { background: var(--accent); }
+  .when { font-size: 12px; white-space: nowrap; }
+  .pin { border: none; background: none; padding: 2px; color: var(--border2); cursor: pointer; font-size: 13px; line-height: 1; border-radius: 4px; transition: color .12s, transform .12s; }
+  .pin:hover { color: var(--dim); transform: scale(1.12); }
   .pin.on { color: #c28a12; }
-  .up { color: var(--ok); }
-  .down { color: var(--err); }
+  .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sn { font-weight: 600; font-size: 12.5px; }
+  .kind { margin-left: 8px; color: var(--faint); font-size: 11.5px; }
   .pager { gap: 8px; }
+  @container page (max-width: 760px) {
+    .c-when { display: none; }
+    .lvl-t { display: none; }
+  }
+  @container page (max-width: 560px) {
+    .c-opp, .c-lvl { display: none; }
+  }
 </style>

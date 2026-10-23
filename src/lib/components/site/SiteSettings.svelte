@@ -113,23 +113,27 @@
 
     <SiteDataSettings draft={d} {site} />
 
-    <div class="row-end save-bar">
-      {#if dirty}<span class="faint" style="font-size:12px">有未保存的修改</span>{/if}
-      <button class="btn small ghost" onclick={() => editSite(site)} disabled={!dirty || sites.saving}>撤销</button>
-      <button class="btn small primary" onclick={saveSiteDraft} disabled={!dirty || sites.saving}>{sites.saving ? '保存中…' : '保存设置'}</button>
-    </div>
+    {#if dirty}
+      <div class="savebar">
+        <span>有未保存的修改</span><span class="grow"></span>
+        <button class="btn small ghost" onclick={() => editSite(site)} disabled={sites.saving}>撤销</button>
+        <button class="btn small primary" onclick={saveSiteDraft} disabled={sites.saving}>{#if sites.saving}<span class="spin"></span>保存中{:else}保存设置{/if}</button>
+      </div>
+    {/if}
 
     <div class="card danger-zone">
-      <h3>移除站点</h3>
-      <p class="hint">只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p>
-      <div class="row"><button class="btn small danger" onclick={() => removeSite(site)}>移除这个站点</button></div>
+      <div class="dz">
+        <div><b>移除站点</b><p class="hint">只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
+        <button class="btn small danger" onclick={() => removeSite(site)}>移除这个站点</button>
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
   .st { display: flex; flex-direction: column; gap: 14px; }
-  .save-bar { position: sticky; bottom: -40px; padding: 10px 0; background: linear-gradient(transparent, var(--bg) 30%); }
-  .x.mini { font-size: 13px; padding: 0 0 0 3px; }
-  .danger-zone { border-color: var(--err-border); }
+  .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
+  .dz { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
+  .dz b { font-size: 13.5px; font-weight: 600; }
+  .dz .hint { margin: 2px 0 0; max-width: 60ch; }
 </style>
