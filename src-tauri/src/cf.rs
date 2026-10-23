@@ -44,7 +44,7 @@ async fn cf_get_query(token: &str, path: &str, query: &[(&str, &str)]) -> Result
         .get(url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Content-Type", "application/json")
-        .timeout(Duration::from_secs(15));
+        .timeout(Duration::from_secs(30));
     let resp = request
         .send()
         .await
@@ -133,6 +133,223 @@ pub async fn verify_token(token: &str) -> Result<CfVerify, String> {
         accounts,
         zones,
     })
+}
+
+
+async fn cf_send(token: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
+    let url = format!("{API}{path}");
+    let client = reqwest::Client::new();
+    let mut req = client
+        .request(method, url)
+        .header("Authorization", format!("Bearer {token}"))
+        .timeout(Duration::from_secs(30));
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let resp = req.send().await.map_err(|e| format!("请求 Cloudflare 失败: {e}"))?;
+    let status = resp.status();
+    let body: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Cloudflare 响应不是 JSON: {e}"))?;
+    if !status.is_success() || !body.get("success").and_then(Value::as_bool).unwrap_or(false) {
+        let msg = body
+            .get("errors")
+            .and_then(|e| e.as_array())
+            .and_then(|a| a.first())
+            .and_then(|e| e.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("未知错误（请确认 Token 权限）");
+        return Err(format!("Cloudflare {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+/// Pages 项目（站点导入 / 部署用到的字段）。
+#[derive(Serialize, Default, Clone, Debug)]
+pub struct PagesProject {
+    pub name: String,
+    pub subdomain: String,
+    pub domains: Vec<String>,
+    pub production_branch: String,
+    /// github | gitlab | ""（直接上传）
+    pub source_type: String,
+    /// 绑定的仓库（owner/repo），直接上传为空。
+    pub source_repo: String,
+}
+
+fn pages_project_from(v: &Value) -> PagesProject {
+    let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let source = &v["source"];
+    let cfg = &source["config"];
+    let repo = match (cfg["owner"].as_str(), cfg["repo_name"].as_str()) {
+        (Some(o), Some(r)) if !o.is_empty() && !r.is_empty() => format!("{o}/{r}"),
+        _ => String::new(),
+    };
+    PagesProject {
+        name: s(&v["name"]),
+        subdomain: s(&v["subdomain"]),
+        domains: v["domains"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|d| d.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+        production_branch: s(&v["production_branch"]),
+        source_type: s(&source["type"]),
+        source_repo: repo,
+    }
+}
+
+pub async fn list_pages_projects(token: &str, account_id: &str) -> Result<Vec<PagesProject>, String> {
+    // Pages 的列表接口不接受较大的 per_page（实测 50 会被拒），按默认页大小翻页。
+    let mut out = Vec::new();
+    for page in 1..=20 {
+        let body = cf_get(token, &format!("/accounts/{account_id}/pages/projects?page={page}")).await?;
+        let items = body["result"].as_array().cloned().unwrap_or_default();
+        out.extend(items.iter().map(pages_project_from));
+        let total = body["result_info"]["total_pages"].as_u64().unwrap_or(1);
+        if items.is_empty() || page as u64 >= total {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+pub async fn get_pages_project(token: &str, account_id: &str, name: &str) -> Result<Option<PagesProject>, String> {
+    match cf_get(token, &format!("/accounts/{account_id}/pages/projects/{name}")).await {
+        Ok(b) => Ok(Some(pages_project_from(&b["result"]))),
+        Err(e) if e.contains("404") || e.to_lowercase().contains("not found") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 建一个直接上传型的 Pages 项目（wrangler 在非交互环境里不会替你建）。
+pub async fn create_pages_project(token: &str, account_id: &str, name: &str, branch: &str) -> Result<PagesProject, String> {
+    let body = cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/accounts/{account_id}/pages/projects"),
+        Some(serde_json::json!({ "name": name, "production_branch": branch })),
+    )
+    .await?;
+    Ok(pages_project_from(&body["result"]))
+}
+
+#[derive(Serialize, Default, Clone, Debug)]
+pub struct PagesDeployment {
+    pub id: String,
+    pub url: String,
+    pub environment: String,
+    pub branch: String,
+    pub commit: String,
+    pub message: String,
+    /// latest_stage.status：success | failure | active | idle | canceled
+    pub status: String,
+    pub stage: String,
+    pub created_on: String,
+}
+
+fn deployment_from(v: &Value) -> PagesDeployment {
+    let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let meta = &v["deployment_trigger"]["metadata"];
+    PagesDeployment {
+        id: s(&v["id"]),
+        url: s(&v["url"]),
+        environment: s(&v["environment"]),
+        branch: s(&meta["branch"]),
+        commit: s(&meta["commit_hash"]),
+        message: s(&meta["commit_message"]),
+        status: s(&v["latest_stage"]["status"]),
+        stage: s(&v["latest_stage"]["name"]),
+        created_on: s(&v["created_on"]),
+    }
+}
+
+pub async fn list_deployments(token: &str, account_id: &str, project: &str) -> Result<Vec<PagesDeployment>, String> {
+    let body = cf_get(token, &format!("/accounts/{account_id}/pages/projects/{project}/deployments")).await?;
+    Ok(body["result"].as_array().map(|a| a.iter().map(deployment_from).collect()).unwrap_or_default())
+}
+
+/// 重新跑某次部署（Pages 绑定 GitHub 时＝按该提交重新构建）。
+pub async fn retry_deployment(token: &str, account_id: &str, project: &str, id: &str) -> Result<PagesDeployment, String> {
+    let body = cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/accounts/{account_id}/pages/projects/{project}/deployments/{id}/retry"),
+        None,
+    )
+    .await?;
+    Ok(deployment_from(&body["result"]))
+}
+
+/// 把生产环境回滚到某次历史部署（不改代码，立即生效）。
+pub async fn rollback_deployment(token: &str, account_id: &str, project: &str, id: &str) -> Result<PagesDeployment, String> {
+    let body = cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/accounts/{account_id}/pages/projects/{project}/deployments/{id}/rollback"),
+        None,
+    )
+    .await?;
+    Ok(deployment_from(&body["result"]))
+}
+
+/// 给 Pages 项目加自定义域名。已存在视为成功。
+pub async fn add_pages_domain(token: &str, account_id: &str, project: &str, domain: &str) -> Result<(), String> {
+    match cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/accounts/{account_id}/pages/projects/{project}/domains"),
+        Some(serde_json::json!({ "name": domain })),
+    )
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if e.contains("already") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// 找到域名所属的 Zone（按最长后缀匹配）。
+pub async fn zone_for(token: &str, domain: &str) -> Result<Option<CfZone>, String> {
+    let body = cf_get(token, "/zones?per_page=50").await?;
+    let mut best: Option<CfZone> = None;
+    for (id, name) in parse_id_name(&body) {
+        if domain == name || domain.ends_with(&format!(".{name}")) {
+            if best.as_ref().is_none_or(|b| name.len() > b.name.len()) {
+                best = Some(CfZone { id, name });
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// 建一条 DNS 记录；同名同类型已存在则返回 false（不覆盖用户已有的记录）。
+pub async fn ensure_dns_record(
+    token: &str,
+    zone_id: &str,
+    kind: &str,
+    name: &str,
+    content: &str,
+    proxied: bool,
+) -> Result<bool, String> {
+    let existing = cf_get_query(token, &format!("/zones/{zone_id}/dns_records"), &[("type", kind), ("name", name)]).await?;
+    if let Some(arr) = existing["result"].as_array() {
+        if kind == "TXT" {
+            if arr.iter().any(|r| r["content"].as_str().map(|c| c.trim_matches('"')) == Some(content)) {
+                return Ok(false);
+            }
+        } else if !arr.is_empty() {
+            return Ok(false);
+        }
+    }
+    cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/zones/{zone_id}/dns_records"),
+        Some(serde_json::json!({ "type": kind, "name": name, "content": content, "proxied": proxied, "ttl": 1 })),
+    )
+    .await?;
+    Ok(true)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 mod acp;
 mod agent;
+mod bing;
 mod api_agent;
 mod api_execution;
 mod api_billing;
@@ -13,8 +14,11 @@ mod bridge;
 mod cf;
 mod cf_templates;
 mod convo;
+mod data_cmds;
 mod keychain;
+mod launch_cmds;
 mod node_boot;
+mod ops_cmds;
 mod path_env;
 mod permit;
 mod ssh;
@@ -23,6 +27,17 @@ mod sftp_drop;
 #[cfg(target_os = "macos")]
 mod sftp_drag_macos;
 mod static_server;
+mod google;
+mod google_oauth;
+mod site_cmds;
+mod site_data;
+mod site_deploy;
+mod site_git;
+mod site_github;
+mod site_jobs;
+mod site_ops;
+mod site_runner;
+mod sites;
 mod tools;
 mod turn_deadline;
 mod usage;
@@ -47,6 +62,10 @@ struct AppState {
     preview: Arc<Mutex<Option<PreviewHandle>>>,
     /// 活跃的 SSH PTY 会话（按 conn_id）。
     ssh: ssh::SshSessions,
+    /// 站点（连接之上的运营对象）。
+    sites: sites::SiteStore,
+    /// 站点后台作业（构建上线 / 运营任务），每站同时只跑一个。
+    site_jobs: site_jobs::Jobs,
 }
 
 fn now_secs() -> u64 {
@@ -156,7 +175,7 @@ const WORKSPACE_CONNECTION_ID: &str = "__workspace__";
 
 /// 自由对话不借用当前 Cloudflare/SSH 连接：这个合成连接只负责给智能体一个 cwd，
 /// 不存在于 connections.json，也没有任何钥匙串凭据。
-fn workspace_connection(work_dir: &str) -> conns::Connection {
+pub(crate) fn workspace_connection(work_dir: &str) -> conns::Connection {
     conns::Connection {
         id: WORKSPACE_CONNECTION_ID.into(),
         name: "自由对话".into(),
@@ -204,9 +223,16 @@ fn resolve_workspace_dir(
 
 fn conversation_runtime(
     conns: &conns::ConnStore,
+    sites: &sites::SiteStore,
     data_dir: &std::path::Path,
     conv: &Conversation,
 ) -> Result<(conns::Connection, String), String> {
+    if conv.task_type == "site" {
+        let (conn, work_dir, _, _) = site_cmds::site_runtime(sites, conns, &conv.site_slug)?;
+        // 运营任务的会话跑在 Pilot 为它准备的独立工作树里（站点数据目录下）。
+        let work_dir = site_cmds::site_work_override(sites, &conv.site_slug, &conv.workspace_dir).unwrap_or(work_dir);
+        return Ok((conn, work_dir));
+    }
     if conv.task_type == "workspace" {
         let work_dir = resolve_workspace_dir(data_dir, &conv.id, &conv.workspace_dir)?;
         return Ok((workspace_connection(&work_dir), work_dir));
@@ -231,9 +257,14 @@ fn attachment_runtime(
             if conn_id != WORKSPACE_CONNECTION_ID && conn_id != conv.conn_id {
                 return Err("本地对话归属不匹配".into());
             }
-            let (conn, _) = conversation_runtime(&state.conns, &state.data_dir, &conv)?;
+            let (conn, _) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
             return Ok((conn, String::new()));
         }
+    }
+    // 站点会话：GitHub 来源按仓库解析检出目录；本地来源的合成连接 skill_dir 就是文件夹。
+    if let Some(site_id) = conn_id.strip_prefix("site:") {
+        let (conn, _, project, _) = site_cmds::site_runtime(&state.sites, &state.conns, site_id)?;
+        return Ok((conn, project));
     }
     if conn_id == WORKSPACE_CONNECTION_ID {
         return Err("自由对话不存在".into());
@@ -3159,6 +3190,11 @@ fn list_pending_permits(state: tauri::State<'_, AppState>) -> Vec<permit::Pendin
         .filter(|c| c.perm_mode == "full")
         .map(|c| c.id)
         .collect();
+    // 运营任务的无人值守会话：一律拒绝，不出卡（推送、部署等由 Pilot 自己按档位执行）。
+    let (unattended, all): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| site_runner::is_unattended(&p.conv));
+    for p in &unattended {
+        let _ = permit::respond(&dir, &p.id, false);
+    }
     let (auto, show): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| full.contains(&p.conv));
     for p in &auto {
         let _ = permit::respond(&dir, &p.id, true);
@@ -3277,6 +3313,7 @@ fn conversation_system_prompt(
 #[allow(clippy::too_many_arguments)]
 async fn create_conversation(
     conns: conns::ConnStore,
+    sites: sites::SiteStore,
     convos: convo::ConvStore,
     runs: agent::RunRegistry,
     conv_id: String,
@@ -3296,53 +3333,68 @@ async fn create_conversation(
     data_dir: PathBuf,
     ssh: ssh::SshSessions,
     api_execution_policy: api_execution::ApiExecutionPolicy,
+    origin: String,
 ) -> Result<Conversation, String> {
     validate_executor(&data_dir, &brain, &model)?;
     let now = now_secs();
     // API 提前保存引用：即使首轮工具执行时进程退出，也不能把下一轮当成全新任务重放。
     let session_seed = fresh_session_seed(&brain);
     let is_workspace = task_type == "workspace";
+    let is_site = task_type == "site";
     // 本地对话只属于虚拟的本地工作区，不借用任何真实连接。
     if is_workspace && conn_id != WORKSPACE_CONNECTION_ID {
         return Err("本地对话必须在本地工作区中创建".into());
     }
-    let work_dir = if is_workspace {
-        resolve_workspace_dir(&data_dir, &conv_id, &workspace_dir)?
+    let (conn, work_dir, sys, stored_conn_id, stored_conn_name) = if is_site {
+        // 站点会话：侧栏归属 site:<id>，运行时借用站点的代码连接（见 site_cmds::site_runtime）。
+        let (conn, work_dir, _, site) = site_cmds::site_runtime(&sites, &conns, site_slug.trim())?;
+        if conn_id != site_cmds::site_conn_id(&site.id) {
+            return Err("站点会话归属不匹配".into());
+        }
+        let work_dir = site_cmds::site_work_override(&sites, &site.id, &workspace_dir).unwrap_or(work_dir);
+        let sys = site_prompt(&site, &conn, &data_dir, &sites);
+        (conn, work_dir, sys, conn_id.clone(), site.name.clone())
     } else {
-        let conn = conns.get(&conn_id)?;
-        resolve_work_dir(&conn, site_slug.trim())?
+        let work_dir = if is_workspace {
+            resolve_workspace_dir(&data_dir, &conv_id, &workspace_dir)?
+        } else {
+            let conn = conns.get(&conn_id)?;
+            resolve_work_dir(&conn, site_slug.trim())?
+        };
+        let conn = if is_workspace {
+            workspace_connection(&work_dir)
+        } else {
+            conns.get(&conn_id)?
+        };
+        let is_cf = conn.kind == "cloudflare";
+        let is_ssh = conn.kind == "ssh";
+        if !is_workspace && !is_ssh && !is_cf && conn.kind != "github" {
+            return Err(format!("不支持的连接类型：{}", conn.kind));
+        }
+        let sys = conversation_system_prompt(
+            &conn,
+            is_workspace,
+            &workspace_dir,
+            site_slug.trim(),
+            &work_dir,
+            &brain,
+            &data_dir,
+        );
+        let (stored_conn_id, stored_conn_name) = if is_workspace {
+            (WORKSPACE_CONNECTION_ID.to_string(), "本地对话".to_string())
+        } else {
+            (conn.id.clone(), conn.name.clone())
+        };
+        (conn, work_dir, sys, stored_conn_id, stored_conn_name)
     };
-    let conn = if is_workspace {
-        workspace_connection(&work_dir)
-    } else {
-        conns.get(&conn_id)?
-    };
-    let is_cf = conn.kind == "cloudflare";
-    let is_ssh = conn.kind == "ssh";
-    if !is_workspace && !is_ssh && !is_cf && conn.kind != "github" {
-        return Err(format!("不支持的连接类型：{}", conn.kind));
-    }
-    let sys = conversation_system_prompt(
-        &conn,
-        is_workspace,
-        &workspace_dir,
-        site_slug.trim(),
-        &work_dir,
-        &brain,
-        &data_dir,
-    );
-    let (stored_conn_id, stored_conn_name) = if is_workspace {
-        (WORKSPACE_CONNECTION_ID.to_string(), "本地对话".to_string())
-    } else {
-        (conn.id.clone(), conn.name.clone())
-    };
+    let task_type_for_turn = task_type.clone();
     let conv = Conversation {
         id: conv_id.clone(),
         conn_id: stored_conn_id,
         conn_name: stored_conn_name,
         site_slug: site_slug.trim().to_string(),
         site_name,
-        workspace_dir: if is_workspace {
+        workspace_dir: if is_workspace || is_site {
             workspace_dir.trim().to_string()
         } else {
             String::new()
@@ -3361,6 +3413,7 @@ async fn create_conversation(
         updated_at: now,
         ctx_tokens: 0,
         total_tokens: 0,
+        origin,
     };
     convos.upsert(conv)?;
 
@@ -3378,7 +3431,7 @@ async fn create_conversation(
         session_seed,
         true,
         Some(sys),
-        message.trim().to_string(),
+        turn_message(&task_type_for_turn, message.trim().to_string()),
         conv_id.clone(),
         on_event,
         api_execution_policy,
@@ -3398,6 +3451,27 @@ async fn create_conversation(
         apply_usage(c, &res, &data_dir);
     })?;
     updated.ok_or_else(|| "会话丢失".into())
+}
+
+/// 发给执行器的本轮消息：站点会话改的是面向访客的内容，和 CF 建站一样附带公开文案规范
+/// （每轮注入，覆盖已建立的会话；落库的仍是用户原文）。
+fn turn_message(task_type: &str, message: String) -> String {
+    if task_type == "site" {
+        editorial::for_turn(message, "cloudflare")
+    } else {
+        message
+    }
+}
+
+/// 站点会话的系统提示（首轮与重建共用）。
+fn site_prompt(
+    site: &sites::Site,
+    conn: &conns::Connection,
+    data_dir: &std::path::Path,
+    sites: &sites::SiteStore,
+) -> String {
+    let tool = site_data::tool_prompt(data_dir, &sites.data_dir(&site.id));
+    site_cmds::site_system_prompt(site, &conn.login, &tool)
 }
 
 fn fresh_session_seed(brain: &str) -> String {
@@ -3534,6 +3608,9 @@ async fn start_conversation(
     // 自由对话与 SSH 不要求项目；Cloudflare 会话必须有明确项目。
     let conn_kind = if task_type == "workspace" {
         "workspace".to_string()
+    } else if task_type == "site" {
+        state.sites.get(&site_slug)?;
+        "site".to_string()
     } else {
         state.conns.get(&conn_id)?.kind
     };
@@ -3555,6 +3632,7 @@ async fn start_conversation(
     });
     let result = create_conversation(
         state.conns.clone(),
+        state.sites.clone(),
         state.convos.clone(),
         state.runs.clone(),
         conv_id,
@@ -3573,6 +3651,7 @@ async fn start_conversation(
         state.data_dir.clone(),
         state.ssh.clone(),
         Default::default(),
+        String::new(),
     )
     .await;
     if deadline.as_ref().is_some_and(|guard| guard.expired()) {
@@ -3608,7 +3687,7 @@ async fn send_message(
         }
         convo::TurnStart::Started => {}
     }
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.data_dir, &conv)?;
+    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
 
     let res = agent::run_turn(
         state.runs.clone(),
@@ -3624,7 +3703,7 @@ async fn send_message(
         conv.session_ref.clone(),
         false,
         None,
-        message.trim().to_string(),
+        turn_message(&conv.task_type, message.trim().to_string()),
         conv_id.clone(),
         on_event,
         Default::default(),
@@ -3650,7 +3729,7 @@ async fn retry_turn(
     let now = now_secs();
     let message = state.convos.begin_retry(&conv_id, now)?;
     let conv = state.convos.get(&conv_id).ok_or("会话不存在")?;
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.data_dir, &conv)?;
+    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
 
     let res = agent::run_turn(
         state.runs.clone(),
@@ -3666,7 +3745,7 @@ async fn retry_turn(
         conv.session_ref.clone(),
         false,
         None,
-        message,
+        turn_message(&conv.task_type, message),
         conv_id.clone(),
         on_event,
         Default::default(),
@@ -3706,17 +3785,22 @@ async fn run_fresh_turn(
     on_event: Channel<agent::TurnEvent>,
 ) -> Result<Conversation, String> {
     let conv = state.convos.get(&conv_id).ok_or("会话不存在")?;
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.data_dir, &conv)?;
+    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
     let is_workspace = conv.task_type == "workspace";
-    let sys = conversation_system_prompt(
-        &conn,
-        is_workspace,
-        &conv.workspace_dir,
-        &conv.site_slug,
-        &work_dir,
-        &conv.brain,
-        &state.data_dir,
-    );
+    let sys = if conv.task_type == "site" {
+        let site = state.sites.get(&conv.site_slug)?;
+        site_prompt(&site, &conn, &state.data_dir, &state.sites)
+    } else {
+        conversation_system_prompt(
+            &conn,
+            is_workspace,
+            &conv.workspace_dir,
+            &conv.site_slug,
+            &work_dir,
+            &conv.brain,
+            &state.data_dir,
+        )
+    };
     // 历史摘要（不含将要重跑的最后一条用户消息）；发给模型的组合消息不落库，界面保持干净。
     // 手动重建只在底层会话确实损坏/超限时使用。给新 session 足够的近期记录，
     // 避免旧 8k 字符预算让长对话看起来像被清空；界面中的原始消息始终原样保留。
@@ -3748,7 +3832,7 @@ async fn run_fresh_turn(
         session_seed,
         true,
         Some(sys),
-        message,
+        turn_message(&conv.task_type, message),
         conv_id.clone(),
         on_event,
         Default::default(),
@@ -4221,6 +4305,7 @@ pub fn run() {
             permit::sweep_all(&data_dir.join("permit").join("pending"));
             let _ = tools::ensure_shot(&data_dir); // 随附截图工具，覆写以随版本刷新
             let _ = tools::ensure_ssh(&data_dir); // 随附远程执行工具（AI 桥的 AI 侧）
+            let _ = tools::ensure_site_data(&data_dir); // 随附站点数据查询工具（只读本地缓存）
             let _ = tools::ensure_design_plugin(&data_dir); // 随附建站设计技能（claude/grok 走 --plugin-dir）
             let _ = cf_templates::ensure_builtin(&data_dir); // 随附起始模板，覆写以随版本刷新
             app.manage(AppState {
@@ -4230,13 +4315,23 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 preview: Arc::new(Mutex::new(None)),
                 ssh: ssh::SshSessions::new(),
+                sites: sites::SiteStore::new(&data_dir),
+                site_jobs: site_jobs::Jobs::default(),
             });
             setup_tray(app.handle())?;
+            site_runner::start_scheduler(app.handle().clone());
             // 每次启动都把主窗口显示并置前——修复自动更新 relaunch 后 macOS 不激活、窗口看不到（要点 Dock 才出来）。
             show_main(app.handle());
             #[cfg(target_os = "windows")]
             if let Some(w) = app.get_webview_window("main") {
                 style_titlebar_windows(&w);
+            }
+            // 调试包排障：PILOT_DEVTOOLS=1 启动时直接打开主窗口的开发者工具。
+            #[cfg(debug_assertions)]
+            if std::env::var_os("PILOT_DEVTOOLS").is_some() {
+                if let Some(w) = app.get_webview_window("main") {
+                    w.open_devtools();
+                }
             }
             Ok(())
         })
@@ -4348,6 +4443,59 @@ pub fn run() {
             upgrade_claude_cli,
             list_pending_permits,
             respond_permit,
+            site_cmds::detect_site_folder,
+            site_cmds::detect_site_repo,
+            site_cmds::list_cf_pages_projects,
+            site_cmds::list_sites,
+            site_cmds::import_site,
+            site_cmds::save_site,
+            site_cmds::remove_site,
+            site_cmds::site_env_keys,
+            site_cmds::set_site_env,
+            site_cmds::site_status,
+            site_cmds::site_deploys,
+            site_cmds::site_job,
+            site_cmds::cancel_site_job,
+            site_cmds::deploy_site,
+            site_cmds::check_site,
+            site_cmds::site_pages_deployments,
+            site_cmds::retry_pages_deployment,
+            site_cmds::rollback_pages_deployment,
+            data_cmds::verify_google_sa,
+            data_cmds::connect_google_sa,
+            data_cmds::update_google_sa,
+            data_cmds::list_google_resources,
+            data_cmds::verify_bing_key,
+            data_cmds::connect_bing,
+            data_cmds::update_bing_key,
+            data_cmds::list_bing_sites,
+            data_cmds::refresh_site_data,
+            data_cmds::site_dashboard,
+            data_cmds::setup_indexnow,
+            data_cmds::read_key_file,
+            data_cmds::google_oauth_login,
+            data_cmds::google_oauth_cancel,
+            data_cmds::google_can_manage,
+            ops_cmds::site_queue,
+            ops_cmds::queue_add,
+            ops_cmds::run_ops_task,
+            ops_cmds::queue_work,
+            ops_cmds::queue_accept,
+            ops_cmds::queue_rollback,
+            ops_cmds::queue_dismiss,
+            ops_cmds::queue_restore,
+            ops_cmds::queue_mark_done,
+            ops_cmds::queue_diff,
+            ops_cmds::ops_overview,
+            ops_cmds::list_reports,
+            ops_cmds::read_report,
+            launch_cmds::import_cf_project,
+            launch_cmds::launch_status,
+            launch_cmds::site_to_github,
+            launch_cmds::site_setup_pages,
+            launch_cmds::ga4_create_property,
+            launch_cmds::gsc_setup_domain,
+            launch_cmds::ga4_accounts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

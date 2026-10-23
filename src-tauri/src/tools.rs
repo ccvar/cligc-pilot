@@ -492,6 +492,21 @@ pub fn ensure_ssh(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
+/// 站点数据查询工具：只读 `<站点数据>/cache/` 里 Pilot 拉好的 JSON，不含任何凭据。
+pub const SITE_DATA_JS: &str = include_str!("builtin/site-data.js");
+
+pub fn site_data_js_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("tools").join("site-data.cjs")
+}
+
+pub fn ensure_site_data(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("tools");
+    fs::create_dir_all(&dir)?;
+    let p = site_data_js_path(data_dir);
+    fs::write(&p, SITE_DATA_JS)?;
+    Ok(p)
+}
+
 // ---- 建站设计规范（随附技能包） ----
 //
 // 为什么做成技能而不是继续堆在系统提示词里：**系统提示词只在首轮下发**（claude 之后走

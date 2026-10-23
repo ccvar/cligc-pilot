@@ -209,6 +209,87 @@ impl ConnStore {
         Ok(conn)
     }
 
+    /// 数据源连接（Google / Bing）：凭据进钥匙串，连接本身只记录展示用的账号信息。
+    /// Google：key_kind = service_account（JSON 密钥）| oauth（刷新令牌 JSON）；login＝服务账号邮箱或登录邮箱。
+    /// Bing：key_kind = bing_key（Webmaster API Key）。`dedupe` 相同即视为重复连接。
+    pub fn add_data_source(
+        &self,
+        kind: &str,
+        name: &str,
+        secret: &str,
+        key_kind: &str,
+        login: &str,
+        account_id: &str,
+        dedupe: &str,
+    ) -> Result<Connection, String> {
+        if !matches!(kind, "google" | "bing") {
+            return Err("不支持的数据源".into());
+        }
+        let secret = secret.trim();
+        if secret.is_empty() {
+            return Err("凭据不能为空".into());
+        }
+        if let Some(dup) = self.list().iter().find(|c| c.kind == kind && !dedupe.is_empty() && c.key_prefix == dedupe) {
+            return Err(format!("已存在相同的连接「{}」。", dup.name));
+        }
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let dir = self.workspaces_dir.join(&conn_id);
+        fs::create_dir_all(&dir).map_err(|e| format!("create workspace: {e}"))?;
+        keychain::set_key(&conn_id, secret)?;
+        let conn = Connection {
+            id: conn_id.clone(),
+            name: name.trim().to_string(),
+            remark: String::new(),
+            kind: kind.into(),
+            skill_dir: dir.to_string_lossy().into_owned(),
+            key_prefix: dedupe.to_string(),
+            key_kind: key_kind.into(),
+            account_id: account_id.into(),
+            login: login.into(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            created_at: chrono_now(),
+        };
+        let mut conns = self.list();
+        conns.push(conn.clone());
+        if let Err(e) = self.save(&conns) {
+            let _ = keychain::delete_key(&conn_id);
+            let _ = fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        Ok(conn)
+    }
+
+    /// 替换数据源连接的凭据（同一类型；Google 可在服务账号与 OAuth 之间切换）。
+    pub fn replace_data_secret(&self, id: &str, secret: &str, key_kind: &str, login: &str, dedupe: &str) -> Result<Connection, String> {
+        let mut conns = self.list();
+        let Some(i) = conns.iter().position(|c| c.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if !matches!(conns[i].kind.as_str(), "google" | "bing") {
+            return Err("连接类型不匹配".into());
+        }
+        let previous = keychain::get_key(id).ok();
+        keychain::set_key(id, secret.trim())?;
+        conns[i].key_kind = key_kind.into();
+        conns[i].login = login.into();
+        conns[i].key_prefix = dedupe.into();
+        let out = conns[i].clone();
+        if let Err(e) = self.save(&conns) {
+            if let Some(p) = previous {
+                let _ = keychain::set_key(id, &p);
+            }
+            return Err(e);
+        }
+        Ok(out)
+    }
+
     /// 新建 SSH 远程连接：密码/私钥口令进钥匙串，建工作区目录，写 connections.json。
     /// 调用方必须已先 probe 过并由用户确认了主机指纹（TOFU）——没有指纹一律拒绝。
     #[allow(clippy::too_many_arguments)]
