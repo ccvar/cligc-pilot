@@ -252,8 +252,8 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "review" => &[("data", "拉取数据"), ("review", "对比上线前后")],
         "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
-        "work" => &[("work", "处理机会"), ("ship", "提交 / 上线")],
-        "recheck" => &[("work", "AI 的改动"), ("ship", "检查 / 上线")],
+        "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
+        "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
         "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认")],
         "watch" => &[("watch", "上线后检查")],
@@ -476,8 +476,8 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
 async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条机会不存在")?;
-    if item.status != "failed" {
-        return Err("只有失败的条目可以重新检查".into());
+    if !matches!(item.status.as_str(), "failed" | "proposed") {
+        return Err("只有失败或等你确认的条目可以重新检查".into());
     }
     let wt = site_dir.join("work").join(&item.id);
     if item.branch.is_empty() || item.base_sha.is_empty() || !wt.is_dir() {
@@ -928,6 +928,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     }
     if level >= 5 && verdict != "auto" {
         log_item(ctx, site, "proposed", item, &verdict);
+    }
+    if !(level >= 4 && verdict == "auto") {
+        let why = if verdict == "auto" { "检查通过，按方案留给你确认后上线".to_string() } else { format!("检查通过，留给你确认：{verdict}") };
+        job.step("ship", "skipped", &why);
+        job.line(&why);
     }
     // 第 4 档：白名单内自动合并上线；第 5 档：判定通过即自动上线，上线 1 小时后再检查一次页面。
     if level >= 4 && verdict == "auto" {

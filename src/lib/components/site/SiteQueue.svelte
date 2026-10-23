@@ -99,7 +99,7 @@
             {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
             <div class="row wrap acts">
               {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
-              {#if i.status === 'failed' && i.branch && i.head_sha}<button class="btn tiny primary" onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
+              {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto')) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
               {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy}><Icon name="sparkles" size={11} />{i.status === 'failed' && i.head_sha ? '让 AI 重新改' : '让 AI 改'}</button>{/if}
               {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}

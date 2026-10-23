@@ -490,80 +490,187 @@ fn prose_of(line: &str) -> String {
     out
 }
 
+/// 一个文件在差异里的改动。
+#[derive(Default)]
+struct FileDiff {
+    file: String,
+    new_file: bool,
+    deleted: bool,
+    added: Vec<String>,
+    removed: Vec<String>,
+}
+
+fn split_diff(diff: &str) -> Vec<FileDiff> {
+    let mut out: Vec<FileDiff> = Vec::new();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            out.push(FileDiff { file: rest.split(" b/").nth(1).unwrap_or(rest).to_string(), ..Default::default() });
+            continue;
+        }
+        let Some(f) = out.last_mut() else { continue };
+        if line.starts_with("new file mode") {
+            f.new_file = true;
+        } else if line.starts_with("deleted file mode") {
+            f.deleted = true;
+        } else if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") || line.starts_with("index ") {
+        } else if let Some(a) = line.strip_prefix('+') {
+            f.added.push(a.to_string());
+        } else if let Some(r) = line.strip_prefix('-') {
+            f.removed.push(r.to_string());
+        }
+    }
+    out
+}
+
+/// 内容数据文件：放在 data / content 目录下的 .ts / .js（很多 Astro 站把文章写成数据文件）。
+/// 只有改动的每一行都是「字符串、对象字面量、本地数据模块的导入导出」时才算内容，见 `data_line`。
+fn data_file(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    let in_data = p.split('/').rev().skip(1).any(|seg| matches!(seg, "data" | "content" | "contents" | "posts" | "articles"));
+    in_data
+        && ["ts", "js", "mjs"].iter().any(|e| name.ends_with(&format!(".{e}")))
+        && !name.ends_with(".d.ts")
+        && !name.contains(".config.")
+        && !matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin")
+}
+
+/// 去掉一行里的字符串字面量，返回（剩下的代码部分，字符串内容）。模板字符串里有 `${` 返回 None（是代码）。
+fn split_strings(line: &str) -> Option<(String, String)> {
+    let (mut code, mut text) = (String::new(), String::new());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' || c == '"' || c == '`' {
+            let mut closed = false;
+            while let Some(d) = chars.next() {
+                if d == '\\' {
+                    if let Some(e) = chars.next() {
+                        text.push(e);
+                    }
+                } else if d == c {
+                    closed = true;
+                    break;
+                } else if c == '`' && d == '$' && chars.peek() == Some(&'{') {
+                    return None;
+                } else {
+                    text.push(d);
+                }
+            }
+            if !closed && c != '`' {
+                return None;
+            }
+            code.push_str("\"\"");
+            text.push(' ');
+        } else {
+            code.push(c);
+        }
+    }
+    Some((code, text))
+}
+
+/// 这一行是不是纯数据：对象键、字符串、数字、括号逗号；或者从本地文件导入 / 导出一个数据常量、展开一个数组。
+fn data_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+        return true;
+    }
+    let Some((code, _)) = split_strings(t) else { return false };
+    let code = code.trim();
+    // import { a, b } from './x'; / import type { T } from './x';（只许本地相对路径）
+    if let Some(rest) = code.strip_prefix("import ") {
+        let from_local = t.contains("from './") || t.contains("from \"./");
+        let names = rest.trim_start_matches("type ").trim();
+        return from_local && names.starts_with('{') && names.split('}').next().is_some_and(|n| n.chars().all(|c| c.is_alphanumeric() || "_$, {".contains(c)));
+    }
+    // export const xxx: Type[] = [ / export const xxx = {
+    if let Some(rest) = code.strip_prefix("export const ") {
+        let Some((lhs, rhs)) = rest.split_once('=') else { return false };
+        let ok_lhs = lhs.trim().chars().all(|c| c.is_alphanumeric() || "_$:[]<> ".contains(c));
+        return ok_lhs && matches!(rhs.trim(), "[" | "{" | "[];" | "{};");
+    }
+    if code.contains("=>") || code.contains('(') || code.contains('=') || code.contains('`') {
+        return false;
+    }
+    if !code.chars().all(|c| c.is_alphanumeric() || "_$\"{}[],:;. -+".contains(c)) {
+        return false;
+    }
+    // 剩下的标识符只能是对象键或 true / false / null / 展开的数组名
+    const CODE_WORDS: &[&str] = &["function", "return", "await", "async", "new", "eval", "require", "process", "import", "export", "fetch", "window", "document", "globalThis", "class", "if", "for", "while", "delete", "throw"];
+    !code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).any(|w| CODE_WORDS.contains(&w))
+}
+
+/// 自动上线时，单次改动已有文件的行数上限；新内容文件按新内容规则和正文下限判断，另有一个整体上限。
+const MAX_CHANGED_LINES: usize = 400;
+const MAX_NEW_FILE_LINES: usize = 3000;
+
 /// `min_page`：新页面正文下限（字，0＝不检查），见 ManagedGroup.min_page_chars。
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize) -> Vec<String> {
     let mut reasons = Vec::new();
-    let mut file = String::new();
-    let mut new_file = false;
-    let mut changed = 0usize;
-    // 新页面的正文量：文件名 → 文字量
-    let mut new_pages: Vec<(String, usize)> = Vec::new();
-    let mut in_frontmatter = false;
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
-    for line in diff.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            file = rest.split(" b/").nth(1).unwrap_or(rest).to_string();
-            new_file = false;
-            if forbidden_path(&file) {
-                reasons.push(format!("{file}：依赖、配置或代码文件不自动改"));
-            } else if !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
-                reasons.push(format!("{file}：不是页面内容文件"));
-            }
-            continue;
+    let (mut changed, mut new_lines) = (0usize, 0usize);
+    for f in split_diff(diff) {
+        let file = &f.file;
+        let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
+        if data_file(file) && !data {
+            reasons.push(format!("{file}：数据文件里有代码改动（不只是文字和数据），留给你确认"));
+        } else if !data && forbidden_path(file) {
+            reasons.push(format!("{file}：依赖、配置或代码文件不自动改"));
+        } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
+            reasons.push(format!("{file}：不是页面内容文件"));
         }
-        if line.starts_with("new file mode") {
-            new_file = true;
-            in_frontmatter = false;
-            if is_page_file(&file) {
-                new_pages.push((file.clone(), 0));
-            }
-            if !allow_new_content {
-                reasons.push(format!("{file}：新内容需要运营人员确认后发布"));
-            }
-            continue;
-        }
-        if line.starts_with("deleted file mode") {
+        if f.deleted {
             reasons.push(format!("{file}：删除文件不自动执行"));
             continue;
         }
-        if line.starts_with("+++") || line.starts_with("---") || line.starts_with("@@") || line.starts_with("index ") {
-            continue;
+        if f.new_file {
+            new_lines += f.added.len();
+            if !allow_new_content {
+                reasons.push(format!("{file}：新内容需要运营人员确认后发布"));
+            }
+        } else {
+            changed += f.added.len() + f.removed.len();
         }
-        if let Some(removed) = line.strip_prefix('-') {
-            changed += 1;
-            if touches_money(removed) {
+        for r in &f.removed {
+            if touches_money(r) {
                 reasons.push(format!("{file}：改动了推荐 / 邀请相关的内容"));
             }
-        } else if let Some(added) = line.strip_prefix('+') {
-            changed += 1;
-            if !new_file && touches_money(added) {
-                reasons.push(format!("{file}：新增了推荐 / 邀请相关的内容"));
-            }
-            if is_page_file(&file) {
-                let lower = added.to_lowercase();
+        }
+        if !f.new_file && f.added.iter().any(|a| touches_money(a)) {
+            reasons.push(format!("{file}：新增了推荐 / 邀请相关的内容"));
+        }
+        let page = is_page_file(file) || data;
+        if page {
+            // 页面文件看整行；数据文件只看字符串里的文字
+            let texts: Vec<String> = f.added.iter().map(|a| if data { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
+            for t in &texts {
+                let lower = t.to_lowercase();
                 if let Some(m) = LEAK_MARKERS.iter().find(|m| lower.contains(&m.to_lowercase())) {
                     reasons.push(format!("{file}：正文里像是混进了内部说明或占位（「{m}」），留给你确认"));
                 }
             }
-            if new_file && is_page_file(&file) {
-                let t = added.trim();
-                if t == "---" {
-                    in_frontmatter = !in_frontmatter;
-                } else if !in_frontmatter && !t.starts_with("```") && !t.starts_with("import ") {
-                    if let Some(p) = new_pages.last_mut() {
-                        p.1 += text_units(&prose_of(t));
+            if f.new_file && min_page > 0 {
+                let mut n = 0;
+                let mut in_frontmatter = false;
+                for t in &texts {
+                    let t = t.trim();
+                    if !data && t == "---" {
+                        in_frontmatter = !in_frontmatter;
+                    } else if data || (!in_frontmatter && !t.starts_with("```") && !t.starts_with("import ")) {
+                        n += text_units(&prose_of(t));
                     }
+                }
+                if n < min_page {
+                    reasons.push(format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）"));
                 }
             }
         }
     }
-    for (f, n) in &new_pages {
-        if min_page > 0 && *n < min_page {
-            reasons.push(format!("{f}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）"));
-        }
+    if changed > MAX_CHANGED_LINES {
+        reasons.push(format!("改动已有文件 {changed} 行，超过自动上线的上限（{MAX_CHANGED_LINES} 行）"));
     }
-    if changed > 400 {
-        reasons.push(format!("改动 {changed} 行，超过自动上线的上限（400 行）"));
+    if new_lines > MAX_NEW_FILE_LINES {
+        reasons.push(format!("新增文件共 {new_lines} 行，超过自动上线的上限（{MAX_NEW_FILE_LINES} 行）"));
     }
     reasons.sort();
     reasons.dedup();
@@ -772,6 +879,26 @@ mod tests {
         assert!(managed_verdict(newpage, false, 1500).iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
         assert!(managed_verdict(newpage, true, 1500).iter().all(|r| r.contains("低于这个方案的下限")));
+    }
+
+    #[test]
+    fn data_files_with_only_text_count_as_content() {
+        // 已有数据文件：加导入、加一段文字、加一个 slug、展开一个数组
+        let edit = "diff --git a/src/data/articles.ts b/src/data/articles.ts\n--- a/src/data/articles.ts\n+++ b/src/data/articles.ts\n@@ -5 +5,2 @@\n+import { transitionArticles } from './articles-transitions';\n+    'ai-video-transition-prompts',\n+          '想把两个镜头接起来（遮挡、甩镜），可以看本页末尾的转场指南。',\n+  ...transitionArticles,\n";
+        assert!(managed_verdict(edit, false, 1500).is_empty(), "{:?}", managed_verdict(edit, false, 1500));
+        // 新的数据文件：按新内容规则和正文下限判断
+        let body: String = (0..40).map(|_| "+      '遮挡转场要让前景物体把画面整个挡住，再在被挡住的那一帧切到下一段素材，两段的运动方向要一致。',\n").collect();
+        let newfile = format!("diff --git a/src/data/articles-x.ts b/src/data/articles-x.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/data/articles-x.ts\n@@ -0,0 +1,50 @@\n+import type {{ ArticleSeed }} from './article-types';\n+export const xArticles: ArticleSeed[] = [\n+  {{\n+    slug: 'x',\n+    datePublished: '2026-10-22',\n+    body: [\n{body}+    ],\n+  }},\n+];\n");
+        assert!(managed_verdict(&newfile, true, 1500).is_empty(), "{:?}", managed_verdict(&newfile, true, 1500));
+        assert!(managed_verdict(&newfile, false, 1500).iter().any(|r| r.contains("新内容")));
+        // 数据文件里混了代码：函数、模板字符串插值、外部导入
+        for bad in ["+export function pick(a) { return a; }", "+  title: `${name} 指南`,", "+import fs from 'node:fs';", "+  run: () => fetch('/x'),", "+const x = process.env.TOKEN;"] {
+            let d = format!("diff --git a/src/data/a.ts b/src/data/a.ts\n--- a/src/data/a.ts\n+++ b/src/data/a.ts\n@@ -1 +1 @@\n{bad}\n");
+            assert!(managed_verdict(&d, true, 0).iter().any(|r| r.contains("代码改动")), "{bad}");
+        }
+        // 不在 data / content 目录下的 .ts 仍然是代码
+        let code = "diff --git a/src/lib/seo.ts b/src/lib/seo.ts\n--- a/src/lib/seo.ts\n+++ b/src/lib/seo.ts\n@@ -1 +1 @@\n+  title: 'x',\n";
+        assert!(managed_verdict(code, true, 0).iter().any(|r| r.contains("代码文件")));
     }
 
     #[test]
