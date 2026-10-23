@@ -296,8 +296,8 @@
   .log-h .chev { color: var(--faint); transition: transform .16s var(--su-ease); }
   .oplog.open .log-h .chev { transform: rotate(90deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
-  .ic-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid var(--border2); background: #fff; border-radius: 8px; color: var(--text); cursor: pointer; transition: background-color .12s, border-color .12s; }
-  .ic-btn:hover { background: var(--su-hover); border-color: #d6d3ca; }
+  .ic-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 8px; color: var(--dim); cursor: pointer; transition: background-color .12s, color .12s; }
+  .ic-btn:hover { background: var(--su-hover); color: var(--text); }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
