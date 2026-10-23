@@ -25,6 +25,8 @@
   const inPlan = $derived(!!site && !!managed.overview?.groups.some((g) => g.sites.includes(site.id)));
   const needCount = $derived(queue.filter((q) => ['proposed', 'failed'].includes(q.status) || (q.status === 'deployed' && !!q.attention)).length + (inPlan ? 0 : queue.filter((q) => q.status === 'open').length));
   const queuedCount = $derived(inPlan ? queue.filter((q) => q.status === 'open').length : 0);
+  // 代码文件夹显示成 ~/work/xxx 这样的短路径
+  const shortPath = (p: string) => (p || '').replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~').replace(/^[A-Za-z]:\\Users\\[^\\]+/, '~');
   const TABS: { key: SiteTab; label: string; icon: string }[] = [
     { key: 'overview', label: '概览', icon: 'grid' },
     { key: 'data', label: '数据', icon: 'chart' },
@@ -46,13 +48,11 @@
           <SiteSwitcher />
           <small>
             {#if site.domain}<button class="link-btn plain" onclick={() => openUrl(`https://${site.domain}`)}>{site.domain} ↗</button> · {/if}
-            {site.source === 'github' ? site.repo : '本地文件夹'}{site.framework ? ` · ${site.framework}` : ''}
+            {#if site.source === 'github'}<button class="link-btn plain src-link" onclick={() => openUrl(`https://github.com/${site.repo}`)} data-tip="在 GitHub 打开仓库"><GhMark size={12} />{site.repo}</button>{:else if st?.code_dir && st.exists}<button class="link-btn plain src-link" onclick={() => revealItemInDir(st.code_dir)} data-tip="在访达中打开代码文件夹"><Icon name="folder" size={12} />{shortPath(st.code_dir)}</button>{:else}<span class="src-link"><Icon name="folder" size={12} />{shortPath(site.local_dir) || '本地文件夹'}</span>{/if}{site.framework ? ` · ${site.framework}` : ''}
           </small>
         </div>
       </div>
       <div class="row">
-        {#if site.source === 'github'}<button class="btn small ghost" onclick={() => openUrl(`https://github.com/${site.repo}`)}><GhMark size={13} />仓库</button>{/if}
-        {#if st?.code_dir && st.exists}<button class="btn small ghost" onclick={() => revealItemInDir(st.code_dir)}><Icon name="folder" size={13} />打开文件夹</button>{/if}
         <button class="btn small" onclick={newChat}><Icon name="chat" size={13} />新对话</button>
         {#if pilotDeploys(site.deploy.mode)}
           <button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{#if job?.status === 'running'}<span class="spin"></span>{job.title}中{:else}<Icon name="rocket" size={13} />构建并上线{/if}</button>
@@ -81,6 +81,7 @@
 {/if}
 
 <style>
+  .src-link { display: inline-flex; align-items: center; gap: 4px; vertical-align: -1px; }
   .wb.empty { align-items: center; justify-content: center; }
   .wb-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 160px; }
   .wb-ic { width: 30px; height: 30px; border-radius: 8px; background: var(--rail); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--dim); flex: none; }
