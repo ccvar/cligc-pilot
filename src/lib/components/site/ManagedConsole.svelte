@@ -96,6 +96,7 @@
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
+      <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
       {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
       {#if o}<button class="btn small {paused ? 'primary' : ''}" onclick={() => setPaused(!paused)}><Icon name={paused ? 'play' : 'pause'} size={12} />{paused ? '恢复托管' : '暂停托管'}</button>{/if}
     </div>
@@ -185,7 +186,6 @@
     {:else}
       <div class="gbar">
         <p class="hint">每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。方案和站点都能单独暂停。</p>
-        <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={12} />新增托管方案</button>
       </div>
       {#each groups as g (g.id)}
         <div class="card grp" class:off={g.paused}>
@@ -288,6 +288,8 @@
   .log-h .chev { color: var(--faint); transition: transform .16s var(--su-ease); }
   .oplog.open .log-h .chev { transform: rotate(90deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
+  .ic-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid var(--border2); background: #fff; border-radius: 8px; color: var(--text); cursor: pointer; transition: background-color .12s, border-color .12s; }
+  .ic-btn:hover { background: var(--su-hover); border-color: #d6d3ca; }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }

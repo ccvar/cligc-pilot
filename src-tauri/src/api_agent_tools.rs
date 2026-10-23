@@ -9,6 +9,26 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 const MAX_FILE: u64 = 1024 * 1024;
+const SITE_DATA_COMMANDS: &[&str] = &["summary", "queries", "pages", "query-pages", "events", "daily", "opportunities", "sitemaps"];
+
+/// site_data 的选项 → `--key value` 参数。键只能是小写字母和连字符，值只能是短字符串、数字或 true。
+fn site_data_options(v: &Value) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let Some(map) = v.as_object() else { return Ok(out) };
+    for (k, val) in map.iter().take(16) {
+        if k.is_empty() || k.len() > 32 || !k.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+            return Err(format!("选项名不合法：{k}"));
+        }
+        match val {
+            Value::Bool(true) => out.push(format!("--{k}")),
+            Value::Bool(false) | Value::Null => {}
+            Value::Number(n) => { out.push(format!("--{k}")); out.push(n.to_string()); }
+            Value::String(s) if s.len() <= 200 && !s.starts_with('-') => { out.push(format!("--{k}")); out.push(s.clone()); }
+            _ => return Err(format!("选项 {k} 的值不合法")),
+        }
+    }
+    Ok(out)
+}
 const MAX_OUTPUT: u64 = 128 * 1024;
 pub(super) struct Tools<'a> {
     conn: &'a Connection,
@@ -20,6 +40,9 @@ pub(super) struct Tools<'a> {
     lease: Option<&'a crate::bridge::Lease>,
     site_key: &'a str,
     ssh_script: PathBuf,
+    /// 站点数据（只读缓存）：<数据目录>/sites，以及查询脚本。
+    sites_root: PathBuf,
+    site_data_script: PathBuf,
 }
 impl<'a> Tools<'a> {
     pub fn new(
@@ -54,6 +77,8 @@ impl<'a> Tools<'a> {
             lease,
             site_key,
             ssh_script: crate::tools::ssh_js_path(data),
+            sites_root: data.join("sites"),
+            site_data_script: crate::tools::site_data_js_path(data),
         })
     }
     pub fn instructions(&self) -> String {
@@ -79,6 +104,9 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
             def("write_file","Write UTF-8 text inside the current workspace only; existing files require overwrite=true.",json!({"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}}),&["path","content","overwrite"]),
             def("run_command","Execute a local shell command with no API/site credentials. Not an OS sandbox. Ask/Auto always require interactive approval; Plan forbids execution.",json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}}),&["command"]),
         ];
+        if self.site_data_script.is_file() {
+            tools.push(def("site_data","Query a site's locally cached Search Console / GA4 / Bing data (read-only, no credentials; allowed in every permission mode). cache = the site's cache directory given in the system prompt.",json!({"cache":{"type":"string"},"command":{"type":"string","enum":SITE_DATA_COMMANDS},"options":{"type":"object","description":"e.g. {\"source\":\"gsc\",\"min-impressions\":500,\"max-ctr\":0.02,\"page\":\"/zh/fees\",\"sort\":\"clicks\",\"limit\":50,\"prev\":true}"}}),&["cache","command"]));
+        }
         if self.conn.kind == "ssh" && self.lease.is_some() {
             tools.push(def("ssh_command","Run a command on the current SSH connection through Pilot's existing permission bridge. No other hosts or SSH credentials are exposed.",json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}}),&["command"]));
         }
@@ -160,6 +188,25 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                 };
                 self.clean_env(&mut cmd);
                 self.process(cmd, args).await
+            }
+            "site_data" => {
+                // 只读：固定脚本 + 只能指向 <数据目录>/sites/<站点>/cache，不经过 shell，所以计划模式也允许
+                let cache = std::fs::canonicalize(required(args, "cache")?).map_err(|_| "站点数据目录不存在".to_string())?;
+                let root = std::fs::canonicalize(&self.sites_root).map_err(|_| "站点数据目录不存在".to_string())?;
+                if !cache.starts_with(&root) || cache.file_name().is_none_or(|n| n != "cache") {
+                    return Err("只能查询 Pilot 的站点数据缓存目录".into());
+                }
+                let command = required(args, "command")?;
+                if !SITE_DATA_COMMANDS.contains(&command) {
+                    return Err(format!("未知的查询命令：{command}"));
+                }
+                let mut cmd = Command::new(crate::brains::resolve_bin("node"));
+                self.clean_env(&mut cmd);
+                cmd.arg(&self.site_data_script).arg(&cache).arg(command);
+                for a in site_data_options(&args["options"])? {
+                    cmd.arg(a);
+                }
+                self.process(cmd, &json!({ "timeout_seconds": 30 })).await
             }
             "ssh_command" if self.conn.kind == "ssh" && self.lease.is_some() => {
                 if self.mode == PermMode::Plan {
@@ -486,6 +533,17 @@ mod tests {
             "hello\nworld"
         );
     }
+    #[test]
+    fn site_data_options_are_plain_flags() {
+        let a = site_data_options(&json!({"source":"gsc","min-impressions":500,"prev":true,"x":false})).unwrap();
+        assert!(a.windows(2).any(|w| w == ["--source", "gsc"]));
+        assert!(a.windows(2).any(|w| w == ["--min-impressions", "500"]));
+        assert!(a.contains(&"--prev".to_string()) && !a.contains(&"--x".to_string()));
+        assert!(site_data_options(&json!({"Bad Key":1})).is_err());
+        assert!(site_data_options(&json!({"page":"--evil"})).is_err());
+        assert!(site_data_options(&json!({"page":{"a":1}})).is_err());
+    }
+
     #[test]
     fn host_commands_require_confirmation_except_full() {
         for mode in [PermMode::Ask, PermMode::Auto] {

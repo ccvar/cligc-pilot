@@ -525,6 +525,7 @@ pub fn tool_prompt(data_dir: &Path, site_dir: &Path) -> String {
 命令：`summary`（总览）、`queries`（查询词）、`pages`（页面）、`query-pages`（查询词×页面）、`events`（GA4 事件）、`daily`（按天趋势）、`opportunities`（Pilot 按规则算出的机会）、`sitemaps`。\n\
 常用选项：`--source gsc|bing|ga4`、`--min-impressions N`、`--max-ctr 0.02`、`--min-position 8 --max-position 20`、`--page <网址片段>`、`--query <词片段>`、`--sort clicks|impressions|ctr|position`、`--limit 50`、`--prev`（前 28 天，用来对比）。\n\
 例：最近 28 天展现超过 500、点击率低于 2% 的查询词：`queries --min-impressions 500 --max-ctr 0.02`。\n\
+如果你是 Pilot 的 API 执行器（有 site_data 工具），直接调用 site_data：cache 填 `{cache}`，command 填上面的命令，选项写进 options（如 {{\"min-impressions\":500,\"max-ctr\":0.02}}）；它只读、任何权限档位都能用，不需要 run_command。\n\
 数据只用来判断改什么；不要把具体流量数字写进代码、提交说明或 PR 描述。",
         have = have.join("、"),
         js = js.to_string_lossy(),
