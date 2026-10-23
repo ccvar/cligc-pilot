@@ -7,7 +7,7 @@ import { loadFleet, loadPending } from './fleet.svelte.js';
 import { selectConn } from './connections.svelte.js';
 import { SITES_CONN_ID } from './env';
 
-export type ManagedTab = 'activity' | 'plans' | 'needs' | 'digests' | 'groups';
+export type ManagedTab = 'plans' | 'needs' | 'digests' | 'groups';
 
 class ManagedState {
   overview = $state<ManagedOverview | null>(null);
@@ -15,7 +15,7 @@ class ManagedState {
   plans = $state<SitePlan[]>([]);
   digests = $state<string[]>([]);
   digest = $state<{ name: string; text: string } | null>(null);
-  tab = $state<ManagedTab>('activity');
+  tab = $state<ManagedTab>('groups');
   draft = $state<ManagedConfig | null>(null);
   saving = $state(false);
   count = $derived(this.overview?.sites.length ?? 0);

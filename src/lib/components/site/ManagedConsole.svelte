@@ -24,11 +24,10 @@
   const managedIds = $derived(new Set((o?.sites ?? []).map((s) => s.id)));
   const needs = $derived(fleet.pending.filter((p) => managedIds.has(p.site_id)));
   const TABS = [
-    { k: 'activity' as const, l: '动态', i: 'activity' },
+    { k: 'groups' as const, l: '托管方案', i: 'sliders' },
     { k: 'plans' as const, l: '计划', i: 'checks' },
     { k: 'needs' as const, l: '需要你', i: 'bell' },
     { k: 'digests' as const, l: '日报', i: 'news' },
-    { k: 'groups' as const, l: '托管方案', i: 'sliders' },
   ];
   $effect(() => {
     void loadManaged();
@@ -61,6 +60,7 @@
     jobsFor = key;
     for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
   });
+  let logOpen = $state(false);
   async function moveSite(id: string, from: string, to: string) {
     if (to === from) return;
     if (to === '__new') { newGroup([id]); return; }
@@ -120,55 +120,6 @@
           <li>可以建多个托管方案：每个方案管一个或多个站点，各有自己的模型、发布方式和上限；方案里的每个站点也能单独停止。</li>
         </ul>
         <div class="row"><button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={12} />新增托管方案</button></div>
-      </div>
-    {:else if managed.tab === 'activity'}
-      {#if o?.sites.length}
-        <div class="card tbl-card">
-          <table class="tbl mlist">
-            <thead><tr><th>站点</th><th>状态</th><th class="num">本周上线</th><th class="num">需要你</th><th class="num">失败</th><th>本周计划</th><th>本周用量</th></tr></thead>
-            <tbody>
-              {#each o.sites as s (s.id)}
-                {@const grp = groups.find((x) => x.id === s.group_id)}
-                {@const st = s.job ? { t: `${s.job}中`, c: 'run' } : o.config.paused ? { t: '全部暂停', c: 'warn' } : grp?.paused ? { t: '方案已暂停', c: 'warn' } : s.active ? { t: '托管中', c: 'ok' } : { t: '已停止', c: '' }}
-                <tr class="clickable" onclick={() => openSite(s.id)}>
-                  <td class="ms">
-                    <span class="ms-name"><SiteIcon id={s.id} size={15} /><b>{s.name}</b></span>
-                    {#if grp}<small>{grp.name} · {AUTONOMY_LABEL[grp.autonomy] ?? ''}</small>{/if}
-                  </td>
-                  <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
-                  <td class="num">{s.shipped_week || '—'}</td>
-                  <td class="num"><span class:warnn={s.waiting > 0}>{s.waiting || '—'}</span></td>
-                  <td class="num"><span class:bad={s.failed > 0}>{s.failed || '—'}</span></td>
-                  <td class="faint sm">{s.plan_date ? `${s.plan_count} 项 · ${md(s.plan_date)}` : '还没有'}</td>
-                  <td class="use" title="改动 {s.budget.changes_used} / {s.budget.changes_limit} 条 · 模型 {s.budget.tokens_used.toLocaleString()}{s.budget.tokens_limit ? ` / ${s.budget.tokens_limit.toLocaleString()}` : ''} token">
-                    <span class="meter"><i style="width:{ratio(s.budget.tokens_used, s.budget.tokens_limit) * 100}%"></i></span>
-                    <small>{kTok(s.budget.tokens_used)}{s.budget.tokens_limit ? ` / ${kTok(s.budget.tokens_limit)}` : ''} · 改动 {s.budget.changes_used}/{s.budget.changes_limit}</small>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      {/if}
-      <div class="card">
-        <h3><Icon name="activity" />动态</h3>
-        {#if !managed.activity.length}<p class="hint">还没有动态。托管站点的计划、上线、检查、回滚都会记在这里。</p>{/if}
-        <div class="list feed">
-          {#each managed.activity as a, i (i)}
-            <div class="li ev">
-              <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
-              <div class="ev-main">
-                <b>{a.title}</b>
-                {#if a.change || a.source}<div class="ev-why"><WhyChips change={a.change} source={a.source} /></div>{/if}
-                <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
-              </div>
-              <span class="ev-r">
-                <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
-                {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
-              </span>
-            </div>
-          {/each}
-        </div>
       </div>
     {:else if managed.tab === 'plans'}
       {#each o?.sites ?? [] as s (s.id)}
@@ -295,6 +246,33 @@
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
         </div>
       {/each}
+
+      <div class="card oplog" class:open={logOpen}>
+        <button class="log-h" onclick={() => (logOpen = !logOpen)} aria-expanded={logOpen}>
+          <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          <Icon name="activity" />操作日志
+          <span class="sub">{managed.activity.length ? `${managed.activity.length} 条 · 最近 ${when(managed.activity[0].ts)}` : '还没有记录'}</span>
+        </button>
+        {#if logOpen}
+          {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{/if}
+        <div class="list feed">
+          {#each managed.activity as a, i (i)}
+            <div class="li ev">
+              <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
+              <div class="ev-main">
+                <b>{a.title}</b>
+                {#if a.change || a.source}<div class="ev-why"><WhyChips change={a.change} source={a.source} /></div>{/if}
+                <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
+              </div>
+              <span class="ev-r">
+                <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
+                {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
+              </span>
+            </div>
+          {/each}
+        </div>
+        {/if}
+      </div>
     {/if}
    </div>
    {/key}
@@ -302,19 +280,14 @@
 </div>
 
 <style>
-  .tbl-card { padding: 2px 16px; overflow-x: auto; }
-  .mlist td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
-  .ms { max-width: 0; width: 28%; }
-  .ms-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .ms-name b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ms small { display: block; padding-left: 23px; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sm { font-size: 12px; white-space: nowrap; }
-  .warnn { color: var(--su-warn-ink); font-weight: 600; }
   .bad { color: var(--err); font-weight: 600; }
-  .use { width: 170px; }
-  .use .meter { display: block; width: 100%; }
-  .use small { display: block; margin-top: 3px; font-size: 11px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
-  @container page (max-width: 760px) { .mlist th:nth-child(6), .mlist td:nth-child(6) { display: none; } }
+  .oplog { padding-top: 12px; padding-bottom: 12px; }
+  .log-h { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
+  .log-h :global(.ico) { color: var(--dim); }
+  .log-h .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
+  .log-h .chev { color: var(--faint); transition: transform .16s var(--su-ease); }
+  .oplog.open .log-h .chev { transform: rotate(90deg); }
+  .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
@@ -358,8 +331,6 @@
   .switch.dim { opacity: .45; }
   .switch:focus-visible { box-shadow: var(--su-ring); }
   .intro ul { margin: 6px 0 14px; padding-left: 18px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
-  .meter { height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
-  .meter i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s var(--su-ease); }
   .ev { display: flex; align-items: flex-start; gap: 12px; }
   .ev .pill { flex: none; min-width: 76px; justify-content: flex-start; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
