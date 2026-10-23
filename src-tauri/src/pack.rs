@@ -1,0 +1,1890 @@
+//! 技能包导入：解压 zip → 找到技能目录（含 scripts/gcms.js）→ 解析 .env →
+//! key 剥离进 Keychain，.env 只留 GCMS_API_BASE → 连接元数据存 connections.json。
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+use crate::keychain;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Connection {
+    pub id: String,
+    pub name: String,
+    /// 用户自定义备注；列表优先显示它，密钥仍只显示脱敏前缀。
+    #[serde(default)]
+    pub remark: String,
+    /// 连接类型：gcms（导入技能包）| cloudflare（CF token 建站）| ssh（远程机器）。旧连接缺省即 gcms。
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// 由“安装与管理 gcms”一键导入的运营助手所绑定的 SSH 连接 id。
+    /// 用来源而不是域名识别，服务器换域名后仍只更新同一个 Pilot 连接。
+    #[serde(default)]
+    pub source_ssh_id: String,
+    pub api_base: String,
+    /// 技能目录（gcms.js 的 cwd）；CF 连接则是该连接的工作区目录（技能包 + 项目都在其下）。
+    pub skill_dir: String,
+    /// 仅用于展示的 key 前缀，完整 key 在 Keychain。
+    pub key_prefix: String,
+    /// gcmsp_（平台多站）/ gcms_（单站）/ cf_token（Cloudflare）。
+    pub key_kind: String,
+    /// Cloudflare 账号 id（仅 kind=cloudflare）；gcms 连接为空。
+    #[serde(default)]
+    pub account_id: String,
+    /// 明确由这条 Cloudflare 连接管理的 Zone。一个 Zone 同时只应绑定一条连接；旧数据为空，
+    /// 首次遇到唯一候选时自动建立，多个候选则由用户选择。
+    #[serde(default)]
+    pub preferred_zones: Vec<String>,
+    /// 以下均仅 kind=ssh。密码/私钥口令进钥匙串（account = conn_id，与其它 kind 同约定，
+    /// 因此 remove 无需特殊处理、不会留孤儿密钥）；私钥只存路径引用，不拷贝用户私钥。
+    #[serde(default)]
+    pub ssh_host: String,
+    #[serde(default)]
+    pub ssh_port: u16,
+    #[serde(default)]
+    pub ssh_user: String,
+    /// password | key
+    #[serde(default)]
+    pub ssh_auth: String,
+    #[serde(default)]
+    pub ssh_key_path: String,
+    /// 用户已确认的主机指纹（TOFU）：此后每次连接必须匹配，不匹配即拒（防中间人）。
+    #[serde(default)]
+    pub ssh_fingerprint: String,
+    /// 远端系统（/etc/os-release 的 PRETTY_NAME，如 "Ubuntu 24.04.1 LTS"）。首次连上时探一次并存下来，
+    /// 之后直接显示、不再连（空 = 还没探过）。
+    #[serde(default)]
+    pub ssh_os: String,
+    /// 发行版 id（os-release 的 ID，如 ubuntu/debian/alpine）——UI 据此选发行版图标。
+    #[serde(default)]
+    pub ssh_os_id: String,
+    /// 技能包版本（= 下发它的服务端版本）。空 = 未知（旧导入 / 服务端太老没有版本端点）。
+    #[serde(default)]
+    pub pack_version: String,
+    pub created_at: String,
+}
+
+fn default_kind() -> String {
+    "gcms".into()
+}
+
+fn normalize_cloudflare_zone(zone: &str) -> Result<String, String> {
+    let zone = zone.trim().trim_end_matches('.').to_lowercase();
+    if zone.is_empty()
+        || zone.contains('/')
+        || zone.contains(':')
+        || !zone.split('.').all(|label| {
+            !label.is_empty() && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+    {
+        return Err("Cloudflare Zone 名称无效".into());
+    }
+    Ok(zone)
+}
+
+/// 导入结果：包里没有嵌密钥且调用方也没提供时，返回 NeedsKey 让 UI 弹输入框。
+/// Upgraded = 检测到同一连接（同地址+同密钥）→ 就地升级技能文件，连接/密钥/对话全保留。
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ImportOutcome {
+    Imported { connection: Connection },
+    Upgraded { connection: Connection },
+    NeedsKey { api_base: String },
+}
+
+#[derive(Clone)]
+pub struct ConnStore {
+    file: PathBuf,
+    packs_dir: PathBuf,
+}
+
+impl ConnStore {
+    pub fn new(data_dir: &Path) -> Result<Self, String> {
+        let packs_dir = data_dir.join("packs");
+        fs::create_dir_all(&packs_dir).map_err(|e| format!("create packs dir: {e}"))?;
+        Ok(Self {
+            file: data_dir.join("connections.json"),
+            packs_dir,
+        })
+    }
+
+    pub fn list(&self) -> Vec<Connection> {
+        let Ok(raw) = fs::read(&self.file) else {
+            return Vec::new();
+        };
+        serde_json::from_slice(&raw).unwrap_or_default()
+    }
+
+    fn save(&self, conns: &[Connection]) -> Result<(), String> {
+        let raw = serde_json::to_vec_pretty(conns).map_err(|e| e.to_string())?;
+        // 同目录临时文件 + rename，避免写一半（崩溃/磁盘满）清空整个连接列表。
+        let tmp = self.file.with_extension("json.tmp");
+        fs::write(&tmp, &raw).map_err(|e| format!("write connections tmp: {e}"))?;
+        fs::rename(&tmp, &self.file).map_err(|e| format!("replace connections.json: {e}"))
+    }
+
+    pub fn get(&self, id: &str) -> Result<Connection, String> {
+        self.list()
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| format!("未找到连接 {id}"))
+    }
+
+    /// 查找某台已连接服务器导入的 Pilot 运营助手。兼容首次加入来源字段之前，
+    /// 以同名 + 同 API 地址导入的连接，并在下一次绑定时自动收编。
+    pub fn pilot_assistant_for_source(
+        &self,
+        source_ssh_id: &str,
+        api_base: &str,
+    ) -> Option<Connection> {
+        let source_ssh_id = source_ssh_id.trim();
+        let api_base = api_base.trim().trim_end_matches('/');
+        let conns = self.list();
+        conns
+            .iter()
+            .find(|connection| {
+                connection.kind == "gcms" && connection.source_ssh_id == source_ssh_id
+            })
+            .cloned()
+            .or_else(|| {
+                conns.into_iter().find(|connection| {
+                    connection.kind == "gcms"
+                        && connection.source_ssh_id.is_empty()
+                        && connection.name == "Pilot 运营助手"
+                        && connection.api_base.trim_end_matches('/') == api_base
+                })
+            })
+    }
+
+    /// 把 gcms 连接绑定到一台来源服务器；可同时安全替换平台密钥与 API 地址。
+    /// 连接 id、技能目录和历史对话保持不变。
+    pub fn bind_pilot_assistant(
+        &self,
+        id: &str,
+        source_ssh_id: &str,
+        api_base: &str,
+        new_key: Option<&str>,
+    ) -> Result<Connection, String> {
+        let source_ssh_id = source_ssh_id.trim();
+        let api_base = api_base.trim().trim_end_matches('/');
+        if source_ssh_id.is_empty() {
+            return Err("缺少运营助手的来源服务器".into());
+        }
+        if !api_base.starts_with("https://") {
+            return Err("运营助手只允许使用 HTTPS API 地址".into());
+        }
+        let mut conns = self.list();
+        let Some(target) = conns.iter().position(|connection| connection.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if conns[target].kind != "gcms" {
+            return Err("只能绑定 gcms 技能包连接".into());
+        }
+        if conns.iter().enumerate().any(|(index, connection)| {
+            index != target
+                && connection.kind == "gcms"
+                && connection.source_ssh_id == source_ssh_id
+        }) {
+            return Err("这台服务器已经绑定了另一个 Pilot 运营助手".into());
+        }
+
+        let env_path = Path::new(&conns[target].skill_dir).join(".env");
+        let previous_env = fs::read(&env_path).ok();
+        let previous_key = if new_key.is_some() {
+            keychain::get_key(id).ok()
+        } else {
+            None
+        };
+        let restore_key = || {
+            if new_key.is_some() {
+                match previous_key.as_deref() {
+                    Some(key) => {
+                        let _ = keychain::set_key(id, key);
+                    }
+                    None => {
+                        let _ = keychain::delete_key(id);
+                    }
+                }
+            }
+        };
+        if let Some(key) = new_key {
+            if !key.starts_with("gcmsp_") {
+                return Err("Pilot 运营助手必须使用平台密钥".into());
+            }
+            keychain::set_key(id, key)?;
+            conns[target].key_prefix = keychain::key_prefix(key);
+            conns[target].key_kind = "gcmsp_".into();
+        }
+        let env_body = format!(
+            "GCMS_API_BASE={api_base}\n# GCMS_API_KEY 已由 GCMS Pilot 保管在系统钥匙串，运行时自动注入\n"
+        );
+        if let Err(error) = fs::write(&env_path, env_body) {
+            restore_key();
+            return Err(format!("更新运营助手连接地址失败：{error}"));
+        }
+
+        conns[target].name = "Pilot 运营助手".into();
+        conns[target].api_base = api_base.into();
+        conns[target].source_ssh_id = source_ssh_id.into();
+        let out = conns[target].clone();
+        if let Err(error) = self.save(&conns) {
+            match previous_env {
+                Some(bytes) => {
+                    let _ = fs::write(&env_path, bytes);
+                }
+                None => {
+                    let _ = fs::remove_file(&env_path);
+                }
+            }
+            restore_key();
+            return Err(error);
+        }
+        Ok(out)
+    }
+
+    /// 导入迁移包时写入连接元数据；密钥由 transfer 模块单独写入钥匙串。
+    pub fn upsert_imported(&self, connection: Connection) -> Result<(), String> {
+        let mut conns = self.list();
+        if let Some(slot) = conns.iter_mut().find(|c| c.id == connection.id) {
+            *slot = connection;
+        } else {
+            conns.push(connection);
+        }
+        self.save(&conns)
+    }
+
+    /// 导入 zip 技能包。key 进 Keychain，不落任何盘面文件。
+    /// 支持两种包：嵌密钥包（.env 内置 key）与原始包（.env.example 占位）——
+    /// 原始包需要调用方经 `provided_key` 传入手动粘贴的密钥，否则返回 NeedsKey。
+    pub fn import_zip(
+        &self,
+        zip_path: &str,
+        name: Option<String>,
+        provided_key: Option<String>,
+    ) -> Result<ImportOutcome, String> {
+        let file = fs::File::open(zip_path).map_err(|e| format!("打开 zip 失败: {e}"))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 zip 失败: {e}"))?;
+
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let dest = self.packs_dir.join(&conn_id);
+        fs::create_dir_all(&dest).map_err(|e| format!("create pack dir: {e}"))?;
+        archive
+            .extract(&dest)
+            .map_err(|e| format!("解压失败: {e}"))?;
+
+        let result = (|| {
+            let skill_dir =
+                find_skill_dir(&dest).ok_or("zip 里没有找到技能目录（缺少 scripts/gcms.js）")?;
+            let env_path = skill_dir.join(".env");
+            let example = skill_dir.join(".env.example");
+            let env_file = if env_path.exists() {
+                env_path.clone()
+            } else if example.exists() {
+                example
+            } else {
+                return Err("技能包里没有 .env / .env.example".to_string());
+            };
+            let (api_base, embedded_key) = parse_env(&env_file)?;
+            if api_base.is_empty() {
+                return Err("技能包 .env 缺少 GCMS_API_BASE".to_string());
+            }
+            let api_key = if !key_missing(&embedded_key) {
+                embedded_key
+            } else if let Some(k) = provided_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+            {
+                k.to_string()
+            } else {
+                // 原始包且没给密钥：后台常驻下载的都是无密钥包，而完整密钥只显示一次——
+                // 若恰有一个同地址的 gcms 连接，直接就地升级它（密钥用钥匙串里那把，无需重填）。
+                // 导入 zip 本就等于信任其中的脚本，按地址匹配不降低信任边界；多个同地址连接时无法消歧，仍走弹窗。
+                let same_base: Vec<Connection> = self
+                    .list()
+                    .into_iter()
+                    .filter(|c| c.kind == "gcms" && c.api_base == api_base)
+                    .collect();
+                if same_base.len() == 1 {
+                    let mut dup = same_base.into_iter().next().expect("len checked");
+                    overlay_skill_dir(&skill_dir, Path::new(&dup.skill_dir))?;
+                    let v = read_pack_version(Path::new(&dup.skill_dir));
+                    if !v.is_empty() && v != dup.pack_version {
+                        dup.pack_version = v;
+                        self.set_pack_version(&dup.id, &dup.pack_version)?;
+                    }
+                    return Ok(ImportOutcome::Upgraded { connection: dup });
+                }
+                // 没有可升级的目标：让 UI 弹输入框后带 key 重试。
+                return Ok(ImportOutcome::NeedsKey { api_base });
+            };
+            let key_kind = if api_key.starts_with("gcmsp_") {
+                "gcmsp_"
+            } else if api_key.starts_with("gcms_") {
+                "gcms_"
+            } else {
+                return Err("访问密钥前缀不是 gcmsp_/gcms_，无法识别".to_string());
+            };
+            // 同地址 + 同密钥前缀一定是同一连接；同地址只有一个连接时，即使前缀
+            // 变化也按密钥轮换处理。这样后台重建平台密钥后重新导入，会原地更新
+            // 钥匙串和连接摘要，而不是新建连接、把历史会话留在旧连接下。
+            let prefix = keychain::key_prefix(&api_key);
+            let mut conns = self.list();
+            let target = gcms_import_target(&conns, &api_base, &prefix);
+            if let Some(target) = target {
+                let dup = &mut conns[target];
+                keychain::set_key(&dup.id, &api_key)?;
+                overlay_skill_dir(&skill_dir, Path::new(&dup.skill_dir))?;
+                dup.key_prefix = prefix;
+                dup.key_kind = key_kind.to_string();
+                // 新包（v1.3.10+）带 PACK_VERSION 标记：升级后落版本，避免「有更新」徽标误报纠缠。
+                let v = read_pack_version(Path::new(&dup.skill_dir));
+                if !v.is_empty() {
+                    dup.pack_version = v;
+                }
+                let upgraded = dup.clone();
+                self.save(&conns)?;
+                return Ok(ImportOutcome::Upgraded {
+                    connection: upgraded,
+                });
+            }
+
+            // 剥离：Keychain 收 key，.env 只留 base。
+            keychain::set_key(&conn_id, &api_key)?;
+            let mut f = fs::File::create(&env_path).map_err(|e| format!("重写 .env: {e}"))?;
+            writeln!(f, "GCMS_API_BASE={api_base}").map_err(|e| e.to_string())?;
+            writeln!(
+                f,
+                "# GCMS_API_KEY 已由 GCMS Pilot 保管在 macOS 钥匙串，运行时自动注入"
+            )
+            .map_err(|e| e.to_string())?;
+
+            let conn = Connection {
+                id: conn_id.clone(),
+                name: name
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| default_name(&api_base)),
+                remark: String::new(),
+                kind: "gcms".into(),
+                source_ssh_id: String::new(),
+                api_base,
+                skill_dir: skill_dir.to_string_lossy().into_owned(),
+                key_prefix: prefix,
+                key_kind: key_kind.to_string(),
+                account_id: String::new(),
+                preferred_zones: Vec::new(),
+                ssh_host: String::new(),
+                ssh_port: 0,
+                ssh_user: String::new(),
+                ssh_auth: String::new(),
+                ssh_key_path: String::new(),
+                ssh_fingerprint: String::new(),
+                ssh_os: String::new(),
+                ssh_os_id: String::new(),
+                pack_version: read_pack_version(&skill_dir),
+                created_at: chrono_now(),
+            };
+            let mut conns = self.list();
+            conns.push(conn.clone());
+            self.save(&conns)?;
+            Ok(ImportOutcome::Imported { connection: conn })
+        })();
+
+        // 只有真正建立连接才保留解压目录；失败或等待密钥都回滚清理。
+        if !matches!(result, Ok(ImportOutcome::Imported { .. })) {
+            let _ = fs::remove_dir_all(&dest);
+            let _ = keychain::delete_key(&conn_id);
+        }
+        result
+    }
+
+    /// 连接 Cloudflare：token 进钥匙串，建该连接的工作区目录，写 connections.json。
+    /// 调用方应已先验证过 token（lib.rs 的 connect_cloudflare 会验证）。
+    pub fn add_cloudflare(
+        &self,
+        name: &str,
+        token: &str,
+        account_id: &str,
+    ) -> Result<Connection, String> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err("Token 不能为空".into());
+        }
+        let prefix = keychain::key_prefix(token);
+        // 去重：同账号 + 同 token 前缀视为同一连接。
+        if let Some(dup) = self.list().iter().find(|c| {
+            c.kind == "cloudflare" && c.account_id == account_id && c.key_prefix == prefix
+        }) {
+            return Err(format!("已存在相同的 Cloudflare 连接「{}」。", dup.name));
+        }
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        // 每个 CF 连接一个工作区目录（内置技能包 + 站点项目都放这下面；Slice 3 填充）。
+        let dir = self.packs_dir.join(&conn_id);
+        fs::create_dir_all(&dir).map_err(|e| format!("create cf workspace: {e}"))?;
+        keychain::set_key(&conn_id, token)?;
+        let conn = Connection {
+            id: conn_id.clone(),
+            name: if name.trim().is_empty() {
+                "Cloudflare".into()
+            } else {
+                name.trim().into()
+            },
+            remark: String::new(),
+            kind: "cloudflare".into(),
+            source_ssh_id: String::new(),
+            api_base: String::new(),
+            skill_dir: dir.to_string_lossy().into_owned(),
+            key_prefix: prefix,
+            key_kind: "cf_token".into(),
+            account_id: account_id.trim().to_string(),
+            preferred_zones: Vec::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: chrono_now(),
+        };
+        let mut conns = self.list();
+        conns.push(conn.clone());
+        if let Err(e) = self.save(&conns) {
+            let _ = keychain::delete_key(&conn_id);
+            let _ = fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        Ok(conn)
+    }
+
+    /// 新建 SSH 远程连接：密码/私钥口令进钥匙串，建工作区目录，写 connections.json。
+    /// 调用方必须已先 probe 过并由用户确认了主机指纹（TOFU）——没有指纹一律拒绝。
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_ssh(
+        &self,
+        name: &str,
+        host: &str,
+        port: u16,
+        user: &str,
+        auth: &str,
+        key_path: &str,
+        secret: &str,
+        fingerprint: &str,
+    ) -> Result<Connection, String> {
+        let (host, user, key_path, fingerprint) = (
+            host.trim(),
+            user.trim(),
+            key_path.trim(),
+            fingerprint.trim(),
+        );
+        if host.is_empty() {
+            return Err("主机不能为空".into());
+        }
+        if user.is_empty() {
+            return Err("用户名不能为空".into());
+        }
+        if fingerprint.is_empty() {
+            return Err("缺少主机指纹：请先「测试连接」并确认指纹".into());
+        }
+        match auth {
+            "password" if secret.is_empty() => return Err("密码不能为空".into()),
+            "key" if key_path.is_empty() => return Err("请选择私钥文件".into()),
+            "password" | "key" => {}
+            other => return Err(format!("未知认证方式: {other}")),
+        }
+        let port = if port == 0 { 22 } else { port };
+        // 去重：同一台机器的同一用户视为同一连接。
+        if let Some(dup) = self.list().iter().find(|c| {
+            c.kind == "ssh" && c.ssh_host == host && c.ssh_port == port && c.ssh_user == user
+        }) {
+            return Err(format!(
+                "已存在相同的远程连接「{}」（{user}@{host}:{port}）。",
+                dup.name
+            ));
+        }
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let dir = self.packs_dir.join(&conn_id);
+        fs::create_dir_all(&dir).map_err(|e| format!("create ssh workspace: {e}"))?;
+        // 无口令的私钥没有秘密可存 —— 不写钥匙串（读侧用 get_key(..).ok() 兜底）。
+        if !secret.is_empty() {
+            if let Err(e) = keychain::set_key(&conn_id, secret) {
+                let _ = fs::remove_dir_all(&dir);
+                return Err(e);
+            }
+        }
+        let conn = Connection {
+            id: conn_id.clone(),
+            name: if name.trim().is_empty() {
+                format!("{user}@{host}")
+            } else {
+                name.trim().into()
+            },
+            remark: String::new(),
+            kind: "ssh".into(),
+            source_ssh_id: String::new(),
+            api_base: String::new(),
+            skill_dir: dir.to_string_lossy().into_owned(),
+            // 故意留空：key_prefix 会显示在连接列表里，SSH 这里的秘密是密码/口令，
+            // 照抄前缀等于把密码前 13 位印在 UI 上。副标题改显 user@host:port。
+            key_prefix: String::new(),
+            key_kind: if auth == "key" {
+                "ssh_key".into()
+            } else {
+                "ssh_password".into()
+            },
+            account_id: String::new(),
+            preferred_zones: Vec::new(),
+            ssh_host: host.into(),
+            ssh_port: port,
+            ssh_user: user.into(),
+            ssh_auth: auth.into(),
+            ssh_key_path: key_path.into(),
+            ssh_fingerprint: fingerprint.into(),
+            // 系统信息首次连上时再探（add 时不连，避免加连接就多一次登录记录）。
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: chrono_now(),
+        };
+        let mut conns = self.list();
+        conns.push(conn.clone());
+        if let Err(e) = self.save(&conns) {
+            let _ = keychain::delete_key(&conn_id);
+            let _ = fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        Ok(conn)
+    }
+
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        let mut conns = self.list();
+        let before = conns.len();
+        conns.retain(|c| c.id != id);
+        if conns.len() == before {
+            return Err(format!("未找到连接 {id}"));
+        }
+        // 先删钥匙串：失败则中止（连接保留，可重试），绝不留下无 UI 句柄的孤儿密钥。
+        keychain::delete_key(id)?;
+        self.save(&conns)?;
+        let _ = fs::remove_dir_all(self.packs_dir.join(id));
+        Ok(())
+    }
+
+    /// 设置连接备注。空字符串表示清除；限制为单行短文本，避免把连接切换器撑坏。
+    pub fn set_remark(&self, id: &str, remark: &str) -> Result<Connection, String> {
+        let remark = remark.trim();
+        if remark.chars().count() > 60 {
+            return Err("备注最多 60 个字符".into());
+        }
+        if remark.chars().any(char::is_control) {
+            return Err("备注只能填写单行文字".into());
+        }
+        let mut conns = self.list();
+        let Some(slot) = conns.iter_mut().find(|c| c.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        slot.remark = remark.to_string();
+        let out = slot.clone();
+        self.save(&conns)?;
+        Ok(out)
+    }
+
+    /// 原地替换 GCMS 连接密钥。连接 id、技能目录、站点和会话均保持不变。
+    /// 调用方必须先用当前 API 地址验证新密钥；这里仅负责持久化。
+    ///
+    /// 先提交脱敏元数据，再写系统凭据库：这样即使旧凭据已经丢失，也不需要为了
+    /// 回滚去读取旧条目（避免再次触发一串钥匙串授权框）。凭据写入失败时恢复元数据。
+    pub fn replace_gcms_key(&self, id: &str, key: &str) -> Result<Connection, String> {
+        let key = key.trim();
+        let mut conns = self.list();
+        let Some(target) = conns.iter().position(|connection| connection.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if conns[target].kind != "gcms" {
+            return Err("这不是 GCMS 技能包连接".into());
+        }
+        let expected = conns[target].key_kind.as_str();
+        if !matches!(expected, "gcmsp_" | "gcms_") {
+            return Err("当前连接的密钥类型无法更新".into());
+        }
+        if !key.starts_with(expected) {
+            return Err(format!("当前连接需要以 {expected} 开头的密钥"));
+        }
+
+        let previous_prefix = conns[target].key_prefix.clone();
+        conns[target].key_prefix = keychain::key_prefix(key);
+        let out = conns[target].clone();
+        self.save(&conns)?;
+        if let Err(error) = keychain::set_key(id, key) {
+            conns[target].key_prefix = previous_prefix;
+            return match self.save(&conns) {
+                Ok(()) => Err(format!("写入系统凭据库失败，原连接未改变：{error}")),
+                Err(restore_error) => Err(format!(
+                    "写入系统凭据库失败：{error}；恢复连接元数据失败：{restore_error}"
+                )),
+            };
+        }
+        Ok(out)
+    }
+
+    /// 把一个 Cloudflare Zone 固定到明确连接。写入前会从其它连接移除同 Zone，避免后续
+    /// DNS/橙云操作因连接遍历顺序变化而换 Token。
+    pub fn set_cloudflare_zone_preference(
+        &self,
+        id: &str,
+        zone: &str,
+    ) -> Result<Connection, String> {
+        let zone = normalize_cloudflare_zone(zone)?;
+        let mut conns = self.list();
+        let Some(target) = conns.iter().position(|connection| connection.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if conns[target].kind != "cloudflare" {
+            return Err("只能为 Cloudflare 连接绑定 Zone".into());
+        }
+        for connection in &mut conns {
+            connection
+                .preferred_zones
+                .retain(|saved| !saved.eq_ignore_ascii_case(&zone));
+        }
+        conns[target].preferred_zones.push(zone);
+        let out = conns[target].clone();
+        self.save(&conns)?;
+        Ok(out)
+    }
+
+    /// 清除一个 Zone 的固定连接。用于用户主动点击“改用其他连接”；下次检查会重新返回
+    /// 所有真实候选，而不是悄悄切换到连接列表里的下一枚 Token。
+    pub fn clear_cloudflare_zone_preference(&self, zone: &str) -> Result<(), String> {
+        let zone = normalize_cloudflare_zone(zone)?;
+        let mut conns = self.list();
+        let mut changed = false;
+        for connection in &mut conns {
+            let before = connection.preferred_zones.len();
+            connection
+                .preferred_zones
+                .retain(|saved| !saved.eq_ignore_ascii_case(&zone));
+            changed |= before != connection.preferred_zones.len();
+        }
+        if changed {
+            self.save(&conns)?;
+        }
+        Ok(())
+    }
+
+    /// 只替换指定 Cloudflare 连接的 Token；连接 id、账号、Zone 绑定和工作区全部保留。
+    /// 调用方必须先验证新 Token 仍可访问原 account_id。
+    pub fn replace_cloudflare_token(&self, id: &str, token: &str) -> Result<Connection, String> {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err("Token 不能为空".into());
+        }
+        let mut conns = self.list();
+        let Some(target) = conns.iter().position(|connection| connection.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if conns[target].kind != "cloudflare" {
+            return Err("这不是 Cloudflare 连接".into());
+        }
+        let prefix = keychain::key_prefix(token);
+        if let Some(duplicate) = conns.iter().enumerate().find(|(index, connection)| {
+            *index != target
+                && connection.kind == "cloudflare"
+                && connection.account_id == conns[target].account_id
+                && connection.key_prefix == prefix
+        }) {
+            return Err(format!(
+                "这枚 Token 已用于 Cloudflare 连接「{}」",
+                duplicate.1.name
+            ));
+        }
+        let previous = keychain::get_key(id)?;
+        keychain::set_key(id, token)?;
+        conns[target].key_prefix = prefix;
+        let out = conns[target].clone();
+        if let Err(error) = self.save(&conns) {
+            let restored = keychain::set_key(id, &previous);
+            return Err(if let Err(restore_error) = restored {
+                format!("{error}；恢复原 Token 失败：{restore_error}")
+            } else {
+                error
+            });
+        }
+        Ok(out)
+    }
+
+    /// 记录远端系统信息（首次连上探到后写入，之后 UI 直接显示、不再连）。
+    pub fn set_ssh_os(&self, id: &str, pretty: &str, os_id: &str) -> Result<Connection, String> {
+        let mut conns = self.list();
+        let Some(slot) = conns.iter_mut().find(|c| c.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        slot.ssh_os = pretty.trim().to_string();
+        slot.ssh_os_id = os_id.trim().to_lowercase();
+        let out = slot.clone();
+        self.save(&conns)?;
+        Ok(out)
+    }
+
+    /// 修改已有的远程连接。
+    ///
+    /// 密码/口令：`secret` 为空 = 不动钥匙串里那条（UI 不回显密码，留空即保持原样）。
+    /// **换认证方式时必须给新密钥**——旧钥匙串条目存的是另一种东西（密码 vs 私钥口令），留着必错。
+    /// 指纹由调用方给（UI 侧刚试连确认过的那个）：换机器/换端口后旧指纹不再作数。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_ssh(
+        &self,
+        id: &str,
+        name: &str,
+        host: &str,
+        port: u16,
+        user: &str,
+        auth: &str,
+        key_path: &str,
+        secret: &str,
+        fingerprint: &str,
+    ) -> Result<Connection, String> {
+        let (host, user, key_path, fingerprint) = (
+            host.trim(),
+            user.trim(),
+            key_path.trim(),
+            fingerprint.trim(),
+        );
+        if host.is_empty() {
+            return Err("主机不能为空".into());
+        }
+        if user.is_empty() {
+            return Err("用户名不能为空".into());
+        }
+        if fingerprint.is_empty() {
+            return Err("缺少主机指纹：请先「测试连接」并确认指纹".into());
+        }
+        let port = if port == 0 { 22 } else { port };
+        let mut conns = self.list();
+        let Some(old) = conns.iter().find(|c| c.id == id).cloned() else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        if old.kind != "ssh" {
+            return Err("这不是远程连接".into());
+        }
+        // 先确认旧凭据是否真的还在。仅凭“以前也是密码认证”不能允许空保存：迁移失败
+        // 正是连接记录仍在、钥匙串条目已丢的状态，继续空保存只会制造假成功。
+        let old_secret = keychain::get_key(id).ok();
+        match auth {
+            "key" if key_path.is_empty() => return Err("请选择私钥文件".into()),
+            "password"
+                if secret.is_empty() && (old.ssh_auth != "password" || old_secret.is_none()) =>
+            {
+                return Err("钥匙串里没有这个连接的密码，请补录密码".into())
+            }
+            "key" | "password" => {}
+            other => return Err(format!("未知认证方式: {other}")),
+        }
+        // 去重：改成另一台已存在的机器（同 user@host:port）＝和那条连接撞车。
+        if let Some(dup) = conns.iter().find(|c| {
+            c.id != id
+                && c.kind == "ssh"
+                && c.ssh_host == host
+                && c.ssh_port == port
+                && c.ssh_user == user
+        }) {
+            return Err(format!(
+                "已存在相同的远程连接「{}」（{user}@{host}:{port}）。",
+                dup.name
+            ));
+        }
+        // 动钥匙串前已把旧值抄下来：存盘要是失败了，得原样放回去（无口令私钥本就没有条目 → None）。
+        // 钥匙串先写：写失败就整个中止（连接还是原样，可重试），别让记录和密钥对不上。
+        if !secret.is_empty() {
+            keychain::set_key(id, secret)?;
+        } else if auth == "key" && old.ssh_auth == "password" {
+            // 密码登录 → 无口令私钥：旧密码留着就是个错的口令，必须清掉。
+            let _ = keychain::delete_key(id);
+        }
+        let restore_secret = || match &old_secret {
+            Some(s) => {
+                let _ = keychain::set_key(id, s);
+            }
+            None => {
+                let _ = keychain::delete_key(id);
+            }
+        };
+        let slot = conns
+            .iter_mut()
+            .find(|c| c.id == id)
+            .expect("checked above");
+        slot.name = if name.trim().is_empty() {
+            format!("{user}@{host}")
+        } else {
+            name.trim().into()
+        };
+        slot.ssh_host = host.into();
+        slot.ssh_port = port;
+        slot.ssh_user = user.into();
+        slot.ssh_auth = auth.into();
+        slot.ssh_key_path = if auth == "key" {
+            key_path.into()
+        } else {
+            String::new()
+        };
+        slot.ssh_fingerprint = fingerprint.into();
+        // 换了机器就别留旧系统信息（下次连上重探）。
+        if old.ssh_host != host || old.ssh_port != port {
+            slot.ssh_os = String::new();
+            slot.ssh_os_id = String::new();
+        }
+        let out = slot.clone();
+        if let Err(e) = self.save(&conns) {
+            // 存盘失败：把钥匙串放回旧值，别留下「密钥是新的、记录是旧的」的错位状态。
+            restore_secret();
+            return Err(e);
+        }
+        Ok(out)
+    }
+
+    /// 记录连接的技能包版本（升级/首次核对后写入）。
+    pub fn set_pack_version(&self, id: &str, v: &str) -> Result<(), String> {
+        let mut conns = self.list();
+        let Some(slot) = conns.iter_mut().find(|c| c.id == id) else {
+            return Err(format!("未找到连接 {id}"));
+        };
+        slot.pack_version = v.trim().to_string();
+        self.save(&conns)
+    }
+
+    /// 一键升级：用（从服务端下载的）zip 就地升级已有连接的技能目录。
+    /// 连接 id / 钥匙串密钥 / skill_dir 路径 / 对话全部不变，只覆盖包内文件。
+    pub fn upgrade_from_zip(&self, conn_id: &str, zip_path: &str) -> Result<Connection, String> {
+        let conn = self.get(conn_id)?;
+        if conn.kind != "gcms" {
+            return Err("只有 gcms 技能包连接支持升级".into());
+        }
+        let file = fs::File::open(zip_path).map_err(|e| format!("打开 zip 失败: {e}"))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("读取 zip 失败: {e}"))?;
+        let tmp = self
+            .packs_dir
+            .join(format!("upgrade-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).map_err(|e| format!("create tmp dir: {e}"))?;
+        let result = (|| {
+            archive
+                .extract(&tmp)
+                .map_err(|e| format!("解压失败: {e}"))?;
+            let src =
+                find_skill_dir(&tmp).ok_or("zip 里没有找到技能目录（缺少 scripts/gcms.js）")?;
+            overlay_skill_dir(&src, Path::new(&conn.skill_dir))?;
+            let mut conn = conn;
+            let v = read_pack_version(Path::new(&conn.skill_dir));
+            if !v.is_empty() && v != conn.pack_version {
+                conn.pack_version = v;
+                self.set_pack_version(&conn.id, &conn.pack_version)?;
+            }
+            Ok(conn)
+        })();
+        let _ = fs::remove_dir_all(&tmp);
+        result
+    }
+}
+
+/// 读技能目录里的 PACK_VERSION 标记（=下发该包的服务端版本）；没有则空串（老包）。
+fn read_pack_version(skill_dir: &Path) -> String {
+    fs::read_to_string(skill_dir.join("PACK_VERSION"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 同一技能目录的导入和在线升级必须串行。弱引用让已不用的目录锁自动从表里淘汰，
+/// 不会随着连接数量增长永久占内存。
+fn skill_overlay_lock(dest: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let key = parent
+        .canonicalize()
+        .map(|parent| match dest.file_name() {
+            Some(name) => parent.join(name),
+            None => parent,
+        })
+        .unwrap_or_else(|_| dest.to_path_buf());
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn transaction_paths(dest: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let name = dest
+        .file_name()
+        .ok_or_else(|| format!("技能目录路径无效：{}", dest.display()))?;
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    let mut stage_name = OsString::from(".");
+    stage_name.push(name);
+    stage_name.push(".pilot-update-stage");
+    let mut backup_name = OsString::from(".");
+    backup_name.push(name);
+    backup_name.push(".pilot-update-backup");
+    Ok((parent.join(stage_name), parent.join(backup_name)))
+}
+
+/// 与 `Path::exists` 不同，断开的符号链接也算存在。
+fn path_lexists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("检查 {} 失败: {error}", path.display())),
+    }
+}
+
+fn remove_path(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("检查 {} 失败: {error}", path.display())),
+    };
+    if metadata.file_type().is_dir() {
+        fs::remove_dir_all(path).map_err(|e| format!("删除目录 {} 失败: {e}", path.display()))
+    } else {
+        // 普通文件、符号链接及 Unix socket 等特殊目录项都只删除该项本身。
+        fs::remove_file(path).map_err(|e| format!("删除文件 {} 失败: {e}", path.display()))
+    }
+}
+
+fn copy_symlink(src: &Path, dest: &Path) -> Result<(), String> {
+    let target = fs::read_link(src).map_err(|e| format!("读取链接 {} 失败: {e}", src.display()))?;
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, dest)
+            .map_err(|e| format!("复制链接 {} 失败: {e}", dest.display()))
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        let target_is_dir = fs::metadata(src).map(|metadata| metadata.is_dir()).ok();
+        let result = match target_is_dir {
+            Some(true) => symlink_dir(&target, dest),
+            Some(false) => symlink_file(&target, dest),
+            // 断开的链接无法探知类型；文件链接优先，失败再尝试目录链接。
+            None => symlink_file(&target, dest).or_else(|_| symlink_dir(&target, dest)),
+        };
+        result.map_err(|e| format!("复制链接 {} 失败: {e}", dest.display()))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = target;
+        Err(format!("当前平台不支持复制符号链接：{}", src.display()))
+    }
+}
+
+/// 把现有技能目录完整克隆成候选目录。普通文件优先硬链接，以免大型 uploads/
+/// 重复占空间；跨文件系统或文件系统不支持硬链接时回退到复制。
+fn clone_skill_tree(src: &Path, dest: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(src)
+        .map_err(|e| format!("读取技能目录 {} 失败: {e}", src.display()))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!("技能目录不是普通目录：{}", src.display()));
+    }
+    fs::create_dir(dest).map_err(|e| format!("创建暂存目录 {} 失败: {e}", dest.display()))?;
+    let entries =
+        fs::read_dir(src).map_err(|e| format!("读取技能目录 {} 失败: {e}", src.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取目录项 {} 失败: {e}", src.display()))?;
+        let source = entry.path();
+        let target = dest.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("读取目录项类型 {} 失败: {e}", source.display()))?;
+        if file_type.is_dir() {
+            clone_skill_tree(&source, &target)?;
+        } else if file_type.is_file() {
+            if fs::hard_link(&source, &target).is_err() {
+                fs::copy(&source, &target)
+                    .map_err(|e| format!("复制 {} 失败: {e}", source.display()))?;
+            }
+        } else if file_type.is_symlink() {
+            copy_symlink(&source, &target)?;
+        } else {
+            return Err(format!("暂不支持复制特殊文件：{}", source.display()));
+        }
+    }
+    Ok(())
+}
+
+/// 只改候选目录。替换普通文件前必须先 unlink：候选中的旧文件通常与正式目录
+/// 是硬链接，直接 `copy` 会截断同一个 inode，从而破坏事务性。
+fn overlay_into_stage(src: &Path, stage: &Path, root: bool) -> Result<(), String> {
+    let entries =
+        fs::read_dir(src).map_err(|e| format!("读取新技能包 {} 失败: {e}", src.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取目录项 {} 失败: {e}", src.display()))?;
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        if root && (name_text == ".env" || name_text == ".env.example") {
+            continue; // 两者都保留目标目录原值；不存在时也不从包内引入。
+        }
+        let source = entry.path();
+        let target = stage.join(&name);
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("读取目录项类型 {} 失败: {e}", source.display()))?;
+        if file_type.is_dir() {
+            if path_lexists(&target)? {
+                let target_type = fs::symlink_metadata(&target)
+                    .map_err(|e| format!("读取 {} 失败: {e}", target.display()))?
+                    .file_type();
+                if !target_type.is_dir() {
+                    remove_path(&target)?;
+                    fs::create_dir(&target)
+                        .map_err(|e| format!("创建目录 {} 失败: {e}", target.display()))?;
+                }
+            } else {
+                fs::create_dir(&target)
+                    .map_err(|e| format!("创建目录 {} 失败: {e}", target.display()))?;
+            }
+            overlay_into_stage(&source, &target, false)?;
+        } else if file_type.is_file() {
+            remove_path(&target)?;
+            fs::copy(&source, &target)
+                .map_err(|e| format!("覆盖 {} 失败: {e}", target.display()))?;
+        } else if file_type.is_symlink() {
+            remove_path(&target)?;
+            copy_symlink(&source, &target)?;
+        } else {
+            return Err(format!(
+                "新技能包包含不支持的特殊文件：{}",
+                source.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_skill_tree(skill_dir: &Path) -> Result<(), String> {
+    let cli = skill_dir.join("scripts").join("gcms.js");
+    let metadata = fs::symlink_metadata(&cli)
+        .map_err(|e| format!("技能目录缺少 scripts/gcms.js（{}）: {e}", cli.display()))?;
+    if !metadata.file_type().is_file() {
+        return Err(format!("scripts/gcms.js 不是普通文件：{}", cli.display()));
+    }
+    Ok(())
+}
+
+/// 恢复上一次进程在两个 rename 之间退出留下的现场：
+/// - backup 有、dest 无：第一步完成但第二步未完成，恢复旧目录；
+/// - backup 和有效 dest 都有：第二步已完成，只需清理旧备份；
+/// - backup 和无效 dest 都有：保守回滚到旧目录。
+fn recover_overlay_transaction(dest: &Path, stage: &Path, backup: &Path) -> Result<(), String> {
+    if path_lexists(backup)? {
+        if !path_lexists(dest)? {
+            fs::rename(backup, dest).map_err(|e| {
+                format!(
+                    "恢复上次技能包更新失败（{} → {}）: {e}",
+                    backup.display(),
+                    dest.display()
+                )
+            })?;
+        } else if validate_skill_tree(dest).is_ok() {
+            remove_path(backup)?;
+        } else {
+            remove_path(stage)?;
+            fs::rename(dest, stage)
+                .map_err(|e| format!("暂存未完成的技能目录 {} 失败: {e}", dest.display()))?;
+            if let Err(error) = fs::rename(backup, dest) {
+                let restore_new = fs::rename(stage, dest);
+                return Err(match restore_new {
+                    Ok(()) => format!("恢复旧技能目录失败，已保留当前目录：{error}"),
+                    Err(restore_error) => {
+                        format!("恢复旧技能目录失败：{error}；恢复当前目录也失败：{restore_error}")
+                    }
+                });
+            }
+            remove_path(stage)?;
+        }
+    }
+    remove_path(stage)
+}
+
+/// 把新包事务式覆盖到已有技能目录：先在同级完整准备候选目录，再用两次同盘 rename
+/// 切换。根级 `.env` / `.env.example`、uploads/、shots/ 等用户和运行时文件均从
+/// 旧目录保留；任何准备错误都不会触碰正式目录。
+fn overlay_skill_dir(src: &Path, dest: &Path) -> Result<(), String> {
+    let lock = skill_overlay_lock(dest);
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (stage, backup) = transaction_paths(dest)?;
+
+    // 即使本次传入的新包无效，也先把上次崩溃留下的正式目录恢复到可用状态。
+    recover_overlay_transaction(dest, &stage, &backup)?;
+    validate_skill_tree(src)?;
+    let dest_metadata =
+        fs::symlink_metadata(dest).map_err(|_| format!("原技能目录不存在：{}", dest.display()))?;
+    if !dest_metadata.file_type().is_dir() {
+        return Err(format!("原技能目录不是普通目录：{}", dest.display()));
+    }
+
+    let preparation = (|| {
+        clone_skill_tree(dest, &stage)?;
+        overlay_into_stage(src, &stage, true)?;
+        validate_skill_tree(&stage)
+    })();
+    if let Err(error) = preparation {
+        let cleanup = remove_path(&stage);
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => format!("{error}；清理暂存目录失败：{cleanup_error}"),
+        });
+    }
+
+    if let Err(error) = fs::rename(dest, &backup) {
+        let cleanup = remove_path(&stage);
+        return Err(match cleanup {
+            Ok(()) => format!("备份原技能目录 {} 失败: {error}", dest.display()),
+            Err(cleanup_error) => format!(
+                "备份原技能目录 {} 失败: {error}；清理暂存目录失败：{cleanup_error}",
+                dest.display()
+            ),
+        });
+    }
+    if let Err(error) = fs::rename(&stage, dest) {
+        return match fs::rename(&backup, dest) {
+            Ok(()) => {
+                let cleanup = remove_path(&stage);
+                Err(match cleanup {
+                    Ok(()) => format!("启用新技能目录失败，已恢复原目录：{error}"),
+                    Err(cleanup_error) => format!(
+                        "启用新技能目录失败，已恢复原目录；清理暂存目录失败：{cleanup_error}"
+                    ),
+                })
+            }
+            Err(restore_error) => Err(format!(
+                "启用新技能目录失败：{error}；恢复原目录也失败：{restore_error}（备份保留在 {}）",
+                backup.display()
+            )),
+        };
+    }
+
+    // 第二次 rename 已经提交成功；清理失败不应把一次成功更新报告成失败，下次调用
+    // 会在持锁状态下识别有效 dest 并继续清掉固定 backup。
+    let _ = remove_path(&backup);
+    Ok(())
+}
+
+/// 在解压目录下找包含 scripts/gcms.js 的技能目录（兼容平台包/单站包/嵌套一层的情况）。
+fn find_skill_dir(root: &Path) -> Option<PathBuf> {
+    fn check(dir: &Path) -> bool {
+        dir.join("scripts").join("gcms.js").is_file()
+    }
+    if check(root) {
+        return Some(root.to_path_buf());
+    }
+    // 两层内广度优先：zip 顶层通常是 README.md + <skill-folder>/。
+    let mut level = vec![root.to_path_buf()];
+    for _ in 0..2 {
+        let mut next = Vec::new();
+        for dir in &level {
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    if check(&p) {
+                        return Some(p);
+                    }
+                    next.push(p);
+                }
+            }
+        }
+        level = next;
+    }
+    None
+}
+
+/// 原始包（tokenless）识别：没有 key，或只是 .env.example 的 gcmsp_xxx / gcms_xxx 占位。
+fn key_missing(key: &str) -> bool {
+    key.is_empty() || key.ends_with("_xxx")
+}
+
+fn parse_env(path: &Path) -> Result<(String, String), String> {
+    let raw = fs::read_to_string(path).map_err(|e| format!("读取 .env: {e}"))?;
+    // 兼容手工编辑过的 .env：BOM、CRLF、`export ` 前缀、引号包裹的值。
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let mut base = String::new();
+    let mut key = String::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("GCMS_API_BASE=") {
+            base = unquote(v.trim()).trim_end_matches('/').to_string();
+        } else if let Some(v) = line.strip_prefix("GCMS_API_KEY=") {
+            key = unquote(v.trim()).to_string();
+        }
+    }
+    Ok((base, key))
+}
+
+fn unquote(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2
+        && ((b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\''))
+    {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Prefer an exact GCMS connection; otherwise rotate the key only when the
+/// platform has a single existing connection. No match means create a new one.
+fn gcms_import_target(conns: &[Connection], api_base: &str, prefix: &str) -> Option<usize> {
+    let mut matching = conns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.kind == "gcms" && c.api_base == api_base);
+    if let Some((index, _)) = matching.clone().find(|(_, c)| c.key_prefix == prefix) {
+        return Some(index);
+    }
+    // `then_some(same_base[0])` evaluates the index even when the condition is
+    // false, panicking on first import. Consume the iterator without indexing.
+    let (index, _) = matching.next()?;
+    if matching.next().is_none() {
+        Some(index)
+    } else {
+        None
+    }
+}
+
+fn default_name(api_base: &str) -> String {
+    api_base
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("gcms")
+        .to_string()
+}
+
+fn chrono_now() -> String {
+    // 避免引入 chrono：秒级 unix 时间足够（UI 端格式化）。
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    secs.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn import_target_fixture(kind: &str, base: &str, prefix: &str) -> Connection {
+        serde_json::from_value(serde_json::json!({
+            "id": "fixture", "name": "fixture", "kind": kind,
+            "api_base": base, "skill_dir": ".", "key_prefix": prefix,
+            "key_kind": "gcmsp_", "created_at": "0"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn import_target_first_platform_does_not_index_an_empty_list() {
+        assert_eq!(gcms_import_target(&[], "https://new.invalid", "new"), None);
+        let conns = [import_target_fixture("gcms", "https://other.invalid", "new")];
+        assert_eq!(gcms_import_target(&conns, "https://new.invalid", "new"), None);
+    }
+
+    #[test]
+    fn import_target_rotates_only_the_single_matching_platform() {
+        let conns = [
+            import_target_fixture("gcms", "https://other.invalid", "new"),
+            import_target_fixture("gcms", "https://site.invalid", "old"),
+        ];
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "old"), Some(1));
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "new"), Some(1));
+    }
+
+    #[test]
+    fn import_target_prefers_exact_match_when_platform_is_ambiguous() {
+        let conns = [
+            import_target_fixture("gcms", "https://site.invalid", "first"),
+            import_target_fixture("gcms", "https://site.invalid", "second"),
+        ];
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "second"), Some(1));
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "first"), Some(0));
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "new"), None);
+    }
+
+    #[test]
+    fn import_target_never_overwrites_a_different_connection_type() {
+        let conns = [
+            import_target_fixture("cloudflare", "https://site.invalid", "new"),
+            import_target_fixture("ssh", "https://site.invalid", "new"),
+            import_target_fixture("workspace", "https://site.invalid", "new"),
+        ];
+        assert_eq!(gcms_import_target(&conns, "https://site.invalid", "new"), None);
+    }
+
+    #[test]
+    fn connection_remark_rules() {
+        let base = std::env::temp_dir().join(format!("pilot-remark-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        let conn = Connection {
+            id: "c1".into(),
+            name: "gcms".into(),
+            remark: String::new(),
+            kind: "gcms".into(),
+            source_ssh_id: String::new(),
+            api_base: "https://example.com".into(),
+            skill_dir: String::new(),
+            key_prefix: "gcms_ab".into(),
+            key_kind: "gcms_".into(),
+            account_id: String::new(),
+            preferred_zones: Vec::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: "t".into(),
+        };
+        store.save(&[conn]).unwrap();
+        let saved = store.set_remark("c1", "  cms.ccvar.com  ").unwrap();
+        assert_eq!(saved.remark, "cms.ccvar.com");
+        assert_eq!(store.get("c1").unwrap().remark, "cms.ccvar.com");
+        assert!(store.set_remark("c1", &"a".repeat(61)).is_err());
+        assert!(store.set_remark("c1", "two\nlines").is_err());
+        assert_eq!(store.set_remark("c1", "").unwrap().remark, "");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn pilot_assistant_lookup_prefers_source_and_adopts_legacy_same_base() {
+        let base =
+            std::env::temp_dir().join(format!("pilot-assistant-source-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        let make = |id: &str, source: &str, api: &str| Connection {
+            id: id.into(),
+            name: "Pilot 运营助手".into(),
+            remark: String::new(),
+            kind: "gcms".into(),
+            source_ssh_id: source.into(),
+            api_base: api.into(),
+            skill_dir: String::new(),
+            key_prefix: "gcmsp_test".into(),
+            key_kind: "gcmsp_".into(),
+            account_id: String::new(),
+            preferred_zones: Vec::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: "t".into(),
+        };
+        store
+            .save(&[
+                make("bound", "ssh-one", "https://old.example/api/platform/v1"),
+                make("legacy", "", "https://legacy.example/api/platform/v1"),
+            ])
+            .unwrap();
+        assert_eq!(
+            store
+                .pilot_assistant_for_source("ssh-one", "https://new.example/api/platform/v1")
+                .unwrap()
+                .id,
+            "bound"
+        );
+        assert_eq!(
+            store
+                .pilot_assistant_for_source("ssh-two", "https://legacy.example/api/platform/v1/")
+                .unwrap()
+                .id,
+            "legacy"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn cloudflare_zone_preference_is_exclusive_and_clearable() {
+        let base = std::env::temp_dir().join(format!("pilot-cf-zone-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        let make = |id: &str| Connection {
+            id: id.into(),
+            name: format!("Cloudflare {id}"),
+            remark: String::new(),
+            kind: "cloudflare".into(),
+            source_ssh_id: String::new(),
+            api_base: String::new(),
+            skill_dir: String::new(),
+            key_prefix: format!("token-{id}…"),
+            key_kind: "cf_token".into(),
+            account_id: format!("account-{id}"),
+            preferred_zones: Vec::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: "t".into(),
+        };
+        store.save(&[make("one"), make("two")]).unwrap();
+
+        store
+            .set_cloudflare_zone_preference("one", " Example.COM. ")
+            .unwrap();
+        assert_eq!(
+            store.get("one").unwrap().preferred_zones,
+            vec!["example.com"]
+        );
+
+        store
+            .set_cloudflare_zone_preference("two", "example.com")
+            .unwrap();
+        assert!(store.get("one").unwrap().preferred_zones.is_empty());
+        assert_eq!(
+            store.get("two").unwrap().preferred_zones,
+            vec!["example.com"]
+        );
+
+        store
+            .clear_cloudflare_zone_preference("EXAMPLE.COM")
+            .unwrap();
+        assert!(store.get("two").unwrap().preferred_zones.is_empty());
+        assert!(store
+            .set_cloudflare_zone_preference("two", "https://example.com")
+            .is_err());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// 改远程连接：改地址/改名/换认证方式，以及不该发生的事（撞车、非 ssh、缺指纹）。
+    /// 注意不碰钥匙串（CI 无钥匙串）：只走 secret 留空的路径。
+    #[test]
+    fn update_ssh_rules() {
+        let base = std::env::temp_dir().join(format!("pilot-upd-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        let mk = |id: &str, host: &str, user: &str| Connection {
+            id: id.into(),
+            name: format!("{user}@{host}"),
+            kind: "ssh".into(),
+            remark: String::new(),
+            source_ssh_id: String::new(),
+            api_base: String::new(),
+            skill_dir: String::new(),
+            key_prefix: String::new(),
+            key_kind: String::new(),
+            account_id: String::new(),
+            preferred_zones: Vec::new(),
+            ssh_host: host.into(),
+            ssh_port: 22,
+            ssh_user: user.into(),
+            ssh_auth: "key".into(),
+            ssh_key_path: "/k/id_ed25519".into(),
+            ssh_fingerprint: "SHA256:old".into(),
+            ssh_os: "Ubuntu 24.04".into(),
+            ssh_os_id: "ubuntu".into(),
+            pack_version: String::new(),
+            created_at: "t".into(),
+        };
+        let gcms = Connection {
+            kind: "gcms".into(),
+            ..mk("g1", "", "")
+        };
+        // Connection 没有 Debug（也不该为了测试给它加），自己取错误文本
+        fn err_of(r: Result<Connection, String>) -> String {
+            match r {
+                Err(e) => e,
+                Ok(_) => panic!("这一步本该失败"),
+            }
+        }
+        store
+            .save(&[
+                mk("c1", "1.1.1.1", "root"),
+                mk("c2", "2.2.2.2", "root"),
+                gcms,
+            ])
+            .unwrap();
+
+        // 改名 + 换指纹（同机器）：系统信息保留，不必重探
+        let c = store
+            .update_ssh(
+                "c1",
+                "生产机",
+                "1.1.1.1",
+                22,
+                "root",
+                "key",
+                "/k/id_ed25519",
+                "",
+                "SHA256:new",
+            )
+            .unwrap();
+        assert_eq!(c.name, "生产机");
+        assert_eq!(c.ssh_fingerprint, "SHA256:new");
+        assert_eq!(
+            c.ssh_os, "Ubuntu 24.04",
+            "同一台机器不该丢掉已探到的系统信息"
+        );
+
+        // 换了机器：系统信息必须清掉（否则显示的是上一台机器的系统）
+        let c = store
+            .update_ssh(
+                "c1",
+                "",
+                "9.9.9.9",
+                2222,
+                "root",
+                "key",
+                "/k/id_ed25519",
+                "",
+                "SHA256:x",
+            )
+            .unwrap();
+        assert_eq!(c.ssh_host, "9.9.9.9");
+        assert_eq!(c.ssh_port, 2222);
+        assert_eq!(c.ssh_os, "");
+        assert_eq!(c.ssh_os_id, "");
+        assert_eq!(c.name, "root@9.9.9.9", "名字留空＝回到默认 user@host");
+
+        // 撞上另一条已有连接（同 user@host:port）→ 拒
+        let err = err_of(store.update_ssh(
+            "c1",
+            "",
+            "2.2.2.2",
+            22,
+            "root",
+            "key",
+            "/k/id_ed25519",
+            "",
+            "SHA256:x",
+        ));
+        assert!(err.contains("已存在相同的远程连接"), "{err}");
+        // 自己和自己不算撞车
+        assert!(store
+            .update_ssh(
+                "c1",
+                "",
+                "9.9.9.9",
+                2222,
+                "root",
+                "key",
+                "/k/id_ed25519",
+                "",
+                "SHA256:x"
+            )
+            .is_ok());
+
+        // 缺指纹 → 拒（TOFU 的底线：没确认过就不给存）
+        assert!(store
+            .update_ssh(
+                "c1",
+                "",
+                "9.9.9.9",
+                2222,
+                "root",
+                "key",
+                "/k/id_ed25519",
+                "",
+                "  "
+            )
+            .is_err());
+        // key 认证但没给私钥路径 → 拒
+        assert!(store
+            .update_ssh("c1", "", "9.9.9.9", 2222, "root", "key", "", "", "SHA256:x")
+            .is_err());
+        // 从密钥换成密码却不给密码 → 拒（钥匙串里那条是私钥口令，不是密码，留着必错）
+        let err = err_of(store.update_ssh(
+            "c1", "", "9.9.9.9", 2222, "root", "password", "", "", "SHA256:x",
+        ));
+        assert!(err.contains("补录密码"), "{err}");
+        // 非 ssh 连接 → 拒
+        assert!(store
+            .update_ssh("g1", "x", "h", 22, "u", "key", "/k", "", "SHA256:x")
+            .is_err());
+        // 不存在的连接 → 拒
+        assert!(store
+            .update_ssh("nope", "x", "h", 22, "u", "key", "/k", "", "SHA256:x")
+            .is_err());
+
+        // 没被碰过的那条要原样还在（别把别人写坏了）
+        let c2 = store.get("c2").unwrap();
+        assert_eq!(c2.ssh_host, "2.2.2.2");
+        assert_eq!(c2.ssh_fingerprint, "SHA256:old");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn parse_env_extracts_base_and_key() {
+        let dir = std::env::temp_dir().join(format!("pilot-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let env = dir.join(".env");
+        fs::write(
+            &env,
+            "# comment\nGCMS_API_BASE=https://x.test/api/platform/v1/\nGCMS_API_KEY=gcmsp_abc123\n",
+        )
+        .unwrap();
+        let (base, key) = parse_env(&env).unwrap();
+        assert_eq!(base, "https://x.test/api/platform/v1"); // 尾斜杠被去掉
+        assert_eq!(key, "gcmsp_abc123");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_skill_dir_handles_nesting() {
+        let root = std::env::temp_dir().join(format!("pilot-test-{}", uuid::Uuid::new_v4()));
+        // zip 顶层：README.md + gcms-platform-assistant/scripts/gcms.js
+        let skill = root.join("gcms-platform-assistant");
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::write(skill.join("scripts").join("gcms.js"), "// cli").unwrap();
+        fs::write(root.join("README.md"), "readme").unwrap();
+        assert_eq!(find_skill_dir(&root).unwrap(), skill);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn find_skill_dir_none_when_missing() {
+        let root = std::env::temp_dir().join(format!("pilot-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("docs")).unwrap();
+        assert!(find_skill_dir(&root).is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn default_name_strips_scheme_and_path() {
+        assert_eq!(
+            default_name("https://cms.ccvar.com/api/platform/v1"),
+            "cms.ccvar.com"
+        );
+    }
+
+    #[test]
+    fn key_missing_detects_placeholders() {
+        assert!(key_missing(""));
+        assert!(key_missing("gcmsp_xxx")); // 平台原始包占位
+        assert!(key_missing("gcms_xxx")); // 单站原始包占位
+        assert!(!key_missing("gcmsp_livetoken123"));
+        assert!(!key_missing("gcms_livetoken123"));
+    }
+
+    #[test]
+    fn import_raw_pack_upgrades_single_matching_connection_without_key() {
+        use std::io::Write as _;
+        let base = std::env::temp_dir().join(format!("pilot-upg-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        // 既有连接：同 api_base 的 gcms 连接，技能目录里有旧脚本 + Pilot 管理的 .env
+        let dest = base.join("skill-old");
+        fs::create_dir_all(dest.join("scripts")).unwrap();
+        fs::write(dest.join("scripts").join("gcms.js"), "OLD").unwrap();
+        fs::write(
+            dest.join(".env"),
+            "GCMS_API_BASE=https://x.example/api/platform/v1",
+        )
+        .unwrap();
+        let conn = Connection {
+            id: "c1".into(),
+            name: "x".into(),
+            kind: "gcms".into(),
+            remark: String::new(),
+            source_ssh_id: String::new(),
+            api_base: "https://x.example/api/platform/v1".into(),
+            skill_dir: dest.to_string_lossy().into_owned(),
+            key_prefix: "gcmsp_ab".into(),
+            key_kind: "gcmsp_".into(),
+            account_id: String::new(),
+            preferred_zones: Vec::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            pack_version: String::new(),
+            created_at: "t".into(),
+        };
+        fs::write(
+            base.join("connections.json"),
+            serde_json::to_vec_pretty(&[conn]).unwrap(),
+        )
+        .unwrap();
+        // 新原始包 zip：无密钥（.env.example 占位）+ 新脚本 + PACK_VERSION
+        let zip_path = base.join("pack.zip");
+        {
+            let f = fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let o = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zw.start_file("kit/skill/scripts/gcms.js", o).unwrap();
+            zw.write_all(b"NEW with relink").unwrap();
+            zw.start_file("kit/skill/.env.example", o).unwrap();
+            zw.write_all(
+                b"GCMS_API_BASE=https://x.example/api/platform/v1\nGCMS_API_KEY=gcmsp_xxx\n",
+            )
+            .unwrap();
+            zw.start_file("kit/skill/PACK_VERSION", o).unwrap();
+            zw.write_all(b"v9.9.9\n").unwrap();
+            zw.finish().unwrap();
+        }
+        // 不提供密钥导入 → 应命中唯一同地址连接，就地升级而非 NeedsKey
+        let out = store
+            .import_zip(zip_path.to_str().unwrap(), None, None)
+            .unwrap();
+        match out {
+            ImportOutcome::Upgraded { connection } => {
+                assert_eq!(connection.id, "c1");
+                assert_eq!(connection.pack_version, "v9.9.9");
+            }
+            _ => panic!("expected Upgraded outcome"),
+        }
+        assert_eq!(
+            fs::read_to_string(dest.join("scripts").join("gcms.js")).unwrap(),
+            "NEW with relink"
+        );
+        // Pilot 管理的 .env 未被包内占位覆盖
+        assert!(fs::read_to_string(dest.join(".env"))
+            .unwrap()
+            .contains("x.example"));
+        assert_eq!(store.get("c1").unwrap().pack_version, "v9.9.9");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn overlay_replaces_pack_files_keeps_user_files_and_env() {
+        let base = std::env::temp_dir().join(format!("pilot-ovl-{}", uuid::Uuid::new_v4()));
+        let dest = base.join("skill");
+        let src = base.join("new");
+        // 现有技能目录：旧脚本 + Pilot 管理的 .env + 用户文件（uploads/、shots/）
+        fs::create_dir_all(dest.join("scripts")).unwrap();
+        fs::create_dir_all(dest.join("uploads")).unwrap();
+        fs::write(dest.join("scripts").join("gcms.js"), "OLD CLI").unwrap();
+        fs::write(dest.join(".env"), "GCMS_API_BASE=https://a.example").unwrap();
+        fs::write(dest.join(".env.example"), "LOCAL EXAMPLE").unwrap();
+        fs::write(dest.join("uploads").join("logo.png"), "userdata").unwrap();
+        // 新包：新脚本 + 新文档 + 占位 .env/.env.example（不得覆盖现有 .env）
+        fs::create_dir_all(src.join("scripts")).unwrap();
+        fs::write(src.join("scripts").join("gcms.js"), "NEW CLI with relink").unwrap();
+        fs::write(src.join("SKILL.md"), "new docs").unwrap();
+        fs::write(src.join(".env"), "GCMS_API_BASE=WRONG\nGCMS_API_KEY=leak").unwrap();
+        fs::write(src.join(".env.example"), "placeholder").unwrap();
+
+        overlay_skill_dir(&src, &dest).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dest.join("scripts").join("gcms.js")).unwrap(),
+            "NEW CLI with relink"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "new docs"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join(".env")).unwrap(),
+            "GCMS_API_BASE=https://a.example"
+        ); // 未被包覆盖
+        assert_eq!(
+            fs::read_to_string(dest.join("uploads").join("logo.png")).unwrap(),
+            "userdata"
+        ); // 用户文件保留
+        assert_eq!(
+            fs::read_to_string(dest.join(".env.example")).unwrap(),
+            "LOCAL EXAMPLE"
+        ); // 已有 example 保留，不被包内占位覆盖
+           // 目标不存在 → 明确报错
+        assert!(overlay_skill_dir(&src, &base.join("nope")).is_err());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn overlay_preparation_failure_keeps_destination_untouched() {
+        let base = std::env::temp_dir().join(format!("pilot-ovl-fail-{}", uuid::Uuid::new_v4()));
+        let dest = base.join("skill");
+        let src = base.join("new");
+        fs::create_dir_all(dest.join("scripts")).unwrap();
+        fs::write(dest.join("scripts/gcms.js"), "OLD CLI").unwrap();
+        fs::write(dest.join("keep.txt"), "old user data").unwrap();
+        // gcms.js 伪装成目录：候选包的准备校验必须失败，且不得开始切换正式目录。
+        fs::create_dir_all(src.join("scripts/gcms.js")).unwrap();
+        fs::write(src.join("new.txt"), "new pack file").unwrap();
+
+        let error = overlay_skill_dir(&src, &dest).unwrap_err();
+        assert!(error.contains("不是普通文件"), "{error}");
+        assert_eq!(
+            fs::read_to_string(dest.join("scripts/gcms.js")).unwrap(),
+            "OLD CLI"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("keep.txt")).unwrap(),
+            "old user data"
+        );
+        assert!(!dest.join("new.txt").exists());
+        let (stage, backup) = transaction_paths(&dest).unwrap();
+        assert!(!path_lexists(&stage).unwrap());
+        assert!(!path_lexists(&backup).unwrap());
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn overlay_recovers_backup_left_between_renames() {
+        let base = std::env::temp_dir().join(format!("pilot-ovl-recover-{}", uuid::Uuid::new_v4()));
+        let dest = base.join("skill");
+        let invalid_src = base.join("invalid-new");
+        fs::create_dir_all(dest.join("scripts")).unwrap();
+        fs::write(dest.join("scripts/gcms.js"), "OLD CLI").unwrap();
+        fs::write(dest.join("keep.txt"), "old user data").unwrap();
+        fs::create_dir_all(&invalid_src).unwrap();
+
+        let (stage, backup) = transaction_paths(&dest).unwrap();
+        fs::rename(&dest, &backup).unwrap();
+        fs::create_dir_all(stage.join("scripts")).unwrap();
+        fs::write(stage.join("scripts/gcms.js"), "UNCOMMITTED CLI").unwrap();
+
+        // 新调用先恢复崩溃现场，再校验本次包；因此本次虽失败，旧目录仍应恢复。
+        assert!(overlay_skill_dir(&invalid_src, &dest).is_err());
+        assert_eq!(
+            fs::read_to_string(dest.join("scripts/gcms.js")).unwrap(),
+            "OLD CLI"
+        );
+        assert_eq!(
+            fs::read_to_string(dest.join("keep.txt")).unwrap(),
+            "old user data"
+        );
+        assert!(!path_lexists(&stage).unwrap());
+        assert!(!path_lexists(&backup).unwrap());
+        fs::remove_dir_all(&base).ok();
+    }
+}
