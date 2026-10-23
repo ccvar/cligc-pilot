@@ -172,6 +172,14 @@
   .th-info small.rhead-line { display: flex; align-items: center; gap: 5px; margin-top: 0; }
   /* 终端：自己管滚动，容器不能给 overflow-y:auto（会和 xterm 打架）。 */
   .term-wrap { flex: 1; min-height: 0; overflow: hidden; background: #1c1917; padding: 8px 10px; }
+  /* xterm 6 的滚动条是自绘的（宽度来自 JS 的 overviewRuler 选项）。这里只把 viewport 的底色抹成终端底色：
+     xterm.css 给它钉了 background:#000，不盖掉的话滚动条那一条会和终端底色差一截。
+     多带一级 .xterm 是为了与 xterm.css 的 `.xterm .xterm-viewport` 同分时稳赢，不必 !important。
+     注意：这两条选择器里的类名是 xterm 运行时才加的，源码里搜不到——清理样式时别当成死代码删掉。 */
+  :global(.term-wrap .xterm .xterm-viewport) { background-color: #1c1917; }
+  /* 装饰栏：设 overviewRuler.width 时被顺带打开，和滚动条完全重叠，却会在左沿画一条贯穿全高的
+     1px 竖线（就是终端右侧那条白线）。我们从不用 decoration → 整个关掉。 */
+  :global(.term-wrap .xterm-decoration-overview-ruler) { display: none; }
   /* 关掉命令行＝只藏不拆：DOM 留着，xterm 和 SSH 会话都不掉，开回来立刻还在。 */
   .term-wrap.hid { display: none; }
   /* 「正在连接」浮层：盖在终端上，连上即消失，不进终端缓冲（所以不会留下擦不掉的一行）。 */

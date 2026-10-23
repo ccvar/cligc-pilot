@@ -18,7 +18,7 @@ import { openSshCredentialRepair } from './ssh.svelte.js';
 // ★ 上一版错在「拨一下顺便记成全局默认」：于是在会话1关掉命令行就改写了默认，
 //   会话2（还没碰过）一开局就继承成会话1的样子 —— 看起来就是「共享」。**开关不许写全局**。
 //
-// 开关（term/chat/files）：每条对话一份，按对话 id 存盘；新对话用固定默认（命令行+对话框）。
+// 开关（term/chat/files）：每条对话一份，按对话 id 存盘；新对话用固定默认（只开命令行，对话框按需打开）。
 // 尺寸（chatH/filesW）：全局偏好 —— 「面板多高」是手感，不是某条对话的属性，
 //   每开一条新对话就要重新拖一遍才叫烦人。
 type WbFlags = { term: boolean; chat: boolean; files: boolean };
@@ -29,7 +29,7 @@ type WbLayout = WbFlags & { chatH: number; filesW: number };
 // 所以这里按连接留一份上次的样本；第一次只能显示「—」，第二次（5 秒后）才有 CPU%。
 type SshStats = { cpu_total: number; cpu_idle: number; mem_total_kb: number; mem_avail_kb: number; disk_total_kb: number; disk_used_kb: number };
 
-const WB_FLAGS_DEF: WbFlags = { term: true, chat: true, files: false };
+const WB_FLAGS_DEF: WbFlags = { term: true, chat: false, files: false };
 const WB_BY_CONV = 'cligc.pilot.wb.byConv';
 
 class WorkbenchState {
