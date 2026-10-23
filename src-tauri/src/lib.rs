@@ -4087,6 +4087,15 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             _ => {}
         });
+    // macOS 菜单栏用单色模板图标（只有「C」字形），由系统按菜单栏深浅自动染色，
+    // 与其它菜单栏图标同一风格；应用图标带底色方块和 Dock 边距，缩进菜单栏会显得偏小。
+    #[cfg(target_os = "macos")]
+    {
+        let glyph = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+        builder = builder.icon(glyph).icon_as_template(true);
+    }
+    // Windows / Linux 的托盘不支持模板图标，黑色字形在深色任务栏上会看不见，继续用应用图标。
+    #[cfg(not(target_os = "macos"))]
     if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
