@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Cligc Pilot",
+        "visible": false,
         "width": 820,
         "height": 560,
         "minWidth": 820,
