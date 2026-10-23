@@ -114,7 +114,7 @@ impl ConnStore {
             return Err(format!("已存在相同的 Cloudflare 连接「{}」。", dup.name));
         }
         let conn_id = uuid::Uuid::new_v4().to_string();
-        // 每个 CF 连接一个工作区目录（内置技能包 + 站点项目都放这下面；Slice 3 填充）。
+        // 每个 CF 连接一个工作区目录（站点项目放在其下的 projects/）。
         let dir = self.workspaces_dir.join(&conn_id);
         fs::create_dir_all(&dir).map_err(|e| format!("create cf workspace: {e}"))?;
         keychain::set_key(&conn_id, token)?;

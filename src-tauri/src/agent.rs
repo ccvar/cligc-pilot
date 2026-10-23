@@ -1299,8 +1299,7 @@ fn conversation_completion_policy(message: &str, connection_kind: &str) -> Strin
 不要把这类工作留成无人接收的后台任务，也不要在结果尚未就绪时结束回合并声称“稍后会自动继续”。\
 不得为这类工作使用 run_in_background、nohup、shell `&` 或其它脱离当前回合的方式；应以前台方式执行\
 并等待 completed、failed 或 canceled 后再回复，不得让 pending/running 的任务跨出本回合。周期性或\
-确实需要脱离当前对话运行的工作，只能\
-通过 Pilot 原生定时任务建议交给用户确认。无法在本回合完成时，明确说明中断点和可恢复状态，不得假装\
+确实需要脱离当前对话运行的工作，向用户说明需要由用户自行安排，不要自行在后台启动。无法在本回合完成时，明确说明中断点和可恢复状态，不得假装\
 仍在运行。\n\
 </pilot-runtime-policy>"
     )

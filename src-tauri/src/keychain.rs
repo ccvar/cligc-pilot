@@ -185,7 +185,7 @@ fn remove_secret(account: &str) -> Result<(), String> {
     }
 }
 
-/// Pilot 控制台等附属凭据使用独立 account 命名空间，避免覆盖技能包连接密钥。
+/// 附属凭据（如 API 账单查询凭据）使用独立 account 命名空间，避免覆盖连接密钥。
 pub fn set_named_secret(account: &str, value: &str) -> Result<(), String> {
     write_secret(account, value)
 }

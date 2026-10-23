@@ -1,4 +1,4 @@
-# 本地打包 GCMS Pilot（Windows，测试用）—— 产 NSIS 安装器 *-setup.exe。
+# 本地打包 Cligc Pilot（Windows，测试用）—— 产 NSIS 安装器 *-setup.exe。
 #
 # 运行（在 desktop\ 或仓库任意位置）：
 #   powershell -ExecutionPolicy Bypass -File desktop\scripts\package-windows.ps1

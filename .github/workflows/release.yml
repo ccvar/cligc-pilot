@@ -1,18 +1,18 @@
-name: Pilot Release
+name: Release
 
-# 推形如 pilot-v0.1.8 的 tag 时：在 macOS + Windows runner 上各自打包 GCMS Pilot，
-# ed25519 签更新包。各平台直接上传到目标 Release，避免依赖 GitHub Actions
+# 推形如 v0.1.0 的 tag 时：在 macOS + Windows runner 上各自打包 Cligc Pilot，
+# ed25519 签更新包。各平台直接上传到本仓库的 Release，避免依赖 GitHub Actions
 # 临时产物存储额度；最后由 publish 作业合成同时含两平台的 latest.json。
 on:
   push:
     tags:
-      - "pilot-v*"
+      - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
-  RELEASE_REPO: ccvar/gcms-pilot-releases
+  RELEASE_REPO: ${{ github.repository }}
 
 jobs:
   build:
@@ -30,18 +30,12 @@ jobs:
             bundles: nsis
             platform: windows-x86_64
     runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: desktop
     steps:
       - uses: actions/checkout@v4
 
       - name: 检查发布密钥
         shell: bash
         run: |
-          if [ -z "${{ secrets.PILOT_RELEASES_TOKEN }}" ]; then
-            echo "::error::缺少 PILOT_RELEASES_TOKEN（需对 ${RELEASE_REPO} 授予 Contents 读写）。"; exit 1
-          fi
           if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
             echo "::error::缺少 TAURI_SIGNING_PRIVATE_KEY（更新包 ed25519 签名私钥）。"; exit 1
           fi
@@ -56,7 +50,7 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: desktop/src-tauri
+          workspaces: src-tauri
 
       - name: 安装前端依赖
         run: npm ci
@@ -75,24 +69,24 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -e
-          ver="${VERSION#pilot-v}"
+          ver="${VERSION#v}"
           bundle="src-tauri/target/${TARGET}/release/bundle"
           out="$GITHUB_WORKSPACE/dist"
           rm -rf "$out"; mkdir -p "$out"
           base="https://github.com/${RELEASE_REPO}/releases/download/${VERSION}"
           if [ "$PLATFORM" = "darwin-aarch64" ]; then
-            cp "$(ls "$bundle"/dmg/*.dmg | head -1)"          "$out/GCMS-Pilot_${ver}_aarch64.dmg"
-            cp "$(ls "$bundle"/macos/*.app.tar.gz | head -1)" "$out/GCMS-Pilot_${ver}_aarch64.app.tar.gz"
+            cp "$(ls "$bundle"/dmg/*.dmg | head -1)"          "$out/Cligc-Pilot_${ver}_aarch64.dmg"
+            cp "$(ls "$bundle"/macos/*.app.tar.gz | head -1)" "$out/Cligc-Pilot_${ver}_aarch64.app.tar.gz"
             sig=$(cat "$(ls "$bundle"/macos/*.app.tar.gz.sig | head -1)")
-            url="${base}/GCMS-Pilot_${ver}_aarch64.app.tar.gz"
+            url="${base}/Cligc-Pilot_${ver}_aarch64.app.tar.gz"
           else
             # Tauri 2 的 Windows 更新产物就是 NSIS 安装器 -setup.exe 本身（附同名 .sig），没有 .nsis.zip。
             ls -la "$bundle"/nsis/ || true
             sigfile=$(ls "$bundle"/nsis/*.sig | head -1)   # 更新签名文件
             signed="${sigfile%.sig}"                        # 它签的就是那个 -setup.exe
-            cp "$signed" "$out/GCMS-Pilot_${ver}_x64-setup.exe"
+            cp "$signed" "$out/Cligc-Pilot_${ver}_x64-setup.exe"
             sig=$(cat "$sigfile")
-            url="${base}/GCMS-Pilot_${ver}_x64-setup.exe"
+            url="${base}/Cligc-Pilot_${ver}_x64-setup.exe"
           fi
           node -e 'const fs=require("fs");const [dest,plat,url,sig]=process.argv.slice(1);fs.writeFileSync(dest,JSON.stringify({[plat]:{signature:sig,url}}))' "$out/frag-${PLATFORM}.json" "$PLATFORM" "$url" "$sig"
           ls -lh "$out"
@@ -100,7 +94,7 @@ jobs:
       - name: 直接上传平台产物
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.PILOT_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -110,7 +104,7 @@ jobs:
             gh release create "$VERSION" \
               --repo "$RELEASE_REPO" \
               --title "$VERSION" \
-              --notes "GCMS Pilot ${VERSION#pilot-v}" \
+              --notes "Cligc Pilot ${VERSION#v}" \
               --draft \
               || gh release view "$VERSION" --repo "$RELEASE_REPO" >/dev/null
           fi
@@ -125,11 +119,11 @@ jobs:
     steps:
       - name: 下载平台片段 + 合并 latest.json
         env:
-          GH_TOKEN: ${{ secrets.PILOT_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          ver="${VERSION#pilot-v}"
+          ver="${VERSION#v}"
           root="all"; out="release"
           rm -rf "$root" "$out"; mkdir -p "$root" "$out"
           gh release download "$VERSION" \
@@ -144,7 +138,7 @@ jobs:
               platforms.update(json.load(open(f)))
           data = {
               "version": ver,
-              "notes": f"GCMS Pilot {ver}",
+              "notes": f"Cligc Pilot {ver}",
               "pub_date": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
               "platforms": platforms,
           }
@@ -156,7 +150,7 @@ jobs:
 
       - name: 发布 Release（macOS + Windows 一起）
         env:
-          GH_TOKEN: ${{ secrets.PILOT_RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -167,7 +161,7 @@ jobs:
           gh release edit "$VERSION" \
             --repo "$RELEASE_REPO" \
             --title "$VERSION" \
-            --notes "GCMS Pilot ${VERSION#pilot-v}" \
+            --notes "Cligc Pilot ${VERSION#v}" \
             --draft=false \
             --latest
           # 平台片段只用于合成 latest.json，不作为用户下载资产保留。

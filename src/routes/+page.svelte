@@ -1506,6 +1506,7 @@
       pilotUpdateStatus = 'available';
       try { await upd.close(); } catch { /* */ }
     } catch (e) {
+      updateCheckedAt = Date.now();
       pilotUpdateError = String(e);
       pilotUpdateStatus = 'unreachable';
       if (!silent) say(`检查 Pilot 更新失败：${pilotUpdateError}`, 'err');
