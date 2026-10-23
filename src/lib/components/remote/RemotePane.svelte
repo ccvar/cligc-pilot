@@ -25,7 +25,8 @@
 </div>
 
 <style>
-  .rp-head { flex: none; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; min-width: 0; }
+  /* 高度和下边线跟旁边聚焦窗格的工作台头部（.thread-head.slim，实测 31px、rgba(30,25,15,.05)）一致，两边终端才从同一条线开始 */
+  .rp-head { flex: none; height: 31px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; border-bottom: 1px solid rgba(30, 25, 15, .05); background: var(--bg); font-size: 12px; min-width: 0; }
   .rp-ic { display: inline-flex; flex: none; }
   /* 全局那条 translateY(-1px) 是给没有降部的英文小字补的；这里名字是粗体、常带中文，再上移就比字高了 */
   .rp-ic :global(svg.distro) { transform: none; }

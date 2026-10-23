@@ -96,7 +96,7 @@
                 onpaste={onComposerPaste}
                 onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
               <div class="composer-bar">
-                <div class="cb-left"><span class="ssh-target" title={app.activeConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(app.activeConn)} size={13} />{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}</span></div>
+                <div class="cb-left"><span class="ssh-target" title={app.activeConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(app.activeConn)} size={13} /><span class="st-addr">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}</span></span></div>
                 <div class="cb-right">
                   <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, true)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, true)} />
                   <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
@@ -136,6 +136,10 @@
   :global(.canvas.multi .pane) .composer-wrap{padding:8px 16px 14px;max-height:55%;overflow-y:auto}
   :global(.canvas.multi .pane) .composer-bar{flex-wrap:wrap}
   :global(.canvas.multi .pane) .cb-right{margin-left:auto;max-width:100%;flex-wrap:wrap}
+  /* 分屏时窗格标题已经写着是哪台机器，输入框里就不再重复，给权限和模型腾地方 */
+  :global(.canvas.multi .pane) .ssh-target{display:none}
+  /* 上面那条 55% 是给对话里的输入框的；这里的起点区要撑满底部对话框，输入框才沉到底 */
+  :global(.canvas.multi .pane) .wb-start.composer-wrap{max-height:none}
   /* 远程工作台：终端主区 + 底部对话 + 右侧文件（VS Code 那套）。
      每层都 min-*:0 —— flex 子项默认 min-size:auto，不清零的话终端撑着不缩、面板挤不出来。 */
   .wb { flex: 1; min-height: 0; display: flex; }
@@ -150,6 +154,9 @@
      交叉轴上的 auto margin 会**压制 stretch**，不给宽度它就缩成 textarea 的默认宽（~192px）。
      对话页那边的 .composer-wrap 是普通块容器，没这问题。 */
   .wb-start { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; }
+  /* ★ 要带上 .composer-wrap：后面那条 `.composer-wrap { flex: none }` 写在后头会盖掉 flex:1，
+     起点区就不撑满，输入框贴在终端下面而不是沉到底。 */
+  .wb-start.composer-wrap { flex: 1; }
   .wb-start .composer { width: 100%; }
   .wb-start .hint { width: 100%; max-width: 760px; margin: 0 auto; }
   /* 分隔线：命中区比看到的粗，好抓 */
@@ -232,6 +239,8 @@
   /* 启动页：远程连接的目标机器（占站点选择器的位子——那台机器就是本次对话的对象） */
   .ssh-target { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--rail); color: var(--dim); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .ssh-target :global(svg) { color: var(--faint); flex: none; }
+  .ssh-target { min-width: 0; max-width: 100%; }
+  .st-addr { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ssh-target :global(svg.distro) { transform: translateY(1px); }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */
