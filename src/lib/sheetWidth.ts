@@ -1,6 +1,6 @@
 import type { Action } from 'svelte/action';
 
-const STORAGE_PREFIX = 'gcms.pilot.sheetWidth.v1.';
+const STORAGE_PREFIX = 'cligc.pilot.sheetWidth.v1.';
 const STORAGE_VERSION = 1;
 
 export type SheetWidthOptions = {

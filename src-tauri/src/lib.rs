@@ -2815,18 +2815,6 @@ fn get_conversation(state: tauri::State<'_, AppState>, id: String) -> Option<Con
     state.convos.get(&id)
 }
 
-/// 把旧版全局自由对话一次性固定到用户当前看到的连接。之后切换连接不再重复迁移。
-#[tauri::command]
-fn anchor_workspace_conversations(
-    state: tauri::State<'_, AppState>,
-    conn_id: String,
-) -> Result<Vec<Conversation>, String> {
-    let conn = state.conns.get(&conn_id)?;
-    state
-        .convos
-        .anchor_legacy_workspace(WORKSPACE_CONNECTION_ID, &conn.id, &conn.name)
-}
-
 #[tauri::command]
 fn delete_conversation(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     state.convos.remove(&id)
@@ -3235,12 +3223,10 @@ async fn create_conversation(
     // API 提前保存引用：即使首轮工具执行时进程退出，也不能把下一轮当成全新任务重放。
     let session_seed = fresh_session_seed(&brain);
     let is_workspace = task_type == "workspace";
-    // workspace 仍用隔离的合成连接运行，但侧栏归属固定为创建时的真实连接。
-    let workspace_owner = if is_workspace {
-        Some(conns.get(&conn_id)?)
-    } else {
-        None
-    };
+    // 本地对话只属于虚拟的本地工作区，不借用任何真实连接。
+    if is_workspace && conn_id != WORKSPACE_CONNECTION_ID {
+        return Err("本地对话必须在本地工作区中创建".into());
+    }
     let work_dir = if is_workspace {
         resolve_workspace_dir(&data_dir, &conv_id, &workspace_dir)?
     } else {
@@ -3266,10 +3252,11 @@ async fn create_conversation(
         &brain,
         &data_dir,
     );
-    let (stored_conn_id, stored_conn_name) = workspace_owner
-        .as_ref()
-        .map(|owner| (owner.id.clone(), owner.name.clone()))
-        .unwrap_or_else(|| (conn.id.clone(), conn.name.clone()));
+    let (stored_conn_id, stored_conn_name) = if is_workspace {
+        (WORKSPACE_CONNECTION_ID.to_string(), "本地对话".to_string())
+    } else {
+        (conn.id.clone(), conn.name.clone())
+    };
     let conv = Conversation {
         id: conv_id.clone(),
         conn_id: stored_conn_id,
@@ -3461,8 +3448,6 @@ async fn start_conversation(
     }
     // 自由对话与 SSH 不要求项目；Cloudflare 会话必须有明确项目。
     let conn_kind = if task_type == "workspace" {
-        // 运行环境虽然隔离，侧栏归属仍必须是一个真实、存在的创建位置。
-        state.conns.get(&conn_id)?;
         "workspace".to_string()
     } else {
         state.conns.get(&conn_id)?.kind
@@ -4249,7 +4234,6 @@ pub fn run() {
             clear_claude_oauth_token,
             list_conversations,
             get_conversation,
-            anchor_workspace_conversations,
             delete_conversation,
             start_conversation,
             send_message,

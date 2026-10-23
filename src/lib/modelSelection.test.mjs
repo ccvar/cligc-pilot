@@ -44,15 +44,9 @@ test('changing API protocols does not reuse transport-specific efforts', () => {
   assert.equal(nextEffort(options[6].value, options[7].value, 'api:none'), '');
 });
 
-test('task, managed and launch forms all normalize model switches before updating model identity', () => {
+test('the launcher normalizes model switches before updating model identity', () => {
   const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-  for (const target of ['tf.effort', 'tf.fallbackEffort', 'mwEffort', 'mwFallbackEffort', 'lEffort']) {
-    assert.ok(page.includes(`${target} = effortAfterModelPick(`), target);
-  }
-  assert.match(page, /value \? effortAfterModelPick\(`/);
-  const managed = fs.readFileSync(new URL('./ManagedSettings.svelte', import.meta.url), 'utf8');
-  assert.match(managed, /effort=effortAfterModelPick\(primary,v,effort,options\)/);
-  assert.match(managed, /fallbackEffort=effortAfterModelPick\(fallback,v,fallbackEffort,options\)/);
+  assert.ok(page.includes('lEffort = effortAfterModelPick('), 'lEffort');
 });
 
 test('launcher persists model identity and effort together before the first send', () => {

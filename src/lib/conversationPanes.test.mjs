@@ -78,9 +78,7 @@ test('upload completion appends to the captured conversation, never the focused 
 test('real turn lifecycle updates background results without stealing focus, even after its pane closes',()=>{
   const {ctx}=harness();
   Object.assign(ctx,{
-    retryTimers:{},clearTimeout,clearStructuredGcmsUnlock:()=>{},clearSitebuildAutoSyncRetry:()=>{},
-    sitebuildAutoSyncGeneration:new Map(),sitebuildAutoSyncPending:new Map(),sitebuildTurnDiscoveryBaselines:new Map(),
-    sitebuildToolsExecutedCreate:()=>false,sitebuildCreateWasRejected:()=>false,
+    retryTimers:{},clearTimeout,
     queued:null,scrollSoon:()=>{},checkCfReady:()=>{},activeConnId:'conn-b',
   });
   const lifecycle=ts.transpileModule(slice('  function beginTurn(', '  async function failTurn('),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
@@ -96,7 +94,6 @@ test('real turn lifecycle updates background results without stealing focus, eve
 });
 
 test('pane actions render conversation-bound file and approval handlers',()=>{
-  assert.match(source,/openGcmsControlUnlock\(activeConversationUnlockAction,activeConv\)/);
   assert.match(source,/mdClick\(e,context\)/);
   assert.match(source,/thumbKey\(p,context\)/);
   assert.match(source,/onpointerdown=\{\(e\)=>startConversationPointerDrag\(e,c.id\)\}/);
@@ -146,10 +143,10 @@ test('settings replies update the originating conversation after focus changes',
 test('workspace switch removes every old pane without canceling work or losing pane drafts',()=>{
   const {ctx,calls}=harness();ctx.running.a='conn-a';
   ctx.splitQueued.a={text:'next',files:[],startedAt:42};
-  ctx.switchConversationWorkspace('__skills__');
+  ctx.switchConversationWorkspace('__workspace__');
   assert.equal(ctx.conversationLayout,null);assert.equal(ctx.splitFocused,'');
   assert.equal(ctx.activeConv,null);assert.equal(ctx.activeConvId,'');
-  assert.equal(ctx.conversationLayoutWorkspace,'__skills__');
+  assert.equal(ctx.conversationLayoutWorkspace,'__workspace__');
   assert.equal(ctx.splitDrafts.a.text,'A draft');assert.equal(ctx.splitQueued.a.text,'next');
   assert.equal(ctx.running.a,'conn-a');assert.equal(calls.length,0);
 });
@@ -160,15 +157,15 @@ test('same workspace refresh preserves its split layout and focus',()=>{
   assert.equal(ctx.conversationLayout,before);assert.equal(ctx.activeConvId,'a');
 });
 
-test('connection workspaces are isolated from one another as well as skills',()=>{
+test('connection workspaces are isolated from one another and from local chats',()=>{
   const {ctx}=harness();ctx.switchConversationWorkspace('conn-b');
   assert.equal(ctx.conversationLayout,null);assert.equal(ctx.conversationLayoutWorkspace,'conn-b');
-  assert.equal(ctx.conversationWorkspace({conn_id:'conn-a',task_type:'workspace'}),'conn-a');
-  assert.equal(ctx.conversationWorkspace({conn_id:'old-connection',task_type:'skill'}),'__skills__');
+  assert.equal(ctx.conversationWorkspace({conn_id:'conn-a',task_type:'sitebuild'}),'conn-a');
+  assert.equal(ctx.conversationWorkspace({conn_id:'__workspace__',task_type:'workspace'}),'__workspace__');
 });
 
 test('cross-workspace drag is rejected before fetching the conversation',async()=>{
-  const {ctx,calls}=harness();ctx.splitSnapshots.b={...ctx.splitSnapshots.b,conn_id:'__skills__',task_type:'skill'};
+  const {ctx,calls}=harness();ctx.splitSnapshots.b={...ctx.splitSnapshots.b,conn_id:'__workspace__',task_type:'workspace'};
   await ctx.addSplit('b','right','pa');
   assert.equal(calls.length,0);assert.equal(ctx.activeConvId,'a');
 });
@@ -177,40 +174,40 @@ test('a delayed drop cannot recreate old panes after switching workspace',async(
   const {ctx}=harness();let finish;
   ctx.invoke=()=>new Promise(resolve=>finish=resolve);
   const pending=ctx.addSplit('b','right','pa');
-  ctx.switchConversationWorkspace('__skills__');finish(ctx.splitSnapshots.b);await pending;
+  ctx.switchConversationWorkspace('__workspace__');finish(ctx.splitSnapshots.b);await pending;
   assert.equal(ctx.conversationLayout,null);assert.equal(ctx.activeConvId,'');
 });
 
 function navigationHarness(){
   const h=harness(),{ctx}=h;
-  Object.assign(ctx,{activeConnId:'conn-a',inSkillWorkspace:false,expandSite:()=>{},
+  Object.assign(ctx,{activeConnId:'conn-a',expandSite:()=>{},
     conversationGroupKey:c=>c.site_slug,scrollSoon:()=>{},checkCfReady:()=>{},
     selectConn:async id=>{ctx.switchConversationWorkspace(id);ctx.activeConnId=id;},
     crypto:globalThis.crypto});
-  vm.runInContext(ts.transpileModule(slice('  async function openConv(', '  function gscHasScope('),
+  vm.runInContext(ts.transpileModule(slice('  async function openConv(', '  async function deleteConv('),
     {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ctx);
   return h;
 }
 
-test('opening a skill from search resets the old layout before the split fast path',async()=>{
+test('opening a local chat from search resets the old layout before the split fast path',async()=>{
   const {ctx}=navigationHarness();
-  ctx.invoke=async()=>({id:'skill-c',conn_id:'__skills__',task_type:'skill',model:'test',skill_ids:['skill']});
-  await ctx.openConv('skill-c');ctx.ensureConversationPane();
-  assert.deepEqual(leaves(ctx.conversationLayout).map(p=>p.conversation),['skill-c']);
-  assert.equal(ctx.conversationLayoutWorkspace,'__skills__');
+  ctx.invoke=async()=>({id:'local-c',conn_id:'__workspace__',task_type:'workspace',model:'test'});
+  await ctx.openConv('local-c');ctx.ensureConversationPane();
+  assert.deepEqual(leaves(ctx.conversationLayout).map(p=>p.conversation),['local-c']);
+  assert.equal(ctx.conversationLayoutWorkspace,'__workspace__');
 });
 
 test('a late open response cannot steal focus after a workspace switch',async()=>{
   const {ctx}=navigationHarness();let finish;
   ctx.invoke=()=>new Promise(resolve=>finish=resolve);
-  const pending=ctx.openConv('b');ctx.switchConversationWorkspace('__skills__');
+  const pending=ctx.openConv('b');ctx.switchConversationWorkspace('__workspace__');
   finish(ctx.splitSnapshots.b);await pending;
   assert.equal(ctx.activeConvId,'');assert.equal(ctx.conversationLayout,null);
 });
 
 test('returning to a connection opens only that connection and restores its draft',async()=>{
-  const {ctx}=navigationHarness();ctx.switchConversationWorkspace('__skills__');
-  ctx.inSkillWorkspace=true;ctx.invoke=async()=>ctx.splitSnapshots.a;
+  const {ctx}=navigationHarness();ctx.switchConversationWorkspace('__workspace__');
+  ctx.activeConnId='__workspace__';ctx.invoke=async()=>ctx.splitSnapshots.a;
   await ctx.openConv('a');ctx.ensureConversationPane();
   assert.equal(ctx.conversationLayoutWorkspace,'conn-a');
   assert.deepEqual(leaves(ctx.conversationLayout).map(p=>p.conversation),['a']);
@@ -218,9 +215,6 @@ test('returning to a connection opens only that connection and restores its draf
 });
 
 test('workspace entry points all reset the conversation layout scope',()=>{
-  assert.match(slice('  async function selectConn(', '  // 历史建站会话'),/switchConversationWorkspace\(id\)/);
-  for(const [start,end] of [['  function openSkills(', '  function openSkillLibrary('],
-    ['  function openSkillLibrary(', '  function newSkillChat('],['  function newSkillChat(', '  function closeSkillImport(']]) {
-    assert.match(slice(start,end),/switchConversationWorkspace\(SKILLS_CONN_ID\)/);
-  }
+  assert.match(slice('  async function selectConn(', '  function openLocalWorkspace('),/switchConversationWorkspace\(id\)/);
+  assert.match(slice('  function openLocalWorkspace(', '  $effect('),/selectConn\(WORKSPACE_CONN_ID\)/);
 });

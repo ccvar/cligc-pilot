@@ -29,7 +29,7 @@ export type TransferUpdate = Partial<Pick<TransferRecord,
   'phase' | 'bytes' | 'totalBytes' | 'files' | 'totalFiles' | 'localPath' | 'error' | 'cancelling'>>
   & { status?: 'queued' | 'running' };
 
-export const SFTP_TRANSFER_HISTORY_KEY = 'gcms.sftp-transfer-history.v1';
+export const SFTP_TRANSFER_HISTORY_KEY = 'cligc.pilot.sftp-transfer-history.v1';
 export const TRANSFER_HISTORY_LIMIT = 100;
 const finalStatuses = new Set<TransferStatus>(['completed', 'failed', 'cancelled', 'interrupted']);
 const transferPhases = new Set(['download', 'downloading', 'upload', 'uploading', 'archive']);

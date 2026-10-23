@@ -7,51 +7,30 @@ import ts from 'typescript';
 const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
 function section(start, end) {
   const a = page.indexOf(start), b = page.indexOf(end, a);
-  assert.ok(a >= 0 && b > a);
+  assert.ok(a >= 0 && b > a, `${start} … ${end}`);
   return ts.transpileModule(page.slice(a, b), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
 }
 const initial = section('  let lPerm =', '  let lEffort =');
-const select = section('  function selectLauncherTask(', '  async function toggleSiteStatus(');
+const select = section('  async function selectConn(', '  function openLocalWorkspace(');
 
-test('restoring the free-chat launcher defaults to full for local and API models', () => {
-  for (const brain of ['claude', 'codex', 'grok', 'api:test']) {
-    for (const perm of [undefined, 'plan', 'ask', 'auto', 'full']) {
-      const ctx = vm.createContext({ prefs: { taskType: 'workspace', brain, perm }, $state: v => v });
-      vm.runInContext(initial, ctx);
-      assert.equal(vm.runInContext('lPerm', ctx), 'full');
-    }
+test('the launcher restores the saved permission default, full when nothing is saved', () => {
+  for (const perm of [undefined, 'plan', 'ask', 'auto', 'full']) {
+    const ctx = vm.createContext({ prefs: { brain: 'claude', perm }, $state: v => v });
+    vm.runInContext(initial, ctx);
+    assert.equal(vm.runInContext('lPerm', ctx), perm ?? 'full');
   }
 });
 
-test('switching to free chat clears site binding and defaults to full without changing existing conversations', () => {
-  for (const perm of ['plan', 'ask', 'auto', 'full']) {
-    const existing = { perm_mode: perm };
-    const ctx = vm.createContext({
-      lTask: 'sitebuild', lPerm: perm, lSite: 'example', lSites: ['example'],
-      activeConn: { kind: 'gcms' }, sites: [{ slug: 'example' }],
-      activeConv: existing, threadPerm: perm,
-    });
-    vm.runInContext(select, ctx);
-    ctx.selectLauncherTask('workspace');
-    assert.equal(ctx.lPerm, 'full');
-    assert.equal(ctx.lTask, 'workspace');
-    assert.equal(ctx.lSite, '');
-    assert.equal(ctx.lSites.length, 0);
-    assert.equal(existing.perm_mode, perm);
-    assert.equal(ctx.threadPerm, perm);
-  }
-});
-
-test('new free chats reset the launcher default, without changing stored chats or other workspaces', () => {
+test('new local chats reset the launcher default, without changing stored chats or other workspaces', () => {
   const code = section('  function newChat()', '  async function openConv(');
   for (const isWorkspaceChat of [true, false]) {
     const existing = { perm_mode: 'ask' };
     const ctx = vm.createContext({
       openConvSeq: 0, activeConvId: 'existing', activeConv: existing,
       lDraft: '', draft: '', attachments: [], lPerm: 'auto',
-      isWorkspaceChat, isSshConn: false, sites: [], lSite: '', lBrain: 'api:test',
+      isWorkspaceChat, isSshConn: false, lSite: '', lBrain: 'api:test',
       viewAfterConvGone: () => {}, brainUsable: () => true,
     });
     vm.runInContext(code, ctx);
@@ -62,19 +41,35 @@ test('new free chats reset the launcher default, without changing stored chats o
   }
 });
 
-test('site operations and site-building defaults stay unchanged', () => {
-  for (const taskType of ['siteops', 'sitebuild']) {
-    for (const perm of ['plan', 'ask', 'auto', 'full']) {
-      const ctx = vm.createContext({ prefs: { taskType, perm }, $state: v => v });
-      vm.runInContext(initial, ctx);
-      assert.equal(vm.runInContext('lPerm', ctx), taskType === 'sitebuild' && perm === 'full' ? 'auto' : perm);
-    }
-  }
+function selectContext(conns, overrides = {}) {
   const ctx = vm.createContext({
-    lTask: 'workspace', lPerm: 'full', lSite: '', lSites: [],
-    activeConn: { kind: 'gcms' }, sites: [{ slug: 'example' }],
+    conns, activeConnId: '__workspace__', selSeq: 0, isMainWindow: false, view: 'launcher',
+    activeConvId: '', activeConv: null, lPerm: 'full', lSite: 'old', lStyle: 'x', cfProjects: ['old'],
+    switchConversationWorkspace() {}, probeOs() {}, disposeTerm() {}, say() {},
+    invoke: async () => ['site-a'], localStorage: { setItem() {} },
+    ...overrides,
   });
   vm.runInContext(select, ctx);
-  ctx.selectLauncherTask('sitebuild');
-  assert.equal(ctx.lPerm, 'auto');
+  return ctx;
+}
+
+test('switching to Cloudflare or SSH never keeps full automation; existing chats keep their own mode', async () => {
+  for (const kind of ['cloudflare', 'ssh']) {
+    for (const perm of ['plan', 'ask', 'auto', 'full']) {
+      const existing = { perm_mode: perm };
+      const ctx = selectContext([{ id: 'c1', kind }], { lPerm: perm, activeConv: existing });
+      await ctx.selectConn('c1');
+      assert.equal(ctx.lPerm, perm === 'full' ? 'auto' : perm, `${kind}/${perm}`);
+      assert.equal(existing.perm_mode, perm);
+      assert.equal(ctx.view, kind === 'ssh' ? 'remote' : 'launcher');
+    }
+  }
+});
+
+test('switching back to the local workspace clears the Cloudflare project and returns to the launcher', async () => {
+  const ctx = selectContext([{ id: 'c1', kind: 'cloudflare' }], { activeConnId: 'c1', view: 'templates' });
+  await ctx.selectConn('__workspace__');
+  assert.equal(ctx.activeConnId, '__workspace__');
+  assert.equal(ctx.lSite, '');
+  assert.equal(ctx.view, 'launcher');
 });

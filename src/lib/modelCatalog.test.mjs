@@ -79,8 +79,3 @@ test('invalid retained API effort displays a pending-adjustment state',()=>{
   assert.deepEqual(state,{effectiveEffort:'',unsupportedApiEffort:true,idx:0});
 });
 
-test('managed confirmation displays effective API effort, never activates hidden legacy values',()=>{
-  const labels=JSON.parse(evaluate(page,'  function effortDisp(','  function mdTok(',
-    `[effortDisp('high','api:p'),effortDisp('','api:p'),effortDisp('api:high','api:p'),effortDisp('api:max','api:p'),effortDisp('high','claude')]`));
-  assert.deepEqual(labels,['默认','默认','高','最大','高']);
-});

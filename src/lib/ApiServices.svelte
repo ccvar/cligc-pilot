@@ -193,7 +193,7 @@
   </div>
   {#if editorId === ''}{@render editor()}{/if}
   <p class="section-note">API 独立计费；密钥只存入系统凭据库。API 连接及密钥暂不随配置导出。测试连接只读取模型列表，不会调用模型生成内容。</p>
-  <p class="section-note">支持文本对话、技能、GCMS 和 SSH 工具。图片 / PDF 识别和 Cloudflare 授权操作请暂用本地客户端。</p>
+  <p class="section-note">支持文本对话、本地文件与 SSH 工具。图片 / PDF 识别和 Cloudflare 授权操作请暂用本地客户端。</p>
 </section>
 
 {#snippet providerIcon(value: ApiProtocol)}

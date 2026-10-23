@@ -26,7 +26,7 @@ export const PRESET_PROMPTS: Prompt[] = [
   { id: 'preset-12', builtin: true, title: '公益基金会', body: '帮我做一个公益基金会的官方网站，面向潜在捐赠者、志愿者和媒体，调性要真诚、温暖、有信任感，避免过度煽情。页面需要：讲清楚我们使命的首屏、我们在做的事和成果数据、真实的受助故事、如何参与（捐赠和做志愿者）、财务与透明度说明、合作伙伴、以及联系与订阅入口。视觉用明亮干净的浅色背景配一个有希望感的主色（比如暖绿或橙），字体易读亲和，多用真实照片，留白充足，动效温和不喧宾夺主。底部放一个邮件订阅框，收集想收到我们进展的人的邮箱，存到 D1。先给我一版整体结构和风格方案，我确认后再动手。' },
 ];
 
-const KEY = 'gcms.pilot.prompts';
+const KEY = 'cligc.pilot.prompts';
 
 export function loadUserPrompts(): Prompt[] {
   try {

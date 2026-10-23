@@ -52,18 +52,16 @@ test('API startup preserves saved model until metadata is loaded, does not guess
   assert.match(page, /if \(!lBrain\.startsWith\('api:'\) && !brainUsable\(lBrain\)\)/);
 });
 
-test('new conversation and managed wizard never silently replace a missing API default', () => {
+test('new conversation never silently replaces a missing API default', () => {
   const ctx = context();
   const notices = [];
   Object.assign(ctx, { openConvSeq: 0, activeConvId: '', activeConv: null, lDraft: '', draft: '', attachments: [],
-    lSite: '', sites: [], lBrain: 'api:removed', isSshConn: false, isWorkspaceChat: true, lPerm: 'auto', viewAfterConvGone() {},
+    lSite: '', lBrain: 'api:removed', isSshConn: false, isWorkspaceChat: true, lPerm: 'auto', viewAfterConvGone() {},
     firstUsableBrain() { return 'claude'; }, say(message) { notices.push(message); } });
   ctx.newChat();
   assert.equal(ctx.lBrain, 'api:removed');
   assert.equal(ctx.lPerm, 'full');
   assert.match(notices[0], /API 连接已移除/);
-  const wizard = parsed.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'openManagedWizard').getText(parsed);
-  assert.match(wizard, /mwBrain = prefs\.brain\.startsWith\('api:'\) \|\| brainUsable\(prefs\.brain\) \? prefs\.brain/);
 });
 
 test('API recovery never triggers the generic automatic CLI retry and points to API settings', () => {
@@ -74,12 +72,12 @@ test('API recovery never triggers the generic automatic CLI retry and points to 
   assert.doesNotMatch(ctx.brainSetupHint('api:missing'), /去授权/);
 });
 
-test('API selection remains shared by conversations, scheduled tasks and managed settings', () => {
+test('API selection is shared by the launcher and existing conversations', () => {
   assert.match(page, /ALL_BRAINS = \$derived<Brain\[\]>/);
   assert.match(page, /apiProfiles\.map\(\(p\): Brain => `api:\$\{p\.id\}`\)/);
   assert.match(page, /<ApiServices profiles=\{apiProfiles\}/);
   assert.match(page, /const threadComboOpts = \$derived\(conversationModelOptions/);
-  assert.match(page, /<ModelFx options=\{comboOpts\} value=\{`\$\{m\.brain\}::\$\{m\.model\}`\}/);
+  assert.match(page, /<ModelFx options=\{comboOpts\} value=\{`\$\{lBrain\}::\$\{lModel\}`\}/);
   const fx = fs.readFileSync(new URL('./ModelFx.svelte', import.meta.url), 'utf8');
   assert.match(fx, /const fastable = \$derived\(!value\.startsWith\('api:'\)/);
   assert.match(fx, /\{#if !apiModel \|\| apiLevels\.length\}/);
