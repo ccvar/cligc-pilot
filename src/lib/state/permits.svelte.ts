@@ -3,7 +3,7 @@ import { app, say } from './app.svelte.js';
 import { scrollSoon } from './thread.svelte.js';
 
 // 待批工具调用：询问/自动档下钩子把请求写在后端 pending 目录，UI 轮询渲染批准卡。
-export type Permit = { id: string; conv: string; tool: string; cmd: string; desc: string; arg: string; dangerous: boolean; mode: string; ts: number };
+type Permit = { id: string; conv: string; tool: string; cmd: string; desc: string; arg: string; dangerous: boolean; mode: string; ts: number };
 
 class PermitsState {
   // 命令一律默认收起（说明才是给人看的重点），点「查看具体命令」再展开。
@@ -28,7 +28,7 @@ export function permitDesc(p: Permit): string {
 export function togglePermitCmd(id: string) { const s = new Set(permits.permitCmdOpen); if (!s.delete(id)) s.add(id); permits.permitCmdOpen = s; }
 // 已应答过的请求 id：应答后钩子最多要 300ms 才删掉 .req.json，而轮询每 600ms 重扫目录，
 // 扫描落进窗口会让刚点掉的卡"复活"一次（看起来像连续弹两个）。id 不复用，永久过滤即可。
-export const respondedPermits = new Set<string>();
+const respondedPermits = new Set<string>();
 export async function respondPermit(id: string, allow: boolean) {
   respondedPermits.add(id);
   permits.pendingPermits = permits.pendingPermits.filter((p) => p.id !== id); // 乐观移除

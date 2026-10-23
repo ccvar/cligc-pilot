@@ -14,7 +14,7 @@ export const DIALOG_GEOMETRY = {
   promptEditor: { id: 'prompt-editor', minWidth: 420, minHeight: 320, draggable: true, resizable: true, rememberPosition: true, rememberSize: true },
 } satisfies Record<string, DialogGeometryOptions>;
 
-export function currentPilotWindowLabel(): string {
+function currentPilotWindowLabel(): string {
   try { return getCurrentWindow().label; }
   catch { return 'main'; }
 }

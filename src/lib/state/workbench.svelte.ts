@@ -21,16 +21,16 @@ import { openSshCredentialRepair } from './ssh.svelte.js';
 // 开关（term/chat/files）：每条对话一份，按对话 id 存盘；新对话用固定默认（命令行+对话框）。
 // 尺寸（chatH/filesW）：全局偏好 —— 「面板多高」是手感，不是某条对话的属性，
 //   每开一条新对话就要重新拖一遍才叫烦人。
-export type WbFlags = { term: boolean; chat: boolean; files: boolean };
-export type WbLayout = WbFlags & { chatH: number; filesW: number };
+type WbFlags = { term: boolean; chat: boolean; files: boolean };
+type WbLayout = WbFlags & { chatH: number; filesW: number };
 
 // ---------- 远端负载（顶栏的 CPU / 内存 / 磁盘） ----------
 // CPU 那两个字段是 /proc/stat 的**累计计数**，不是百分比：单次读没意义，得跟上一次求差。
 // 所以这里按连接留一份上次的样本；第一次只能显示「—」，第二次（5 秒后）才有 CPU%。
-export type SshStats = { cpu_total: number; cpu_idle: number; mem_total_kb: number; mem_avail_kb: number; disk_total_kb: number; disk_used_kb: number };
+type SshStats = { cpu_total: number; cpu_idle: number; mem_total_kb: number; mem_avail_kb: number; disk_total_kb: number; disk_used_kb: number };
 
-export const WB_FLAGS_DEF: WbFlags = { term: true, chat: true, files: false };
-export const WB_BY_CONV = 'cligc.pilot.wb.byConv';
+const WB_FLAGS_DEF: WbFlags = { term: true, chat: true, files: false };
+const WB_BY_CONV = 'cligc.pilot.wb.byConv';
 
 class WorkbenchState {
   wbStartEl = $state<HTMLTextAreaElement | null>(null); // 起点输入框（新对话后把光标送进去）
@@ -57,15 +57,15 @@ class WorkbenchState {
 
 export const workbench = new WorkbenchState();
 
-export function loadWbSize(k: string, def: number, lo: number, hi: number): number {
+function loadWbSize(k: string, def: number, lo: number, hi: number): number {
   try { const n = parseInt(localStorage.getItem('cligc.pilot.wb.' + k) || ''); return n >= lo && n <= hi ? n : def; } catch { return def; }
 }
-export function loadWbByConv(): Record<string, WbFlags> {
+function loadWbByConv(): Record<string, WbFlags> {
   try { const o = JSON.parse(localStorage.getItem(WB_BY_CONV) || '{}'); return o && typeof o === 'object' ? o : {}; } catch { return {}; }
 }
-export function wbKeyOf(): string { return app.activeConvId || (app.isSshConn ? 'new:' + app.activeConnId : ''); }
+function wbKeyOf(): string { return app.activeConvId || (app.isSshConn ? 'new:' + app.activeConnId : ''); }
 /** 存盘：顺手按「现存对话」清一遍，免得删了对话还留一堆孤儿键把 localStorage 撑大。 */
-export function saveWbByConv() {
+function saveWbByConv() {
   try {
     // ★ convos 还没加载完（开机那会儿是空的）时**绝不能清**：那会把所有对话的布局
     //   一把全删光 —— 看起来就是「配置没保住」。空表说明「还不知道有哪些对话」，
@@ -81,7 +81,7 @@ export function saveWbByConv() {
     localStorage.setItem(WB_BY_CONV, JSON.stringify(workbench.wbByConv));
   } catch { /* 配额满/隐私模式：布局丢了就丢了，不值得打断用户 */ }
 }
-export function saveWbSize(k: 'chatH' | 'filesW', v: number) { try { localStorage.setItem('cligc.pilot.wb.' + k, String(v)); } catch { /* */ } }
+function saveWbSize(k: 'chatH' | 'filesW', v: number) { try { localStorage.setItem('cligc.pilot.wb.' + k, String(v)); } catch { /* */ } }
 /** 拨一下：只改**当前这条对话**的开关，绝不碰别的对话、也不写全局默认。 */
 export function setWbFlags(patch: Partial<WbFlags>) {
   workbench.wb = { ...workbench.wb, ...patch };
@@ -117,14 +117,14 @@ export function startWbResize(e: MouseEvent, dir: 'h' | 'v') {
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 }
-export const STAT_EVERY_MS = 5000;
-export function fmtKb(kb: number): string {
+const STAT_EVERY_MS = 5000;
+function fmtKb(kb: number): string {
   const u = ['KB', 'MB', 'GB', 'TB'];
   let v = kb, i = 0;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
 }
-export async function pollStats(id: string) {
+async function pollStats(id: string) {
   try {
     const s = await invoke<SshStats>('ssh_stats', { connId: id });
     const p = workbench.statPrev[id];
@@ -156,7 +156,7 @@ export async function copyTermSelection(t: import('@xterm/xterm').Terminal) {
   try { await navigator.clipboard.writeText(text); }
   catch { say('复制失败，请检查系统剪贴板权限', 'err'); }
 }
-export async function pasteIntoTerm(t: import('@xterm/xterm').Terminal) {
+async function pasteIntoTerm(t: import('@xterm/xterm').Terminal) {
   try {
     const text = await navigator.clipboard.readText();
     // 读剪贴板是异步的；期间用户可能已经切换连接/拆掉旧终端。
@@ -165,7 +165,7 @@ export async function pasteIntoTerm(t: import('@xterm/xterm').Terminal) {
     say('读取剪贴板失败，可在终端中右键选择“粘贴”', 'err');
   }
 }
-export function handleTermKey(t: import('@xterm/xterm').Terminal, e: KeyboardEvent): boolean {
+function handleTermKey(t: import('@xterm/xterm').Terminal, e: KeyboardEvent): boolean {
   if (e.type !== 'keydown') return true;
   const key = e.key.toLowerCase();
   // Windows 兼容两套习惯：有选区时 Ctrl+C 复制，无选区时仍把 ^C 发给远端；

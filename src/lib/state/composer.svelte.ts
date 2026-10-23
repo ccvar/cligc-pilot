@@ -9,7 +9,7 @@ import { cf } from './cloudflare.svelte.js';
 export type Attach = { name: string; path: string; preview: string };
 
 // 等待消息：这轮还在跑时先把下一条排进队列，等回合结束自动发；发出前可编辑/清除。绑定 convId，切走即清。
-export type QueuedMessage = {
+type QueuedMessage = {
   convId: string;
   text: string;
   atts: Attach[];
@@ -52,7 +52,7 @@ export function autogrow(node: HTMLTextAreaElement, max = 220) {
 }
 export function legacyComposer(){return {text:composer.draft,files:composer.attachments,queued: composer.queued,cfReady: cf.cfReady};}
 export function setLegacyDraft(text:string){composer.draft=text;}
-export function attachmentTarget(): { connId: string; project: string } | null {
+function attachmentTarget(): { connId: string; project: string } | null {
   // 远程工作台的首条消息还没有 Conversation，但连接本身已经有本地工作目录。
   // 进入已有对话后仍以该对话为准；避免把另一个连接残留的 activeConv 当成当前目标。
   if (app.activeConv && (app.view !== 'remote' || app.activeConv.conn_id === app.activeConnId)) {
@@ -66,7 +66,7 @@ export function attachmentFilename(f: File): string {
   const ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' } as Record<string, string>)[f.type] || 'bin';
   return `clipboard-${Date.now()}.${ext}`;
 }
-export async function attachFile(f: File) {
+async function attachFile(f: File) {
   const target = attachmentTarget();
   if (!target) { say('先进入一个对话再添加文件', 'err'); return; }
   if (f.size > 25 * 1024 * 1024) { say('文件太大（上限 25MB）', 'err'); return; }

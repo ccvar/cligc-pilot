@@ -229,7 +229,7 @@ export async function startChat() {
 
 // ---------- 重试 / 自动重连 ----------
 // 错误文本像不像"瞬时问题"（网络/限流/过载/5xx）——只对这类做自动重试，避免对密钥错误/取消等硬错误反复重跑。
-export function isTransient(err: string): boolean {
+function isTransient(err: string): boolean {
   if (!err || /已停止/.test(err)) return false;
   return /(网络|连接|超时|无法访问|timed?\s*out|timeout|overload|rate.?limit|too many requests|\b429\b|\b5\d\d\b|ECONN| ENET|EAI_AGAIN|socket hang|connection (reset|refused|closed|error)|temporar|try again|network error|fetch failed)/i.test(err);
 }

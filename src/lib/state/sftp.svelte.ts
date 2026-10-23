@@ -12,23 +12,23 @@ import { sftpEdit } from './editor.svelte.js';
 
 // ---------- 远程文件（SFTP，走终端同一条 SSH 会话） ----------
 // 视图＝可展开的树：sftpPath 是树根，每个目录的孩子按需加载后缓存在 sftpKids 里。
-export type SftpEntry = { name: string; dir: boolean; link: boolean; perms: string; size: number; mtime: number };
-export type SftpRow = SftpEntry & { path: string; depth: number };
-export type DownloadProgress = { phase: string; bytes: number; total_bytes: number; files: number; total_files: number; skipped: number };
-export type DownloadResult = { path: string; drag_id: string | null; skipped: number };
-export type SftpDragEvent = { phase: 'dragging' | 'dropped' | 'completed' | 'cancelled' | 'error'; path?: string; error?: string };
-export type LocalDropEntry = { name: string; size: number; mtime: number; directory: boolean | null };
-export type LocalDropCapture = { token: string; count: number };
-export type LocalDropProbe = { capture: Promise<LocalDropCapture | null>; entries: LocalDropEntry[] };
+type SftpEntry = { name: string; dir: boolean; link: boolean; perms: string; size: number; mtime: number };
+type SftpRow = SftpEntry & { path: string; depth: number };
+type DownloadProgress = { phase: string; bytes: number; total_bytes: number; files: number; total_files: number; skipped: number };
+type DownloadResult = { path: string; drag_id: string | null; skipped: number };
+type SftpDragEvent = { phase: 'dragging' | 'dropped' | 'completed' | 'cancelled' | 'error'; path?: string; error?: string };
+type LocalDropEntry = { name: string; size: number; mtime: number; directory: boolean | null };
+type LocalDropCapture = { token: string; count: number };
+type LocalDropProbe = { capture: Promise<LocalDropCapture | null>; entries: LocalDropEntry[] };
 // ---- 列宽可拖（名称是弹性列，吃掉剩下的宽度）----
 // 手柄在每个定宽列的**左边缘**上：拖它就是拖这一列的左边，往右拖＝这列变窄，名称随之变宽。
 // 这样手柄始终跟着鼠标走，三根手柄的行为也一致。
-export type ColKey = 'perm' | 'size' | 'date';
+type ColKey = 'perm' | 'size' | 'date';
 
-export const sftpHistoryKey = `${SFTP_TRANSFER_HISTORY_KEY}:${pilotWindowLabel}`;
-export const COL_MIN: Record<ColKey, number> = { perm: 62, size: 48, date: 92 };
-export const COL_MAX: Record<ColKey, number> = { perm: 200, size: 160, date: 240 };
-export const COL_DEF: Record<ColKey, number> = { perm: 96, size: 76, date: 128 };
+const sftpHistoryKey = `${SFTP_TRANSFER_HISTORY_KEY}:${pilotWindowLabel}`;
+const COL_MIN: Record<ColKey, number> = { perm: 62, size: 48, date: 92 };
+const COL_MAX: Record<ColKey, number> = { perm: 200, size: 160, date: 240 };
+const COL_DEF: Record<ColKey, number> = { perm: 96, size: 76, date: 128 };
 
 class SftpState {
   sftpConnId = $state(''); // 已加载文件列表所属的连接；换连接才重置，切页签不重置
@@ -93,10 +93,10 @@ export function retryOrRepairSftp() {
   if (missingSshCredential(sftp.sftpErr)) repairActiveSshCredential();
   else void sftpGo(sftp.sftpPath);
 }
-export function loadSftpTransfers(): TransferRecord[] {
+function loadSftpTransfers(): TransferRecord[] {
   try { return readTransferHistory(localStorage.getItem(sftpHistoryKey)); } catch { return []; }
 }
-export function persistSftpTransfers(immediate = false) {
+function persistSftpTransfers(immediate = false) {
   const save = () => {
     sftp.sftpHistoryTimer = undefined;
     try { localStorage.setItem(sftpHistoryKey, serializeTransferHistory(sftp.sftpTransfers)); } catch { /* Storage may be unavailable or full. */ }
@@ -104,19 +104,19 @@ export function persistSftpTransfers(immediate = false) {
   if (immediate) { clearTimeout(sftp.sftpHistoryTimer); save(); }
   else if (!sftp.sftpHistoryTimer) sftp.sftpHistoryTimer = setTimeout(save, 250);
 }
-export function addSftpTransfer(id: string, name: string, direction: 'upload' | 'download', connId: string, remotePath: string, localPath?: string, phase = 'connecting') {
+function addSftpTransfer(id: string, name: string, direction: 'upload' | 'download', connId: string, remotePath: string, localPath?: string, phase = 'connecting') {
   const conn = app.conns.find(c => c.id === connId);
   sftp.sftpTransfers = addTransfer(sftp.sftpTransfers, createTransfer({ id, name, direction, connId, connectionName: conn?.remark?.trim() || conn?.name || '远程连接', remotePath, localPath, phase, status: phase === 'dragging' ? 'queued' : 'running' }));
   persistSftpTransfers(true);
 }
-export function updateSftpTransfer(id: string, patch: TransferUpdate) {
+function updateSftpTransfer(id: string, patch: TransferUpdate) {
   sftp.sftpTransfers = updateTransfer(sftp.sftpTransfers, id, patch);
   persistSftpTransfers();
 }
-export function progressSftpTransfer(id: string, p: DownloadProgress) {
+function progressSftpTransfer(id: string, p: DownloadProgress) {
   updateSftpTransfer(id, { status: 'running', phase: p.phase, bytes: p.bytes, totalBytes: p.total_bytes, files: p.files, totalFiles: p.total_files });
 }
-export function finishSftpTransfer(id: string, status: TransferFinalStatus, patch: TransferUpdate = {}) {
+function finishSftpTransfer(id: string, status: TransferFinalStatus, patch: TransferUpdate = {}) {
   sftp.sftpTransfers = finishTransfer(sftp.sftpTransfers, id, status, patch);
   persistSftpTransfers(true);
 }
@@ -137,7 +137,7 @@ export async function cancelSftpTransfer(id: string) {
     say(String(e), 'err');
   }
 }
-export function beginSftpLocalDrop() {
+function beginSftpLocalDrop() {
   if (!isMac || sftp.sftpDropCapture) return;
   // Native code binds this one-use token to a real drag sequence and window,
   // never to a stale drag pasteboard or the general clipboard.
@@ -147,14 +147,14 @@ export function beginSftpLocalDrop() {
   void capture.catch(() => {});
   sftp.sftpDropCapture = capture;
 }
-export function discardSftpLocalDrop() {
+function discardSftpLocalDrop() {
   const capture = sftp.sftpDropCapture;
   sftp.sftpDropCapture = null;
   if (capture) void capture.then(result => {
     if (result) void invoke('sftp_discard_local_drop', { token: result.token }).catch(() => {});
   }).catch(() => {});
 }
-export function sftpDropTargetAt(e: DragEvent): SftpDropTarget | null {
+function sftpDropTargetAt(e: DragEvent): SftpDropTarget | null {
   const element = e.target instanceof Element ? e.target : null;
   const path = element?.closest<HTMLElement>('[data-sftp-drop-path]')?.dataset.sftpDropPath;
   const hoveredRow = path ? sftp.sftpRows.find(row => row.path === path) : undefined;
@@ -164,7 +164,7 @@ export function sftpDropTargetAt(e: DragEvent): SftpDropTarget | null {
     insidePanel: !!element && (e.currentTarget as HTMLElement).contains(element), hoveredRow,
     targetDeleting: isSftpDeleting(dir) });
 }
-export function localDropEntries(data: DataTransfer, files: File[]): LocalDropEntry[] {
+function localDropEntries(data: DataTransfer, files: File[]): LocalDropEntry[] {
   // Read protected drag items synchronously, before any IPC/await clears them.
   const items = Array.from(data.items).filter(item => item.kind === 'file');
   return files.map((file, index) => {
@@ -173,7 +173,7 @@ export function localDropEntries(data: DataTransfer, files: File[]): LocalDropEn
     return { name: file.name, size: file.size, mtime: file.lastModified, directory };
   });
 }
-export function sftpDeletingKey(connId: string, path: string): string { return `${connId}\n${path}`; }
+function sftpDeletingKey(connId: string, path: string): string { return `${connId}\n${path}`; }
 export function isSftpDeleteTarget(path: string): boolean { return sftp.sftpDeleting.has(sftpDeletingKey(sftp.sftpConnId, path)); }
 export function isSftpDeleting(path: string): boolean {
   const prefix = `${sftp.sftpConnId}\n`;
@@ -184,10 +184,10 @@ export function isSftpDeleting(path: string): boolean {
   }
   return false;
 }
-export function sftpJoin(dir: string, name: string): string { return dir === '/' ? '/' + name : dir + '/' + name; }
+function sftpJoin(dir: string, name: string): string { return dir === '/' ? '/' + name : dir + '/' + name; }
 export function parentOf(p: string): string { return p.replace(/\/[^/]+\/?$/, '') || '/'; }
-export function baseOf(p: string): string { return p.split('/').filter(Boolean).pop() || p; }
-export function sortRows(list: SftpEntry[]): SftpEntry[] {
+function baseOf(p: string): string { return p.split('/').filter(Boolean).pop() || p; }
+function sortRows(list: SftpEntry[]): SftpEntry[] {
   const { key, asc } = sftp.sftpSort;
   const sign = asc ? 1 : -1;
   return [...list].sort((a, b) => {
@@ -199,7 +199,7 @@ export function sortRows(list: SftpEntry[]): SftpEntry[] {
 export function setSort(key: 'name' | 'size' | 'mtime') {
   sftp.sftpSort = sftp.sftpSort.key === key ? { key, asc: !sftp.sftpSort.asc } : { key, asc: true };
 }
-export function loadColW(): Record<ColKey, number> {
+function loadColW(): Record<ColKey, number> {
   try {
     const raw = JSON.parse(localStorage.getItem('cligc.pilot.sftpCols') || '{}');
     const pick = (k: ColKey) => {
@@ -209,8 +209,8 @@ export function loadColW(): Record<ColKey, number> {
     return { perm: pick('perm'), size: pick('size'), date: pick('date') };
   } catch { return { ...COL_DEF }; }
 }
-export function saveColW() { try { localStorage.setItem('cligc.pilot.sftpCols', JSON.stringify(sftp.colW)); } catch { /* */ } }
-export function setColW(k: ColKey, w: number) {
+function saveColW() { try { localStorage.setItem('cligc.pilot.sftpCols', JSON.stringify(sftp.colW)); } catch { /* */ } }
+function setColW(k: ColKey, w: number) {
   sftp.colW = { ...sftp.colW, [k]: Math.min(COL_MAX[k], Math.max(COL_MIN[k], Math.round(w))) };
 }
 export function startColDrag(e: MouseEvent, k: ColKey) {
@@ -302,7 +302,7 @@ export async function toggleDir(r: SftpRow) {
   n.add(r.path); sftp.sftpOpenDirs = n;
 }
 /** 试着把它当目录读一下。不是目录就 false —— 调用方退回按文件处理，不报错。 */
-export async function isRemoteDir(path: string): Promise<boolean> {
+async function isRemoteDir(path: string): Promise<boolean> {
   try { await invoke<SftpEntry[]>('sftp_list', { connId: sftp.sftpConnId, path }); return true; }
   catch { return false; }
 }
@@ -497,7 +497,7 @@ export async function sftpDownload(r: SftpRow, archive = false) {
   }
   finally { sftp.sftpXfer = ''; sftp.sftpDownloadTask = null; }
 }
-export async function cancelSftpDownload() {
+async function cancelSftpDownload() {
   const task = sftp.sftpDownloadTask;
   if (!task?.started || task.cancelling) return;
   sftp.sftpDownloadTask = { ...task, cancelling: true };
@@ -576,7 +576,7 @@ export async function sftpUpload(dir = sftp.sftpPath) {
     if (sftp.sftpConnId === connId) await loadDir(dir, true);
   }
 }
-export async function uploadSftpFile(connId: string, dir: string, name: string, local?: string, file?: File) {
+async function uploadSftpFile(connId: string, dir: string, name: string, local?: string, file?: File) {
   const id = crypto.randomUUID(), remote = sftpJoin(dir, name);
   addSftpTransfer(id, name, 'upload', connId, remote, local);
   sftp.sftpUploadTask = { id, started: false, cancelling: false };
@@ -606,7 +606,7 @@ export async function uploadSftpFile(connId: string, dir: string, name: string, 
   } finally { if (sftp.sftpUploadTask?.id === id) sftp.sftpUploadTask = null; }
 }
 /** Native local drops stream from verified paths; platforms without the bridge keep the byte fallback. */
-export async function sftpUploadDropped(files: File[], dir = sftp.sftpPath, connId = sftp.sftpConnId, probe?: LocalDropProbe) {
+async function sftpUploadDropped(files: File[], dir = sftp.sftpPath, connId = sftp.sftpConnId, probe?: LocalDropProbe) {
   if (!files.length || !dir || sftp.sftpXfer || sftp.sftpBusy || sftp.sftpNativeDragging) return;
   let uploaded = 0;
   let failed = false;

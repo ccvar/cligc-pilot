@@ -57,7 +57,7 @@ export const library = new LibraryState();
 // 归到「自建」而不是硬塞进某一档，这既是实话，也正好是他们最想单独看的一组。
 export const CAT_MINE = '自建';
 // 固定顺序：按出现顺序排的话，删一个模板就可能让整排筹码跳位。
-export const CAT_ORDER = ['落地页', '内容', '作品集', '电商', '企业', '活动'];
+const CAT_ORDER = ['落地页', '内容', '作品集', '电商', '企业', '活动'];
 export const catOf = (t: Template) => (t.builtin ? t.category || '其他' : CAT_MINE);
 /** 模板文本索引：全局搜索按它匹配（名称 / 描述 / slug / 分类）。 */
 export const tmplHay = (t: Template) => `${t.name} ${t.desc} ${t.slug} ${catOf(t)}`.toLowerCase();

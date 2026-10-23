@@ -12,9 +12,9 @@ export function modelIcon(brain: string): string {
 }
 /** 第一个可用（已装已登录）的厂商；全不可用时回退 claude（保持旧行为）。 */
 export function firstUsableBrain(): Brain { return app.ALL_BRAINS.find((b) => brainUsable(b)) ?? 'claude'; }
-export const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'];
+const FAST_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'];
 export const fastable = (m: string) => FAST_MODELS.includes(m);
-export const permOpts = [
+const permOpts = [
   { value: 'plan', label: '计划', sub: '只读 · 只给方案' },
   { value: 'ask', label: '询问', sub: '每步都要你批准' },
   { value: 'auto', label: '自动', sub: '仅危险动作确认' },
@@ -83,7 +83,7 @@ export function customsOf(b: string): string[] { return b.startsWith('api:') ? [
 // ★ 加新模型时**必须同时改这里**，否则它会掉进最后那个 200k 兜底 —— 用量百分比、
 //   「快满了」提示、自动压缩时机全部按错误的窗口算，而且不报错、只是数字悄悄不对。
 //   `-5` 这一支（sonnet-5 / opus-5 / fable-5）没有第三段版本号，别套 `-4-[6-9]` 那种写法。
-export function ctxLimit(brain: string, model = ''): number {
+function ctxLimit(brain: string, model = ''): number {
   if (brain.startsWith('api:')) return 0; // Capability is not inferable from a custom model ID.
   if (brain === 'codex') return 272000;
   if (brain === 'grok') return 500000;
@@ -139,7 +139,7 @@ export function brainLabel(b: string): string { return b.startsWith('api:') ? `$
 //   凭据有效后才有判别力：真 ID 返回内容，假 ID 明确回
 //   「There's an issue with the selected model (…). It may not exist or you may not have access to it.」
 //   claude-opus-5 与 claude-opus-4-8 都是这么验的（真回话 + 同轮假 ID 被拒）。
-export const CLAUDE_MODELS = [
+const CLAUDE_MODELS = [
   // ★ 必须用显式 ID，不能用别名 'sonnet'：别名由 CLI 解析，2.1.96 把它解析成
   //   claude-sonnet-4-6 —— 标签写着 Sonnet 5、实际跑的是 4.6（用户实测抓到）。
   { value: 'claude-sonnet-5', label: 'Sonnet', sub: '性价比 · Sonnet 5 · 1M 上下文' },
@@ -152,7 +152,7 @@ export const CLAUDE_MODELS = [
 ];
 // Codex 档位 = 具体模型 ID（-c model=）。首项「跟随 Codex 默认」= 不覆盖本地 codex 配置。
 // 型号取自本机 codex 模型清单，会随厂商更新；要用别的新模型走下方「自定义模型 ID」。
-export const CODEX_MODELS = [
+const CODEX_MODELS = [
   { value: '', label: '跟随 Codex 默认', sub: '用本地 codex 配置' },
   // 菜单展示官方模型容量；不要把 Codex 缓存默认窗口当成模型上限。
   // https://developers.openai.com/api/docs/models/gpt-6-astra
@@ -170,13 +170,13 @@ export const CODEX_MODELS = [
 ];
 // Grok（订阅通道）使用官方模型 ID；首项「跟随默认」
 // 不传 --model，厂商换默认时自动跟随。显式档位方便会话固定模型与回退上一代。
-export const GROK_MODELS = [
+const GROK_MODELS = [
   { value: '', label: '跟随 Grok 默认', sub: '使用 CLI 当前默认模型' },
   { value: 'grok-4.7', label: 'Grok 4.7', sub: '最新 · 500k 上下文' },
   { value: 'grok-4.6', label: 'Grok 4.6', sub: '上一代 · 500k 上下文' },
   { value: 'grok-4.5', label: 'Grok 4.5', sub: '上一代 · 500k 上下文' },
 ];
-export function modelOptsFor(b: string) {
+function modelOptsFor(b: string) {
   if (b.startsWith('api:')) return (apiProfile(b)?.models ?? []).map((id) => ({ value: id, label: id, sub: brainAvailability(b) }));
   return b === 'codex' ? CODEX_MODELS : b === 'grok' ? GROK_MODELS : CLAUDE_MODELS;
 }

@@ -38,10 +38,10 @@ class SidebarState {
 
 export const sidebar = new SidebarState();
 
-export function taskLabel(t: string): string {
+function taskLabel(t: string): string {
   return t === 'sitebuild' ? '建站' : t === 'remote' ? '远程运维' : '自由对话';
 }
-export function conversationTaskLabel(c: Conversation | null | undefined): string {
+function conversationTaskLabel(c: Conversation | null | undefined): string {
   return taskLabel(c?.task_type ?? '');
 }
 // 侧栏分组键：CF 按项目；SSH 一台机器一组；本地对话按接入的文件夹（未接文件夹的归「自由对话」）。
@@ -52,10 +52,10 @@ export function conversationGroupKey(c: Conversation): string {
 }
 
 // 会话按「分组 → 任务类型」两级分组：分组按最近活动倒序；任务类型固定顺序，只留有会话的。
-export const TASK_ORDER = ['sitebuild', 'remote', 'workspace'];
+const TASK_ORDER = ['sitebuild', 'remote', 'workspace'];
 export function faviconOf(u: string): string { try { return new URL(u).origin + '/favicon.ico'; } catch { return ''; } }
-export function loadCollapsedSites(): Set<string> { try { return new Set<string>(JSON.parse(localStorage.getItem('cligc.pilot.collapsedSites') || '[]')); } catch { return new Set(); } }
-export function persistCollapsedSites() { try { localStorage.setItem('cligc.pilot.collapsedSites', JSON.stringify([...sidebar.collapsedSites])); } catch { /* */ } }
+function loadCollapsedSites(): Set<string> { try { return new Set<string>(JSON.parse(localStorage.getItem('cligc.pilot.collapsedSites') || '[]')); } catch { return new Set(); } }
+function persistCollapsedSites() { try { localStorage.setItem('cligc.pilot.collapsedSites', JSON.stringify([...sidebar.collapsedSites])); } catch { /* */ } }
 export function toggleSite(slug: string) { const n = new Set(sidebar.collapsedSites); if (n.has(slug)) n.delete(slug); else n.add(slug); sidebar.collapsedSites = n; persistCollapsedSites(); }
 export function expandSite(slug: string) { if (sidebar.collapsedSites.has(slug)) { const n = new Set(sidebar.collapsedSites); n.delete(slug); sidebar.collapsedSites = n; persistCollapsedSites(); } }
 // 侧栏会话时间标签：今天 / 昨天 / N 天前 / 更早日期。

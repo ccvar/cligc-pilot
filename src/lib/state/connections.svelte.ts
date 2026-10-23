@@ -28,7 +28,7 @@ export const connections = new ConnectionsState();
 export function connectionDisplayName(connection: Connection): string {
   return connection.name;
 }
-export async function settleConnCtxMenu(connId: string, anchor?: { top: number; bottom: number; right: number }) {
+async function settleConnCtxMenu(connId: string, anchor?: { top: number; bottom: number; right: number }) {
   await tick();
   if (!connections.connCtx || connections.connCtx.conn.id !== connId || !connections.connCtxMenuEl) return;
   const menuRect = connections.connCtxMenuEl.getBoundingClientRect();

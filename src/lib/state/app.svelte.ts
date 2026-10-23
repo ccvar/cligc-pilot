@@ -7,7 +7,7 @@ import { selectConn, bootConnId } from './connections.svelte.js';
 import { detectSiteUrl } from './messages.svelte.js';
 import type { LiveTurn } from './messages.svelte.js';
 
-export type ConfirmKind = 'warning' | 'danger' | 'info';
+type ConfirmKind = 'warning' | 'danger' | 'info';
 
 class AppState {
   // ---------- setup ----------
@@ -54,7 +54,7 @@ class AppState {
 
 export const app = new AppState();
 
-export async function refreshApiProfiles() {
+async function refreshApiProfiles() {
   try { app.apiProfiles = await invoke<ApiProfile[]>('list_api_profiles'); }
   catch (e) { say(`读取 API 服务失败：${String(e)}`, 'err'); }
   finally { app.apiProfilesLoaded = true; }

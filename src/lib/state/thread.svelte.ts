@@ -33,7 +33,7 @@ class ThreadState {
 
 export const thread = new ThreadState();
 
-export async function persistThreadModel(m: string) {
+async function persistThreadModel(m: string) {
   if (!app.activeConv || m === app.activeConv.model) return;
   const resetsSession = app.activeConv.brain === 'claude' || app.activeConv.brain.startsWith('api:');
   try {
@@ -120,7 +120,7 @@ export async function persistThreadPerm(p: string) {
   } catch (e) { say(String(e), 'err'); }
 }
 
-export function threadNearBottom(el: HTMLDivElement): boolean {
+function threadNearBottom(el: HTMLDivElement): boolean {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
 }
 export function onThreadScroll(e: Event) {

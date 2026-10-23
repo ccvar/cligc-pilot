@@ -30,7 +30,7 @@ class UiState {
 export const ui = new UiState();
 
 // 单行省略文案只有真的被截断时才挂全局 tooltip；宽度够时保持安静。
-export function overflowTip(node: HTMLElement, text: string) {
+function overflowTip(node: HTMLElement, text: string) {
   let current = text;
   let frame = 0;
   const sync = () => {
@@ -56,8 +56,8 @@ export function startDrag(e: MouseEvent) {
   if (t.closest('button, a, input, textarea, select, [role="button"], [data-no-drag]')) return;
   getCurrentWindow().startDragging().catch(() => {});
 }
-export function loadRailFlag(): boolean { try { return localStorage.getItem('cligc.pilot.railCollapsed') === '1'; } catch { return false; } }
-export function loadRailWidth(): number { try { const n = parseInt(localStorage.getItem('cligc.pilot.railWidth') || ''); return n >= 190 && n <= 460 ? n : 240; } catch { return 240; } }
+function loadRailFlag(): boolean { try { return localStorage.getItem('cligc.pilot.railCollapsed') === '1'; } catch { return false; } }
+function loadRailWidth(): number { try { const n = parseInt(localStorage.getItem('cligc.pilot.railWidth') || ''); return n >= 190 && n <= 460 ? n : 240; } catch { return 240; } }
 export function toggleRail() { ui.railCollapsed = !ui.railCollapsed; try { localStorage.setItem('cligc.pilot.railCollapsed', ui.railCollapsed ? '1' : '0'); } catch { /* */ } }
 export function startResize(e: MouseEvent) {
   e.preventDefault();

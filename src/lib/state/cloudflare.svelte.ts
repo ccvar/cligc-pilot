@@ -69,15 +69,15 @@ export function fillDeploy() {
 }
 
 // ---------- 连接 Cloudflare ----------
-export const CF_TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tokens';
-export const CF_TOKEN_PERMISSIONS = [
+const CF_TOKEN_URL = 'https://dash.cloudflare.com/profile/api-tokens';
+const CF_TOKEN_PERMISSIONS = [
   { key: 'page', type: 'edit' },
   { key: 'workers_scripts', type: 'edit' },
   { key: 'd1', type: 'edit' },
   { key: 'dns', type: 'edit' },
   { key: 'zone', type: 'read' },
 ] as const;
-export const CF_DASH_URL = 'https://dash.cloudflare.com/';
+const CF_DASH_URL = 'https://dash.cloudflare.com/';
 export function cfUpdateConnection(): Connection | null {
   return app.conns.find((connection) => connection.id === cf.cfUpdateId) ?? null;
 }
@@ -89,7 +89,7 @@ export function cfTokenTemplateUrl(): string {
   url.searchParams.set('name', 'Cligc Pilot');
   return url.toString();
 }
-export function resetCfConnect(updateId = '') {
+function resetCfConnect(updateId = '') {
   const updating = app.conns.find((connection) => connection.id === updateId);
   cf.cfUpdateId = updating?.id ?? '';
   cf.cfOpen = true; cf.cfToken = ''; cf.cfErr = ''; cf.cfAccounts = []; cf.cfZones = [];

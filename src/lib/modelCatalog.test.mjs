@@ -16,7 +16,7 @@ function evaluate(source,start,end,expression,context={}) {
     {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 }
 test('new presets use exact model IDs and preserve legacy choices',()=>{
-  const lists=JSON.parse(evaluate(models,'export const CLAUDE_MODELS =','// Grok（订阅通道）',
+  const lists=JSON.parse(evaluate(models,'const CLAUDE_MODELS =','// Grok（订阅通道）',
     '({claude:CLAUDE_MODELS,codex:CODEX_MODELS})'));
   for(const [family,id,label] of [['claude','claude-opus-5-5','Opus 5.5'],
     ['codex','gpt-6-sol','GPT-6 Sol'],['codex','gpt-6-luna','GPT-6 Luna']]) {
@@ -29,7 +29,7 @@ test('new presets use exact model IDs and preserve legacy choices',()=>{
   assert.match(page,/return b === 'claude' \? 'claude-sonnet-5' : ''/);
 });
 test('Grok 4.7 is selectable without changing existing or default models',()=>{
-  const grok=JSON.parse(evaluate(models,'export const GROK_MODELS =','export function modelOptsFor','GROK_MODELS'));
+  const grok=JSON.parse(evaluate(models,'const GROK_MODELS =','function modelOptsFor','GROK_MODELS'));
   assert.equal(grok.find(m=>m.value==='grok-4.7')?.label,'Grok 4.7');
   assert.ok(grok.some(m=>m.value==='grok-4.6'));
   assert.equal(grok[0].value,'');

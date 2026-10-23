@@ -108,7 +108,7 @@ export async function copyCmd(cmd: string) {
 }
 // 手动重新检测：走 redetect_brains（后端先重读登录 shell 的 PATH，再探测）——治「装/登录完仍显示未安装/未登录」。
 export async function refreshBrainsManual() { settings.brainsBusy = true; try { app.brains = await invoke('redetect_brains'); } catch (e) { say(String(e), 'err'); } finally { settings.brainsBusy = false; } void verifyClaude(true); }
-export function stopAuthWait() { settings.authWaiting = ''; if (settings.authTimer) { clearInterval(settings.authTimer); settings.authTimer = undefined; } }
+function stopAuthWait() { settings.authWaiting = ''; if (settings.authTimer) { clearInterval(settings.authTimer); settings.authTimer = undefined; } }
 export async function authorize(b: Brain) {
   try {
     await invoke('open_brain_login', { brain: b });
@@ -151,7 +151,7 @@ export function closeClaudeToken() {
   settings.claudeTokenDraft = '';
   settings.claudeTokenOpen = false;
 }
-export async function verifyClaude(force = false) {
+async function verifyClaude(force = false) {
   if (!app.brains?.claude.found || !app.brains.claude.logged_in) { settings.claudeVerify = 'unknown'; return settings.claudeVerify; }
   if (settings.claudeVerify === 'checking') return settings.claudeVerify;
   if (!force && Date.now() - settings.claudeVerifyAt < 30 * 60_000) return settings.claudeVerify;
@@ -165,7 +165,7 @@ export async function verifyClaude(force = false) {
   settings.claudeVerifyAt = Date.now();
   return settings.claudeVerify;
 }
-export async function checkCliUpdate() {
+async function checkCliUpdate() {
   if (settings.cliUpdBusy) return;
   settings.cliUpdBusy = true;
   try { settings.cliUpd = await invoke<CliUpdateInfo>('check_claude_update'); }

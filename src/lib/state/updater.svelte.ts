@@ -6,7 +6,7 @@ import { say, confirmDialog } from './app.svelte.js';
 import { settings } from './settings.svelte.js';
 
 // 应用版本 + 在线检查更新（Tauri updater：拉 release 仓 latest.json，ed25519 验签后下载安装再重启）。
-export type PilotUpdateStatus = 'idle' | 'checking' | 'available' | 'current' | 'unreachable' | 'updating' | 'waiting' | 'done' | 'failed';
+type PilotUpdateStatus = 'idle' | 'checking' | 'available' | 'current' | 'unreachable' | 'updating' | 'waiting' | 'done' | 'failed';
 
 class UpdaterState {
   appVersion = $state('');
@@ -26,8 +26,8 @@ class UpdaterState {
 
 export const updater = new UpdaterState();
 
-export const PILOT_UPDATE_RECEIPT_KEY = 'cligc.pilot.updateReceipt';
-export function sameUpdateVersion(a: string, b: string): boolean {
+const PILOT_UPDATE_RECEIPT_KEY = 'cligc.pilot.updateReceipt';
+function sameUpdateVersion(a: string, b: string): boolean {
   const norm = (v: string) => v.trim().replace(/^v/i, '');
   return norm(a) === norm(b);
 }
@@ -60,7 +60,7 @@ export async function checkPilotUpdate(silent = true) {
   }
 }
 
-export async function installPilotUpdate() {
+async function installPilotUpdate() {
   if (!isMainWindow) { say('请在 Pilot 主窗口中更新客户端', 'err'); return; }
   if (updater.updBusy) return;
   updater.updBusy = true; updater.updMsg = '检查中…'; updater.updPct = -1;

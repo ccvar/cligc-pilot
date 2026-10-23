@@ -5,7 +5,7 @@ import { openConv } from './conversations';
 import { ensureTemplateMeta, library, tmplHay, openTemplates, openPrompts, focusTemplate } from './library.svelte.js';
 import type { Template } from './library.svelte.js';
 
-export type SearchEntry =
+type SearchEntry =
   | { kind: 'view'; view: 'templates' | 'prompts'; label: string }
   | { kind: 'conv'; c: Conversation }
   | { kind: 'template'; t: Template }
@@ -61,11 +61,11 @@ class SearchState {
 export const search = new SearchState();
 
 export function openSearch() { search.searchOpen = true; search.searchQ = ''; search.searchIdx = 0; void ensureTemplateMeta(); requestAnimationFrame(() => search.searchInput?.focus()); }
-export const SEARCH_VIEWS: { view: 'templates' | 'prompts'; label: string }[] = [
+const SEARCH_VIEWS: { view: 'templates' | 'prompts'; label: string }[] = [
   { view: 'templates', label: '模板库' },
   { view: 'prompts', label: '提示词' },
 ];
-export function searchNudge(delta: number) {
+function searchNudge(delta: number) {
   if (!search.searchFlat.length) return;
   search.searchIdx = Math.max(0, Math.min(search.searchFlat.length - 1, search.searchIdx + delta));
   requestAnimationFrame(() => document.querySelector('.search-item.on')?.scrollIntoView({ block: 'nearest' }));

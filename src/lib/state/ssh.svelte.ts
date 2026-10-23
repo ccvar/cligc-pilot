@@ -7,7 +7,7 @@ import { probeOs, selectConn } from './connections.svelte.js';
 import { disposeTerm, workbench, startTerm } from './workbench.svelte.js';
 import { sftp, sftpGo } from './sftp.svelte.js';
 
-export const SSH_BLANK = { name: '', host: '', port: 22, user: '', auth: 'password', password: '', keyPath: '', keyPass: '' };
+const SSH_BLANK = { name: '', host: '', port: 22, user: '', auth: 'password', password: '', keyPath: '', keyPass: '' };
 
 class SshFormState {
   // ---------- 新建 / 编辑远程连接（SSH） ----------

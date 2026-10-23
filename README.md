@@ -47,6 +47,17 @@ cd src-tauri && cargo test                      # Rust 单元测试
 node --test src/lib/*.test.mjs                  # 前端单元测试（*Browser / editMenu 需另装 playwright）
 ```
 
+### 前端结构
+
+- `src/routes/+page.svelte`：应用外壳（标题栏、主区视图切换、根层弹窗）与全局样式；按原顺序调用各模块的 `init*()` 注册副作用。
+- `src/lib/state/`：按领域拆分的 rune store 与逻辑（`app`、`connections`、`panes`、`turns`、`composer`、`launcher`、`sftp`、`workbench`……）。
+  共享状态是类上的 `$state` / `$derived` 字段，组件直接读写 `app.conns`、`launcher.lPerm` 等，不层层传 props。
+- `src/lib/components/`：侧栏、启动页、对话视图、远程工作台、设置、更新中心、各类弹窗与图标。
+- 样式是各组件的作用域样式：祖先或运行时类不在本组件里的选择器要把那一段包进 `:global(...)`
+  （如 `:global(.app.rail-collapsed) .thread-head`、`.thread-head:global(.elevated)`）。
+  只导出 snippet、从不渲染默认导出的组件，其样式会被 Vite 摇掉，所以图标做成了独立组件。
+- 部分测试在 vm 里执行 `src/lib/state` 中的真实函数，读取方式见 `src/lib/testing/appSource.mjs`。
+
 ### API 服务边界
 
 - 「测试连接」只验证认证及模型列表，不会付费生成内容，也不代表已验证工具能力。模型需支持工具调用。

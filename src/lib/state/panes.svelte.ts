@@ -10,7 +10,7 @@ import { composer, autogrow, attachmentFilename } from './composer.svelte.js';
 import type { Attach } from './composer.svelte.js';
 import { detectSiteUrl, conversationProject, ATT_MARKER } from './messages.svelte.js';
 
-export type PaneDraft = {text:string;files:Attach[];scroll:number;sticky:boolean};
+type PaneDraft = {text:string;files:Attach[];scroll:number;sticky:boolean};
 
 class PanesState {
   // Layout stores only conversation references. Execution and drafts remain keyed by conversation,
@@ -40,7 +40,7 @@ export function splitConversation(id:string):Conversation | null { return panes.
 export function conversationWorkspace(c:Conversation):string {
   return c.conn_id;
 }
-export function resetConversationLayout(workspace:string) {
+function resetConversationLayout(workspace:string) {
   if(panes.conversationLayoutWorkspace===workspace)return;
   ++panes.openConvSeq; // Invalidate pending opens from the workspace being left.
   panes.cancelConversationPointerDrag();
@@ -61,9 +61,9 @@ export function switchConversationWorkspace(workspace:string) {
   resetConversationLayout(workspace);
   app.activeConv=null;app.activeConvId='';composer.draft='';composer.attachments=[];composer.queued=null;
 }
-export const paneInputs = new Map<string,HTMLTextAreaElement>();
-export const paneScrollers = new Map<string,HTMLDivElement>();
-export const paneMetadataLoading = new Set<string>();
+const paneInputs = new Map<string,HTMLTextAreaElement>();
+const paneScrollers = new Map<string,HTMLDivElement>();
+const paneMetadataLoading = new Set<string>();
 export function conversationConnection(c:Conversation|null) {
   return c && c.task_type!=='workspace' ? app.conns.find(x=>x.id===c.conn_id)??null : null;
 }
@@ -128,7 +128,7 @@ export function focusSplit(id:string) {
   composer.draftEl=paneInputs.get(c.id);
   // Connection discovery is not switched here: all pane actions carry their own target.
 }
-export function ensureConversationPane() {
+function ensureConversationPane() {
   if(!app.activeConv)return;
   resetConversationLayout(conversationWorkspace(app.activeConv));
   const savedDraft=panes.splitDrafts[app.activeConv.id];

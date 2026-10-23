@@ -8,7 +8,7 @@ import { app, say } from './app.svelte.js';
 import { panes, splitConversation } from './panes.svelte.js';
 import { ui } from './ui.svelte.js';
 
-export type ExecutionActivity = {
+type ExecutionActivity = {
   id: string;
   label: string;
   detail: string;
@@ -197,9 +197,9 @@ export function faviconGuess(url?: string): string { const u = (url ?? '').trim(
 // 发消息时把这段追加到正文末尾让 AI 拿到路径；渲染时再从正文里拆出来单独做成附件卡（见 splitAttachments）。
 export const ATT_MARKER = '附件（已存在项目里，可直接读取使用）：';
 // 助手消息里由后端补的 codex 生图产物清单（agent.rs append_generated_images），渲染成缩略图。
-export const GEN_MARKER = '生成的图片：';
+const GEN_MARKER = '生成的图片：';
 // 从消息正文里拆出「真正的文字」和「路径列表」——存储的是完整正文，气泡里显示干净文字 + 图卡。
-export function splitMarked(text: string, marker: string): { body: string; atts: string[] } {
+function splitMarked(text: string, marker: string): { body: string; atts: string[] } {
   let cut = text.indexOf('\n\n' + marker);
   let sep = 2;
   if (cut < 0) {
@@ -213,7 +213,7 @@ export function splitMarked(text: string, marker: string): { body: string; atts:
 export function splitAttachments(text: string) { return splitMarked(text, ATT_MARKER); }
 export function splitGenImages(text: string) { return splitMarked(text, GEN_MARKER); }
 export function isImgPath(p: string): boolean { return /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(p); }
-export const thumbJobs = new Map<string, Promise<string>>();
+const thumbJobs = new Map<string, Promise<string>>();
 export function conversationProject(c: Conversation): string { return c.task_type === 'workspace' ? c.id : c.site_slug; }
 export function thumbKey(p: string, c:Conversation|null=app.activeConv): string { return c ? c.conn_id + '|' + conversationProject(c) + '|' + p : '||' + p; }
 // 读工作目录内图片 → data URI（并发去重；失败缓存空串＝退回文件卡样式）。
@@ -232,13 +232,13 @@ export function loadWorkdirImg(connId: string, project: string, p: string): Prom
 }
 // 悬停/放大会把任意工作目录图片读进缓存：软上限 80 条，超了丢最早的（对象键序＝插入序），
 // 防止单会话里长期翻聊天记录把 data URI 越积越多。
-export function pruneThumbs(t: Record<string, string>): Record<string, string> {
+function pruneThumbs(t: Record<string, string>): Record<string, string> {
   const keys = Object.keys(t);
   if (keys.length <= 80) return t;
   for (const kk of keys.slice(0, keys.length - 80)) delete t[kk];
   return t;
 }
-export function ensureThumb(connId: string, project: string, p: string) { void loadWorkdirImg(connId, project, p); }
+function ensureThumb(connId: string, project: string, p: string) { void loadWorkdirImg(connId, project, p); }
 export function fmtClock(sec: number): string {
   const d = new Date(sec * 1000);
   const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
@@ -257,7 +257,7 @@ export function fmtRemain(ms: number): string {
 marked.setOptions({ gfm: true, breaks: true });
 // 在 DOMPurify 默认协议白名单上放行 file:/sandbox:（AI 常用它们链接本地产物；默认会把
 // href 整个剥掉，链接看着能点实际是死的）。javascript: 等仍被拦。
-export const MD_URI_RE = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|file|sandbox):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+const MD_URI_RE = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|file|sandbox):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
 // file: 只为 <a> 放行（点击全被 mdClick 代理接管）；<img> src 收紧回 http(s)/data:image，
 // 防 file: 子资源直连本地文件系统。
 DOMPurify.addHook('afterSanitizeAttributes', (n) => {
@@ -320,7 +320,7 @@ export function workAbsPath(s: string): string {
   if (!(v.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(v))) return '';
   return v;
 }
-export function openWorkdirLightbox(p: string, c:Conversation|null=app.activeConv) {
+function openWorkdirLightbox(p: string, c:Conversation|null=app.activeConv) {
   if (!c) return;
   // 点击是明确意图：之前失败过（负缓存空串）的条目给重试机会——文件可能刚被生成出来
   const k = thumbKey(p,c);
@@ -358,7 +358,7 @@ export function codeImgUrl(t: string): string {
 }
 
 // linkify + 段落（用户消息/错误消息仍走纯文本路径）
-export const urlRe = /(https?:\/\/[^\s)"'`」』】>，。；：！？、（）《》]+)/g;
+const urlRe = /(https?:\/\/[^\s)"'`」』】>，。；：！？、（）《》]+)/g;
 export function segs(text: string): { t: string; link: boolean }[] {
   const out: { t: string; link: boolean }[] = [];
   let last = 0; let m: RegExpExecArray | null; urlRe.lastIndex = 0;
@@ -369,7 +369,7 @@ export function segs(text: string): { t: string; link: boolean }[] {
   if (last < text.length) out.push({ t: text.slice(last), link: false });
   return out;
 }
-export function fmt(secs: number): string { return new Date(secs * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+function fmt(secs: number): string { return new Date(secs * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
 
 export function initMessages() {
   $effect(() => {
