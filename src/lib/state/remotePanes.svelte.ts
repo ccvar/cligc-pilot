@@ -87,9 +87,9 @@ export function resizeRemoteLayout(l: Layout) { setLayout(l); }
 
 export function endRemoteDrag() { remotePanes.dragId = ''; remotePanes.dragPoint = null; remotePanes.preview = null; remotePanes.singleEdge = null; }
 
-/** 从左栏拖一台机器（按住拖动，超过 6px 才算拖；Esc 取消）。 */
+/** 从左栏拖一台机器、或按住窗格标题拖去别处重排（超过 6px 才算拖；Esc 取消）。 */
 export function startRemoteDrag(e: PointerEvent, connId: string) {
-  if (e.button !== 0 || e.isPrimary === false) return;
+  if (e.button !== 0 || e.isPrimary === false || (e.target as HTMLElement).closest('button,input,textarea')) return;
   e.preventDefault(); // 别在拖的时候选中左栏的字
   const startX = e.clientX, startY = e.clientY;
   let moved = false;

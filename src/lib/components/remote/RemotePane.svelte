@@ -5,14 +5,16 @@
   import { app } from '$lib/state/app.svelte.js';
   import { workbench } from '$lib/state/workbench.svelte.js';
   import { connectionDisplayName, distroOf } from '$lib/state/connections.svelte.js';
-  import { closeRemotePane } from '$lib/state/remotePanes.svelte.js';
+  import { closeRemotePane, startRemoteDrag } from '$lib/state/remotePanes.svelte.js';
 
   let { connId, paneId }: { connId: string; paneId: string } = $props();
   const conn = $derived(app.conns.find((c) => c.id === connId));
   const st = $derived(workbench.termState[connId]);
 </script>
 
-<header class="rp-head">
+<!-- 按住标题拖到别的窗格边上：重排 -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<header class="rp-head" aria-label="拖动以重排窗格" onpointerdown={(e) => startRemoteDrag(e, connId)}>
   <span class="rp-ic"><DistroMark id={distroOf(conn)} size={13} /></span>
   <span class="rp-name" title="{conn?.ssh_user}@{conn?.ssh_host}">{conn ? connectionDisplayName(conn) : connId}</span>
   <span class="rp-st" class:on={st?.on}>{st?.busy ? '连接中…' : st?.on ? '已连接' : '未连接'}</span>

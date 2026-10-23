@@ -7,7 +7,7 @@
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import SftpPanel from '$lib/components/remote/SftpPanel.svelte';
   import TermHost from '$lib/components/remote/TermHost.svelte';
-  import { closeRemotePane } from '$lib/state/remotePanes.svelte.js';
+  import { closeRemotePane, startRemoteDrag } from '$lib/state/remotePanes.svelte.js';
   // 分屏时作为聚焦窗格显示：多一个关闭按钮
   let { paneId = '' }: { paneId?: string } = $props();
   import { startDrag } from '$lib/state/ui.svelte.js';
@@ -22,8 +22,10 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- 工作台头部只留一行（机器地址 + 状态）：标题「远程连接」是废话——侧栏已经写着你在哪台机器上。 -->
-<header class="thread-head slim" data-tauri-drag-region onmousedown={startDrag}>
-  <div class="th-info">{#if paneId && app.activeConn}<span class="wb-name"><DistroMark id={distroOf(app.activeConn)} size={13} /><b>{connectionDisplayName(app.activeConn)}</b></span>{/if}<small class="rhead-line">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port} · {workbench.termOn ? '已连接' : '未连接'}
+<header class="thread-head slim" class:in-pane={!!paneId} data-tauri-drag-region onmousedown={startDrag}>
+  <!-- 分屏时按住这一行拖去别的窗格边上重排（role=button 让 startDrag 不去拖窗口） -->
+  <div class="th-info" role={paneId ? 'button' : undefined} aria-label={paneId ? '拖动以重排窗格' : undefined}
+    onpointerdown={(e) => { if (paneId && app.activeConnId) startRemoteDrag(e, app.activeConnId); }}>{#if paneId && app.activeConn}<span class="wb-name"><DistroMark id={distroOf(app.activeConn)} size={13} /><b>{connectionDisplayName(app.activeConn)}</b></span>{/if}<small class="rhead-line">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port} · {workbench.termOn ? '已连接' : '未连接'}
     <button class="th-rfz" data-tip={workbench.termBusy ? '连接中…' : '重新连接'} aria-label="重新连接" disabled={workbench.termBusy} onclick={() => reconnectTerm()}><RefreshIcon spinning={workbench.termBusy} /></button>
     {#if workbench.stat}
       <span class="hstats">
@@ -308,6 +310,10 @@
   :global(.app.rail-collapsed.top-update-visible) .thread-head { padding-left: 167px; }
   :global(.app.rail-collapsed.top-update-visible.fs) .thread-head,
   :global(.app.rail-collapsed.top-update-visible.win) .thread-head { padding-left: 127px; }
+  /* 分屏里：左右内边距和旁边窗格的标题（RemotePane .rp-head：12px / 8px）一致，× 和图标才在同一位置。
+     侧栏收起时上面那几条（给红绿灯让位）分数更高，照样生效。 */
+  .thread-head.in-pane { padding-left: 12px; padding-right: 8px; }
+  .thread-head.in-pane .wb-close { width: 22px; height: 22px; }
   .th-info { min-width: 0; flex: 1 1 auto; overflow: hidden; }
   .th-info small { display: block; min-width: 0; overflow: hidden; color: var(--dim); font-size: 12px; margin-top: 2px; text-overflow: ellipsis; white-space: nowrap; }
   .th-info small :global(svg), .th-info small :global(img) { vertical-align: -2px; }
