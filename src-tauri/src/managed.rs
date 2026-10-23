@@ -569,10 +569,46 @@ fn split_strings(line: &str) -> Option<(String, String)> {
     Some((code, text))
 }
 
+/// `key: /正则/flags,`：数据里用来匹配文字的正则字面量（比如「哪些旧文提到了旧价格」）。
+/// 正则体里不许有没转义的 `/`，结尾只许跟 flags 和逗号——这样 `/a/.test(fetch(x))` 之类的代码过不了。
+fn regex_value(t: &str) -> bool {
+    let Some((key, rest)) = t.split_once(':') else { return false };
+    if key.trim().is_empty() || !key.trim().chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return false;
+    }
+    let Some(body) = rest.trim().strip_prefix('/') else { return false };
+    let mut chars = body.chars();
+    let mut in_class = false;
+    let mut closed = false;
+    let mut len = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '[' => in_class = true,
+            ']' => in_class = false,
+            '/' if !in_class => {
+                closed = true;
+                break;
+            }
+            '\n' => return false,
+            _ => {}
+        }
+        len += 1;
+    }
+    let tail: String = chars.collect();
+    let tail = tail.trim().trim_end_matches(',').trim();
+    closed && len > 0 && tail.chars().all(|c| "dgimsuvy".contains(c))
+}
+
 /// 这一行是不是纯数据：对象键、字符串、数字、括号逗号；或者从本地文件导入 / 导出一个数据常量、展开一个数组。
 fn data_line(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+        return true;
+    }
+    if regex_value(t) {
         return true;
     }
     let Some((code, _)) = split_strings(t) else { return false };
@@ -613,7 +649,8 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize) -> 
         let file = &f.file;
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         if data_file(file) && !data {
-            reasons.push(format!("{file}：数据文件里有代码改动（不只是文字和数据），留给你确认"));
+            let line = f.added.iter().chain(&f.removed).find(|l| !data_line(l)).map(|l| l.trim().chars().take(60).collect::<String>()).unwrap_or_default();
+            reasons.push(format!("{file}：数据文件里有像代码的改动（比如「{line}」），留给你确认"));
         } else if !data && forbidden_path(file) {
             reasons.push(format!("{file}：依赖、配置或代码文件不自动改"));
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
@@ -888,6 +925,12 @@ mod tests {
         assert!(managed_verdict(edit, false, 1500).is_empty(), "{:?}", managed_verdict(edit, false, 1500));
         assert!(data_line("const viduSources = [") && data_line("    sources: viduSources,"));
         assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
+        // 正则字面量的值算数据；正则后面接代码不算
+        assert!(data_line("    mentions: /(海螺|Hailuo)[^。]{0,60}(\\$\\s*9\\.99|每日少量|small daily)/i,"));
+        assert!(data_line("    mentions: /Vidu[^。]{0,40}80\\s*(积分|credits)/i,"));
+        assert!(data_line("  re: /a[/]b/g"));
+        assert!(!data_line("  re: /a/.test(fetch('/x/')) ? 1 : /b/,"));
+        assert!(!data_line("  re: /a/, run: go(),"));
         // 新的数据文件：按新内容规则和正文下限判断
         let body: String = (0..40).map(|_| "+      '遮挡转场要让前景物体把画面整个挡住，再在被挡住的那一帧切到下一段素材，两段的运动方向要一致。',\n").collect();
         let newfile = format!("diff --git a/src/data/articles-x.ts b/src/data/articles-x.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/data/articles-x.ts\n@@ -0,0 +1,50 @@\n+import type {{ ArticleSeed }} from './article-types';\n+export const xArticles: ArticleSeed[] = [\n+  {{\n+    slug: 'x',\n+    datePublished: '2026-10-22',\n+    body: [\n{body}+    ],\n+  }},\n+];\n");
@@ -896,7 +939,7 @@ mod tests {
         // 数据文件里混了代码：函数、模板字符串插值、外部导入
         for bad in ["+export function pick(a) { return a; }", "+  title: `${name} 指南`,", "+import fs from 'node:fs';", "+  run: () => fetch('/x'),", "+const x = process.env.TOKEN;"] {
             let d = format!("diff --git a/src/data/a.ts b/src/data/a.ts\n--- a/src/data/a.ts\n+++ b/src/data/a.ts\n@@ -1 +1 @@\n{bad}\n");
-            assert!(managed_verdict(&d, true, 0).iter().any(|r| r.contains("代码改动")), "{bad}");
+            assert!(managed_verdict(&d, true, 0).iter().any(|r| r.contains("像代码的改动")), "{bad}");
         }
         // 不在 data / content 目录下的 .ts 仍然是代码
         let code = "diff --git a/src/lib/seo.ts b/src/lib/seo.ts\n--- a/src/lib/seo.ts\n+++ b/src/lib/seo.ts\n@@ -1 +1 @@\n+  title: 'x',\n";
