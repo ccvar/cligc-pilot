@@ -32,6 +32,40 @@ export const ACTIONS: { key: string; label: string; sub: string }[] = [
   { key: 'technical', label: '修技术问题', sub: '死链、跳转、sitemap、抓取错误' },
 ];
 
+export const METRIC_LABEL: Record<string, string> = {
+  clicks: '点击', ctr: '点击率', impressions: '展现和覆盖的查询词', position: '平均排名', conversions: 'GA4 转化事件', health: '体检问题数',
+};
+
+/** 运营目标预设：点一下填好目标文字、勾上推荐的动作、定好衡量标准；都可以再改。 */
+export const GOAL_PRESETS: { key: string; name: string; icon: string; goal: string; actions: string[]; metric: string; fits: string }[] = [
+  { key: 'traffic', name: '拉新流量', icon: 'trend', fits: '新站 / 成长期',
+    goal: '扩大在 Google 和 Bing 的覆盖：让更多页面和查询词进入搜索结果前列，以写新页面和补内容缺口为主。',
+    actions: ['meta', 'content', 'internal_links', 'new_content', 'technical'], metric: 'impressions' },
+  { key: 'ctr', name: '提升点击率', icon: 'target', fits: '成熟期',
+    goal: '已经排在前面的页面，重写标题和描述、补足回应搜索意图的内容，让更多看到的人点进来。',
+    actions: ['meta', 'content'], metric: 'ctr' },
+  { key: 'convert', name: '提高转化', icon: 'zap', fits: '已配好 GA4 事件',
+    goal: '流量不少但注册 / 邀请转化少：加强落地页的行动引导、对比和信任内容，把高流量页面引到转化页（推荐链接本身不改）。',
+    actions: ['meta', 'content', 'internal_links'], metric: 'conversions' },
+  { key: 'authority', name: '建立主题权威', icon: 'grid', fits: '定位清楚、内容偏少',
+    goal: '围绕核心主题建内容体系：支柱页加子话题集群，理顺站内链接，让每个主题都有完整的覆盖。',
+    actions: ['content', 'internal_links', 'new_content'], metric: 'position' },
+  { key: 'fresh', name: '保鲜存量内容', icon: 'refresh', fits: '内容较旧的站',
+    goal: '更新过时的内容（费率、步骤、版本、截图说明），修复死链和跳转；不写新页面。',
+    actions: ['meta', 'content', 'technical'], metric: 'clicks' },
+  { key: 'safe', name: '稳健维护', icon: 'shield', fits: '不想多动的站',
+    goal: '最低风险：只修技术问题、优化标题和描述，不改正文、不写新页面。',
+    actions: ['meta', 'technical'], metric: 'health' },
+];
+
+/** 按站点阶段推荐一个预设（选中站点里最多的那个阶段）。 */
+export function suggestPreset(stages: string[]): string {
+  if (!stages.length) return '';
+  const n = (k: string) => stages.filter((x) => x === k).length;
+  const top = ['new', 'growing', 'established'].sort((a, b) => n(b) - n(a))[0];
+  return top === 'established' ? 'ctr' : 'traffic';
+}
+
 /** 新建方案时预填的内容准则：只是起点，运营人员可以整段改写或清空。 */
 export const GUIDELINE_TEMPLATE = `# 内容准则
 
@@ -57,7 +91,7 @@ function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false,
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
     new_content: c?.new_content ?? 'review', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
-    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', created_at: 0,
+    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', created_at: 0,
   };
 }
 

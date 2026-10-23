@@ -1200,6 +1200,24 @@ pub fn judge(before: &crate::site_data::Row, after: &crate::site_data::Row) -> &
     }
 }
 
+/// 按托管方案的衡量标准复盘。不管看什么，点击跌 15% 以上都算负面（安全底线）。
+/// 页面级拿不到转化和体检数据，这两种按点击判断。
+pub fn judge_for(metric: &str, before: &crate::site_data::Row, after: &crate::site_data::Row) -> &'static str {
+    let rel = |a: f64, b: f64| if b > 0.0 { (a - b) / b } else if a > 0.0 { 1.0 } else { 0.0 };
+    let clicks = rel(after.clicks, before.clicks);
+    if clicks <= -0.15 {
+        return "negative";
+    }
+    let good = match metric {
+        "ctr" => rel(after.ctr, before.ctr) >= 0.10,
+        "impressions" => rel(after.impressions, before.impressions) >= 0.15 || clicks >= 0.10,
+        // 排名数字越小越好：前进 1 位以上
+        "position" => before.position > 0.0 && after.position > 0.0 && before.position - after.position >= 1.0 || clicks >= 0.10,
+        _ => return judge(before, after),
+    };
+    if good { "positive" } else { "neutral" }
+}
+
 async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let st = ctx.state();
     let site_dir = ctx.site_dir(&site.id);
@@ -1216,10 +1234,14 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let mut state = load_state(&site_dir);
     let mut lines = Vec::new();
     let mut downgraded = site.ops.downgraded.clone();
+    let metric = group_rules(ctx, site).map(|g| g.metric);
     for i in &items {
         let before = i.before.clone().unwrap_or_default();
         let after = by_page.get(i.opp.page.as_str()).map(|r| (*r).clone()).unwrap_or_default();
-        let verdict = judge(&before, &after);
+        let verdict = match &metric {
+            Some(m) => judge_for(m, &before, &after),
+            None => judge(&before, &after),
+        };
         let note = format!(
             "点击 {:.0} → {:.0}，点击率 {:.1}% → {:.1}%，排名 {:.1} → {:.1}",
             before.clicks, after.clicks, before.ctr * 100.0, after.ctr * 100.0, before.position, after.position
@@ -1557,6 +1579,10 @@ mod tests {
         assert_eq!(judge(&r(100.0, 0.02), &r(100.0, 0.025)), "positive");
         assert_eq!(judge(&r(100.0, 0.02), &r(95.0, 0.02)), "neutral");
         assert_eq!(judge(&r(0.0, 0.0), &r(3.0, 0.01)), "positive");
+        // 衡量标准：点击率涨了就算正面；点击跌 15% 不管看什么都是负面
+        assert_eq!(judge_for("ctr", &r(100.0, 0.02), &r(100.0, 0.023)), "positive");
+        assert_eq!(judge_for("impressions", &r(100.0, 0.02), &r(80.0, 0.02)), "negative");
+        assert_eq!(judge_for("conversions", &r(100.0, 0.02), &r(115.0, 0.02)), "positive");
     }
 
     #[test]

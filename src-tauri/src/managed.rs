@@ -103,8 +103,26 @@ pub struct ManagedGroup {
     /// 选题清单：一行一个关键词 / 主题，新内容优先从这里选；没有数据的新站主要靠它。
     #[serde(default)]
     pub topics: String,
+    /// 衡量标准（效果复盘看什么）：clicks / ctr / impressions / position / conversions / health。
+    #[serde(default = "default_metric")]
+    pub metric: String,
     #[serde(default)]
     pub created_at: u64,
+}
+
+fn default_metric() -> String {
+    "clicks".into()
+}
+pub const METRICS: &[&str] = &["clicks", "ctr", "impressions", "position", "conversions", "health"];
+pub fn metric_label(m: &str) -> &'static str {
+    match m {
+        "ctr" => "点击率",
+        "impressions" => "展现和覆盖的查询词",
+        "position" => "平均排名",
+        "conversions" => "GA4 转化事件",
+        "health" => "体检问题数",
+        _ => "点击",
+    }
 }
 
 pub const ACTIONS: &[&str] = &["meta", "content", "internal_links", "new_content", "technical"];
@@ -142,6 +160,7 @@ impl ManagedGroup {
             actions: all_actions(),
             guidelines: String::new(),
             topics: String::new(),
+            metric: default_metric(),
             created_at: 0,
         }
     }
@@ -159,6 +178,7 @@ impl ManagedGroup {
         if !self.goal.trim().is_empty() {
             out.push_str(&format!("【运营目标】\n{}\n\n", self.goal.trim()));
         }
+        out.push_str(&format!("【衡量标准】主要看{}；效果复盘按它判断改动有没有用。\n\n", metric_label(&self.metric)));
         let allowed: Vec<&str> = ACTIONS.iter().filter(|a| self.allows(a)).map(|a| action_label(a)).collect();
         let denied: Vec<&str> = ACTIONS.iter().filter(|a| !self.allows(a)).map(|a| action_label(a)).collect();
         out.push_str(&format!("【允许的动作】{}{}\n\n", allowed.join("、"), if denied.is_empty() { String::new() } else { format!("（不要做：{}）", denied.join("、")) }));
@@ -233,6 +253,9 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     }
     if g.daily_changes > 50 {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
+    }
+    if !METRICS.contains(&g.metric.as_str()) {
+        return Err(format!("未知的衡量标准：{}", g.metric));
     }
     if g.actions.is_empty() {
         return Err("至少允许一种动作，否则托管什么也不会做".into());

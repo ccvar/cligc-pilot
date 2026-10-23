@@ -6,7 +6,8 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE } from '$lib/state/managed.svelte.js';
+  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, METRIC_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
+  import { fleet } from '$lib/state/fleet.svelte.js';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
@@ -43,6 +44,32 @@
   function toggleAction(k: string) {
     if (!g) return;
     g.actions = g.actions.includes(k) ? g.actions.filter((x) => x !== k) : [...g.actions, k];
+  }
+  // 目标预设：可以多选，目标文字合并、动作取并集；衡量标准用第一个选中的
+  // 站点阶段：和后端 site_stage 同一套阈值（近 28 天展现 < 200 新站，点击 < 200 成长期）
+  const stageOf = (id: string) => {
+    const r = fleet.rows.find((x) => x.id === id);
+    if (!r || !r.has_data || !r.summary.fetched_at || r.summary.gsc_impressions < 200) return 'new';
+    return r.summary.gsc_clicks < 200 ? 'growing' : 'established';
+  };
+  const suggested = $derived(suggestPreset((g?.sites ?? []).map(stageOf)));
+  const picked = $derived(GOAL_PRESETS.filter((p) => !!g?.goal && g.goal.includes(p.goal)).map((p) => p.key));
+  function togglePreset(key: string) {
+    if (!g) return;
+    const p = GOAL_PRESETS.find((x) => x.key === key);
+    if (!p) return;
+    const on = picked.includes(key);
+    const keys = on ? picked.filter((k) => k !== key) : [...picked, key];
+    const chosen = GOAL_PRESETS.filter((x) => keys.includes(x.key));
+    if (on) {
+      g.goal = g.goal.replace(p.goal, '').replace(/\n{2,}/g, '\n').trim();
+    } else {
+      g.goal = g.goal.trim() ? `${g.goal.trim()}\n${p.goal}` : p.goal;
+    }
+    if (chosen.length) {
+      g.actions = ACTIONS.map((a) => a.key).filter((k) => chosen.some((c) => c.actions.includes(k)));
+      g.metric = chosen[0].metric;
+    }
   }
   const topicCount = $derived((g?.topics ?? '').split('\n').filter((l) => l.trim()).length);
   const canNext = $derived(!!g && !!g.name.trim() && (!isNew || g.sites.length > 0) && (step !== 2 || g.actions.length > 0));
@@ -88,9 +115,22 @@
       </div>
 
      {:else if step === 2}
+      <div class="field"><span class="lbl">目标预设 <span class="faint cnt">点选会填好目标、勾上推荐的动作、定好衡量标准，都可以再改；可以多选</span></span>
+        <div class="presets">
+          {#each GOAL_PRESETS as p (p.key)}
+            <button class="preset" class:on={picked.includes(p.key)} onclick={() => togglePreset(p.key)} aria-pressed={picked.includes(p.key)}>
+              <span class="pr-top"><Icon name={p.icon} size={13} /><b>{p.name}</b>{#if p.key === suggested && !picked.length}<span class="rec">推荐</span>{/if}{#if picked.includes(p.key)}<Icon name="check" size={12} />{/if}</span>
+              <small>{p.fits} · 看{METRIC_LABEL[p.metric]}</small>
+            </button>
+          {/each}
+        </div>
+      </div>
       <div class="field"><label for="ge-goal">运营目标</label>
         <textarea id="ge-goal" class="tin plain" rows="2" bind:value={g.goal} maxlength="500" placeholder="例如：提升中文页的 Google 自然流量，重点是费率、邀请和下载相关的查询词"></textarea>
         <small>一两句话。每次制定计划、每个改动都会围绕它。</small>
+      </div>
+      <div class="field"><span class="lbl">衡量标准 <span class="faint cnt">效果复盘按它判断改动有没有用；点击跌 15% 以上始终算负面</span></span>
+        <div class="seg metric">{#each Object.entries(METRIC_LABEL) as [k, l] (k)}<button class:on={g.metric === k} onclick={() => g && (g.metric = k)}>{l}</button>{/each}</div>
       </div>
       <div class="field"><span class="lbl">允许的动作 <span class="faint cnt">健康巡查始终开启</span></span>
         <div class="acts">
@@ -119,7 +159,7 @@
       <div class="chosen">
         <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="link-btn" onclick={() => (step = 1)}>修改</button></div>
         <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
-        <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
+        <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 看{METRIC_LABEL[g.metric] ?? '点击'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
       </div>
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
@@ -196,6 +236,16 @@
   .lbl-row label { font-size: 12px; font-weight: 550; }
   .lbl-row .grow { flex: 1; }
   .link-btn.sm { font-size: 12px; }
+  .presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 6px; }
+  .preset { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 9px; background: #fff; font: inherit; color: var(--text); cursor: pointer; transition: border-color .12s, background-color .12s; }
+  .preset:hover:not(.on) { background: var(--su-hover); }
+  .preset.on { border-color: var(--accent); background: #fcfbf8; box-shadow: inset 0 0 0 .5px var(--accent); }
+  .pr-top { display: flex; align-items: center; gap: 6px; }
+  .pr-top b { font-size: 12.5px; font-weight: 600; flex: 1; }
+  .pr-top :global(.ico) { color: var(--dim); }
+  .preset small { font-size: 11px; color: var(--faint); }
+  .rec { font-size: 10px; font-weight: 600; color: var(--ok); background: var(--su-ok-soft); border-radius: 999px; padding: 1px 6px; }
+  .seg.metric { flex-wrap: wrap; }
   .acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
   .act { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 9px; cursor: pointer; transition: border-color .12s, background-color .12s; }
   .act:hover { background: var(--su-hover); }

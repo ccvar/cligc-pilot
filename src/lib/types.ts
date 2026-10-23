@@ -431,6 +431,8 @@ export interface ManagedGroup {
   guidelines: string;
   /** 选题清单，一行一个 */
   topics: string;
+  /** 衡量标准：clicks / ctr / impressions / position / conversions / health */
+  metric: string;
   created_at: number;
 }
 export interface ManagedSite {
