@@ -456,7 +456,8 @@ pub fn forbidden_path(path: &str) -> bool {
 /// 推荐 / 邀请 / 返佣相关的内容：改动里只要删改了带这些标记的行，就不自动上线。
 pub fn touches_money(line: &str) -> bool {
     let l = line.to_lowercase();
-    ["ref=", "referral", "invite", "affiliate", "/go/", "promo", "coupon", "邀请", "返佣", "推荐码", "优惠码"].iter().any(|k| l.contains(k))
+    // 「ref=」只认网址参数（?ref= / &ref=），否则每个 href= 都会被当成推荐链接
+    ["?ref=", "&ref=", "referral", "invite", "affiliate", "/go/", "promo", "coupon", "邀请", "返佣", "推荐码", "优惠码"].iter().any(|k| l.contains(k))
 }
 
 /// 全托管的判定：返回不能自动上线的原因（空＝可以）。
@@ -634,7 +635,8 @@ fn data_line(line: &str) -> bool {
     if code.contains("=>") || code.contains('(') || code.contains('=') || code.contains('`') {
         return false;
     }
-    if !code.chars().all(|c| c.is_alphanumeric() || "_$\"{}[],:;. -+".contains(c)) {
+    // `?` `|`：类型声明里的可选字段和联合类型（seoTitle?: string; / kind: 'a' | 'b';），没有运行时效果
+    if !code.chars().all(|c| c.is_alphanumeric() || "_$\"{}[],:;. -+?|".contains(c)) {
         return false;
     }
     // 剩下的标识符只能是对象键或 true / false / null / 展开的数组名
@@ -931,6 +933,8 @@ mod tests {
         assert!(managed_verdict(edit, false, 1500).is_empty(), "{:?}", managed_verdict(edit, false, 1500));
         assert!(data_line("const viduSources = [") && data_line("    sources: viduSources,"));
         assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
+        assert!(data_line("  seoTitle?: string;") && data_line("  kind: 'a' | 'b';") && data_line("  links?: { label: string; href: string }[];"));
+        assert!(!super::touches_money("<a class=\"text-link\" href={link.href}>") && super::touches_money("https://x.com/?ref=abc"));
         // 正则字面量的值算数据；正则后面接代码不算
         assert!(data_line("    mentions: /(海螺|Hailuo)[^。]{0,60}(\\$\\s*9\\.99|每日少量|small daily)/i,"));
         assert!(data_line("    mentions: /Vidu[^。]{0,40}80\\s*(积分|credits)/i,"));
