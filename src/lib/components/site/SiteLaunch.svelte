@@ -3,6 +3,7 @@
   import type { Site } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Dropdown from '$lib/Dropdown.svelte';
+  import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import { app } from '$lib/state/app.svelte.js';
   import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
@@ -22,14 +23,17 @@
   let openGh = $state(false);
   $effect(() => { if (!ghConn && ghConns.length) ghConn = ghConns[0].id; });
   $effect(() => { if (!repoName) repoName = site.deploy.project || site.name.replace(/[^a-zA-Z0-9._-]+/g, '-'); });
+  const checking = $derived(!!launch.checking[site.id]);
   const manage = $derived(st?.google_manage_conn ?? '');
   const allDone = $derived(!!st && st.github && st.pages && (st.domain_attached || !site.domain) && st.deployed && st.ga4 && st.gsc && st.indexnow);
 </script>
 
 {#if st && !allDone}
   <div class="card launch">
-    <h3>上线向导 <span class="faint" style="font-weight:400;font-size:12px">从零到可运营，每一步都由你点了才执行</span><span class="grow"></span><button class="btn tiny" onclick={() => loadLaunch(site.id)}>刷新</button></h3>
+    <h3>上线向导 <span class="sub">从零到可运营，每一步都由你点了才执行</span><span class="grow"></span>
+      <button class="ic-btn" onclick={() => loadLaunch(site.id, true)} disabled={checking} aria-label="重新检查" data-tip={checking ? '检查中…' : '重新检查：读取最新状态，并按域名到已连接的 Google / Bing 账号里找现成的资源绑上'}><RefreshIcon spinning={checking} /></button></h3>
     {#each st.errors as e (e)}<p class="hint warn-text">{e}</p>{/each}
+    {#if st.auto_bound?.length}<p class="ok-note">已按域名自动绑定：{st.auto_bound.join('、')}</p>{/if}
 
     <div class="lstep" class:done={st.github}>
       <span class="n">{st.github ? '✓' : 1}</span>
@@ -96,7 +100,7 @@
       <span class="n">{st.gsc ? '✓' : 5}</span>
       <div class="lb">
         <b>Search Console</b>
-        <small>{st.gsc ? `已绑定 ${site.data.gsc_site}` : manage ? '在 Cloudflare 写 DNS 验证记录、验证所有权、添加网域资源并提交 sitemap。' : '自动验证需要授予管理权限的 Google 账号登录；也可以在设置里绑定已有的资源。'}</small>
+        <small>{st.gsc ? `已绑定 ${site.data.gsc_site}` : manage ? '在 Cloudflare 写 DNS 验证记录、验证所有权、添加网域资源并提交 sitemap。' : 'Search Console 里已经有这个站点的话，点右上角刷新会按域名自动绑上；自动验证并添加需要授予管理权限的 Google 账号。'}</small>
         {#if !st.gsc}<div class="row">
           {#if manage}<button class="btn tiny" onclick={() => setupGsc(site, manage)} disabled={!!busy || !site.domain}>{busy === 'gsc' ? '验证中（最多约 1 分半）…' : '自动验证并添加'}</button>
           {:else}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>绑定已有的</button>{/if}
@@ -119,7 +123,7 @@
       <span class="n">{st.bing ? '✓' : 7}</span>
       <div class="lb">
         <b>Bing Webmaster（可选）</b>
-        <small>{st.bing ? `已绑定 ${site.data.bing_site}` : '在 Bing Webmaster 里「从 Google Search Console 导入」最省事；导入后连接 Bing 并在设置里绑定。'}</small>
+        <small>{st.bing ? `已绑定 ${site.data.bing_site}` : '在 Bing Webmaster 里「从 Google Search Console 导入」最省事；导入后点右上角刷新，会按域名自动绑上（需要先连接 Bing）。'}</small>
         {#if !st.bing}<div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}>打开 Bing Webmaster ↗</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>去绑定</button></div>{/if}
       </div>
     </div>
@@ -137,5 +141,9 @@
   .lb small { color: var(--dim); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   .lb small.err { color: var(--err); white-space: pre-wrap; }
   .lstep.done b { color: var(--dim); }
+  .ic-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 7px; color: var(--dim); cursor: pointer; transition: background-color .12s, color .12s; }
+  .ic-btn:hover:not(:disabled) { background: var(--su-hover); color: var(--text); }
+  .ic-btn:disabled { cursor: default; color: var(--faint); }
+  .ic-btn :global(svg) { width: 14px; height: 14px; }
   .ghform { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 </style>

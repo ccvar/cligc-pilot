@@ -179,6 +179,12 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                 }
             }
             for s in &sites {
+                // 一个站点的 GA4 和 Search Console 共用一条 Google 连接：站点已经在用别的账号、且那边绑了资源时，
+                // 不能在这里改连接（会让原来那个账号下的资源读不到），除非明确要求全部重新绑定。
+                if !overwrite && !s.data.google_conn_id.is_empty() && s.data.google_conn_id != conn.id && (!s.data.ga4_property.is_empty() || !s.data.gsc_site.is_empty()) {
+                    report.kept += 1;
+                    continue;
+                }
                 let mut what = Vec::new();
                 let mut ga4: Option<(String, String)> = None;
                 let mut gsc_hit: Option<String> = None;

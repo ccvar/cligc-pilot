@@ -85,12 +85,87 @@ pub struct LaunchStatus {
     pub deployed: bool,
     /// 有没有一条授予了管理权限的 Google OAuth 连接（自动建 GA4 / 验证 Search Console 需要）。
     pub google_manage_conn: String,
+    /// 这次检查时按域名自动绑定上的资源（「Search Console sc-domain:x.com」这类说明）。
+    pub auto_bound: Vec<String>,
     pub errors: Vec<String>,
 }
 
+/// 上次「按域名找资源」的时间：向导每次打开都会检查，但去 Google / Bing 查列表 10 分钟最多一次（点刷新不受限）。
+static PROBED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> = std::sync::LazyLock::new(Default::default);
+
+/// 站点还没绑 Search Console / Bing 时，到已连接的账号里按域名找一遍，唯一命中就直接绑上。
+/// 规则和「按域名绑定」一致；Google 只在站点已用的那个账号里找（一个站点的 GA4 和 Search Console 共用一条连接），
+/// 站点还没选 Google 连接时才在所有账号里找。
+async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
+    let (mut bound, mut errs) = (Vec::new(), Vec::new());
+    if site.domain.is_empty() || (!site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty()) {
+        return (bound, errs);
+    }
+    {
+        let now = crate::now_secs();
+        let mut m = PROBED.lock().unwrap_or_else(|e| e.into_inner());
+        if !force && m.get(&site.id).is_some_and(|t| now.saturating_sub(*t) < 600) {
+            return (bound, errs);
+        }
+        m.insert(site.id.clone(), now);
+    }
+    if site.data.gsc_site.is_empty() {
+        let conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google" && (site.data.google_conn_id.is_empty() || c.id == site.data.google_conn_id)).collect();
+        for c in conns {
+            let Ok(raw) = crate::keychain::get_key(&c.id) else { continue };
+            let Ok(cred) = crate::google::parse_credential(&c.key_kind, &raw) else { continue };
+            let list = match crate::google::access_token(&c.id, &cred, &crate::google::read_scopes()).await {
+                Ok(t) => crate::google::list_gsc_sites(&t).await,
+                Err(e) => Err(e),
+            };
+            match list {
+                Ok(list) => {
+                    if let Some(g) = crate::google::match_gsc_site(&list, &site.domain) {
+                        let (cid, url) = (c.id.clone(), g.url.clone());
+                        if state.sites.update(&site.id, crate::now_secs(), |x| {
+                            if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid; }
+                            x.data.gsc_site = url;
+                            Ok(())
+                        }).is_ok() {
+                            bound.push(format!("Search Console {}", g.url));
+                        }
+                        break;
+                    }
+                }
+                Err(e) => errs.push(format!("Search Console（{}）：{e}", c.remark.trim().is_empty().then(|| c.name.clone()).unwrap_or_else(|| c.remark.clone()))),
+            }
+        }
+    }
+    if site.data.bing_site.is_empty() {
+        for c in state.conns.list().into_iter().filter(|c| c.kind == "bing") {
+            let Ok(key) = crate::keychain::get_key(&c.id) else { continue };
+            match crate::bing::list_sites(&key).await {
+                Ok(list) => {
+                    let hit = list.iter().find(|b| crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &site.domain)));
+                    if let Some(b) = hit {
+                        let (cid, url) = (c.id.clone(), b.url.clone());
+                        if state.sites.update(&site.id, crate::now_secs(), |x| {
+                            x.data.bing_conn_id = cid;
+                            x.data.bing_site = url;
+                            Ok(())
+                        }).is_ok() {
+                            bound.push(format!("Bing {}", b.url));
+                        }
+                        break;
+                    }
+                }
+                Err(e) => errs.push(format!("Bing：{e}")),
+            }
+        }
+    }
+    (bound, errs)
+}
+
 #[tauri::command]
-pub async fn launch_status(state: tauri::State<'_, AppState>, id: String) -> Result<LaunchStatus, String> {
+pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>) -> Result<LaunchStatus, String> {
     let site = state.sites.get(&id)?;
+    let (auto_bound, probe_errs) = probe_bindings(&state, &site, force.unwrap_or(false)).await;
+    let site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
     let mut st = LaunchStatus {
         github: site.source == "github" || !site.repo.is_empty(),
         repo: site.repo.clone(),
@@ -99,6 +174,8 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String) -> Res
         indexnow: !site.data.indexnow_key.is_empty(),
         bing: !site.data.bing_site.is_empty(),
         deployed: crate::site_deploy::load_history(&state.sites.data_dir(&id)).iter().any(|r| r.ok),
+        auto_bound,
+        errors: probe_errs,
         ..Default::default()
     };
     if matches!(site.deploy.mode.as_str(), "workers" | "vps") {

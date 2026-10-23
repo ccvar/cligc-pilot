@@ -17,6 +17,8 @@ export interface LaunchStatus {
   bing: boolean;
   deployed: boolean;
   google_manage_conn: string;
+  /** 这次检查按域名自动绑定上的资源。 */
+  auto_bound: string[];
   errors: string[];
 }
 
@@ -25,13 +27,21 @@ class LaunchState {
   busy = $state<Record<string, string>>({});
   notes = $state<Record<string, Record<string, string>>>({});
   measurement = $state<Record<string, string>>({});
+  checking = $state<Record<string, boolean>>({});
 }
 
 export const launch = new LaunchState();
 
-export async function loadLaunch(id: string) {
-  try { const v = await invoke<LaunchStatus>('launch_status', { id }); launch.status = { ...launch.status, [id]: v }; }
-  catch (e) { say(String(e), 'err'); }
+/** 读向导状态。顺带按域名去已连接的 Google / Bing 账号里找资源，唯一命中就绑上（force=手动刷新，不受 10 分钟节流）。 */
+export async function loadLaunch(id: string, force = false) {
+  if (force) launch.checking = { ...launch.checking, [id]: true };
+  try {
+    const v = await invoke<LaunchStatus>('launch_status', { id, force });
+    launch.status = { ...launch.status, [id]: v };
+    if (v.auto_bound?.length) { await refreshSites(); say(`已按域名绑定：${v.auto_bound.join('、')}`); }
+    else if (force) say('状态已是最新');
+  } catch (e) { say(String(e), 'err'); }
+  finally { if (force) launch.checking = { ...launch.checking, [id]: false }; }
 }
 
 function note(id: string, step: string, text: string) {
