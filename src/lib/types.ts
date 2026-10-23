@@ -179,6 +179,8 @@ export interface SiteData {
   ga4_property: string;
   ga4_property_name: string;
   gsc_site: string;
+  /** Search Console 用的 Google 连接；空＝和 GA4 同一条。 */
+  gsc_conn_id: string;
   bing_conn_id: string;
   bing_site: string;
   indexnow_key: string;

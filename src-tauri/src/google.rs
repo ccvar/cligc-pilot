@@ -268,6 +268,8 @@ pub fn match_gsc_site<'a>(sites: &'a [GscSite], domain: &str) -> Option<&'a GscS
         .find(|s| s.url == format!("sc-domain:{bare}"))
         .or_else(|| sites.iter().find(|s| s.url == format!("https://{domain}/")))
         .or_else(|| sites.iter().find(|s| s.url == format!("https://www.{bare}/")))
+        .or_else(|| sites.iter().find(|s| s.url == format!("http://{domain}/")))
+        .or_else(|| sites.iter().find(|s| s.url == format!("http://www.{bare}/")))
 }
 
 /// 媒体资源下网页数据流的主机名（按域名自动匹配媒体资源用）。
@@ -493,6 +495,8 @@ mod tests {
         assert_eq!(match_gsc_site(&sites, "gatesor.com").unwrap().url, "sc-domain:gatesor.com");
         assert_eq!(match_gsc_site(&sites[..2], "gatesor.com").unwrap().url, "https://gatesor.com/");
         assert!(match_gsc_site(&sites, "nope.com").is_none());
+        let http = vec![GscSite { url: "http://gateneo.com/".into(), permission: "siteOwner".into() }];
+        assert_eq!(match_gsc_site(&http, "gateneo.com").unwrap().url, "http://gateneo.com/");
         assert_eq!(encode_site("sc-domain:gatesor.com"), "sc-domain%3Agatesor.com");
         assert_eq!(encode_site("https://a.com/"), "https%3A%2F%2Fa.com%2F");
     }

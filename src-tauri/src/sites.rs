@@ -49,6 +49,13 @@ pub struct DeployConfig {
     pub command: String,
 }
 
+impl DataBinding {
+    /// 实际用来读 Search Console 的连接。
+    pub fn gsc_conn(&self) -> &str {
+        if self.gsc_conn_id.is_empty() { &self.google_conn_id } else { &self.gsc_conn_id }
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
 pub struct DataBinding {
     #[serde(default)]
@@ -61,6 +68,10 @@ pub struct DataBinding {
     /// Search Console 资源：`sc-domain:example.com` 或 `https://example.com/`。
     #[serde(default)]
     pub gsc_site: String,
+    /// Search Console 用的 Google 连接。GA4 和 Search Console 可能在不同的 Google 账号下；
+    /// 留空表示和 GA4 用同一条（`google_conn_id`），老数据都是这样。
+    #[serde(default)]
+    pub gsc_conn_id: String,
     #[serde(default)]
     pub bing_conn_id: String,
     /// Bing Webmaster 里的站点网址（形如 `https://example.com/`）。
@@ -992,6 +1003,15 @@ pub fn delete_env(site_id: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gsc_conn_falls_back_to_the_ga4_connection() {
+        let mut d = DataBinding { google_conn_id: "a".into(), ..Default::default() };
+        assert_eq!(d.gsc_conn(), "a");
+        d.gsc_conn_id = "b".into();
+        assert_eq!(d.gsc_conn(), "b");
+    }
+
     use super::*;
 
     #[test]

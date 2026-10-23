@@ -110,7 +110,10 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
         m.insert(site.id.clone(), now);
     }
     if site.data.gsc_site.is_empty() {
-        let conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google" && (site.data.google_conn_id.is_empty() || c.id == site.data.google_conn_id)).collect();
+        // 先找站点已经在用的账号，再找其它 Google 账号（Search Console 可以和 GA4 在不同账号下）
+        let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
+        let first = site.data.gsc_conn().to_string();
+        conns.sort_by_key(|c| c.id != first);
         for c in conns {
             let Ok(raw) = crate::keychain::get_key(&c.id) else { continue };
             let Ok(cred) = crate::google::parse_credential(&c.key_kind, &raw) else { continue };
@@ -123,11 +126,12 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
                     if let Some(g) = crate::google::match_gsc_site(&list, &site.domain) {
                         let (cid, url) = (c.id.clone(), g.url.clone());
                         if state.sites.update(&site.id, crate::now_secs(), |x| {
-                            if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid; }
+                            if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid.clone(); }
+                            x.data.gsc_conn_id = if x.data.google_conn_id == cid { String::new() } else { cid };
                             x.data.gsc_site = url;
                             Ok(())
                         }).is_ok() {
-                            bound.push(format!("Search Console {}", g.url));
+                            bound.push(format!("Search Console {}（{}）", g.url, if c.login.is_empty() { c.name.clone() } else { c.login.clone() }));
                         }
                         break;
                     }
@@ -441,7 +445,9 @@ pub async fn gsc_setup_domain(state: tauri::State<'_, AppState>, id: String, con
     }
     let u = site_url.clone();
     state.sites.update(&id, now(), |s| {
-        s.data.google_conn_id = conn_id.clone();
+        // 只改 Search Console 这一侧，不动 GA4 用的账号
+        if s.data.google_conn_id.is_empty() { s.data.google_conn_id = conn_id.clone(); }
+        s.data.gsc_conn_id = if s.data.google_conn_id == conn_id { String::new() } else { conn_id.clone() };
         s.data.gsc_site = u.clone();
         Ok(())
     })?;

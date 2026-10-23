@@ -130,7 +130,7 @@ pub fn data_sources_overview(state: tauri::State<'_, AppState>) -> Vec<DataSourc
         .map(|c| {
             let used = sites
                 .iter()
-                .filter(|s| s.data.google_conn_id == c.id || s.data.bing_conn_id == c.id)
+                .filter(|s| s.data.google_conn_id == c.id || s.data.gsc_conn() == c.id || s.data.bing_conn_id == c.id)
                 .map(|s| s.name.clone())
                 .collect();
             DataSourceRow { conn: c, sites: used }
@@ -179,15 +179,10 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                 }
             }
             for s in &sites {
-                // 一个站点的 GA4 和 Search Console 共用一条 Google 连接：站点已经在用别的账号、且那边绑了资源时，
-                // 不能在这里改连接（会让原来那个账号下的资源读不到），除非明确要求全部重新绑定。
-                if !overwrite && !s.data.google_conn_id.is_empty() && s.data.google_conn_id != conn.id && (!s.data.ga4_property.is_empty() || !s.data.gsc_site.is_empty()) {
-                    report.kept += 1;
-                    continue;
-                }
                 let mut what = Vec::new();
                 let mut ga4: Option<(String, String)> = None;
                 let mut gsc_hit: Option<String> = None;
+                // GA4 / Search Console 各自独立：已经绑在别的账号下的那一项不动（除非要求全部重新绑定）
                 if overwrite || s.data.ga4_property.is_empty() {
                     if let Some((p, _)) = hosts.iter().find(|(_, hs)| hs.iter().any(|h| crate::google::same_host(h, &s.domain))) {
                         ga4 = Some((p.property.clone(), p.name.clone()));
@@ -210,12 +205,18 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                 }
                 let cid = conn.id.clone();
                 state.sites.update(&s.id, crate::now_secs(), |x| {
-                    x.data.google_conn_id = cid;
                     if let Some((p, n)) = ga4 {
+                        // 换 GA4 账号时，Search Console 原本跟着旧账号走的，要把旧账号记成它自己的
+                        if x.data.gsc_conn_id.is_empty() && !x.data.gsc_site.is_empty() && x.data.google_conn_id != cid {
+                            x.data.gsc_conn_id = x.data.google_conn_id.clone();
+                        }
+                        x.data.google_conn_id = cid.clone();
                         x.data.ga4_property = p;
                         x.data.ga4_property_name = n;
                     }
                     if let Some(g) = gsc_hit {
+                        if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid.clone(); }
+                        x.data.gsc_conn_id = if x.data.google_conn_id == cid { String::new() } else { cid.clone() };
                         x.data.gsc_site = g;
                     }
                     Ok(())

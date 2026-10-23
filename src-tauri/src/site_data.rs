@@ -275,31 +275,24 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     let mut meta = load_meta(site_dir);
     let due = |m: &SourceMeta| force || !m.error.is_empty() || now().saturating_sub(m.fetched_at) > STALE_SECS;
     let d = &site.data;
-    if !d.google_conn_id.is_empty() && (!d.ga4_property.is_empty() || !d.gsc_site.is_empty()) && (due(&meta.ga4) || due(&meta.gsc)) {
-        match google_token(conns, &d.google_conn_id, &google::read_scopes()).await {
-            Ok(token) => {
-                if !d.ga4_property.is_empty() && due(&meta.ga4) {
-                    meta.ga4 = match fetch_ga4(&token, &d.ga4_property, &dir).await {
-                        Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-                        Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
-                    };
-                }
-                if !d.gsc_site.is_empty() && due(&meta.gsc) {
-                    meta.gsc = match fetch_gsc(&token, &d.gsc_site, &dir).await {
-                        Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-                        Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
-                    };
-                }
-            }
-            Err(e) => {
-                if !d.ga4_property.is_empty() {
-                    meta.ga4.error = e.clone();
-                }
-                if !d.gsc_site.is_empty() {
-                    meta.gsc.error = e;
-                }
-            }
-        }
+    // GA4 和 Search Console 各用各的连接（可能是两个 Google 账号）；同一条连接时令牌有缓存，不会重复换取。
+    if !d.google_conn_id.is_empty() && !d.ga4_property.is_empty() && due(&meta.ga4) {
+        meta.ga4 = match google_token(conns, &d.google_conn_id, &google::read_scopes()).await {
+            Ok(token) => match fetch_ga4(&token, &d.ga4_property, &dir).await {
+                Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
+                Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
+            },
+            Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
+        };
+    }
+    if !d.gsc_conn().is_empty() && !d.gsc_site.is_empty() && due(&meta.gsc) {
+        meta.gsc = match google_token(conns, d.gsc_conn(), &google::read_scopes()).await {
+            Ok(token) => match fetch_gsc(&token, &d.gsc_site, &dir).await {
+                Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
+                Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
+            },
+            Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
+        };
     }
     if !d.bing_conn_id.is_empty() && !d.bing_site.is_empty() && due(&meta.bing) {
         meta.bing = match conns.get(&d.bing_conn_id).and_then(|c| crate::keychain::get_key(&c.id)) {
