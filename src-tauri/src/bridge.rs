@@ -346,6 +346,7 @@ mod tests {
             key_prefix: String::new(),
             key_kind: String::new(),
             account_id: String::new(),
+            login: String::new(),
             ssh_host: "h".into(),
             ssh_port: 22,
             ssh_user: "root".into(),

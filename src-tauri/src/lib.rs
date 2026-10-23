@@ -6,6 +6,7 @@ mod api_billing;
 mod api_profiles;
 mod api_reasoning;
 mod editorial;
+mod github;
 mod brains;
 mod conns;
 mod bridge;
@@ -103,6 +104,11 @@ fn sanitize_filename(name: &str) -> String {
 /// 计算本轮 cwd 但不建目录：CF 连接＝工作区下的项目目录；其它＝空串（调用方回退连接目录）。
 /// 读路径（如附件缩略图）用它，避免只读操作把用户删掉的项目目录悄悄复活成幽灵项目。
 fn work_dir_path(conn: &conns::Connection, site_slug: &str) -> String {
+    if conn.kind == "github" {
+        return github::repo_dir(&conn.skill_dir, site_slug)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+    }
     if conn.kind == "cloudflare" {
         std::path::Path::new(&conn.skill_dir)
             .join("projects")
@@ -160,6 +166,7 @@ fn workspace_connection(work_dir: &str) -> conns::Connection {
         key_prefix: String::new(),
         key_kind: String::new(),
         account_id: String::new(),
+        login: String::new(),
         ssh_host: String::new(),
         ssh_port: 0,
         ssh_user: String::new(),
@@ -386,10 +393,79 @@ async fn update_cloudflare_token(
     }
     let store = state.conns.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        store.replace_cloudflare_token(&conn_id, &token)
+        store.replace_token(&conn_id, "cloudflare", &token)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// ---- GitHub ----
+
+/// 验证 fine-grained Token：返回账号与它能访问的仓库（含是否可写）。Token 不落盘。
+#[tauri::command]
+async fn verify_github_token(token: String) -> Result<github::GhVerify, String> {
+    github::verify_token(&token).await
+}
+
+#[tauri::command]
+async fn connect_github(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    token: String,
+) -> Result<conns::Connection, String> {
+    let verified = github::verify_token(&token).await?;
+    let store = state.conns.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        store.add_github(&name, &token, &verified.login, verified.user_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 换 Token：新 Token 必须属于同一个 GitHub 账号；连接 id 与已检出的仓库保留。
+#[tauri::command]
+async fn update_github_token(
+    state: tauri::State<'_, AppState>,
+    conn_id: String,
+    token: String,
+) -> Result<conns::Connection, String> {
+    let current = state.conns.get(&conn_id)?;
+    if current.kind != "github" {
+        return Err("这不是 GitHub 连接".into());
+    }
+    let verified = github::verify_token(&token).await?;
+    if verified.user_id.to_string() != current.account_id {
+        return Err(format!("新 Token 属于 {}，不是原账号 {}，未更新连接", verified.login, current.login));
+    }
+    let store = state.conns.clone();
+    tauri::async_runtime::spawn_blocking(move || store.replace_token(&conn_id, "github", &token))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 用已保存的 Token 拉取可访问的仓库（新建会话时选仓库用）。
+#[tauri::command]
+async fn list_github_repos(
+    state: tauri::State<'_, AppState>,
+    conn_id: String,
+) -> Result<Vec<github::GhRepo>, String> {
+    let conn = state.conns.get(&conn_id)?;
+    if conn.kind != "github" {
+        return Err("这不是 GitHub 连接".into());
+    }
+    let token = tauri::async_runtime::spawn_blocking(move || keychain::get_key(&conn_id))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(github::verify_token(&token).await?.repos)
+}
+
+/// 本地已检出的仓库（`owner/repo`）。
+#[tauri::command]
+fn list_github_checkouts(state: tauri::State<'_, AppState>, conn_id: String) -> Vec<String> {
+    match state.conns.get(&conn_id) {
+        Ok(conn) if conn.kind == "github" => github::checkouts(&conn.skill_dir),
+        _ => vec![],
+    }
 }
 
 // ---- SSH 远程连接 ----
@@ -3174,6 +3250,9 @@ fn conversation_system_prompt(
     if is_workspace {
         return agent::workspace_system_prompt(!workspace_dir.trim().is_empty());
     }
+    if conn.kind == "github" {
+        return agent::github_system_prompt(site_slug, &conn.login);
+    }
     if conn.kind == "ssh" {
         return agent::ssh_system_prompt(
             &conn.ssh_user,
@@ -3240,7 +3319,7 @@ async fn create_conversation(
     };
     let is_cf = conn.kind == "cloudflare";
     let is_ssh = conn.kind == "ssh";
-    if !is_workspace && !is_ssh && !is_cf {
+    if !is_workspace && !is_ssh && !is_cf && conn.kind != "github" {
         return Err(format!("不支持的连接类型：{}", conn.kind));
     }
     let sys = conversation_system_prompt(
@@ -3407,6 +3486,9 @@ mod api_outcome_integration_tests {
 
 /// 是否已经有可操作目标：自由对话与 SSH 不需要项目；Cloudflare 必须先有项目 slug。
 fn conversation_target_ready(conn_kind: &str, task_type: &str, site_slug: &str) -> bool {
+    if conn_kind == "github" {
+        return github::parse_repo(site_slug).is_ok();
+    }
     task_type == "workspace" || conn_kind == "ssh" || !site_slug.trim().is_empty()
 }
 
@@ -3420,6 +3502,9 @@ mod conversation_target_tests {
         assert!(conversation_target_ready("cloudflare", "sitebuild", "blog"));
         assert!(conversation_target_ready("ssh", "remote", ""));
         assert!(conversation_target_ready("workspace", "workspace", ""));
+        assert!(conversation_target_ready("github", "repo", "octo/hello"));
+        assert!(!conversation_target_ready("github", "repo", ""));
+        assert!(!conversation_target_ready("github", "repo", "../etc"));
     }
 }
 
@@ -3453,7 +3538,7 @@ async fn start_conversation(
         state.conns.get(&conn_id)?.kind
     };
     if !conversation_target_ready(&conn_kind, &task_type, &site_slug) {
-        return Err("项目不能为空".into());
+        return Err(if conn_kind == "github" { "请选择一个仓库（owner/repo）" } else { "项目不能为空" }.into());
     }
     if message.trim().is_empty() {
         return Err("请先说点什么".into());
@@ -4191,6 +4276,11 @@ pub fn run() {
             verify_cf_token,
             connect_cloudflare,
             update_cloudflare_token,
+            verify_github_token,
+            connect_github,
+            update_github_token,
+            list_github_repos,
+            list_github_checkouts,
             verify_ssh,
             connect_ssh,
             update_ssh,
