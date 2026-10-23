@@ -19,7 +19,7 @@
   const siteOpts = $derived.by(() => {
     const rank = new Map(sites.recent.map((id, i) => [id, i]));
     return [...sites.list]
-      .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'))
+      .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || a.name.localeCompare(b.name, 'zh'))
       .map((s) => ({ value: s.id, label: s.name, img: sites.icons[s.id] ?? '', sub: s.domain && s.domain !== s.name ? s.domain : (DEPLOY_LABEL[s.deploy.mode] ?? '').split('（')[0] }));
   });
   const hubSite = $derived(sites.list.find((s) => s.id === launcher.lSite));

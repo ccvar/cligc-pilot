@@ -8,7 +8,7 @@
   import { fleet, trafficDown } from '$lib/state/fleet.svelte.js';
 
   // 左栏只放「有对话的站点」：它是对话的入口，不是站点目录。没建过对话的站点不出现——
-  // 找站点、管站点都在「全部站点」总览和全局搜索里。顺序：置顶在前，其余按最近一次对话。
+  // 找站点、管站点都在「全部站点」总览和全局搜索里。顺序：按最近一次对话。
   // 例外：当前打开的站点总在（它这一行就是站点看板的入口）。
   let { convRow }: { convRow: Snippet<[Conversation]> } = $props();
 
@@ -29,7 +29,7 @@
   const list = $derived(
     fleet.rows
       .filter((r) => lastConv.has(r.id) || r.id === activeId)
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || (lastConv.get(b.id) ?? 0) - (lastConv.get(a.id) ?? 0)),
+      .sort((a, b) => (lastConv.get(b.id) ?? 0) - (lastConv.get(a.id) ?? 0)),
   );
 </script>
 

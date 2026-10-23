@@ -49,7 +49,7 @@ class SearchState {
       // 站点：名称 / 域名 / 仓库 / 标签。和连接一样跨工作区——站点一多，这就是最快的跳转方式。
       const siteHits = fleet.rows
         .filter((r) => `${r.name} ${r.domain} ${r.repo} ${r.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(q))
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
         .slice(0, 8);
       if (siteHits.length) out.push({ title: '站点', entries: siteHits.map((s) => ({ kind: 'site' as const, s })) });
       const connHits = app.conns.filter((c) => connHay(c).includes(q)).slice(0, 8);

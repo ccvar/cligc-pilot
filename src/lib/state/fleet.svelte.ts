@@ -4,7 +4,7 @@ import type { SiteRow, PendingItem, Site } from '$lib/types';
 import { say } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
-export type SiteFilter = 'all' | 'pinned' | 'attention' | 'failed' | 'down' | 'nodata';
+export type SiteFilter = 'all' | 'attention' | 'failed' | 'down' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
@@ -51,7 +51,6 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
     (!query || hay(r).includes(query))
     && (!tag || r.tags.includes(tag))
     && (f === 'all'
-      || (f === 'pinned' && r.pinned)
       || (f === 'attention' && needsAttention(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
       || (f === 'down' && trafficDown(r))
@@ -106,13 +105,6 @@ export async function loadPending() {
   catch (e) { say(String(e), 'err'); }
 }
 
-export async function setPinned(id: string, pinned: boolean) {
-  try {
-    const s = await invoke<Site>('set_site_flags', { id, pinned });
-    sites.list = sites.list.map((x) => (x.id === s.id ? s : x));
-    fleet.rows = fleet.rows.map((r) => (r.id === id ? { ...r, pinned } : r));
-  } catch (e) { say(String(e), 'err'); }
-}
 export async function setTags(id: string, tags: string[]) {
   try {
     const s = await invoke<Site>('set_site_flags', { id, tags });

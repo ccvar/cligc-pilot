@@ -20,7 +20,7 @@
     const needle = q.trim().toLowerCase();
     return [...sites.list]
       .filter((s) => !needle || `${s.name} ${s.domain} ${s.repo} ${s.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(needle))
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || a.name.localeCompare(b.name, 'zh'));
+      .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || a.name.localeCompare(b.name, 'zh'));
   });
   $effect(() => { void q; hi = 0; });
 
@@ -70,7 +70,6 @@
             <span class="ic"><SiteIcon id={s.id} size={16} /></span>
             <span class="txt"><b>{s.name}</b>{#if s.domain && s.domain !== s.name}<small>{s.domain}</small>{/if}</span>
             <span class="dep" data-tip={s.deploy.mode === 'vps' ? 'VPS' : s.deploy.mode === 'none' ? '未配置部署' : s.deploy.mode === 'workers' ? 'Cloudflare Workers' : 'Cloudflare Pages'}>{#if s.deploy.mode === 'vps'}<Icon name="server" size={11} />{:else if s.deploy.mode !== 'none'}<CfMark size={11} />{/if}</span>
-            {#if s.pinned}<span class="pin" aria-label="已置顶">★</span>{/if}
             {#if s.id === cur?.id}<Icon name="check" size={13} />{/if}
           </button>
         {:else}
@@ -106,7 +105,6 @@
   .sw-opt.cur .txt b { font-weight: 600; }
   .sw-opt .txt small { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sw-opt .dep { flex: none; display: inline-flex; width: 14px; justify-content: center; color: var(--faint); opacity: .8; }
-  .sw-opt .pin { flex: none; font-size: 11px; color: #c28a12; }
   .sw-opt :global(.ico:last-child) { color: var(--text); }
   .empty { margin: 14px 8px; text-align: center; font-size: 12px; color: var(--faint); }
   .sw-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--border); background: var(--rail); font-size: 11px; color: var(--faint); }

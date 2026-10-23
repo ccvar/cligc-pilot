@@ -8,7 +8,7 @@
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { sites, editSite, saveSiteDraft, setSiteEnv, removeSite } from '$lib/state/sites.svelte.js';
-  import { setTags, setPinned, fleet } from '$lib/state/fleet.svelte.js';
+  import { setTags, fleet } from '$lib/state/fleet.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { if (!sites.draft || sites.draft.id !== site.id) editSite(site); });
@@ -62,14 +62,13 @@
         <div class="field"><label for="ss-name">站点名称</label><input id="ss-name" class="tin" bind:value={d.name} /></div>
         <div class="field"><label for="ss-domain">主域名</label><input id="ss-domain" class="tin" bind:value={d.domain} placeholder="example.com" spellcheck="false" /><small>用于数据匹配、IndexNow 提交与站点链接。</small></div>
       </div>
-      <div class="field" style="margin-top:10px"><span class="lbl">标签与置顶</span>
+      <div class="field" style="margin-top:10px"><span class="lbl">标签</span>
         <div class="row wrap">
           {#each site.tags as t (t)}<span class="pill">#{t}<button class="x mini" title="移除" onclick={() => setTags(site.id, site.tags.filter((x) => x !== t))}>×</button></span>{/each}
           <input class="tin" style="max-width:160px" bind:value={tagIn} placeholder="加标签，回车" list="ss-tags" onkeydown={(e) => e.key === 'Enter' && addTag()} />
           <datalist id="ss-tags">{#each fleet.tags.filter((t) => !site.tags.includes(t)) as t (t)}<option value={t}></option>{/each}</datalist>
-          <label class="check" style="margin-left:8px"><input type="checkbox" checked={site.pinned} onchange={(e) => setPinned(site.id, (e.currentTarget as HTMLInputElement).checked)} /><span>在左栏置顶</span></label>
         </div>
-        <small>站点多的时候用标签分组、筛选（比如按语言、市场、业务线）。标签和置顶即时保存。</small>
+        <small>站点多的时候用标签分组、筛选（比如按语言、市场、业务线）。标签即时保存。</small>
       </div>
       <div class="grid2" style="margin-top:10px">
         <div class="field"><span class="lbl">代码来源</span><div class="mono dim" style="font-size:12px;padding-top:4px;overflow-wrap:anywhere">{site.source === 'github' ? `GitHub · ${site.repo}` : site.local_dir}</div><small>导入后不能修改；换来源请移除后重新导入。</small></div>

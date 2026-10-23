@@ -115,7 +115,7 @@ export function openSite(id: string, tab: SiteTab = 'overview', queueFilter: '' 
   void selectConn(SITE_PREFIX + id);
 }
 
-/** 记一次「打开过这个站点」：左栏只放置顶和最近的站点，全部站点在总览里找。 */
+/** 记一次「打开过这个站点」：左栏只放最近的站点，全部站点在总览里找。 */
 export function touchRecent(id: string) {
   const next = [id, ...sites.recent.filter((x) => x !== id)].slice(0, RECENT_MAX);
   sites.recent = next;

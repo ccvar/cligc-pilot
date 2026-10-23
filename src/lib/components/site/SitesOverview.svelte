@@ -7,7 +7,7 @@
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
-  import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, setPinned, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, num, delta } from './fmt';
@@ -36,7 +36,6 @@
   const FILTERS = $derived([
     { v: 'all' as const, l: `全部 ${totals.sites}` },
     { v: 'attention' as const, l: `需关注 ${fleet.attentionCount}` },
-    { v: 'pinned' as const, l: '置顶' },
     { v: 'failed' as const, l: `失败 ${totals.failed}` },
     { v: 'down' as const, l: `流量下滑 ${totals.down}` },
     { v: 'nodata' as const, l: `未接数据 ${totals.nodata}` },
@@ -80,7 +79,6 @@
         <div class="card tbl-card">
           <table class="tbl">
             <thead><tr>
-              <th class="pin-col"></th>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
               <th class="num"><button class="th" onclick={() => sortBy('clicks')}>Google 点击{arrow('clicks')}</button></th>
               <th class="num"><button class="th" onclick={() => sortBy('change')}>变化{arrow('change')}</button></th>
@@ -94,7 +92,6 @@
                 {@const st = status(r)}
                 {@const ch = clicksChange(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
-                  <td><button class="pin" class:on={r.pinned} title={r.pinned ? '取消置顶' : '置顶'} onclick={(e) => { e.stopPropagation(); void setPinned(r.id, !r.pinned); }}>★</button></td>
                   <td class="site-cell">
                     <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
@@ -163,7 +160,6 @@
   .chips button.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
-  .pin-col { width: 22px; }
   .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; transition: color .12s; }
   .th:hover { color: var(--text); }
   tr.clickable { cursor: pointer; }
@@ -190,9 +186,6 @@
   .am-stopped::before { background: var(--faint); }
   .am-none { color: var(--faint); }
   .when { font-size: 12px; white-space: nowrap; }
-  .pin { border: none; background: none; padding: 2px; color: var(--border2); cursor: pointer; font-size: 13px; line-height: 1; border-radius: 4px; transition: color .12s, transform .12s; }
-  .pin:hover { color: var(--dim); transform: scale(1.12); }
-  .pin.on { color: #c28a12; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
   .kind { margin-left: 8px; color: var(--faint); font-size: 11.5px; }

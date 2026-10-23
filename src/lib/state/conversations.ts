@@ -20,9 +20,9 @@ export function newChat() {
   composer.draft='';composer.attachments=[];
   if (app.isWorkspaceChat) launcher.lPerm = 'full';
   if (app.isSitesHub) {
-    // 还没进具体站点：默认选最近用过的站点（其次置顶的、第一个），左下角可换
+    // 还没进具体站点：默认选最近用过的站点（没有就第一个），左下角可换
     const ids = new Set(sites.list.map((s) => s.id));
-    if (!ids.has(launcher.lSite)) launcher.lSite = sites.recent.find((id) => ids.has(id)) ?? sites.list.find((s) => s.pinned)?.id ?? sites.list[0]?.id ?? '';
+    if (!ids.has(launcher.lSite)) launcher.lSite = sites.recent.find((id) => ids.has(id)) ?? sites.list[0]?.id ?? '';
     if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
   }
   // 远程连接没有启动页：新对话＝把底部对话面板腾空（工作台留在原地，终端不断）。
