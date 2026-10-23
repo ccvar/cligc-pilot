@@ -36,6 +36,12 @@
   }
   const moving = $derived((g?.sites ?? []).filter((id) => otherOf(id)).length);
   function close() { if (!managed.saving) managed.editor = null; }
+  // 两步：先选站点，再看规则；新建时只有第二步才能「开始托管」，编辑时两步可以随便切
+  let step = $state<1 | 2>(1);
+  let lastFor = '';
+  $effect(() => { const k = g ? g.id || 'new' : ''; if (k !== lastFor) { lastFor = k; step = 1; q = ''; } });
+  const isNew = $derived(!g?.id);
+  const siteName = (id: string) => sites.list.find((x) => x.id === id)?.name ?? id;
 </script>
 
 {#if g}
@@ -43,9 +49,15 @@
   <div class="su modal ge" role="dialog" aria-modal="true" aria-label={g.id ? '编辑托管方案' : '新建托管方案'}>
     <header class="sheet-head">
       <b><Icon name="sparkles" />{g.id ? '编辑托管方案' : '新建托管方案'}</b>
+      <nav class="stepper" aria-label="步骤">
+        <button class:on={step === 1} class:done={step === 2} onclick={() => (step = 1)}><span class="sn">{step === 2 ? '✓' : 1}</span>选择站点</button>
+        <span class="sl"></span>
+        <button class:on={step === 2} onclick={() => (step = 2)} disabled={isNew && !g.sites.length}><span class="sn">2</span>托管规则</button>
+      </nav>
       <button class="x" onclick={close} aria-label="关闭">×</button>
     </header>
     <div class="sheet-body">
+     {#if step === 1}
       <div class="field"><label for="ge-name">方案名称</label><input id="ge-name" class="tin" bind:value={g.name} placeholder="例如：中文站点 · 只改标题描述" maxlength="40" /></div>
 
       <div class="field">
@@ -67,6 +79,11 @@
         {#if moving}<small class="warn-text">{moving} 个站点会从原来的方案移到这里，改用这个方案的规则。</small>{/if}
       </div>
 
+     {:else}
+      <div class="chosen">
+        <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="link-btn" onclick={() => (step = 1)}>修改</button></div>
+        <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
+      </div>
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>运营人员点头后发布</button></div>
@@ -83,12 +100,19 @@
         <div class="field"><span class="lbl">备用模型</span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
       </div>
       <small class="faint">主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。Codex 不能用于托管。</small>
+     {/if}
     </div>
     <footer class="sheet-foot">
       {#if g.id}<button class="btn small danger" onclick={() => g && deleteGroup(g)} disabled={managed.saving}><Icon name="trash" size={12} />删除方案</button>{/if}
       <span class="grow"></span>
-      <button class="btn small ghost" onclick={close} disabled={managed.saving}>取消</button>
-      <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim()}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : g.sites.length ? `托管 ${g.sites.length} 个站点` : '创建方案'}{/if}</button>
+      {#if step === 1}
+        <button class="btn small ghost" onclick={close} disabled={managed.saving}>取消</button>
+        {#if !isNew}<button class="btn small ghost" onclick={saveGroup} disabled={managed.saving || !g.name.trim()}>保存</button>{/if}
+        <button class="btn small primary" onclick={() => (step = 2)} disabled={!g.name.trim() || (isNew && !g.sites.length)}>下一步：托管规则<Icon name="arrow" size={12} /></button>
+      {:else}
+        <button class="btn small ghost" onclick={() => (step = 1)} disabled={managed.saving}>上一步</button>
+        <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim()}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : `开始托管 ${g.sites.length} 个站点`}{/if}</button>
+      {/if}
     </footer>
   </div>
 {/if}
@@ -99,7 +123,7 @@
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
   .pk-search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .pk-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }
-  .pk-list { max-height: 220px; overflow-y: auto; padding: 4px; }
+  .pk-list { max-height: min(340px, 44vh); overflow-y: auto; padding: 4px; }
   .pk-row { display: flex; align-items: center; gap: 9px; padding: 5px 8px; border-radius: 7px; cursor: pointer; font-size: 13px; transition: background-color .12s; }
   .pk-row:hover { background: var(--su-hover); }
   .pk-row input { accent-color: var(--accent); margin: 0; }
@@ -110,4 +134,20 @@
   .sec { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12.5px; font-weight: 600; color: var(--text); }
   .sec :global(.ico) { color: var(--dim); }
   .sheet-foot .grow { flex: 1; }
+  .stepper { display: flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 10px; }
+  .stepper button { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; padding: 3px 6px; border-radius: 7px; font: inherit; font-size: 12.5px; color: var(--faint); cursor: pointer; }
+  .stepper button:hover:not(:disabled) { color: var(--text); background: var(--su-hover); }
+  .stepper button:disabled { cursor: default; opacity: .6; }
+  .stepper button.on { color: var(--text); font-weight: 600; }
+  .stepper .sn { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; background: var(--accent-soft); color: var(--dim); }
+  .stepper button.on .sn { background: var(--accent); color: #fff; }
+  .stepper button.done .sn { background: var(--ok); color: #fff; }
+  .stepper .sl { width: 18px; height: 1px; background: var(--border2); }
+  .chosen { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); }
+  .chosen .lbl { font-size: 12.5px; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chips .pill { gap: 5px; }
+  .ch-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .chosen .link-btn { font-size: 12px; }
+  .chosen + .sec { border-top: none; padding-top: 4px; }
 </style>
