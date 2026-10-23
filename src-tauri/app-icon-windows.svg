@@ -1,6 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 6 88 88">
   <!-- Windows 图标惯例为满版（不留 macOS 那样的透明边距），用于 icon.ico 与 Store Logo。 -->
-  <rect width="64" height="64" rx="14" fill="#2f2c27"/>
-  <path d="M44 24a14 14 0 1 0 0 16" fill="none" stroke="#f1ece1" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="45.5" cy="42" r="4.6" fill="#f1ece1"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6be09a"/>
+      <stop offset="1" stop-color="#18a058"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="88" height="88" rx="19.8" fill="#fff"/>
+  <rect x="33" y="22" width="14" height="46" rx="7" fill="url(#g)"/>
+  <rect x="53" y="34" width="14" height="46" rx="7" fill="url(#g)"/>
 </svg>
