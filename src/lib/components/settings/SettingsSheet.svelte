@@ -17,9 +17,8 @@
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
   import { openGhConnect } from '$lib/state/github.svelte.js';
-  import { openDataConnect, openDataUpdate, isDataConn } from '$lib/state/datasrc.svelte.js';
-  import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
-  import BingMark from '$lib/components/icons/BingMark.svelte';
+  import { isDataConn } from '$lib/state/datasrc.svelte.js';
+  import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
@@ -58,22 +57,16 @@
               <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openSshConnect(); }}>
                 <SshMark size={15} /><span>新建远程连接</span>
               </button>
-              <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openDataConnect('google'); }}>
-                <GoogleMark size={15} /><span>连接 Google（GA4 + Search Console）</span>
-              </button>
-              <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openDataConnect('bing'); }}>
-                <BingMark size={15} /><span>连接 Bing Webmaster</span>
-              </button>
             </div>
           {/if}
         </div>
       </div>
       {#if app.conns.length === 0}<p class="hint">还没有连接。可以连接 Cloudflare 建站部署、连接 GitHub 改仓库代码，或新建一个 SSH 远程连接。本地对话不需要连接。</p>{/if}
       <div class="conn-list">
-        {#each app.conns as c (c.id)}
+        {#each app.conns.filter((c) => !isDataConn(c)) as c (c.id)}
           <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
-            onclick={() => (isDataConn(c) ? openDataUpdate(c) : selectConn(c.id))}
-            onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && (isDataConn(c) ? openDataUpdate(c) : selectConn(c.id))}
+            onclick={() => selectConn(c.id)}
+            onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={22} />
             <span class="conn-main"><b>{connectionDisplayName(c)}</b>
@@ -100,6 +93,8 @@
           </div>
         {/each}
       </div>
+
+      <DataSourcesSection />
 
       <div class="sec-head mt"><span>模型服务 · 本地客户端</span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
       {#if app.brains}

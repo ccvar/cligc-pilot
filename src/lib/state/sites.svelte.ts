@@ -83,6 +83,7 @@ export async function refreshSites() {
 export function openSite(id: string, tab: SiteTab = 'overview') {
   connections.switcherOpen = false;
   sites.tab = tab;
+  if (app.activeConnId === SITE_PREFIX + id) { openSiteBoard(tab); return; }
   void selectConn(SITE_PREFIX + id);
 }
 
@@ -287,7 +288,7 @@ export async function removeSite(s: Site) {
     await invoke('remove_site', { id: s.id });
     await refreshSites();
     await refreshConvos();
-    void selectConn('__workspace__');
+    void selectConn('__sites__');
   } catch (e) { say(String(e), 'err'); }
 }
 

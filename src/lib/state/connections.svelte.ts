@@ -2,7 +2,7 @@ import type { Connection } from '$lib/types';
 import { tick } from 'svelte';
 import { hideTip } from '$lib/tip';
 import { invoke } from '@tauri-apps/api/core';
-import { pilotWindowLabel, CONN_WIN_PREFIX, LAST_CONN_KEY, isMainWindow, WORKSPACE_CONN_ID } from './env';
+import { pilotWindowLabel, CONN_WIN_PREFIX, LAST_CONN_KEY, isMainWindow, WORKSPACE_CONN_ID, SITES_CONN_ID } from './env';
 import { app, say, confirmDialog, refreshConns, refreshConvos } from './app.svelte.js';
 import { switchConversationWorkspace } from './panes.svelte.js';
 import { launcher } from './launcher.svelte.js';
@@ -109,8 +109,13 @@ export async function selectConn(id: string) {
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;
-    if (app.view === 'thread' || app.view === 'remote' || app.view === 'site'
+    if (app.view === 'thread' || app.view === 'remote' || app.view === 'site' || app.view === 'sites'
       || ((app.view === 'templates' || app.view === 'prompts') && conn?.kind !== 'cloudflare')) app.view = 'launcher';
+  }
+  if (id === SITES_CONN_ID) {
+    // 全部站点：主区是总览，左栏是站点列表。
+    app.view = 'sites';
+    return;
   }
   if (isSiteConnId(id)) {
     // 站点：进入站点页（看板 / 待处理 / 部署 / 设置），侧栏是该站的会话。

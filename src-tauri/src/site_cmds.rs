@@ -153,6 +153,7 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
         return Err("自动化档位只能是 1–4".into());
     }
     site.ops.whitelist.retain(|w| sites::WHITELIST_KINDS.contains(&w.as_str()));
+    site.tags = sites::normalize_tags(&site.tags)?;
     if site.ops.brain == "codex" {
         return Err("无人值守的运营任务不能用 Codex（它没有逐条确认的钩子），请选 Claude、Grok 或 API 服务".into());
     }
@@ -186,6 +187,8 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
         deploy: req.deploy,
         data: sites::DataBinding { indexnow_key: req.indexnow_key, ..Default::default() },
         ops: sites::OpsConfig::default(),
+        pinned: false,
+        tags: Vec::new(),
         created_at: t,
         updated_at: t,
     };

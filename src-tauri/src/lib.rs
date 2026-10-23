@@ -7,6 +7,7 @@ mod api_billing;
 mod api_profiles;
 mod api_reasoning;
 mod editorial;
+mod fleet_cmds;
 mod github;
 mod brains;
 mod conns;
@@ -4496,6 +4497,11 @@ pub fn run() {
             launch_cmds::ga4_create_property,
             launch_cmds::gsc_setup_domain,
             launch_cmds::ga4_accounts,
+            fleet_cmds::sites_overview,
+            fleet_cmds::pending_across_sites,
+            fleet_cmds::set_site_flags,
+            fleet_cmds::data_sources_overview,
+            fleet_cmds::auto_bind_sites,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

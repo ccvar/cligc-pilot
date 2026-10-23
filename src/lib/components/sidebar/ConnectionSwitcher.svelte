@@ -16,7 +16,9 @@
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
-  import { sites, openSite, openSiteImport, SITE_PREFIX } from '$lib/state/sites.svelte.js';
+  import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
+  import { fleet } from '$lib/state/fleet.svelte.js';
+  import { SITES_CONN_ID } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
 </script>
 
@@ -29,18 +31,12 @@
           <span class="cs-main"><b>本地对话</b><small>不连接任何服务，可接入本地文件夹</small></span>
           {#if app.activeConnId === WORKSPACE_CONN_ID}<span class="cs-check">✓</span>{/if}
         </button>
-        {#if sites.list.length}
-          <div class="cs-label">站点</div>
-          {#each sites.list as s (s.id)}
-            {@const sid = SITE_PREFIX + s.id}
-            <button class="cs-item {app.activeConnId === sid ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === sid} onclick={() => openSite(s.id)}>
-              <SiteMark size={18} />
-              <span class="cs-main"><b>{s.name}</b><small>{s.domain || (s.source === 'github' ? s.repo : '本地文件夹')} · {s.source === 'github' ? 'GitHub' : '本地'}</small></span>
-              {#if app.activeConnId === sid}<span class="cs-check">✓</span>{/if}
-            </button>
-          {/each}
-          <div class="cs-label">连接</div>
-        {/if}
+        <!-- 站点再多也只占一行：进去之后左栏就是可搜索的站点列表。 -->
+        <button class="cs-item {app.isSitesMode ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSitesMode} onclick={() => { connections.switcherOpen = false; void selectConn(SITES_CONN_ID); }}>
+          <SiteMark size={18} />
+          <span class="cs-main"><b>站点</b><small>{sites.list.length ? `${sites.list.length} 个站点${fleet.pendingCount ? ` · ${fleet.pendingCount} 条待确认` : ''}` : '导入用代码管理的静态站，接数据、做运营'}</small></span>
+          {#if app.isSitesMode}<span class="cs-check">✓</span>{/if}
+        </button>
         {#each app.conns.filter((c) => !isDataConn(c)) as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
@@ -68,10 +64,10 @@
     </div>
   {/if}
 <button class="rail-foot" class:open={connections.switcherOpen} onclick={() => { connections.switcherOpen = !connections.switcherOpen; }}>
-  {#if app.isSiteConn}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
+  {#if app.isSitesMode}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
   <span class="foot-main">
     <b>{app.activeConn ? connectionDisplayName(app.activeConn) : '未连接'}</b>
-    {#if app.activeConn}<small>{#if app.isSiteConn}{sites.active?.domain || '站点'}{sites.active ? ` · ${sites.active.source === 'github' ? sites.active.repo : '本地文件夹'}` : ''}{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
+    {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{sites.list.length} 个站点{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {sites.list.length} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
       远程连接：这里放远端系统版本（点一下重探，比如刚 do-release-upgrade 过）。
     --><span class="foot-os" role="button" tabindex="-1" title="远端系统 · 点击重新检测"
       onclick={(e) => { e.stopPropagation(); probeOs(app.activeConnId, true); }}
@@ -148,7 +144,6 @@
     white-space: nowrap;
   }
   .cs-check { color: var(--accent); flex: none; font-size: 13px; }
-  .cs-label { padding: 6px 9px 2px; font-size: 10.5px; font-weight: 600; color: var(--faint); letter-spacing: .02em; }
   .cs-div { height: 1px; background: var(--border); margin: 3.5px 4px; }
   /* 动作行是单行：比原来(7px)收，但别收到发挤——padding 5.5px + line-height 1.3 落在约 28px，
      比原来 37px 紧一截、又留了呼吸感（23px 太挤，实测反馈）。连接行是两行，另按 .cs-item 定高。 */

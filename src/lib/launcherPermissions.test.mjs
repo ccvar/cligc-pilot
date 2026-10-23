@@ -45,7 +45,7 @@ function selectContext(conns, overrides = {}) {
     activeConvId: '', activeConv: null, lPerm: 'full', lSite: 'old', lStyle: 'x', cfProjects: ['old'],
     switchConversationWorkspace() {}, probeOs() {}, disposeTerm() {}, say() {},
     isSiteConnId: (id) => id.startsWith('site:'), siteIdOf: (id) => id.slice(5), loadSiteStatus() {}, loadGhRepos() {},
-    sites: { tab: 'overview', draft: null },
+    sites: { tab: 'overview', draft: null }, SITES_CONN_ID: '__sites__',
     invoke: async () => ['site-a'], localStorage: { setItem() {} },
     ...overrides,
   }));
@@ -83,4 +83,12 @@ test('switching to a site opens its board and never keeps full automation', asyn
     assert.equal(ctx.lPerm, perm === 'full' ? 'auto' : perm);
     assert.equal(ctx.lSite, '');
   }
+});
+
+test('the all-sites workspace opens the overview', async () => {
+  const ctx = selectContext([], { activeConnId: 'c1', view: 'thread' });
+  await ctx.selectConn('__sites__');
+  assert.equal(ctx.activeConnId, '__sites__');
+  assert.equal(ctx.view, 'sites');
+  assert.equal(ctx.activeConv, null);
 });

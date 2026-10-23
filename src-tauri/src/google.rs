@@ -261,7 +261,6 @@ pub async fn list_gsc_sites(token: &str) -> Result<Vec<GscSite>, String> {
 }
 
 /// 按域名挑一个最匹配的 Search Console 资源：优先网域资源，其次 https 网址前缀（界面里的自动选择同此规则）。
-#[cfg(test)]
 pub fn match_gsc_site<'a>(sites: &'a [GscSite], domain: &str) -> Option<&'a GscSite> {
     let bare = domain.trim_start_matches("www.");
     sites
@@ -269,6 +268,27 @@ pub fn match_gsc_site<'a>(sites: &'a [GscSite], domain: &str) -> Option<&'a GscS
         .find(|s| s.url == format!("sc-domain:{bare}"))
         .or_else(|| sites.iter().find(|s| s.url == format!("https://{domain}/")))
         .or_else(|| sites.iter().find(|s| s.url == format!("https://www.{bare}/")))
+}
+
+/// 媒体资源下网页数据流的主机名（按域名自动匹配媒体资源用）。
+pub async fn ga4_stream_hosts(token: &str, property: &str) -> Result<Vec<String>, String> {
+    let url = format!("https://analyticsadmin.googleapis.com/v1beta/{property}/dataStreams?pageSize=50");
+    let v = api(token, reqwest::Method::GET, &url, None).await?;
+    Ok(v["dataStreams"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d["webStreamData"]["defaultUri"].as_str())
+                .filter_map(|u| crate::sites::normalize_domain(u).ok())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// 主机名是否指同一个站（忽略 www.）。
+pub fn same_host(a: &str, b: &str) -> bool {
+    a.trim_start_matches("www.") == b.trim_start_matches("www.")
 }
 
 // ---------------------------------------------------------------------------

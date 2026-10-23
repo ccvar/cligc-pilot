@@ -1,7 +1,7 @@
 import type { Connection, BrainsInfo, Brain, Conversation } from '$lib/types';
 import type { ApiProfile } from '$lib/apiProfiles';
 import { invoke } from '@tauri-apps/api/core';
-import { WORKSPACE_CONN_ID, LOCAL_CONN } from './env';
+import { WORKSPACE_CONN_ID, LOCAL_CONN, SITES_CONN_ID, SITES_CONN } from './env';
 import { brainUsable } from './models';
 import { selectConn, bootConnId } from './connections.svelte.js';
 import { detectSiteUrl } from './messages.svelte.js';
@@ -23,6 +23,7 @@ class AppState {
   confirmResolve: ((value: boolean) => void) | null = null;
   activeConn = $derived.by(() => {
     if (this.activeConnId === WORKSPACE_CONN_ID) return LOCAL_CONN;
+    if (this.activeConnId === SITES_CONN_ID) return SITES_CONN;
     if (isSiteConnId(this.activeConnId)) {
       const s = sites.list.find((x) => x.id === siteIdOf(this.activeConnId));
       return s ? siteConnection(s) : null;
@@ -36,7 +37,7 @@ class AppState {
   convos = $state<Conversation[]>([]);
   activeConvId = $state('');
   activeConv = $state<Conversation | null>(null);
-  view = $state<'launcher' | 'thread' | 'site' | 'templates' | 'prompts' | 'remote'>('launcher');
+  view = $state<'launcher' | 'thread' | 'site' | 'sites' | 'templates' | 'prompts' | 'remote'>('launcher');
   // Cloudflare 建站：连接是 CF 时，lSite 复用为「项目名」，站点选择器换成项目输入。
   isCfConn = $derived(this.activeConn?.kind === 'cloudflare');
   cfProjects = $state<string[]>([]);
@@ -66,6 +67,8 @@ class AppState {
   /** 当前选中的是站点（合成连接 site:<id>）。 */
   isSiteConn = $derived(this.activeConn?.kind === 'site');
   activeConvIsSite = $derived(this.activeConv?.task_type === 'site');
+  /** 站点工作区：全部站点总览（__sites__）或其中某个站点（site:<id>）。左栏都显示站点列表。 */
+  isSitesMode = $derived(this.activeConnId === SITES_CONN_ID || this.activeConn?.kind === 'site');
 }
 
 export const app = new AppState();
@@ -100,12 +103,12 @@ export function say(m: string, k: 'ok' | 'err' = 'ok', ms = 0) { app.flash = m; 
 export async function refreshConns() {
   try {
     app.conns = await invoke<Connection[]>('list_connections');
-    if (app.activeConnId && app.activeConnId !== WORKSPACE_CONN_ID && !isSiteConnId(app.activeConnId) && !app.conns.some((c) => c.id === app.activeConnId)) {
+    if (app.activeConnId && app.activeConnId !== WORKSPACE_CONN_ID && app.activeConnId !== SITES_CONN_ID && !isSiteConnId(app.activeConnId) && !app.conns.some((c) => c.id === app.activeConnId)) {
       // 当前连接被删掉了：退回本地对话，不留一个指向空连接的界面。
       void selectConn(WORKSPACE_CONN_ID);
     } else if (!app.activeConnId) {
       const want = bootConnId();
-      void selectConn(want && (app.conns.some((c) => c.id === want) || isSiteConnId(want)) ? want : WORKSPACE_CONN_ID);
+      void selectConn(want && (app.conns.some((c) => c.id === want) || isSiteConnId(want) || want === SITES_CONN_ID) ? want : WORKSPACE_CONN_ID);
     }
   } catch (e) {
     say(String(e), 'err');

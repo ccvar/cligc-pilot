@@ -160,6 +160,27 @@ impl Default for OpsConfig {
     }
 }
 
+/// 规范化标签：去空白、去重、限长，最多 12 个。
+pub fn normalize_tags(tags: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in tags {
+        let t = t.trim().trim_start_matches('#').trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.chars().count() > 20 || t.chars().any(char::is_control) {
+            return Err(format!("标签「{t}」太长或含非法字符"));
+        }
+        if !out.iter().any(|x| x == t) {
+            out.push(t.to_string());
+        }
+    }
+    if out.len() > 12 {
+        return Err("每个站点最多 12 个标签".into());
+    }
+    Ok(out)
+}
+
 pub const WHITELIST_KINDS: &[&str] = &["meta_description", "title", "internal_links", "sitemap"];
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -191,6 +212,12 @@ pub struct Site {
     pub data: DataBinding,
     #[serde(default)]
     pub ops: OpsConfig,
+    /// 置顶（站点多的时候固定在列表最上面）。
+    #[serde(default)]
+    pub pinned: bool,
+    /// 标签（分组、筛选用）。
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -900,6 +927,8 @@ mod tests {
             deploy: DeployConfig::default(),
             data: DataBinding::default(),
             ops: OpsConfig::default(),
+            pinned: false,
+            tags: Vec::new(),
             created_at: 1,
             updated_at: 1,
         };

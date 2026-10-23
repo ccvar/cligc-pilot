@@ -55,12 +55,12 @@
 
 <div class="card">
   <h3>数据源</h3>
-  <p class="hint">Pilot 用连接里的凭据拉数据、缓存在本地；站点会话里的模型只能通过只读工具查询缓存，拿不到凭据。</p>
+  <p class="hint">数据源账号在「连接与模型设置 → 数据源」里统一管理，这里只选这个站点用哪个资源（按域名自动匹配）。模型只能通过只读工具查询本地缓存，拿不到凭据。</p>
 
   <div class="ds-block">
     <div class="ds-title"><GoogleMark size={15} /> Google（GA4 + Search Console）</div>
     {#if !googleConns.length}
-      <div class="row"><button class="btn small" onclick={() => openDataConnect('google')}>连接 Google…</button><span class="hint">服务账号或 Google 账号登录二选一。</span></div>
+      <div class="row"><span class="hint">还没有 Google 数据源。</span><button class="link-btn" onclick={() => openDataConnect('google')}>连接一个</button><span class="hint">（服务账号或 Google 账号登录，所有站点共用）</span></div>
     {:else}
       <div class="grid3">
         <div class="field"><span class="lbl">连接</span>
@@ -84,14 +84,14 @@
       {#if gres && draft.data.google_conn_id && googleConns.find((c) => c.id === draft.data.google_conn_id)?.key_kind === 'service_account' && (!gres.properties.length || !gres.sites.length)}
         <p class="hint">列表里没有这个站点？把服务账号 <code>{gres.email}</code> 加进 GA4 媒体资源（查看者）和 Search Console 资源（用户），再 <button class="link-btn" onclick={() => loadGoogleRes(draft.data.google_conn_id, true)}>刷新</button>。</p>
       {/if}
-      <div class="row"><button class="btn tiny" onclick={() => openDataConnect('google')}>新建 Google 连接…</button>{#if draft.data.google_conn_id}<button class="btn tiny" onclick={() => loadGoogleRes(draft.data.google_conn_id, true)}>刷新列表</button>{/if}</div>
+      {#if draft.data.google_conn_id}<div class="row"><button class="btn tiny" onclick={() => loadGoogleRes(draft.data.google_conn_id, true)}>刷新资源列表</button></div>{/if}
     {/if}
   </div>
 
   <div class="ds-block">
     <div class="ds-title"><BingMark size={15} /> Bing Webmaster</div>
     {#if !bingConns.length}
-      <div class="row"><button class="btn small" onclick={() => openDataConnect('bing')}>连接 Bing…</button><span class="hint">用 Bing Webmaster 后台生成的 API Key。</span></div>
+      <div class="row"><span class="hint">还没有 Bing 数据源。</span><button class="link-btn" onclick={() => openDataConnect('bing')}>连接一个</button><span class="hint">（Bing Webmaster 的 API Key，所有站点共用）</span></div>
     {:else}
       <div class="grid2">
         <div class="field"><span class="lbl">连接</span>

@@ -51,6 +51,8 @@ pub async fn import_cf_project(state: tauri::State<'_, AppState>, conn_id: Strin
         deploy: sites::DeployConfig { mode: "direct".into(), cf_conn_id: conn.id.clone(), project: slug, branch: "main".into() },
         data: sites::DataBinding { indexnow_key: det.indexnow_key.clone(), ..Default::default() },
         ops: sites::OpsConfig::default(),
+        pinned: false,
+        tags: Vec::new(),
         created_at: t,
         updated_at: t,
     };

@@ -19,20 +19,50 @@
   import { startConversationPointerDrag, startConversationDrag, endConversationDrag } from '$lib/state/panes.svelte.js';
   import { brainLabel, modelIcon } from '$lib/state/models';
   import { permits } from '$lib/state/permits.svelte.js';
+  import type { Conversation } from '$lib/types';
+  import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
+  import { openSiteImport } from '$lib/state/sites.svelte.js';
+  import { selectConn } from '$lib/state/connections.svelte.js';
+  import { SITES_CONN_ID } from '$lib/state/env';
 </script>
+
+<!-- 对话行：普通工作区和站点列表共用 -->
+{#snippet convRow(c: Conversation)}
+<div class="convo {app.activeConvId === c.id ? 'on' : ''}" onpointerdown={(e)=>startConversationPointerDrag(e,c.id)} draggable="true" ondragstart={(e)=>startConversationDrag(e,c.id)} ondragend={endConversationDrag} role="button" tabindex="0"
+  onclick={() => openConv(c.id)} onkeydown={(e) => e.key === 'Enter' && openConv(c.id)}>
+  <div class="convo-body">
+    <span class="convo-bi" title={brainLabel(c.brain)}><BrainIcon brain={modelIcon(c.brain)} size={11} /></span>
+    <span class="convo-title">{c.title}</span>
+    {#if c.status === 'running' || app.running[c.id]}<span class="mini-run"></span>{/if}
+    {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
+    <span class="convo-when">{relTime(c.updated_at)}</span>
+  </div>
+  <button class="convo-x" title="删除对话" onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
+</div>
+{/snippet}
 
 <!-- 左栏 -->
 <aside class="rail" class:collapsed={ui.railCollapsed} style="width:{ui.railWidth}px">
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="rail-resize" title="拖动调整宽度" onmousedown={startResize} role="separator" aria-orientation="vertical"></div>
   <div class="rail-head">
-    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话">
+    <button class="newchat" onclick={newChat} disabled={!app.activeConn || app.activeConn.kind === 'sites'} title={app.activeConn?.kind === 'sites' ? '先在下面选一个站点' : '新对话'}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10l7.5-7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
         <path d="M2.5 13.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
       </svg>
       新对话
     </button>
+    {#if app.isSitesMode}
+    <button class="railnav {app.view === 'sites' ? 'on' : ''}" onclick={() => selectConn(SITES_CONN_ID)}>
+      <SiteMark size={14} />
+      全部站点
+    </button>
+    <button class="railnav" onclick={() => openSiteImport()}>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+      导入站点
+    </button>
+    {/if}
     {#if app.isSiteConn}
     <button class="railnav {app.view === 'site' ? 'on' : ''}" onclick={() => openSiteBoard()}>
       <BoardIcon size={14} />
@@ -51,6 +81,9 @@
     {/if}
   </div>
 
+  {#if app.isSitesMode}
+    <SitesRail {convRow} />
+  {:else}
   <div class="convos" class:scrolled={ui.convosScrolled} onscroll={(e) => (ui.convosScrolled = (e.currentTarget as HTMLElement).scrollTop > 2)}>
     {#if sidebar.grouped.length === 0}
       <p class="rail-empty">还没有对话。<br />{app.isSiteConn ? '在这个站点里开一个对话，让 AI 改代码、看数据。' : app.isSshConn ? '在下方面板里直接说你想让这台机器做什么。' : app.isCfConn ? '给项目起个名，直接说你想要什么样的网站。' : app.isGhConn ? '选一个仓库，直接说你想改什么。' : '选好模型，直接说你想做什么。'}</p>
@@ -74,23 +107,12 @@
       </button>
       {#if !sidebar.collapsedSites.has(g.slug)}
         <SidebarConversationList items={g.subs.flatMap(sub => sub.items)} label={g.name}>
-          {#snippet row(c)}
-            <div class="convo {app.activeConvId === c.id ? 'on' : ''}" onpointerdown={(e)=>startConversationPointerDrag(e,c.id)} draggable="true" ondragstart={(e)=>startConversationDrag(e,c.id)} ondragend={endConversationDrag} role="button" tabindex="0"
-              onclick={() => openConv(c.id)} onkeydown={(e) => e.key === 'Enter' && openConv(c.id)}>
-              <div class="convo-body">
-                <span class="convo-bi" title={brainLabel(c.brain)}><BrainIcon brain={modelIcon(c.brain)} size={11} /></span>
-                <span class="convo-title">{c.title}</span>
-                {#if c.status === 'running' || app.running[c.id]}<span class="mini-run"></span>{/if}
-                {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
-                <span class="convo-when">{relTime(c.updated_at)}</span>
-              </div>
-              <button class="convo-x" title="删除对话" onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
-            </div>
-          {/snippet}
+          {#snippet row(c)}{@render convRow(c)}{/snippet}
         </SidebarConversationList>
       {/if}
     {/each}
   </div>
+  {/if}
 
   <ConnectionSwitcher />
 </aside>

@@ -314,7 +314,68 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     // 机会列表跟着数据一起重算，模型的查询工具和看板读的是同一份。
     let opps = crate::site_ops::opportunities(site, site_dir);
     let _ = write_json(&dir, "opportunities.json", &opps);
+    let _ = write_json(&dir, "summary.json", &compute_summary(site_dir));
     meta
+}
+
+/// 全部站点总览用的一行摘要（每次拉数据后写一份小文件，站点再多也只读小文件）。
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct Summary {
+    pub gsc_clicks: f64,
+    pub gsc_clicks_prev: f64,
+    pub gsc_impressions: f64,
+    pub gsc_position: f64,
+    pub ga4_views: f64,
+    pub ga4_views_prev: f64,
+    pub bing_clicks: f64,
+    pub opportunities: usize,
+    pub data_end: String,
+    pub fetched_at: u64,
+    pub errors: Vec<String>,
+}
+
+pub fn compute_summary(site_dir: &Path) -> Summary {
+    let dir = cache_dir(site_dir);
+    let meta = load_meta(site_dir);
+    let gq: Vec<Row> = read_json(&dir, "gsc_queries.json");
+    let gqp: Vec<Row> = read_json(&dir, "gsc_queries_prev.json");
+    let ga: Vec<GaRow> = read_json(&dir, "ga4_pages.json");
+    let gap: Vec<GaRow> = read_json(&dir, "ga4_pages_prev.json");
+    let bq: Vec<Row> = read_json(&dir, "bing_queries.json");
+    let opps: Vec<crate::site_ops::Opportunity> = read_json(&dir, "opportunities.json");
+    let t = totals(&gq);
+    let errors = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)]
+        .iter()
+        .filter(|(_, e)| !e.is_empty())
+        .map(|(l, e)| format!("{l}：{e}"))
+        .collect();
+    Summary {
+        gsc_clicks: t.clicks,
+        gsc_clicks_prev: totals(&gqp).clicks,
+        gsc_impressions: t.impressions,
+        gsc_position: t.position,
+        ga4_views: ga.iter().map(|r| r.views).sum(),
+        ga4_views_prev: gap.iter().map(|r| r.views).sum(),
+        bing_clicks: bq.iter().map(|r| r.clicks).sum(),
+        opportunities: opps.len(),
+        data_end: if meta.gsc.end.is_empty() { meta.ga4.end.clone() } else { meta.gsc.end.clone() },
+        fetched_at: meta.gsc.fetched_at.max(meta.ga4.fetched_at).max(meta.bing.fetched_at),
+        errors,
+    }
+}
+
+/// 读摘要；还没有（旧缓存）就现算一份存下。
+pub fn summary(site_dir: &Path) -> Summary {
+    let dir = cache_dir(site_dir);
+    if dir.join("summary.json").exists() {
+        return read_json(&dir, "summary.json");
+    }
+    if !has_any_data(site_dir) {
+        return Summary::default();
+    }
+    let s = compute_summary(site_dir);
+    let _ = write_json(&dir, "summary.json", &s);
+    s
 }
 
 pub fn has_any_data(site_dir: &Path) -> bool {

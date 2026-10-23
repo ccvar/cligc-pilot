@@ -207,6 +207,8 @@ export interface Site {
   deploy: SiteDeploy;
   data: SiteData;
   ops: SiteOps;
+  pinned: boolean;
+  tags: string[];
   created_at: number;
   updated_at: number;
 }
@@ -353,3 +355,19 @@ export interface OpsItem {
   note: string;
   auto: boolean;
 }
+
+// ---- 多站点 ----
+export interface SiteSummary {
+  gsc_clicks: number; gsc_clicks_prev: number; gsc_impressions: number; gsc_position: number;
+  ga4_views: number; ga4_views_prev: number; bing_clicks: number; opportunities: number;
+  data_end: string; fetched_at: number; errors: string[];
+}
+export interface SiteRow {
+  id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
+  level: number; deploy_mode: string; has_data: boolean; summary: SiteSummary;
+  proposed: number; failed: number; open: number; job: string;
+  last_deploy_ts: number; last_deploy_ok: boolean | null; active_at: number;
+}
+export interface PendingItem { site_id: string; site_name: string; item: OpsItem }
+export interface DataSourceRow { conn: Connection; sites: string[] }
+export interface BindReport { bound: [string, string][]; unmatched: string[]; kept: number; errors: string[] }
