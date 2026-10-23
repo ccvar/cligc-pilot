@@ -1,19 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { createServer } from 'vite';
+import { sliceSource } from './testing/appSource.mjs';
 
 // Browser regression for the real global handler + CodeMirror. IPC is mocked:
 // no OS clipboard access, native menu clicks or remote file writes occur.
 // PLAYWRIGHT_MODULE can point to an externally provisioned Playwright runtime.
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const source = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-const start = source.indexOf('  function onCtxMenu(');
-const end = source.indexOf('  // ---------- 助手消息 Markdown', start);
-assert.ok(start >= 0 && end > start);
-const handler = ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const handler = ts.transpileModule(sliceSource('lib/state/ui.svelte.ts', 'export function onCtxMenu(', 'export function initUi('), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const inputs = ['text', 'search', 'url', 'tel', 'email', 'password', 'number', 'checkbox', 'range', 'file', 'color', 'date', 'button'];
 const html = `<!doctype html><html><body>
 ${inputs.map(type => `<input id="${type}" type="${type}" aria-label="${type}">`).join('')}
@@ -33,6 +29,7 @@ import { createCodeEditor } from '/src/lib/codeEditorRuntime.ts';
 window.menuCalls = []; window.terminalSelected = false; window.terminalCopies = 0;
 const invoke = async (command, args) => { window.menuCalls.push({ command, ...args }); };
 const term = { hasSelection: () => window.terminalSelected };
+const workbench = { term };
 const copyTermSelection = async () => { window.terminalCopies++; };
 ${handler}
 window.addEventListener('contextmenu', onCtxMenu);

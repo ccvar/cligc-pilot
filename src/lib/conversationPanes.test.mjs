@@ -4,15 +4,16 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import {leaves,pane,removePane,replacePane,splitPane} from './conversationLayout.ts';
+import {appSource,sliceSource,withStores} from './testing/appSource.mjs';
 
-const source=fs.readFileSync(new URL('../routes/+page.svelte',import.meta.url),'utf8');
+const source=appSource();
 const canvasSource=fs.readFileSync(new URL('./ConversationCanvas.svelte',import.meta.url),'utf8');
 const slice=(from,to)=>{const a=source.indexOf(from),b=source.indexOf(to,a);assert.ok(a>=0&&b>a);return source.slice(a,b);};
-const code=ts.transpileModule(slice('  function splitConversation(', '  // 会话可切换模型；'),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+const code=ts.transpileModule(sliceSource('lib/state/panes.svelte.ts','export function splitConversation(','export function initPanes('),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 function harness(){
   const c=id=>({id,conn_id:'conn-a',site_slug:`site-${id}`,model:'test',brain:'codex',messages:[],status:'idle'});
   const a=c('a'),b=c('b'),calls=[],results={};
-  const ctx={splitSnapshots:{a,b},splitDrafts:{a:{text:'A draft',files:[],sticky:true},b:{text:'B draft',files:[],sticky:true}},splitErrors:{},splitQueued:{},convos:[a,b],activeConv:a,activeConvId:'a',threadModel:'test',threadPerm:'full',threadEffort:'',running:{},lives:{},autoRetried:{},retryExhausted:{},ATT_MARKER:'ATTACHMENTS',
+  const ctx={paneCfReady:{},paneUploading:{},splitSnapshots:{a,b},splitDrafts:{a:{text:'A draft',files:[],sticky:true},b:{text:'B draft',files:[],sticky:true}},splitErrors:{},splitQueued:{},convos:[a,b],activeConv:a,activeConvId:'a',threadModel:'test',threadPerm:'full',threadEffort:'',running:{},lives:{},autoRetried:{},retryExhausted:{},ATT_MARKER:'ATTACHMENTS',
     conversationLayout:splitPane(pane('a','pa'),'pa','b','right'),splitFocused:'pa',leaves,pane,removePane,replacePane,splitPane,
     $state:v=>v,tick:()=>Promise.resolve(),
     conversationLayoutWorkspace:'conn-a',openConvSeq:0,cancelConversationPointerDrag:()=>{},threadEl:null,threadStickBottom:true,
@@ -23,7 +24,7 @@ function harness(){
     invoke:async(command,args)=>{calls.push({command,args});if(command==='send_message')return new Promise((resolve,reject)=>{results[args.convId]={resolve,reject};});return 'saved/file.txt';},
     conversationProject:c=>c.site_slug,attachmentFilename:f=>f.name,openConv:()=>Promise.resolve(),say:()=>{},view:'thread',draft:'',attachments:[],queued:null,splitSuspended:false,splitVisible:true,conns:[],Date,Uint8Array,
   };
-  vm.createContext(ctx);vm.runInContext(code,ctx);return{ctx,calls,results};
+  vm.createContext(withStores(ctx));vm.runInContext(code,ctx);return{ctx,calls,results};
 }
 test('simultaneous sends stay bound to their conversations after focus switches',async()=>{
   const {ctx,calls,results}=harness();
@@ -65,7 +66,7 @@ test('last remaining pane stays an ordinary conversation with no alternate view'
   assert.doesNotMatch(source,/splitSuspended|expandSplit|split-entry|返回分屏|<ConversationPane/);
   assert.match(source,/@render conversationHeader\(c,paneId\)/);
   assert.match(source,/@render convPane\(c,paneId\)/);
-  assert.match(source,/@render convPane\(activeConv\)/);
+  assert.match(source,/@render convPane\(app\.activeConv\)/);
 });
 test('upload completion appends to the captured conversation, never the focused one',async()=>{
   const {ctx,calls}=harness();let resolve;
@@ -81,7 +82,7 @@ test('real turn lifecycle updates background results without stealing focus, eve
     retryTimers:{},clearTimeout,
     queued:null,scrollSoon:()=>{},checkCfReady:()=>{},activeConnId:'conn-b',
   });
-  const lifecycle=ts.transpileModule(slice('  function beginTurn(', '  async function failTurn('),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const lifecycle=ts.transpileModule(sliceSource('lib/state/turns.svelte.ts','export function beginTurn(','export async function failTurn('),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInContext(lifecycle,ctx);
   ctx.closeSplit('pa');assert.equal(ctx.activeConvId,'b');
   const updated={...ctx.splitSnapshots.a,messages:[{role:'user',text:'background request'}],updated_at:1};
@@ -122,7 +123,7 @@ test('drag feedback keeps the conversation ghost and restores the blurred split 
   assert.match(canvasSource,/const next=splitPane\(layout,destination\.id,dragConversation,destination\.edge/);
   assert.match(canvasSource,/class="drop-preview"[\s\S]*?<span>分屏视图<\/span>/);
   assert.match(canvasSource,/backdrop-filter:blur\(4px\)/);
-  assert.match(source,/class=\{`single-split-preview \$\{singleDropEdge\}`\}[\s\S]*?<span>分屏视图<\/span>/);
+  assert.match(source,/class=\{`single-split-preview \$\{panes\.singleDropEdge\}`\}[\s\S]*?<span>分屏视图<\/span>/);
 });
 
 test('dropping outward from a boundary pane appends to the full canvas',()=>{
@@ -184,7 +185,7 @@ function navigationHarness(){
     conversationGroupKey:c=>c.site_slug,scrollSoon:()=>{},checkCfReady:()=>{},
     selectConn:async id=>{ctx.switchConversationWorkspace(id);ctx.activeConnId=id;},
     crypto:globalThis.crypto});
-  vm.runInContext(ts.transpileModule(slice('  async function openConv(', '  async function deleteConv('),
+  vm.runInContext(ts.transpileModule(sliceSource('lib/state/conversations.ts','export async function openConv(','export async function deleteConv('),
     {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,ctx);
   return h;
 }
@@ -215,6 +216,6 @@ test('returning to a connection opens only that connection and restores its draf
 });
 
 test('workspace entry points all reset the conversation layout scope',()=>{
-  assert.match(slice('  async function selectConn(', '  function openLocalWorkspace('),/switchConversationWorkspace\(id\)/);
-  assert.match(slice('  function openLocalWorkspace(', '  $effect('),/selectConn\(WORKSPACE_CONN_ID\)/);
+  assert.match(sliceSource('lib/state/connections.svelte.ts','export async function selectConn(','export function openLocalWorkspace('),/switchConversationWorkspace\(id\)/);
+  assert.match(sliceSource('lib/state/connections.svelte.ts','export function openLocalWorkspace(','export function distroOf('),/selectConn\(WORKSPACE_CONN_ID\)/);
 });

@@ -1,23 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as transferHistory from './sftpTransfers.ts';
 import { resolveSftpDropTarget, localFileBasename } from './sftpDrop.ts';
+import { stateFunctions, withStores } from './testing/appSource.mjs';
 
 // Exercise the actual page handlers with mocked dialogs and IPC. These tests
 // never open a native dialog, start an OS drag, or read/write a remote file.
-const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-const script = page.slice(page.indexOf('>') + 1, page.indexOf('</script>'));
-const source = ts.createSourceFile('page.ts', script, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 function handlers(names) {
-  const functions = names.map(name => {
-    const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
-    assert.ok(node, `Missing page handler: ${name}`);
-    return node.getText(source);
-  });
-  return ts.transpileModule(functions.join('\n'), {
+  return ts.transpileModule(stateFunctions(names), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
 }
@@ -83,7 +75,7 @@ function harness(overrides = {}) {
     say: (message, kind) => messages.push({ message, kind }),
     ...overrides,
   };
-  vm.createContext(ctx);
+  vm.createContext(withStores(ctx));
   vm.runInContext(handlers([
     'sftpDeletingKey', 'isSftpDeleting', 'sftpDownloadSelected', 'sftpDownload', 'cancelSftpDownload', 'onSftpDragStart',
     'loadSftpTransfers', 'persistSftpTransfers', 'addSftpTransfer', 'updateSftpTransfer', 'progressSftpTransfer',

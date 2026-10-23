@@ -1,19 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { sliceSource, withStores } from './testing/appSource.mjs';
 
-const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-function section(start, end) {
-  const a = page.indexOf(start), b = page.indexOf(end, a);
-  assert.ok(a >= 0 && b > a, `${start} … ${end}`);
-  return ts.transpileModule(page.slice(a, b), {
+function section(file, start, end) {
+  return ts.transpileModule(sliceSource(file, start, end), {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
 }
-const initial = section('  let lPerm =', '  let lEffort =');
-const select = section('  async function selectConn(', '  function openLocalWorkspace(');
+// The launcher store's field initializer; `this` is the sandbox standing in for the store.
+const initial = section('lib/state/launcher.svelte.ts', '  lPerm =', '  lEffort =');
+const select = section('lib/state/connections.svelte.ts', 'export async function selectConn(', 'export function openLocalWorkspace(');
 
 test('the launcher restores the saved permission default, full when nothing is saved', () => {
   for (const perm of [undefined, 'plan', 'ask', 'auto', 'full']) {
@@ -24,15 +22,15 @@ test('the launcher restores the saved permission default, full when nothing is s
 });
 
 test('new local chats reset the launcher default, without changing stored chats or other workspaces', () => {
-  const code = section('  function newChat()', '  async function openConv(');
+  const code = section('lib/state/conversations.ts', 'export function newChat()', 'export async function openConv(');
   for (const isWorkspaceChat of [true, false]) {
     const existing = { perm_mode: 'ask' };
-    const ctx = vm.createContext({
+    const ctx = vm.createContext(withStores({
       openConvSeq: 0, activeConvId: 'existing', activeConv: existing,
       lDraft: '', draft: '', attachments: [], lPerm: 'auto',
       isWorkspaceChat, isSshConn: false, lSite: '', lBrain: 'api:test',
       viewAfterConvGone: () => {}, brainUsable: () => true,
-    });
+    }));
     vm.runInContext(code, ctx);
     ctx.newChat();
     assert.equal(ctx.lPerm, isWorkspaceChat ? 'full' : 'auto');
@@ -42,13 +40,13 @@ test('new local chats reset the launcher default, without changing stored chats 
 });
 
 function selectContext(conns, overrides = {}) {
-  const ctx = vm.createContext({
+  const ctx = vm.createContext(withStores({
     conns, activeConnId: '__workspace__', selSeq: 0, isMainWindow: false, view: 'launcher',
     activeConvId: '', activeConv: null, lPerm: 'full', lSite: 'old', lStyle: 'x', cfProjects: ['old'],
     switchConversationWorkspace() {}, probeOs() {}, disposeTerm() {}, say() {},
     invoke: async () => ['site-a'], localStorage: { setItem() {} },
     ...overrides,
-  });
+  }));
   vm.runInContext(select, ctx);
   return ctx;
 }

@@ -3,21 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { appSource, stateFunctions, withStores } from './testing/appSource.mjs';
 
-const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-const script = page.slice(page.indexOf('>') + 1, page.indexOf('</script>'));
-const parsed = ts.createSourceFile('page.ts', script, ts.ScriptTarget.ES2022, true);
+const page = appSource();
 const functions = ['apiProfile', 'modelIcon', 'brainAvailability', 'brainUsable', 'modelOptsFor',
   'launcherModelOpts', 'defaultModelFor', 'isLauncherModel', 'customsOf', 'ctxLimit', 'ctxLimitAdaptive', 'newChat', 'maybeAutoRetry', 'brainSetupHint'];
-const source = parsed.statements.filter(node => ts.isFunctionDeclaration(node) && functions.includes(node.name?.text))
-  .map(node => node.getText(parsed)).join('\n');
+const source = stateFunctions(functions);
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const ready = { found: true, logged_in: true };
 function context(profiles = []) {
   const ctx = { apiProfiles: profiles, apiProfilesLoaded: true, brains: { claude: ready, codex: ready, grok: ready },
     prefs: { customClaudeIds: ['local-only'], customCodexIds: [], customGrokIds: [] },
     CLAUDE_MODELS: [{ value: 'claude-sonnet-5', label: 'Sonnet' }], CODEX_MODELS: [], GROK_MODELS: [] };
-  vm.createContext(ctx); vm.runInContext(compiled, ctx); return ctx;
+  vm.createContext(withStores(ctx)); vm.runInContext(compiled, ctx); return ctx;
 }
 function profile(id, overrides = {}) {
   return { id, name: `Account ${id}`, protocol: 'openai_responses', enabled: true, key_configured: true,
@@ -49,7 +47,7 @@ test('API startup preserves saved model until metadata is loaded, does not guess
   assert.equal(ctx.isLauncherModel('api:a', 'custom-model'), true);
   assert.equal(ctx.ctxLimitAdaptive('api:a', 'gpt-any', 900000), 0);
   assert.equal(ctx.defaultModelFor('claude'), 'claude-sonnet-5');
-  assert.match(page, /if \(!lBrain\.startsWith\('api:'\) && !brainUsable\(lBrain\)\)/);
+  assert.match(page, /if \(!launcher\.lBrain\.startsWith\('api:'\) && !brainUsable\(launcher\.lBrain\)\)/);
 });
 
 test('new conversation never silently replaces a missing API default', () => {
@@ -75,9 +73,9 @@ test('API recovery never triggers the generic automatic CLI retry and points to 
 test('API selection is shared by the launcher and existing conversations', () => {
   assert.match(page, /ALL_BRAINS = \$derived<Brain\[\]>/);
   assert.match(page, /apiProfiles\.map\(\(p\): Brain => `api:\$\{p\.id\}`\)/);
-  assert.match(page, /<ApiServices profiles=\{apiProfiles\}/);
-  assert.match(page, /const threadComboOpts = \$derived\(conversationModelOptions/);
-  assert.match(page, /<ModelFx options=\{comboOpts\} value=\{`\$\{lBrain\}::\$\{lModel\}`\}/);
+  assert.match(page, /<ApiServices profiles=\{app\.apiProfiles\}/);
+  assert.match(page, /threadComboOpts = \$derived\(conversationModelOptions/);
+  assert.match(page, /<ModelFx options=\{launcher\.comboOpts\} value=\{`\$\{launcher\.lBrain\}::\$\{launcher\.lModel\}`\}/);
   const fx = fs.readFileSync(new URL('./ModelFx.svelte', import.meta.url), 'utf8');
   assert.match(fx, /const fastable = \$derived\(!value\.startsWith\('api:'\)/);
   assert.match(fx, /\{#if !apiModel \|\| apiLevels\.length\}/);

@@ -1,16 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { stateFunctions, withStores } from './testing/appSource.mjs';
 
 // Exercise the real event receiver; no model calls, real state or Tauri process.
-const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-const script = page.slice(page.indexOf('>') + 1, page.indexOf('</script>'));
-const parsed = ts.createSourceFile('page.ts', script, ts.ScriptTarget.ES2022, true);
-const receiver = parsed.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'makeChannel');
-assert.ok(receiver, 'makeChannel must remain available to exercise its actual behavior');
-const code = ts.transpileModule(receiver.getText(parsed), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const code = ts.transpileModule(stateFunctions(['makeChannel']), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function live() {
   return { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: 0, startedAt: 10, error: '', failed: false };
@@ -27,7 +22,7 @@ function harness() {
     mdRender: text => { renders.push(text); return `<rendered>${text}</rendered>`; },
     scrollSoon: () => { scrolls += 1; },
   };
-  vm.createContext(context); vm.runInContext(code, context);
+  vm.createContext(withStores(context)); vm.runInContext(code, context);
   return { context, renders, history, scrolls: () => scrolls, channel: id => context.makeChannel(id) };
 }
 

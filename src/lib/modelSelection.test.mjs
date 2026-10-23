@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { normalizeApiEffort } from './apiReasoning.ts';
+import { appSource, stateFunctions, withStores } from './testing/appSource.mjs';
 
 const source = fs.readFileSync(new URL('./modelSelection.ts', import.meta.url), 'utf8');
 const parsed = ts.createSourceFile('modelSelection.ts', source, ts.ScriptTarget.ES2022, true);
@@ -45,20 +46,17 @@ test('changing API protocols does not reuse transport-specific efforts', () => {
 });
 
 test('the launcher normalizes model switches before updating model identity', () => {
-  const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
+  const page = appSource();
   assert.ok(page.includes('lEffort = effortAfterModelPick('), 'lEffort');
 });
 
 test('launcher persists model identity and effort together before the first send', () => {
-  const page = fs.readFileSync(new URL('../routes/+page.svelte', import.meta.url), 'utf8');
-  const parsed = ts.createSourceFile('page.ts', page.slice(page.indexOf('>') + 1, page.indexOf('</script>')), ts.ScriptTarget.ES2022, true);
-  const functions = parsed.statements.filter(node => ts.isFunctionDeclaration(node)
-    && ['pickCombo', 'persistLauncherEffort'].includes(node.name?.text)).map(node => node.getText(parsed)).join('\n');
+  const functions = stateFunctions(['pickCombo', 'persistLauncherEffort']);
   const saved = [];
   const ctx = { lBrain: 'api:claude', lModel: 'claude-opus-5-5', lEffort: 'api:high', lFast: false,
     prefs: { brain: 'api:claude', model: 'claude-opus-5-5', effort: 'api:high' }, comboOpts: options,
     effortAfterModelPick: context.effortAfterModelPick, savePrefs: prefs => saved.push({ ...prefs }) };
-  vm.createContext(ctx);
+  vm.createContext(withStores(ctx));
   vm.runInContext(ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, ctx);
   ctx.pickCombo('api:responses::gpt-6-sol');
   assert.deepEqual(saved.at(-1), { brain: 'api:responses', model: 'gpt-6-sol', effort: '', fast: false });

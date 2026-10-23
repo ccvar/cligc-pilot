@@ -4,17 +4,19 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { apiEffortValue, apiReasoningLevels, normalizeApiEffort } from './apiReasoning.ts';
+import { appSource, asScript, read } from './testing/appSource.mjs';
 
-const page=fs.readFileSync(new URL('../routes/+page.svelte',import.meta.url),'utf8');
+const page=appSource();
+const models=read('lib/state/models.ts');
 const fx=fs.readFileSync(new URL('./ModelFx.svelte',import.meta.url),'utf8');
 function evaluate(source,start,end,expression,context={}) {
   const from=source.indexOf(start),to=source.indexOf(end,from);
   assert.ok(from>=0&&to>from);
-  return vm.runInNewContext(ts.transpileModule(source.slice(from,to)+`\nJSON.stringify(${expression})`,
+  return vm.runInNewContext(ts.transpileModule(asScript(source.slice(from,to))+`\nJSON.stringify(${expression})`,
     {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
 }
 test('new presets use exact model IDs and preserve legacy choices',()=>{
-  const lists=JSON.parse(evaluate(page,'  const CLAUDE_MODELS =','  // Grok（订阅通道）',
+  const lists=JSON.parse(evaluate(models,'export const CLAUDE_MODELS =','// Grok（订阅通道）',
     '({claude:CLAUDE_MODELS,codex:CODEX_MODELS})'));
   for(const [family,id,label] of [['claude','claude-opus-5-5','Opus 5.5'],
     ['codex','gpt-6-sol','GPT-6 Sol'],['codex','gpt-6-luna','GPT-6 Luna']]) {
@@ -27,10 +29,10 @@ test('new presets use exact model IDs and preserve legacy choices',()=>{
   assert.match(page,/return b === 'claude' \? 'claude-sonnet-5' : ''/);
 });
 test('Grok 4.7 is selectable without changing existing or default models',()=>{
-  const models=JSON.parse(evaluate(page,'  const GROK_MODELS =','  function modelOptsFor','GROK_MODELS'));
-  assert.equal(models.find(m=>m.value==='grok-4.7')?.label,'Grok 4.7');
-  assert.ok(models.some(m=>m.value==='grok-4.6'));
-  assert.equal(models[0].value,'');
+  const grok=JSON.parse(evaluate(models,'export const GROK_MODELS =','export function modelOptsFor','GROK_MODELS'));
+  assert.equal(grok.find(m=>m.value==='grok-4.7')?.label,'Grok 4.7');
+  assert.ok(grok.some(m=>m.value==='grok-4.6'));
+  assert.equal(grok[0].value,'');
 });
 test('GPT-6 Codex effort levels follow subscription capabilities, Luna excludes ultra',()=>{
   for(const [model,expected] of [['gpt-6-sol',['','low','medium','high','xhigh','max','ultra']],
