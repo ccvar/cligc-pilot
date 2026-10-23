@@ -7,6 +7,7 @@
   import SiteReports from './SiteReports.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
+  import GaMark from '$lib/components/icons/GaMark.svelte';
   import { ago as agoTs, num, pct as pctF, delta as dlt } from './fmt';
   import { sites, loadDashboard, refreshSiteData } from '$lib/state/sites.svelte.js';
 
@@ -39,11 +40,11 @@
   {:else}
     <div class="bar">
       <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'}</span>
-      <button class="btn small" onclick={() => refreshSiteData(site.id, true)} disabled={busy}>{#if busy}<span class="spin"></span>同步中{:else}<Icon name="refresh" size={12} />同步数据{/if}</button>
+      <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
-    {#each [['Search Console', d?.meta.gsc.error], ['GA4', d?.meta.ga4.error], ['Bing', d?.meta.bing.error]] as [label, err] (label)}
-      {#if err}<div class="err-note">{label}：{err}</div>{/if}
-    {/each}
+    {#if d?.meta.gsc.error}<div class="err-note src"><GoogleMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
+    {#if d?.meta.ga4.error}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}
+    {#if d?.meta.bing.error}<div class="err-note src"><BingMark size={13} />Bing：{d.meta.bing.error}</div>{/if}
 
     {#if d}
       <div class="card groups" style="--g:{[site.data.gsc_site && '4fr', site.data.ga4_property && '2fr', site.data.bing_site && '1.2fr'].filter(Boolean).join(' ')}">
@@ -66,7 +67,7 @@
         {#if site.data.ga4_property}
           {@const v = dlt(d.ga4_totals.views, d.ga4_prev_views)}
           <section class="grp" style="--n:2">
-            <header><span class="ga">GA4</span>站内访问</header>
+            <header><GaMark size={13} />GA4 站内访问</header>
             <div class="stats">
               <div class="stat"><small>浏览量</small><b>{n(d.ga4_totals.views)}</b><em class:up={v.dir > 0} class:down={v.dir < 0}>{v.text || '—'}</em></div>
               <div class="stat"><small>会话</small><b>{n(d.ga4_totals.sessions)}</b><em>用户 {n(d.ga4_totals.users)}</em></div>
@@ -82,19 +83,21 @@
           </section>
         {/if}
       </div>
-      <p class="faint note">Search Console 数据有 2–3 天延迟。</p>
+      <p class="faint note src"><GoogleMark size={11} />Search Console 数据有 2–3 天延迟。</p>
 
       {#if d.gsc_daily.length || d.ga4_daily.length}
         <div class="card">
           <h3><Icon name="trend" />趋势 <span class="sub">近 90 天</span></h3>
           {#if d.gsc_daily.length}
+            <div class="chart-src src"><GoogleMark size={12} />Google 搜索</div>
             <LineChart labels={d.gsc_daily.map((r) => r.key)} series={[
               { label: '点击', color: '#2f6fd8', values: d.gsc_daily.map((r) => r.clicks) },
               { label: '展现', color: '#9b8ee0', values: d.gsc_daily.map((r) => r.impressions) },
             ]} />
           {/if}
           {#if d.ga4_daily.length}
-            <div style="margin-top:18px"><LineChart height={110} labels={d.ga4_daily.map((r) => r.key)} series={[
+            <div class="chart-src src" style="margin-top:18px"><GaMark size={12} />GA4 站内访问</div>
+            <div><LineChart height={110} labels={d.ga4_daily.map((r) => r.key)} series={[
               { label: '会话', color: '#12805c', values: d.ga4_daily.map((r) => r.sessions) },
               { label: '浏览量', color: '#b45309', values: d.ga4_daily.map((r) => r.views) },
             ]} /></div>
@@ -114,7 +117,7 @@
       <div class="two">
         <div class="card">
           <h3><Icon name="search" />查询词 <span class="grow"></span>
-            {#if site.data.bing_site && site.data.gsc_site}<span class="seg mini"><button class:on={qTab === 'gsc'} onclick={() => (qTab = 'gsc')}>Google</button><button class:on={qTab === 'bing'} onclick={() => (qTab = 'bing')}>Bing</button></span>{/if}
+            {#if site.data.bing_site && site.data.gsc_site}<span class="seg mini"><button class="src" class:on={qTab === 'gsc'} onclick={() => (qTab = 'gsc')}><GoogleMark size={11} />Google</button><button class="src" class:on={qTab === 'bing'} onclick={() => (qTab = 'bing')}><BingMark size={11} />Bing</button></span>{/if}
           </h3>
           <table class="tbl">
             <thead><tr><th>查询词</th><th class="num">点击</th><th class="num">展现</th><th class="num">点击率</th><th class="num">排名</th></tr></thead>
@@ -134,9 +137,9 @@
         <div class="card">
           <h3><Icon name="file" />页面 <span class="grow"></span>
             <span class="seg mini">
-              {#if site.data.gsc_site}<button class:on={pTab === 'gsc'} onclick={() => (pTab = 'gsc')}>Google</button>{/if}
-              {#if site.data.ga4_property}<button class:on={pTab === 'ga4'} onclick={() => (pTab = 'ga4')}>GA4</button>{/if}
-              {#if site.data.bing_site}<button class:on={pTab === 'bing'} onclick={() => (pTab = 'bing')}>Bing</button>{/if}
+              {#if site.data.gsc_site}<button class="src" class:on={pTab === 'gsc'} onclick={() => (pTab = 'gsc')}><GoogleMark size={11} />Google</button>{/if}
+              {#if site.data.ga4_property}<button class="src" class:on={pTab === 'ga4'} onclick={() => (pTab = 'ga4')}><GaMark size={11} />GA4</button>{/if}
+              {#if site.data.bing_site}<button class="src" class:on={pTab === 'bing'} onclick={() => (pTab = 'bing')}><BingMark size={11} />Bing</button>{/if}
             </span>
           </h3>
           {#if pTab === 'ga4'}
@@ -160,14 +163,14 @@
       {#if site.data.ga4_property}
         <div class="two">
           <div class="card">
-            <h3><Icon name="route" />流量来源 <span class="sub">近 28 天</span></h3>
+            <h3><Icon name="route" />流量来源 <span class="sub src"><GaMark size={11} />GA4 · 近 28 天</span></h3>
             <table class="tbl">
               <thead><tr><th>来源 / 媒介</th><th class="num">会话</th><th class="num">用户</th></tr></thead>
               <tbody>{#each d.ga4_sources.slice(0, 15) as r (r.key)}<tr><td class="trunc">{r.key}</td><td class="num">{n(r.sessions)}</td><td class="num">{n(r.users)}</td></tr>{:else}<tr><td colspan="3" class="faint">没有数据</td></tr>{/each}</tbody>
             </table>
           </div>
           <div class="card">
-            <h3><Icon name="target" />转化事件 <span class="sub">近 28 天</span></h3>
+            <h3><Icon name="target" />转化事件 <span class="sub src"><GaMark size={11} />GA4 · 近 28 天</span></h3>
             {#if evNames.length}
               {#each evNames as ev (ev)}
                 {@const total = events.find((e) => e.event === ev && !e.dim)}
@@ -200,14 +203,14 @@
   .grp:first-child { border-left: none; }
   .grp header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; white-space: nowrap; }
   .grp header .faint { font-weight: 400; margin-left: 2px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .grp header :global(svg), .grp header .ga { flex: none; }
+  .grp header :global(svg) { flex: none; }
   .grp .stats { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 12px 16px; }
   @container page (max-width: 900px) {
     .groups { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .grp:first-child { grid-column: 1 / -1; border-bottom: 1px solid var(--border); }
     .grp:nth-child(2) { border-left: none; }
   }
-  .ga { font-size: 9px; font-weight: 700; letter-spacing: .02em; color: #fff; background: #e37400; border-radius: 3px; padding: 1px 3px; line-height: 1.2; }
+  .chart-src { font-size: 12px; color: var(--dim); margin: 2px 0 4px; }
   .note { margin: -6px 0 0; font-size: 11.5px; }
   .two :global(table.tbl th:first-child) { width: 44%; }
   .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
