@@ -6,7 +6,7 @@
 //!           → 写回 <id>.resp.json → 脚本打印 JSON 给 AI
 //! ```
 //!
-//! **为什么不学 gcms/CF 把凭据塞进子进程 env**：那对一个 API key 可以接受，对一台机器的
+//! **为什么不学 CF 把凭据塞进子进程 env**：那对一个 API key 可以接受，对一台机器的
 //! root shell 不成立。这里凭据只在 Rust + 钥匙串里，每条命令都过 Pilot ——
 //! 可确认、可拦、可记录，且 AI 改不了这个闸（它在 Rust 里，不在 AI 能写的脚本里）。
 //!
@@ -14,7 +14,7 @@
 //! 不用监听端口、不碰防火墙、不新增依赖。租约目录放在**本轮 cwd（工作区）之下**是必须的 ——
 //! codex 的 `workspace-write` 沙箱只允许写 cwd，放 data_dir 下 codex 会被沙箱挡住。
 //!
-//! 租约（Lease）＝一轮对话的授权：进程 env 里给脚本 `GCMS_SSH_DIR` + `GCMS_SSH_TOKEN`，
+//! 租约（Lease）＝一轮对话的授权：进程 env 里给脚本 `PILOT_SSH_DIR` + `PILOT_SSH_TOKEN`，
 //! 回合结束（含出错/取消）Drop 即撤销 + 删目录。
 
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::pack::Connection;
+use crate::conns::Connection;
 use crate::permit::{self, PermMode};
 use crate::ssh::SshSessions;
 
@@ -113,8 +113,8 @@ impl Lease {
     /// token 让**别的对话**（比如被网页注入的 CF 会话）没法伪造请求打你的服务器。
     pub fn env(&self) -> [(&'static str, String); 2] {
         [
-            ("GCMS_SSH_DIR", self.dir.to_string_lossy().into_owned()),
-            ("GCMS_SSH_TOKEN", self.token.clone()),
+            ("PILOT_SSH_DIR", self.dir.to_string_lossy().into_owned()),
+            ("PILOT_SSH_TOKEN", self.token.clone()),
         ]
     }
 }
@@ -342,13 +342,10 @@ mod tests {
             name: "s".into(),
             remark: String::new(),
             kind: "ssh".into(),
-            source_ssh_id: String::new(),
-            api_base: String::new(),
             skill_dir: String::new(),
             key_prefix: String::new(),
             key_kind: String::new(),
             account_id: String::new(),
-            preferred_zones: Vec::new(),
             ssh_host: "h".into(),
             ssh_port: 22,
             ssh_user: "root".into(),
@@ -357,7 +354,6 @@ mod tests {
             ssh_fingerprint: "SHA256:x".into(),
             ssh_os: String::new(),
             ssh_os_id: String::new(),
-            pack_version: String::new(),
             created_at: String::new(),
         }
     }
@@ -419,8 +415,8 @@ mod tests {
         )
         .unwrap();
         let env = lease.env();
-        assert_eq!(env[0].0, "GCMS_SSH_DIR");
-        assert_eq!(env[1].0, "GCMS_SSH_TOKEN");
+        assert_eq!(env[0].0, "PILOT_SSH_DIR");
+        assert_eq!(env[1].0, "PILOT_SSH_TOKEN");
         assert!(!env[1].1.is_empty());
         let dir = PathBuf::from(&env[0].1);
         assert!(dir.exists());

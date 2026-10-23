@@ -49,7 +49,6 @@ async fn run(responses: Vec<(u16, String)>, root: &Path) -> Run {
         &c,
         &work,
         &work.join("data"),
-        &[],
         PermMode::Full,
         "fixture",
         None,
@@ -83,7 +82,6 @@ async fn run(responses: Vec<(u16, String)>, root: &Path) -> Run {
         tools: vec![],
         error: String::new(),
         session_ref: String::new(),
-        proposal: None,
         usage: None,
         limit_reset: None,
     };

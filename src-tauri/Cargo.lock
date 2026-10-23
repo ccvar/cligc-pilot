@@ -673,6 +673,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "cligc-pilot"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "apple-native-keyring-store",
+ "argon2",
+ "base64 0.22.1",
+ "block2",
+ "chrono",
+ "drag",
+ "flate2",
+ "keyring-core",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "reqwest",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+ "windows 0.61.3",
+ "windows-native-keyring-store",
+ "zeroize",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1692,47 +1733,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "gcms-pilot"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "apple-native-keyring-store",
- "argon2",
- "base64 0.22.1",
- "block2",
- "chrono",
- "drag",
- "flate2",
- "keyring-core",
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "reqwest",
- "russh",
- "russh-sftp",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-updater",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
- "windows 0.61.3",
- "windows-native-keyring-store",
- "zeroize",
- "zip 8.6.0",
 ]
 
 [[package]]

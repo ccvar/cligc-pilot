@@ -159,7 +159,6 @@ async fn run_loop(
         connection,
         &work,
         &work.join("data"),
-        &[],
         PermMode::Full,
         "fixture",
         None,
@@ -175,7 +174,6 @@ async fn run_loop(
         tools: vec![],
         error: String::new(),
         session_ref: String::new(),
-        proposal: None,
         usage: None,
         limit_reset: None,
     };
@@ -421,8 +419,8 @@ async fn legacy_history_migrates_once_without_discarding_tool_results() {
 }
 
 #[tokio::test]
-async fn changed_system_or_tool_schema_invalidates_all_old_reasoning_only() {
-    for change_tools in [false, true] {
+async fn changed_system_prompt_invalidates_all_old_reasoning_only() {
+    {
         let dir = tempfile::tempdir().unwrap();
         let (url, server) = strict_server(vec![
             Response::Write,
@@ -431,15 +429,11 @@ async fn changed_system_or_tool_schema_invalidates_all_old_reasoning_only() {
         ])
         .await;
         let p = profile("anthropic_messages", &url);
-        let mut c = conn();
+        let c = conn();
         let mut h = history();
         assert!(run_loop(dir.path(), &c, &p, &mut h).await.ok);
-        if change_tools {
-            c.kind = "gcms".into();
-        } else {
-            h.system
-                .push_str(" Runtime instructions changed by an app upgrade.");
-        }
+        h.system
+            .push_str(" Runtime instructions changed by an app upgrade.");
         h.items
             .push(json!({"role":"user","content":"Continue with the updated runtime."}));
         let result = run_loop(dir.path(), &c, &p, &mut h).await;
@@ -453,13 +447,8 @@ async fn changed_system_or_tool_schema_invalidates_all_old_reasoning_only() {
         );
         assert!(requests[2]["messages"].to_string().contains("tool_result"));
         assert!(requests[2]["messages"].to_string().contains("write-once"));
-        if change_tools {
-            assert_ne!(requests[0]["tools"], requests[2]["tools"]);
-            assert_eq!(requests[0]["system"], requests[2]["system"]);
-        } else {
-            assert_ne!(requests[0]["system"], requests[2]["system"]);
-            assert_eq!(requests[0]["tools"], requests[2]["tools"]);
-        }
+        assert_ne!(requests[0]["system"], requests[2]["system"]);
+        assert_eq!(requests[0]["tools"], requests[2]["tools"]);
         assert_eq!(
             std::fs::read_to_string(dir.path().join("created.txt")).unwrap(),
             "created exactly once"

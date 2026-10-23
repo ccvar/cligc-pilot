@@ -1,5 +1,5 @@
-//! 对话式会话：一次会话 = 用户与某个模型围绕某站点的多轮对话，
-//! 模型在对话过程中通过 node scripts/gcms.js 把事情做掉。
+//! 对话式会话：一次会话 = 用户与某个模型围绕一个目标（Cloudflare 项目 / SSH 机器 /
+//! 本地工作区）的多轮对话。
 //! 持久化到 conversations.json（原子写 + 互斥串行化）。
 //! 底层多轮机制：claude 用 --session-id/--resume，codex 用 exec/exec resume。
 
@@ -12,16 +12,6 @@ use std::sync::{Arc, Mutex};
 pub struct ToolCall {
     pub label: String,
     pub detail: String,
-}
-
-/// AI 在对话里提议的定时任务（用户确认后才真正创建）。
-#[derive(Clone, Serialize, Deserialize)]
-pub struct TaskProposal {
-    pub title: String,
-    pub prompt: String,
-    pub every_minutes: u64,
-    #[serde(default)]
-    pub first_run: String,
 }
 
 /// begin_turn 的结果。
@@ -47,9 +37,6 @@ pub struct Message {
     pub hidden: bool,
     #[serde(default)]
     pub error: bool,
-    /// AI 提议的定时任务（界面上渲染成确认卡）。
-    #[serde(default)]
-    pub proposal: Option<TaskProposal>,
     /// 本轮因订阅额度/限流失败：恢复时间戳秒（0=拿不到时间）。None=非限额错误。
     /// 前端据此渲染「额度已用完」卡片与到点自动续跑。
     #[serde(default)]
@@ -65,11 +52,8 @@ pub struct Conversation {
     pub conn_name: String,
     pub site_slug: String,
     pub site_name: String,
-    /// siteops | sitebuild | workspace | skill | remote（article/free 为旧会话兼容值）
+    /// sitebuild（Cloudflare 项目）| remote（SSH）| workspace（自由对话）
     pub task_type: String,
-    /// skill 会话显式绑定的通用技能。普通会话保持为空，不会自动加载全部技能。
-    #[serde(default)]
-    pub skill_ids: Vec<String>,
     pub brain: String,
     pub model: String,
     /// 权限档位：plan | ask | auto | full。空串＝旧会话＝full（保持 0.1.10）。
@@ -81,12 +65,6 @@ pub struct Conversation {
     /// fast 模式：只有 Opus 5 / Opus 4.8 支持。旧会话反序列化缺这个键 → default false。
     #[serde(default)]
     pub fast: bool,
-    /// 多站会话：站点 slug 清单（>1 时为跨站会话，site_slug 存空、site_name 存展示名）。
-    #[serde(default)]
-    pub site_slugs: Vec<String>,
-    /// 与 site_slugs 对齐的站点名。
-    #[serde(default)]
-    pub site_names: Vec<String>,
     /// 自由对话显式选择的本地工作目录。空串表示使用 Pilot 为该会话创建的隔离目录。
     /// 只有 task_type=workspace 会读取；其它任务必须忽略，避免把本地路径误当站点上下文。
     #[serde(default)]
@@ -411,7 +389,6 @@ mod tests {
             ts: 0,
             hidden: false,
             error: role == "assistant" && text.is_empty(),
-            proposal: None,
             limit_reset: None,
         }
     }
@@ -423,14 +400,11 @@ mod tests {
             site_slug: "s".into(),
             site_name: "".into(),
             task_type: "free".into(),
-            skill_ids: vec![],
             brain: "claude".into(),
             model: "sonnet".into(),
             perm_mode: "full".into(),
             effort: String::new(),
             fast: false,
-            site_slugs: vec![],
-            site_names: vec![],
             workspace_dir: String::new(),
             session_ref: session.into(),
             title: "t".into(),
@@ -588,7 +562,6 @@ mod tests {
                 ts: 0,
                 hidden: true,
                 error: false,
-                proposal: None,
                 limit_reset: None,
             },
             Message {
@@ -598,7 +571,6 @@ mod tests {
                 ts: 0,
                 hidden: false,
                 error: true,
-                proposal: None,
                 limit_reset: None,
             },
             msg("user", "最新请求"),

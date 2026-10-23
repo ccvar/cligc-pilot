@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-const SERVICE: &str = "com.ccvar.gcms.pilot";
+const SERVICE: &str = "com.cligc.pilot";
 const CLAUDE_CREDENTIAL_ACCOUNT: &str = "brain:claude:credential";
 const VAULT_ACCOUNT: &str = "pilot:credential-vault:v1";
 
@@ -247,35 +247,11 @@ pub fn get_key(conn_id: &str) -> Result<String, String> {
     read_secret(conn_id)?.ok_or_else(|| "keychain read: NoEntry".to_string())
 }
 
-/// 认证失败时从旧的逐连接备份条目重新读取一次，并把较新的值合并回统一保险库。
-///
-/// 平时仍只读取统一保险库，因此不会恢复成“连接越多、授权框越多”。只有服务端明确
-/// 拒绝了保险库里的凭据时，调用方才走这条恢复路径。这样人工轮换密钥、或旧进程用
-/// 过期快照覆盖保险库后，都能由逐连接备份原地修复，而不需要删除连接和会话。
-pub fn refresh_key_from_legacy(conn_id: &str) -> Result<Option<String>, String> {
-    if conn_id == VAULT_ACCOUNT {
-        return Err("凭据 account 与内部保险库冲突".into());
-    }
-    let legacy = entry(conn_id)?;
-    let value = match legacy.get_password() {
-        Ok(value) => Some(value),
-        Err(keyring_core::Error::NoEntry) => None,
-        Err(error) => return Err(format!("credential recovery read: {error}")),
-    };
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let mut cache = vault_cache().lock().unwrap();
-    merge_secret_into_vault(&mut cache, conn_id, &value)?;
-    cache.legacy_missing.remove(conn_id);
-    Ok(Some(value))
-}
-
 pub fn delete_key(conn_id: &str) -> Result<(), String> {
     remove_secret(conn_id)
 }
 
-/// 只暴露前缀用于 UI 展示（gcmsp_ab12…），完整 key 永不出 Rust 层。
+/// 只暴露前缀用于 UI 展示（cfut_ab12…），完整 key 永不出 Rust 层。
 /// 按字符截取（字节切片在多字节字符边界会 panic）。
 pub fn key_prefix(key: &str) -> String {
     let mut p: String = key.chars().take(13).collect();
@@ -321,8 +297,8 @@ mod tests {
     #[ignore]
     fn keychain_roundtrip() {
         let account = format!("self-test-{}", uuid::Uuid::new_v4());
-        set_key(&account, "gcmsp_roundtrip_secret").unwrap();
-        assert_eq!(get_key(&account).unwrap(), "gcmsp_roundtrip_secret");
+        set_key(&account, "pilot_roundtrip_secret").unwrap();
+        assert_eq!(get_key(&account).unwrap(), "pilot_roundtrip_secret");
         delete_key(&account).unwrap();
         // 二次删除应幂等成功。
         delete_key(&account).unwrap();

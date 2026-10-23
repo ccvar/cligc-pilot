@@ -31,7 +31,7 @@ use tokio::process::{ChildStdin, Command};
 
 use crate::agent::{self, RunRegistry, TurnEvent, TurnResult, TurnUsage};
 use crate::convo::ToolCall;
-use crate::pack::Connection;
+use crate::conns::Connection;
 use crate::permit::{self, PermMode};
 
 /// 批准卡超时：与 claude 钩子中枢一致，15 分钟没人点＝拒绝。
@@ -86,7 +86,6 @@ pub async fn run_turn(
             tools: vec![],
             error: e,
             session_ref,
-            proposal: None,
             usage: None,
             limit_reset: None,
         }
@@ -238,9 +237,8 @@ pub async fn run_turn(
     } else {
         agent::detect_usage_limit(&format!("{error}\n{err_text}\n{}", s.raw_tail))
     };
-    let error = agent::redact_gcms_unlock_challenges(&error);
-    let persisted_text = agent::redact_gcms_unlock_challenges(&text);
-    let (clean_text, proposal) = agent::extract_proposal(&persisted_text);
+    let persisted_text = text.to_string();
+    let clean_text = persisted_text.trim().to_string();
     text = clean_text;
 
     let _ = channel.send(TurnEvent::Done {
@@ -250,18 +248,9 @@ pub async fn run_turn(
     TurnResult {
         ok,
         text,
-        tools: s
-            .tools
-            .iter()
-            .cloned()
-            .map(|mut tool| {
-                tool.detail = agent::redact_gcms_unlock_challenges(&tool.detail);
-                tool
-            })
-            .collect(),
+        tools: s.tools.clone(),
         error,
         session_ref: s.session_ref.clone(),
-        proposal,
         usage,
         limit_reset,
     }
@@ -488,13 +477,6 @@ async fn pump(
                     }
                     _ => {}
                 }
-                if let Some(request) = grok_gcms_unlock_request(update) {
-                    let _ = ch.send(TurnEvent::GcmsUnlockRequired {
-                        operation: request.operation,
-                        unlock_challenge: request.unlock_challenge,
-                        admin_path: request.admin_path,
-                    });
-                }
                 if let Some((activity_id, label, detail, error, status)) =
                     grok_activity_update(update)
                 {
@@ -580,24 +562,6 @@ async fn send(stdin: &mut ChildStdin, msg: &serde_json::Value) -> Result<(), Str
 }
 
 // ---- 流事件解析（纯函数，夹具可测）----
-
-fn grok_gcms_unlock_request(u: &serde_json::Value) -> Option<agent::GcmsUnlockRequest> {
-    if u.get("sessionUpdate").and_then(|value| value.as_str()) != Some("tool_call_update") {
-        return None;
-    }
-    // GCMS 用非 2xx + exit(1) 返回 unlock_required，因此 Grok ACP 会把这条
-    // 有效服务端结果标成 failed。只消费 completed/failed 两种终态，绝不从
-    // in_progress 的半截输出触发密码框。
-    if !matches!(
-        u.get("status").and_then(|value| value.as_str()),
-        Some("completed" | "failed")
-    ) {
-        return None;
-    }
-    ["content", "output", "rawOutput", "result"]
-        .iter()
-        .find_map(|key| u.get(*key).and_then(agent::gcms_unlock_from_tool_payload))
-}
 
 fn grok_activity_update(u: &serde_json::Value) -> Option<(String, String, String, String, String)> {
     let update = u.get("sessionUpdate").and_then(|value| value.as_str())?;
@@ -1027,75 +991,6 @@ mod tests {
     }
 
     #[test]
-    fn grok_unlock_parser_reads_only_terminal_tool_output() {
-        let payload = json!({
-            "unlock_required": true,
-            "operation": "pages.rollback",
-            "unlock_challenge": "gcmspc_abcdefghijklmnopqrstuvwxyzABCDE1234567890_-",
-            "page_id": 42,
-            "admin_path": "/admin/pages/42/project"
-        });
-        let update = json!({
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": "call-1",
-            "status": "completed",
-            "content": [{
-                "type": "content",
-                "content": {"type": "text", "text": payload.to_string()}
-            }]
-        });
-        let request = grok_gcms_unlock_request(&update).expect("Grok tool output should emit");
-        assert_eq!(request.operation, "pages.rollback");
-        assert_eq!(request.admin_path, "/admin/pages/42/project");
-
-        let navigation = json!({
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": "call-navigation",
-            "status": "failed",
-            "content": [{
-                "type": "content",
-                "content": {
-                    "type": "text",
-                    "text": json!({
-                        "error": "unlock_required",
-                        "message": "操作 navigation.delete 需要在 Pilot 中输入后台密码重新授权。",
-                        "unlock_required": true,
-                        "operation": "navigation.delete"
-                    }).to_string()
-                }
-            }]
-        });
-        let request = grok_gcms_unlock_request(&navigation)
-            .expect("failed GCMS command still carries an authoritative unlock result");
-        assert_eq!(request.operation, "navigation.delete");
-        assert!(request.unlock_challenge.is_empty());
-        assert!(request.admin_path.is_empty());
-        let mut partial = navigation.clone();
-        partial["status"] = json!("in_progress");
-        assert!(
-            grok_gcms_unlock_request(&partial).is_none(),
-            "partial tool output must not request a password"
-        );
-
-        assert!(
-            grok_gcms_unlock_request(&json!({
-                "sessionUpdate": "agent_message_chunk",
-                "content": {"type": "text", "text": payload.to_string()}
-            }))
-            .is_none(),
-            "assistant prose must never create an unlock event"
-        );
-        assert!(
-            grok_gcms_unlock_request(&json!({
-                "sessionUpdate": "tool_call",
-                "rawInput": {"payload": payload}
-            }))
-            .is_none(),
-            "tool input is not server evidence"
-        );
-    }
-
-    #[test]
     fn usage_meta_maps_to_claude_semantics() {
         // 顶层＝最后一次调用：input 拆成未缓存 + cache_read，ctx 复原为全量 13079。
         let u = usage_from_meta(&fx_meta()).expect("有用量");
@@ -1206,8 +1101,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let work_dir = dir.to_string_lossy().into_owned();
         let conn: Connection = serde_json::from_value(json!({
-            "id": "t", "name": "t", "api_base": "", "skill_dir": work_dir,
-            "key_prefix": "", "key_kind": "gcms_", "created_at": "",
+            "id": "t", "name": "t", "skill_dir": work_dir,
+            "key_prefix": "", "key_kind": "", "created_at": "",
         }))
         .unwrap();
         let ch = || Channel::<TurnEvent>::new(|_| Ok(()));

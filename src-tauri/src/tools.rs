@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// `--visible` 打开同一独立配置，由用户完成验证后自动截图。不会读取日常浏览器配置。
 /// 成功打印 JSON {ok:true,out,engine,bytes,final_url}；失败返回结构化 code/detail。
 pub const SHOT_JS: &str = r##"#!/usr/bin/env node
-// shot.js — GCMS Pilot 随附的网页截图工具。
+// shot.js — Cligc Pilot 随附的网页截图工具。
 // 用法: node shot.js --url <url> --out <file.png> [--width 1280] [--height 800]
 //       [--full-page] [--wait <ms>] [--timeout <ms>] [--visible]
 // --visible 只使用 Pilot 专属浏览器配置，不读取用户日常 Chrome 的账号、Cookie 或历史记录。
@@ -392,7 +392,7 @@ main().catch(error => {
 /// 等 Pilot（Rust）确认 + 用钥匙串凭据执行完再把结果捡回来。SSH 凭据永远不进这个进程。
 /// 协议见 bridge.rs：先写心跳再写请求；心跳停了 Pilot 就不执行（防「工具已超时但命令照跑」）。
 pub const SSH_JS: &str = r##"#!/usr/bin/env node
-// ssh.js — GCMS Pilot 随附的远程命令工具（凭据在 Pilot 手里，本脚本只是个传声筒）。
+// ssh.js — Cligc Pilot 随附的远程命令工具（凭据在 Pilot 手里，本脚本只是个传声筒）。
 // 用法: node ssh.js [--timeout <秒>] '<命令>'
 const fs = require("fs");
 const path = require("path");
@@ -418,8 +418,8 @@ function out(o, code) {
 }
 function fail(msg) { out({ ok: false, error: msg }, 1); }
 
-const dir = process.env.GCMS_SSH_DIR || "";
-const token = process.env.GCMS_SSH_TOKEN || "";
+const dir = process.env.PILOT_SSH_DIR || "";
+const token = process.env.PILOT_SSH_TOKEN || "";
 if (!dir || !token) fail("这个对话没有连接远程机器：本工具只在「远程连接」的对话里可用。");
 
 const args = process.argv.slice(2);
@@ -604,8 +604,8 @@ mod tests {
         let p = ensure_ssh(&base).unwrap();
         assert_eq!(p, ssh_js_path(&base));
         let s = fs::read_to_string(&p).unwrap();
-        assert!(s.contains("GCMS_SSH_DIR"));
-        assert!(s.contains("GCMS_SSH_TOKEN"));
+        assert!(s.contains("PILOT_SSH_DIR"));
+        assert!(s.contains("PILOT_SSH_TOKEN"));
         // 脚本里绝不能有任何取凭据的路子（这正是 AI 桥存在的理由）
         assert!(!s.contains("password"));
         assert!(!s.contains("keychain"));
@@ -771,8 +771,8 @@ mod tests {
         let child = std::process::Command::new("node")
             .arg(&script)
             .arg("cat /var/log/big.log")
-            .env("GCMS_SSH_DIR", &dir)
-            .env("GCMS_SSH_TOKEN", "tok")
+            .env("PILOT_SSH_DIR", &dir)
+            .env("PILOT_SSH_TOKEN", "tok")
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("spawn node");
@@ -818,8 +818,8 @@ mod tests {
         let out = std::process::Command::new("node")
             .arg(&p)
             .arg("ls")
-            .env_remove("GCMS_SSH_DIR")
-            .env_remove("GCMS_SSH_TOKEN")
+            .env_remove("PILOT_SSH_DIR")
+            .env_remove("PILOT_SSH_TOKEN")
             .output()
             .expect("run node");
         assert!(!out.status.success());

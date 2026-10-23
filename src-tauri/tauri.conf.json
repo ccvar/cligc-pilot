@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GCMS Pilot",
-  "version": "0.2.64",
-  "identifier": "com.ccvar.gcms.pilot",
+  "productName": "Cligc Pilot",
+  "version": "0.1.0",
+  "identifier": "com.cligc.pilot",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GCMS Pilot",
+        "title": "Cligc Pilot",
         "width": 820,
         "height": 560,
         "minWidth": 820,
@@ -29,9 +29,12 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "Productivity",
-    "shortDescription": "本地 AI 内容驾驶舱",
+    "shortDescription": "本地 AI 工作台：远程服务器、Cloudflare 建站与多模型对话",
     "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": "-"
@@ -47,9 +50,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/ccvar/gcms-pilot-releases/releases/latest/download/latest.json"
+        "https://github.com/ccvar/cligc-pilot/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg3QzYxRkM4MjlDQ0FDRUEKUldUcXJNd3B5Qi9HaDRwdUVuMW9SeEtoWW1KSEt1N1U2SXJOVzdrdi9tbFdQd3R3SEV3MzNwMFoK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwOTFCM0I1RjBERDg0NUUKUldSZWhOM3d0Yk9SMEtXeG1ZRTFPdnAzUTVZcFFRUnU3cG5JaCs1NTlZK3lld0E0a3RMWUpIMGEK"
     }
   }
 }

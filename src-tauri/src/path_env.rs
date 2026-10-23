@@ -13,7 +13,7 @@ pub fn fix() {
 // ---------------- macOS ----------------
 
 #[cfg(target_os = "macos")]
-const MARK: &str = "__GCMS_PILOT_ENV__";
+const MARK: &str = "__CLIGC_PILOT_ENV__";
 
 /// 白名单导入：PATH + 代理相关。不整包导入，避免把 shell 私货带进 GUI 进程。
 #[cfg(target_os = "macos")]

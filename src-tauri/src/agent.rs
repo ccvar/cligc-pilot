@@ -5,7 +5,7 @@
 //!   codex  —— 优先复用常驻 app-server 的 thread/turn；实验接口不可用时自动降级到
 //!             `exec` / `exec resume <id>`。
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::SeekFrom;
@@ -19,12 +19,10 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncSeekExt, AsyncWriteExt, BufRead
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::convo::{TaskProposal, ToolCall};
+use crate::convo::ToolCall;
 use crate::keychain;
-use crate::pack::Connection;
+use crate::conns::Connection;
 use crate::permit::{self, PermMode};
-
-static GCMS_UNLOCKS: OnceLock<Mutex<HashMap<String, (String, u64)>>> = OnceLock::new();
 
 /// Codex CLI 启动前的本地兼容性预检。
 ///
@@ -131,34 +129,6 @@ fn quarantine_codex_cache(cache: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("Codex 模型缓存与当前 CLI 不兼容，自动修复失败：{e}"))
 }
 
-/// 保存 GCMS 控制层短时授权。令牌只在 Pilot 进程内存在，到期后不再注入子进程。
-pub(crate) fn store_gcms_unlock(conn_id: &str, token: String, expires_at: u64) {
-    let store = GCMS_UNLOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut grants) = store.lock() {
-        grants.insert(conn_id.to_string(), (token, expires_at));
-    }
-}
-
-fn gcms_unlock(conn_id: &str) -> Option<String> {
-    let store = GCMS_UNLOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    let mut grants = store.lock().ok()?;
-    let Some((token, expires_at)) = grants.get(conn_id).cloned() else {
-        return None;
-    };
-    if expires_at <= now {
-        grants.remove(conn_id);
-        return None;
-    }
-    Some(token)
-}
-
-/// 读取当前连接尚未过期的 GCMS 短时授权。只供 Pilot 原生控制 API 使用，
-/// 不会注入终端或对话进程。
-pub(crate) fn gcms_unlock_token(conn_id: &str) -> Option<String> {
-    gcms_unlock(conn_id)
-}
-
 /// 本轮的权限设置：档位 + 钩子资产落盘位置（claude 用）。
 struct PermSpec {
     mode: PermMode,
@@ -242,14 +212,6 @@ pub enum TurnEvent {
         current: Option<u64>,
         total: Option<u64>,
     },
-    /// GCMS 高风险操作的服务端解锁要求。它只从工具结果提取并经本轮
-    /// Channel 送到原生 UI，不进入 TurnResult/会话消息。页面操作额外
-    /// 携带服务端签名 challenge；其它控制操作只允许严格白名单里的 operation。
-    GcmsUnlockRequired {
-        operation: String,
-        unlock_challenge: String,
-        admin_path: String,
-    },
     ContextCompacted {
         pre_tokens: u64,
     },
@@ -259,222 +221,12 @@ pub enum TurnEvent {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GcmsUnlockRequest {
-    pub operation: String,
-    pub unlock_challenge: String,
-    pub admin_path: String,
-}
-
-fn valid_page_unlock_operation(operation: &str) -> bool {
-    matches!(
-        operation,
-        "pages.publish" | "pages.rollback" | "page_capabilities.grant"
-    )
-}
-
-fn valid_control_unlock_operation(operation: &str) -> bool {
-    matches!(
-        operation,
-        "sites.delete"
-            | "categories.delete"
-            | "navigation.delete"
-            | "themes.apply_live"
-            | "domains.apply"
-            | "public_access.apply"
-            | "public_access.clear_unverified"
-            | "pages.publish"
-            | "pages.rollback"
-            | "page_capabilities.grant"
-    )
-}
-
-fn unlock_operation_from_message(message: &str) -> Option<&'static str> {
-    const OPERATIONS: [&str; 10] = [
-        "sites.delete",
-        "categories.delete",
-        "navigation.delete",
-        "themes.apply_live",
-        "domains.apply",
-        "public_access.apply",
-        "public_access.clear_unverified",
-        "pages.publish",
-        "pages.rollback",
-        "page_capabilities.grant",
-    ];
-    let mut matches = OPERATIONS
-        .iter()
-        .copied()
-        .filter(|operation| message.contains(operation));
-    let operation = matches.next()?;
-    matches.next().is_none().then_some(operation)
-}
-
-fn valid_page_unlock_challenge(token: &str) -> bool {
-    let Some(body) = token.strip_prefix("gcmspc_") else {
-        return false;
-    };
-    (20..=96).contains(&body.len())
-        && body
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-}
-
-fn page_id_from_admin_path(path: &str) -> Option<i64> {
-    let raw = path
-        .strip_prefix("/admin/pages/")?
-        .strip_suffix("/project")?;
-    if raw.is_empty() || raw.contains('/') || raw.starts_with('0') {
-        return None;
-    }
-    raw.parse::<i64>().ok().filter(|id| *id > 0)
-}
-
-fn gcms_unlock_candidate(value: &serde_json::Value) -> Option<GcmsUnlockRequest> {
-    let object = value.as_object()?;
-    let unlock_required = object.get("unlock_required").and_then(|v| v.as_bool()) == Some(true)
-        || object.get("error").and_then(|v| v.as_str()) == Some("unlock_required");
-    if !unlock_required {
-        return None;
-    }
-    let operation = object
-        .get("operation")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            object
-                .get("message")
-                .and_then(|value| value.as_str())
-                .and_then(unlock_operation_from_message)
-        })?;
-    if !valid_control_unlock_operation(operation) {
-        return None;
-    }
-    if !valid_page_unlock_operation(operation) {
-        if object
-            .get("unlock_challenge")
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty())
-            || object
-                .get("admin_path")
-                .and_then(|value| value.as_str())
-                .is_some_and(|value| !value.trim().is_empty())
-        {
-            return None;
-        }
-        return Some(GcmsUnlockRequest {
-            operation: operation.to_string(),
-            unlock_challenge: String::new(),
-            admin_path: String::new(),
-        });
-    }
-    let unlock_challenge = object.get("unlock_challenge")?.as_str()?.trim();
-    if !valid_page_unlock_challenge(unlock_challenge) {
-        return None;
-    }
-    let admin_path = object.get("admin_path")?.as_str()?.trim();
-    let page_id = page_id_from_admin_path(admin_path)?;
-    if let Some(expected) = object.get("page_id").and_then(|v| v.as_i64()) {
-        if expected != page_id {
-            return None;
-        }
-    }
-    Some(GcmsUnlockRequest {
-        operation: operation.to_string(),
-        unlock_challenge: unlock_challenge.to_string(),
-        admin_path: admin_path.to_string(),
-    })
-}
-
-fn gcms_unlock_from_tool_payload_inner(
-    value: &serde_json::Value,
-    depth: usize,
-) -> Option<GcmsUnlockRequest> {
-    if depth > 16 {
-        return None;
-    }
-    if let Some(candidate) = gcms_unlock_candidate(value) {
-        return Some(candidate);
-    }
-    match value {
-        serde_json::Value::Array(values) => values
-            .iter()
-            .find_map(|value| gcms_unlock_from_tool_payload_inner(value, depth + 1)),
-        serde_json::Value::Object(values) => values
-            .values()
-            .find_map(|value| gcms_unlock_from_tool_payload_inner(value, depth + 1)),
-        serde_json::Value::String(raw) if raw.len() <= 1_048_576 => {
-            let trimmed = raw.trim();
-            let parsed = serde_json::from_str::<serde_json::Value>(trimmed)
-                .ok()
-                .or_else(|| {
-                    let start = trimmed.find('{')?;
-                    let end = trimmed.rfind('}')?;
-                    (end > start)
-                        .then(|| {
-                            serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]).ok()
-                        })
-                        .flatten()
-                })?;
-            gcms_unlock_from_tool_payload_inner(&parsed, depth + 1)
-        }
-        _ => None,
-    }
-}
-
-/// Extract a page unlock request from a tool-result payload. Callers must pass
-/// only result/output fields, never assistant prose or tool inputs.
-pub(crate) fn gcms_unlock_from_tool_payload(
-    value: &serde_json::Value,
-) -> Option<GcmsUnlockRequest> {
-    gcms_unlock_from_tool_payload_inner(value, 0)
-}
-
-fn send_gcms_unlock_request(ch: &Channel<TurnEvent>, request: GcmsUnlockRequest) {
-    let _ = ch.send(TurnEvent::GcmsUnlockRequired {
-        operation: request.operation,
-        unlock_challenge: request.unlock_challenge,
-        admin_path: request.admin_path,
-    });
-}
-
-/// Server challenges are deliberately ephemeral. Even if an assistant echoes
-/// one in its final prose, redact it before TurnResult can reach ConvStore.
-pub(crate) fn redact_gcms_unlock_challenges(text: &str) -> String {
-    const PREFIX: &str = "gcmspc_";
-    const REDACTED: &str = "[页面确认挑战已由 Pilot 临时接管]";
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        let Some(offset) = rest.find(PREFIX) else {
-            out.push_str(rest);
-            break;
-        };
-        out.push_str(&rest[..offset]);
-        let token = &rest[offset..];
-        let end = token
-            .bytes()
-            .position(|b| !(b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
-            .unwrap_or(token.len());
-        if end >= PREFIX.len() + 20 {
-            out.push_str(REDACTED);
-        } else {
-            out.push_str(&token[..end]);
-        }
-        rest = &token[end..];
-    }
-    out
-}
-
 pub struct TurnResult {
     pub ok: bool,
     pub text: String,
     pub tools: Vec<ToolCall>,
     pub error: String,
     pub session_ref: String,
-    /// AI 在本轮提议的定时任务（PILOT_TASK 行解析而来），供前端弹确认卡。
-    pub proposal: Option<TaskProposal>,
     /// 本轮 token 用量（从 CLI 流里抽出）；用于「会话大小/累计用量」。拿不到则 None。
     pub usage: Option<TurnUsage>,
     /// 本轮因订阅额度/限流失败：Some(恢复时间戳秒)，拿不到恢复时间为 Some(0)；非限额错误 None。
@@ -692,15 +444,7 @@ fn codex_server_environment_key(
     hasher.update([0]);
     hasher.update(conn.kind.as_bytes());
     hasher.update([0]);
-    hasher.update(conn.api_base.as_bytes());
-    hasher.update([0]);
-    hasher.update(crate::codex_environment::POLICY_VERSION.as_bytes());
-    hasher.update([0]);
     hasher.update(api_key.as_bytes());
-    if let Some(token) = gcms_unlock(&conn.id) {
-        hasher.update([0]);
-        hasher.update(token.as_bytes());
-    }
     if let Some(lease) = lease {
         let mut env = lease.env();
         env.sort_by(|a, b| a.0.cmp(&b.0));
@@ -717,8 +461,8 @@ fn codex_server_environment_key(
 fn codex_initialize_params() -> serde_json::Value {
     serde_json::json!({
         "clientInfo": {
-            "name": "gcms-pilot",
-            "title": "GCMS Pilot",
+            "name": "cligc-pilot",
+            "title": "Cligc Pilot",
             "version": env!("CARGO_PKG_VERSION")
         },
         // thread/resume.excludeTurns is deliberately used below so a persistent
@@ -736,7 +480,6 @@ async fn codex_app_server(
     api_key: &str,
     lease: Option<&crate::bridge::Lease>,
 ) -> Result<Arc<CodexAppServer>, String> {
-    crate::codex_environment::validate_credentials(&conn.kind, &conn.api_base, api_key)?;
     let key = codex_server_environment_key(conn, work_dir, api_key, lease);
     let scope = key
         .rsplit_once(':')
@@ -746,7 +489,7 @@ async fn codex_app_server(
     let _transition_guard = transition.lock().await;
     let servers = CODEX_APP_SERVERS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
 
-    // 环境（尤其 GCMS 短时解锁令牌）变化时，先把同连接、同工作目录下已经空闲的
+    // 环境（如 SSH 桥租约）变化时，先把同连接、同工作目录下已经空闲的
     // 旧服务完整关停并 wait，再启动新服务。仅从 HashMap 移除会让 kill_on_drop 与
     // 新 thread/resume 竞速，在 Windows 上尤其容易留下短暂的 active writer。
     let stale_servers = {
@@ -779,7 +522,6 @@ async fn codex_app_server(
 
     let mut cmd = Command::new(crate::brains::resolve_bin("codex"));
     cmd.args(["app-server", "--stdio"]);
-    crate::codex_environment::apply_cli(&mut cmd, &conn.kind);
     apply_env_cwd(&mut cmd, conn, work_dir, api_key, lease);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -910,26 +652,6 @@ async fn codex_app_server(
         )
         .await?;
     server.notify("initialized", None)?;
-    if conn.kind == "gcms" {
-        // Read only in memory. Never log the returned config: a user may have
-        // put credentials in `set`. Known policy failures must not fall back to
-        // exec and repeat the same failure (or use another connection's key).
-        let effective = server.request("config/read", serde_json::json!({
-            "includeLayers": false, "cwd": work_dir
-        }), std::time::Duration::from_secs(10)).await;
-        match effective {
-            Ok(effective) => {
-                if let Err(error) = crate::codex_environment::validate_effective_policy(&effective["config"]) {
-                    server.shutdown().await;
-                    return Err(error);
-                }
-            }
-            Err(_) => {
-                server.shutdown().await;
-                return Err(format!("{}：无法读取 Codex 生效配置，未启动任务。请重启 Pilot 后重试，仍失败请检查 Codex 版本与配置。", crate::codex_environment::VALIDATION_ERROR));
-            }
-        }
-    }
     let mut guard = servers.lock().await;
     // 仍有其它对话在执行的旧环境服务不能强杀；它会在后续调用进入本函数时，
     // sinks 变空后由上面的显式 shutdown 回收。
@@ -1097,9 +819,6 @@ fn send_codex_app_activity(
 }
 
 fn handle_codex_app_notification(method: &str, params: &serde_json::Value, sink: &CodexTurnSink) {
-    if let Some(request) = codex_app_gcms_unlock_request(method, params) {
-        send_gcms_unlock_request(&sink.channel, request);
-    }
     {
         let mut images = Vec::new();
         extract_generated_images(params, &mut images);
@@ -1314,13 +1033,10 @@ async fn try_run_codex_app_server(
     };
     let server = match codex_app_server(conn, work_dir, api_key, lease).await {
         Ok(server) => server,
-        Err(error) if error.starts_with(crate::codex_environment::VALIDATION_ERROR) => {
-            return CodexAppServerAttempt::Completed(failed_turn_result(session_ref, error, &channel));
-        }
         Err(error) => return CodexAppServerAttempt::Unavailable(error),
     };
     let sandbox = codex_sandbox(mode);
-    let config = crate::codex_environment::thread_config(&conn.kind);
+    let config = serde_json::json!({"sandbox_workspace_write": {"network_access": true}});
     let mut thread_id = session_ref.to_string();
 
     if is_first || thread_id.trim().is_empty() {
@@ -1500,7 +1216,6 @@ fn failed_turn_result(
         tools: Vec::new(),
         error,
         session_ref: session_ref.to_string(),
-        proposal: None,
         usage: None,
         limit_reset: None,
     }
@@ -1512,9 +1227,9 @@ fn finish_codex_app_turn(
     error: String,
     channel: &Channel<TurnEvent>,
 ) -> TurnResult {
-    let error = redact_gcms_unlock_challenges(&error);
-    let persisted_text = redact_gcms_unlock_challenges(&collect.text);
-    let (clean_text, proposal) = extract_proposal(&persisted_text);
+    let error = error.to_string();
+    let persisted_text = collect.text.to_string();
+    let clean_text = persisted_text.trim().to_string();
     let clean_text = if ok && !collect.images.is_empty() {
         let existing = collect
             .images
@@ -1538,13 +1253,12 @@ fn finish_codex_app_turn(
             .tools
             .into_iter()
             .map(|mut tool| {
-                tool.detail = redact_gcms_unlock_challenges(&tool.detail);
+                tool.detail = tool.detail.to_string();
                 tool
             })
             .collect(),
         error,
         session_ref: collect.session_ref,
-        proposal,
         usage: collect.usage,
         limit_reset,
     }
@@ -1552,73 +1266,8 @@ fn finish_codex_app_turn(
 
 // ---- 系统提示词（角色框架）----
 
-const GCMS_BATCH_POLICY: &str = "\n\
-【批量操作性能规则】用户要求对多条内容执行相同读取、上传、修改、发布或校验时，先一次确定目标 ID、\
-字段和预期结果，再用单个受控脚本/批次完成；不要每处理一条就重新思考、解释或启动一次模型回合。\
-写入前批量读取最新状态与 ETag，只修改确实需要变化的条目；成功项立即记账，网络瞬断时只对失败项\
-做最多 3 次带间隔重试，严禁重复上传或覆盖成功项。批量结束后统一读取结果并验收一次；只有发现异常\
-或用户明确要求时才逐条截图、逐条复查。回复中用“已完成/总数、失败项和下一步”汇报真实进度。";
-
-pub fn system_prompt(task_type: &str, site_slug: &str, site_name: &str) -> String {
-    let base = format!(
-        "你是站点「{name}」(slug: {slug}) 的 AI 内容助手，通过运行 `node scripts/gcms.js` 操作 gcms 平台。\
-先阅读当前目录的 SKILL.md、AI助手说明.md（如存在）了解可用命令。\n\
-硬性规则：目标站点固定用 `--site {slug}`；slug 只用 ASCII 小写字母/数字/连字符；\
-时间字段一律带时区偏移的 RFC3339；图片先转 WebP 再上传；未经用户明确同意不要发布内容（默认建草稿）。\n\
-【扩展内容类型】站点能做的不只文章/链接/页面——先 `node scripts/gcms.js types --site {slug}` 看本站启用的\
-扩展类型（产品/文档/活动/图库/自定义），返回的字段 schema 就是操作契约：list/create/update 对\
-扩展集合同样可用，自定义字段放 `fields:{{...}}`。需要新的内容形态（如案例库/菜谱/招聘岗位）时，\
-先把内容模型（类型名+字段清单）讲给用户、征得同意后再 type-create；类型是站点级结构，别随手建。\n\
-【自由编排页面：Pilot 优先】用户提出创建或修改宣传页、专题页、内容聚合页等自由编排页面时，\
-不要把用户赶到网页后台，也不要要求用户自己拼 Manifest。先运行 `node scripts/gcms.js page-context --site {slug}` 和\
-`node scripts/gcms.js page-capabilities --site {slug}`，以实时返回的主题、组件、数据源、操作权限和协议为准；\
-已有页面先用 `node scripts/gcms.js page-projects --site {slug} --lang <语种> --slug <slug>` 找到真实 project id 与最新 ETag；\
-默认使用 `theme.inherit=true`、`shell=site`（Manifest 中为 `shell.mode=site`），继承站点字体、颜色、圆角、导航和页脚。\
-动态区域必须读取 page-components、page-data-sources 并通过 page-binding-preview 使用真实数据绑定，\
-不得把文章、产品等站内业务数据复制或硬编码进页面 props；只有页面自身的展示文案可以写入 Manifest。\n\
-用户明确提出创建或修改页面，就可以在 Pilot 内生成或更新草稿，不要为每个安全的草稿步骤反复确认。\
-每次实质修改都必须基于最新 ETag/base revision 创建新修订，随后依次运行 page-validate、page-build、page-preview；\
-把 page-build 返回的 ready build id 传给 page-preview、发布预检和正式发布，确保预览与发布绑定同一产物及真实数据快照，\
-并在回复中给出可打开的预览与简短变更摘要；校验或构建失败时先修好草稿再交付。\
-除非用户明确要求发布，否则不要运行 page-publish-plan 或 page-publish，也不要把草稿说成已上线。\
-正式发布、回滚或能力批准返回 `unlock_required` 时，停止重试并等待 Pilot 原生界面；\
-不要在助手回复中复述 `unlock_challenge`，该挑战由 Pilot 从工具结果临时接管。\
-遇到 409、revision_conflict 或 ETag 变化时，重新运行 page-get（必要时也重读 page-context），比较最新修订并创建合并后的新修订；\
-禁止覆盖他人的修改、重放旧快照或盲目重试。能力缺失时在对话中说明具体阻塞与可继续完成的部分，不要把操作责任推回网页后台。\n\
-交互方式：以对话推进——先理解用户意图，必要时提问澄清，给出简短方案并征得同意后再动手；\
-动手时边做边用一两句话说明你在做什么；每完成一步给出结果（如新建内容的 ID、预览或后台链接，可用 `preview-url`）。\
-回答用中文，简洁自然，不要长篇大论。运行命令（Bash）时 description 字段一律用中文写清这条命令做什么、\
-会影响什么——它会原样展示给非技术用户做批准决定。\n\
-【定时发布 vs 定时任务，区分清楚】\n\
-- 如果用户只是要把某篇内容**定时发布**：直接用 gcms.js 建 status=scheduled 的内容并设 published_at 即可，这属于内容操作。\n\
-- 如果用户希望你**周期性地自动**做某事（比如每天自动写一篇、每周巡检）：**你无法、也绝不要自己搭建任何定时或常驻机制**——不要写或安装 cron / launchd / 系统定时器，不要准备「长期运行的脚本或环境」，不要建后台守护进程或自触发循环，也不要在当前目录留调度脚本。这类循环任务**只能**由 GCMS Pilot 客户端调度。你唯一要做的是：用一句话告诉用户你准备了一个定时任务建议、请在下方卡片确认，然后在回复的**最后单独打印一行**（只打印一次）：\n\
-PILOT_TASK: {{\"title\":\"简短任务名\",\"prompt\":\"每次到点要执行的完整指令，写清站点、语言、产出要求\",\"every_minutes\":周期分钟数,\"first_run\":\"可选，首次运行时间，带时区的RFC3339\"}}\n\
-打印这行后就停下、等用户在卡片里确认；确认后由 Pilot 到点自动开新对话执行你写的 prompt。其中 every_minutes：1440=每天、10080=每周、60=每小时、360=每6小时。",
-        name = if site_name.is_empty() { site_slug } else { site_name },
-        slug = site_slug
-    );
-    let role = match task_type {
-        "sitebuild" => "\n\n本次目标：新站建设。帮用户从零把这个站点搭起来——先了解定位、目标读者、栏目方向，\
-**并聊清内容模型**：这个站需要哪些内容形态（文章之外是否要产品库/文档/活动/图库/自定义类型）；\
-给出建站方案；达成一致后依次完善站点资料（site-profile-update）、配置前台导航（navigation-update）、\
-启用或创建所需内容类型（types / type-enable / type-create，模型需用户确认）、创建若干种子内容。\
-每一步做完都向用户汇报，让他确认后再进行下一步。",
-        // article/free 是旧版本留下的会话类型：继续按合并后的“站点运营”能力执行，
-        // 不改历史 JSON，也不会让旧自由会话绕过文章质量底线。
-        "siteops" | "article" | "free" => "\n\n本次目标：站点运营。围绕当前站点协助用户完成内容策划与创作、资料维护、SEO、栏目与内容模型、\
-日常检查等运营工作；先理解目标，必要时给出短方案，涉及写入时遵循上面的确认边界。创建内容默认保存为草稿。\n\
-【文章质量强制规则】只要本轮涉及创建、改写或发布文章，这些规则均不可被用户自定义指令绕过：\
-每篇文章必须有真实、贴切且与正文对应的配图，并填写准确 alt；\
-涉及后台、网页、软件或产品操作时必须使用真实系统截图，发布前遮盖 Token、账号、邮箱、Cookie 和内部 URL 等敏感信息，禁止伪造截图。\
-每篇文章围绕一个明确且真实的搜索意图和目标读者展开，内容必须原创、可验证、可执行；禁止关键词堆砌、模板拼接、空话、虚构案例、虚构数据和伪造引用。\
-时效性事实优先引用官方或一手来源；不能验证的事实要标注不确定，不得编造。",
-        _ => "\n\n以对话方式协助用户完成关于这个站点的各类内容运营工作。",
-    };
-    format!("{base}{role}{GCMS_BATCH_POLICY}")
-}
-
 /// 与任何连接、站点和通用技能都隔离的自由对话提示词。
-/// cwd 只是一块可选本地工作区；不能因为 Pilot 当前选中了某条连接就读取或操作 GCMS。
+/// cwd 只是一块可选本地工作区；不能因为 Pilot 当前选中了某条连接就读取或操作它。
 pub fn workspace_system_prompt(has_folder: bool) -> String {
     let workspace = if has_folder {
         "用户已明确选择一个本地文件夹作为本会话工作目录。需要处理文件时先查看目录现状，再按用户要求操作；不要遍历或读取无关文件。"
@@ -1626,9 +1275,8 @@ pub fn workspace_system_prompt(has_folder: bool) -> String {
         "用户没有选择本地文件夹；当前目录是 Pilot 为本会话创建的空白隔离目录。除非用户明确要求生成文件，否则把本次任务当作纯对话。"
     };
     format!(
-        "你是 Pilot 的通用 AI 助手。本会话是独立自由对话，不属于任何 GCMS 站点、Cloudflare 项目或远程服务器。\
-不得查找、读取或使用 GCMS_API_KEY、GCMS_API_BASE、CLOUDFLARE_API_TOKEN、站点技能包或当前 Pilot 连接信息；\
-不要运行 gcms.js，也不要假设存在目标站点。{workspace}\n\
+        "你是 Pilot 的通用 AI 助手。本会话是独立自由对话，不属于任何 Cloudflare 项目或远程服务器。\
+不得查找、读取或使用 CLOUDFLARE_API_TOKEN 或当前 Pilot 连接信息，也不要假设存在目标站点或服务器。{workspace}\n\
 先理解用户意图，必要时简短澄清；涉及文件修改时先说明影响并遵守当前权限档位。回答使用用户所用语言，简洁自然。"
     )
 }
@@ -1638,7 +1286,7 @@ pub fn workspace_system_prompt(has_folder: bool) -> String {
 /// 运行时约束（而不只放在首轮 system prompt），让既有 session 也立即生效。
 ///
 /// SSH 会话例外：它有独立桥接租约和明确的远程运维提示，长编译等允许由用户通过日志
-/// 分次查看；这里处理的是 GCMS/Cloudflare/workspace 对话中“说稍后自动继续、实际无人
+/// 分次查看；这里处理的是 Cloudflare/workspace 对话中“说稍后自动继续、实际无人
 /// 接收结果”的假后台任务。
 fn conversation_completion_policy(message: &str, connection_kind: &str) -> String {
     if connection_kind == "ssh" {
@@ -1655,87 +1303,6 @@ fn conversation_completion_policy(message: &str, connection_kind: &str) -> Strin
 通过 Pilot 原生定时任务建议交给用户确认。无法在本回合完成时，明确说明中断点和可恢复状态，不得假装\
 仍在运行。\n\
 </pilot-runtime-policy>"
-    )
-}
-
-/// GCMS 平台级新站建设提示词。
-///
-/// 与普通单站会话不同，这里还没有目标 slug：AI 必须先读取平台能力、站点清单与真实主题，
-/// 再通过 control API 的 dry-run → 用户确认 → 幂等执行流程创建一个全新子站点。
-/// reference_* 只兼容旧版曾绑定到具体站点的 sitebuild 会话，绝不能把参考站当成写入目标。
-pub fn platform_sitebuild_system_prompt(
-    platform_name: &str,
-    reference_slug: &str,
-    reference_name: &str,
-) -> String {
-    let platform = if platform_name.trim().is_empty() {
-        "当前 GCMS 平台"
-    } else {
-        platform_name.trim()
-    };
-    let reference = if reference_slug.trim().is_empty() {
-        "当前没有指定参考站点；这是平台级新建流程，不要要求用户先选一个已有站点。".to_string()
-    } else {
-        format!(
-            "界面此前选择了参考站点「{}」(slug: {})。它只可用于读取结构或风格参考，未经用户另行明确要求不得修改；本次必须创建一个不同 slug 的新站点。",
-            if reference_name.trim().is_empty() {
-                reference_slug.trim()
-            } else {
-                reference_name.trim()
-            },
-            reference_slug.trim()
-        )
-    };
-    format!(
-        "你是「{platform}」的 GCMS 新站建设助手，通过运行 `node scripts/gcms.js` 创建并完善一个真正的新子站点。\
-先完整阅读当前目录的 SKILL.md、AI助手说明.md（如存在），以其中实时命令和安全边界为准。\n\
-{reference}\n\
-\n\
-【不可跳过的建站流程】\n\
-1. 只读摸底：先运行 `node scripts/gcms.js capabilities`、`node scripts/gcms.js control-sites` 和 `node scripts/gcms.js themes`。\
-若 capabilities 中 `sites.create` 不可用/未授权，或脚本没有这些命令，立即停止并用普通用户能理解的话提示检查 GCMS 版本、平台密钥权限或升级技能包；禁止猜测私有接口。\n\
-2. 理解需求：从用户描述提取站点名称、候选 slug、业务类型、目标读者、主要语言、栏目/内容形态和视觉气质；只追问真正缺失且会改变结果的 1–3 个问题。\n\
-3. 选择主题：只从 `themes` 实时返回的真实主题中比较 description、category、layout 与 options，推荐 1 个最匹配主题并简述理由；必要时给不超过 2 个备选，绝不编造主题 ID。\n\
-4. 预检查：确认 slug 未被 `control-sites` 占用后，构造 seed_mode=empty、management_automation_enabled=true 的建站输入，先运行 `site-create-plan`。把 normalized_input、impact、warnings 转成简洁中文，同时列出准备采用的主题、内容模型和首批草稿计划。\n\
-5. 等待确认：预检查完成后必须停下来，明确询问用户是否按该方案创建。首条需求不等于对预检查结果的确认；没有用户在看到方案后的明确同意，不得运行 `site-create`、`theme-apply` 或任何站点写入。\n\
-6. 幂等创建：用户确认后，用稳定且可复用的 request-id 运行 `site-create --confirm true`。若重试同一创建请求必须复用原 request-id，输入变化则换新值；禁止绕过脚本直接调用未记录的路由。\n\
-7. 配置外观：新站创建成功后先运行 `theme-plan --site <新slug> <主题ID>`。若结果与已确认方案一致且没有新增警告，再运行 `theme-apply --confirm true --request-id <稳定ID>`；出现新增影响或警告就再次让用户确认。\n\
-8. 分阶段完善：随后以新 slug 为唯一目标，读取真实 schema 后依次完善 site-profile、navigation、languages、types，并按已确认方案创建少量种子内容。内容默认 draft，禁止默认发布；内容模型、导航结构或重要资料每一阶段先简报再执行。\n\
-9. 完成汇报：最后清楚列出新站 ID/slug、采用主题、已完成配置、草稿内容和仍待处理事项，提醒用户可在 Pilot 站点列表看到新站。\n\
-\n\
-【安全边界】\n\
-- 站点创建、修改、删除、主题和域名操作都必须先跑对应 `*-plan`，并遵守能力契约中的 confirmation、idempotency 与 unlock 要求。\n\
-- 不得询问、读取、记录或代为输入 GCMS 后台密码；requires_unlock 的操作只能交给 Pilot 原生界面。\n\
-- 本阶段不主动修改域名、DNS、Cloudflare、Caddy 或 HTTPS；用户明确提出后再交给 Pilot 的专用流程。\n\
-- 不删除或覆盖任何已有站点，不伪造案例、数据、截图或主题能力。\n\
-- 回答用中文，简洁自然；运行命令时 description 必须用中文说明会读取什么或改变什么。"
-    )
-}
-
-/// 多站会话的系统提示词：AI 可操作清单内任意站点（平台密钥 gcms.js 本就支持 --site 任意站）。
-pub fn multi_site_system_prompt(slugs: &[String], names: &[String]) -> String {
-    let mut list = String::new();
-    for (i, s) in slugs.iter().enumerate() {
-        let n = names.get(i).map(String::as_str).unwrap_or(s);
-        list.push_str(&format!("- {s}（{n}）\n"));
-    }
-    format!(
-        "你是跨站点的 AI 内容助手，通过运行 `node scripts/gcms.js` 同时管理下列 {count} 个站点。\
-先阅读当前目录的 SKILL.md、AI助手说明.md（如存在）了解可用命令。\n\
-【站点清单】\n{list}\
-硬性规则：**每条命令都必须显式带 `--site <slug>`**，slug 只能取自上面清单；\
-时间字段一律带时区偏移的 RFC3339；图片先转 WebP 再上传；未经用户明确同意不要发布内容（默认建草稿）。\n\
-【统计/巡检/对比类需求】按清单逐站查询后汇总作答，给出分站明细 + 合计；站点较多时边查边简要汇报进度。\n\
-【扩展内容类型】各站独立：先 `types --site <slug>` 看该站启用的类型，字段 schema 即操作契约。\n\
-【批量重活分发给 Pilot】如果用户要求对**每个站独立完成一件重活**（如各写一篇文章）：不要在本会话里逐站硬干\
-（串行慢、上下文膨胀、质量随长度下降）。改为提议一个多站定时任务：用一句话说明后，在回复最后单独打印一行\n\
-PILOT_TASK: {{\"title\":\"简短任务名\",\"prompt\":\"每个站点各自执行的完整指令（写清语言、产出要求；站点由任务配置指定，不要写死 slug）\",\"every_minutes\":周期分钟数,\"first_run\":\"可选，RFC3339\"}}\n\
-Pilot 会预填本会话的全部站点，用户确认后并发分站执行；一次性的活让用户创建后点「立即运行」即可。\n\
-交互方式：先理解意图、必要时澄清，动手时边做边简述；回答用中文，简洁自然。\
-运行命令（Bash）时 description 一律用中文写清这条命令做什么、影响哪个站点。\
-{batch_policy}",
-        count = slugs.len(),
-        batch_policy = GCMS_BATCH_POLICY,
     )
 }
 
@@ -1838,8 +1405,8 @@ pub fn ssh_system_prompt(user: &str, host: &str, port: u16, ssh_js: &str) -> Str
 }
 
 /// 网页截图能力的系统提示补充（shot.js 由 Pilot 生成在数据目录，见 tools.rs）。
-/// gcms 会话教「截图→确认→转 WebP→上传→插入文章」；CF 会话教「截本地预览自查 / 截参考站」。
-pub fn shot_prompt(shot_path: &str, is_cf: bool) -> String {
+/// 只给 Cloudflare 建站会话：截本地预览自查 / 截参考站。
+pub fn shot_prompt(shot_path: &str) -> String {
     let common = format!(
         "【网页截图】需要网页截图时先用随附工具自动后台渲染：\n\
 `node \"{shot_path}\" --url <URL> --out shots/名字.png [--width 1280] [--full-page] [--wait 3000]`\n\
@@ -1853,23 +1420,10 @@ Pilot 专用浏览器协助验证，再把**同一条命令**加 `--visible --ti
 ——打不开的页面 Chrome 会把自己的错误页截下来，所以要看图排除：错误页 / 验证码 / 空白页 / Cookie 弹窗。\
 不对就依据真实 `code/detail` 调整一次；禁止把所有失败笼统说成“反爬”，也不要反复启动可见浏览器。"
     );
-    if is_cf {
-        format!(
-            "{common}\n\
+    format!(
+        "{common}\n\
 用途：截 `http://127.0.0.1:<预览端口>` 检查你搭的页面实际效果（先确认本地预览在跑）；也可截参考网站找样式灵感。"
-        )
-    } else {
-        format!(
-            "{common}\n\
-用途一：自由编排页面每次完成 build-bound 私有预览后，必须按 page-context 返回的视口做视觉验收；\
-至少截桌面 1280、平板 768 和手机 390（手机高度 844），逐张用 Read 打开，检查横向溢出、裁切、\
-导航遮挡、字号/对比度、间距节奏、真实图片与数据卡片。发现问题先创建新修订并重新\
-validate → build → preview → 截图，三张都通过后才把预览交给用户；截图不是发布授权。\n\
-用途二：给文章配网页截图——确认无误后转 WebP（`cwebp 输入.png -o 输出.webp`，macOS 也可 \
-`sips -s format webp 输入.png --out 输出.webp`），用 `node scripts/gcms.js upload` 上传拿 url，\
-以 Markdown 图片插入文章。注意版权：优先截步骤 / 界面等事实性画面，不要整版搬运他人内容。"
-        )
-    }
+    )
 }
 
 /// codex 专用兜底：它没有 `--plugin-dir`，吃不到随附的设计技能，只能在提示词里给绝对路径让它自己读。
@@ -1914,7 +1468,6 @@ pub async fn run_turn(
     effort: String,
     // fast 模式：只有 Opus 5 / Opus 4.8 支持（CLI 2.1.205+ 才认 headless 的 fastMode 键）。
     fast: bool,
-    selected_skill_ids: Vec<String>,
     data_dir: PathBuf,
     ssh: crate::ssh::SshSessions,
     session_ref: String,
@@ -1927,36 +1480,10 @@ pub async fn run_turn(
 ) -> TurnResult {
     // 用户消息仍按原文写入 conversations.json；这里只增强发给执行器的临时副本。
     // 每轮注入才能覆盖升级前已经建立的 Claude/Codex session。
-    let mut message = crate::editorial::for_turn(
+    let message = crate::editorial::for_turn(
         conversation_completion_policy(&message, &conn.kind),
         &conn.kind,
     );
-    // 通用技能由技能工作区的会话显式选择；普通站点/自由对话不再自动注入全部技能。
-    // 每轮重新注入，既覆盖 CLI resume，也能在技能后来被停用时立即停止使用。
-    match crate::skills::selected_skill_prompt(&data_dir, &selected_skill_ids) {
-        Ok(prompt) if !prompt.is_empty() => {
-            message.push_str("\n\n<pilot-user-skills>\n");
-            message.push_str(&prompt);
-            message.push_str("</pilot-user-skills>");
-        }
-        Ok(_) => {}
-        Err(error) => {
-            let _ = channel.send(TurnEvent::Done {
-                ok: false,
-                error: error.clone(),
-            });
-            return TurnResult {
-                ok: false,
-                text: String::new(),
-                tools: vec![],
-                error,
-                session_ref,
-                proposal: None,
-                usage: None,
-                limit_reset: None,
-            };
-        }
-    }
     // ssh 连接没有 API key（密码/口令是给 Pilot 连机器用的，绝不进子进程），
     // 且无口令私钥根本没有钥匙串条目 —— 这里拿不到不算错。
     let api_key = if conn.kind == "ssh" || conn.kind == "workspace" {
@@ -1975,7 +1502,6 @@ pub async fn run_turn(
                     tools: vec![],
                     error: e,
                     session_ref,
-                    proposal: None,
                     usage: None,
                     limit_reset: None,
                 };
@@ -2013,7 +1539,6 @@ pub async fn run_turn(
                 tools: vec![],
                 error: e,
                 session_ref,
-                proposal: None,
                 usage: None,
                 limit_reset: None,
             };
@@ -2038,7 +1563,7 @@ pub async fn run_turn(
     if let Some(profile_id) = brain.strip_prefix("api:") {
         return crate::api_agent::run_turn(
             registry, conn, work_dir, profile_id.to_string(), model, effort, mode,
-            selected_skill_ids, data_dir, lease.as_ref(), session_ref, is_first,
+            data_dir, lease.as_ref(), session_ref, is_first,
             system, message, turn_id, channel, api_key,
             api_execution_policy,
         ).await;
@@ -2151,7 +1676,6 @@ pub async fn run_turn(
                 tools: vec![],
                 error: e,
                 session_ref,
-                proposal: None,
                 usage: None,
                 limit_reset: None,
             };
@@ -2187,7 +1711,6 @@ pub async fn run_turn(
                 tools: vec![],
                 error: msg,
                 session_ref,
-                proposal: None,
                 usage: None,
                 limit_reset: None,
             };
@@ -2214,7 +1737,6 @@ pub async fn run_turn(
                 tools: vec![],
                 error: msg,
                 session_ref,
-                proposal: None,
                 usage: None,
                 limit_reset: None,
             };
@@ -2321,12 +1843,10 @@ pub async fn run_turn(
     } else {
         String::new()
     };
-    let error = redact_gcms_unlock_challenges(&clarify_claude_cli_error(&brain, error));
+    let error = clarify_claude_cli_error(&brain, error).to_string();
 
-    // 挑战先脱敏再解析提议，避免它藏进 PILOT_TASK 参数或普通助手正文后落库。
-    let persisted_text = redact_gcms_unlock_challenges(&c.text);
-    // 从助手文本里剥出 PILOT_TASK 提议（并把那行从展示文本移除）。
-    let (clean_text, proposal) = extract_proposal(&persisted_text);
+    let persisted_text = c.text.to_string();
+    let clean_text = persisted_text.trim().to_string();
     // 生图产物：只补真实存在的文件（模型可能提了没写出来的路径）。
     let clean_text = if ok && !c.images.is_empty() {
         let existing: Vec<String> = c
@@ -2358,13 +1878,12 @@ pub async fn run_turn(
             .tools
             .into_iter()
             .map(|mut tool| {
-                tool.detail = redact_gcms_unlock_challenges(&tool.detail);
+                tool.detail = tool.detail.to_string();
                 tool
             })
             .collect(),
         error,
         session_ref: c.session_ref,
-        proposal,
         usage: c.usage,
         limit_reset,
     }
@@ -2413,31 +1932,6 @@ fn clarify_claude_cli_error(brain: &str, error: String) -> String {
     } else {
         error
     }
-}
-
-/// 从文本里找 `PILOT_TASK: {json}` 行，解析成 TaskProposal 并把该行从展示文本移除。
-pub(crate) fn extract_proposal(text: &str) -> (String, Option<TaskProposal>) {
-    let mut found: Option<TaskProposal> = None;
-    let mut kept: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if found.is_none() {
-            let t = line.trim();
-            if let Some(idx) = t.find("PILOT_TASK:") {
-                let rest = &t[idx + "PILOT_TASK:".len()..];
-                if let Some(b) = rest.find('{') {
-                    let mut de = serde_json::Deserializer::from_str(&rest[b..]);
-                    if let Ok(p) = TaskProposal::deserialize(&mut de) {
-                        if p.every_minutes >= 1 && !p.prompt.trim().is_empty() {
-                            found = Some(p);
-                            continue; // 丢掉这一整行
-                        }
-                    }
-                }
-            }
-        }
-        kept.push(line);
-    }
-    (kept.join("\n").trim().to_string(), found)
 }
 
 #[derive(Clone)]
@@ -2545,7 +2039,6 @@ fn parse_usage(v: &serde_json::Value) -> Option<TurnUsage> {
 
 /// 按连接类型注入凭据 env + 设置 cwd：
 ///   cloudflare → CLOUDFLARE_API_TOKEN/ACCOUNT_ID，cwd=项目目录；
-///   gcms       → GCMS_API_BASE/KEY，cwd=技能包目录；
 ///   workspace  → **不注入任何连接凭据**，只设置用户明确选择/会话隔离的 cwd；
 ///   ssh        → **不注入任何凭据**（那是一台机器的 root shell，不是一个 API key），
 ///                只给本轮租约的目录+令牌，让 ssh.js 能把命令递给 Pilot 代跑。见 bridge.rs。
@@ -2572,14 +2065,6 @@ pub(crate) fn apply_env_cwd(
         cmd.env("CLOUDFLARE_API_TOKEN", api_key);
         if !conn.account_id.is_empty() {
             cmd.env("CLOUDFLARE_ACCOUNT_ID", &conn.account_id);
-        }
-    } else {
-        cmd.env("GCMS_API_BASE", &conn.api_base)
-            .env("GCMS_API_KEY", api_key)
-            // A revoked/expired unlock must not leak in from Pilot's parent.
-            .env_remove("GCMS_CONTROL_UNLOCK_TOKEN");
-        if let Some(token) = gcms_unlock(&conn.id) {
-            cmd.env("GCMS_CONTROL_UNLOCK_TOKEN", token);
         }
     }
 }
@@ -2694,7 +2179,6 @@ fn build_codex(
     perm: PermMode,
     lease: Option<&crate::bridge::Lease>,
 ) -> Result<(Command, String), String> {
-    crate::codex_environment::validate_credentials(&conn.kind, &conn.api_base, api_key)?;
     // codex 无头没有逐工具回传 UI 的能力，权限档位只能落到 sandbox 粗粒度（精细批准以 claude 为主）。
     // plan＝只读；full＝完全放开；ask/auto＝可写工作区（无法逐命令确认）。
     let sandbox = match perm {
@@ -2746,7 +2230,6 @@ fn build_codex(
     }
     // `-` 让 Codex 从 stdin 读完整提示词。不要把 prompt 直接作为参数：Windows 的
     // codex.cmd 无法接收含换行的参数，首轮系统提示必然会触发该限制。
-    crate::codex_environment::apply_cli(&mut cmd, &conn.kind);
     cmd.arg("-");
     apply_env_cwd(&mut cmd, conn, work_dir, api_key, lease);
     cmd.stdin(Stdio::piped())
@@ -2937,29 +2420,6 @@ fn native_command_phase(payload: &serde_json::Value) -> &'static str {
         })
         .unwrap_or_default()
         .to_lowercase();
-    if input.contains("gcms.js") {
-        if input.contains(" upload") || input.contains("media") {
-            return "正在上传站点图片";
-        }
-        if input.contains(" update")
-            || input.contains(" patch")
-            || input.contains(" publish")
-            || input.contains("cover_image")
-        {
-            return "正在更新站点内容";
-        }
-        if input.contains(" doctor") || input.contains(" sites") || input.contains("capabilities") {
-            return "正在检查 GCMS 连接";
-        }
-        if input.contains(" get")
-            || input.contains(" list")
-            || input.contains(" status")
-            || input.contains(" audit")
-        {
-            return "正在读取站点内容";
-        }
-        return "正在处理站点内容";
-    }
     if input.contains("webp")
         || input.contains("identify ")
         || input.contains("view_image")
@@ -3058,25 +2518,7 @@ fn watch_codex_rollout(
     })
 }
 
-fn claude_gcms_unlock_request(ev: &serde_json::Value) -> Option<GcmsUnlockRequest> {
-    match ev.get("type").and_then(|value| value.as_str()) {
-        Some("user") => ev
-            .pointer("/message/content")
-            .and_then(|value| value.as_array())?
-            .iter()
-            .filter(|block| {
-                block.get("type").and_then(|value| value.as_str()) == Some("tool_result")
-            })
-            .find_map(|block| gcms_unlock_from_tool_payload(block.get("content").unwrap_or(block))),
-        Some("tool_result") => gcms_unlock_from_tool_payload(ev.get("content").unwrap_or(ev)),
-        _ => None,
-    }
-}
-
 fn parse_claude(ev: &serde_json::Value, ch: &Channel<TurnEvent>, collect: &Arc<Mutex<Collect>>) {
-    if let Some(request) = claude_gcms_unlock_request(ev) {
-        send_gcms_unlock_request(ch, request);
-    }
     send_claude_tool_result_activity(ev, ch);
     match ev.get("type").and_then(|t| t.as_str()) {
         Some("system") if claude_compact_pre_tokens(ev).is_some() => {
@@ -3255,51 +2697,7 @@ fn claude_compact_pre_tokens(ev: &serde_json::Value) -> Option<u64> {
     })
 }
 
-/// App-server uses a separate method plus camelCase item/output fields, unlike
-/// exec --json's `type: item.completed` envelope. Only completed tool outputs
-/// may request native authorization; never scan commands, arguments or prose.
-fn codex_app_gcms_unlock_request(
-    method: &str,
-    params: &serde_json::Value,
-) -> Option<GcmsUnlockRequest> {
-    if method != "item/completed" {
-        return None;
-    }
-    let item = params.get("item")?;
-    let result_keys: &[&str] = match item.get("type")?.as_str()? {
-        "commandExecution" => &["aggregatedOutput"],
-        "mcpToolCall" => &["result"],
-        "dynamicToolCall" => &["contentItems"],
-        "functionCallOutput" => &["output"],
-        _ => return None,
-    };
-    result_keys
-        .iter()
-        .find_map(|key| item.get(*key).and_then(gcms_unlock_from_tool_payload))
-}
-
-fn codex_gcms_unlock_request(ev: &serde_json::Value) -> Option<GcmsUnlockRequest> {
-    if ev.get("type").and_then(|value| value.as_str()) != Some("item.completed") {
-        return None;
-    }
-    let item = ev.get("item")?;
-    let item_type = item.get("type").and_then(|value| value.as_str())?;
-    let result_keys: &[&str] = match item_type {
-        "command_execution" => &["aggregated_output", "output", "result"],
-        "mcp_tool_call" | "tool_call" | "dynamic_tool_call" | "function_call_output" => {
-            &["result", "output", "content"]
-        }
-        _ => return None,
-    };
-    result_keys
-        .iter()
-        .find_map(|key| item.get(*key).and_then(gcms_unlock_from_tool_payload))
-}
-
 fn parse_codex(ev: &serde_json::Value, ch: &Channel<TurnEvent>, collect: &Arc<Mutex<Collect>>) {
-    if let Some(request) = codex_gcms_unlock_request(ev) {
-        send_gcms_unlock_request(ch, request);
-    }
     // 生图工具的产物只出现在工具结果事件里、不进对话正文——从所有事件里顺手收集。
     {
         let mut imgs = Vec::new();
@@ -3508,7 +2906,7 @@ pub(crate) fn failure_detail(value: &serde_json::Value) -> String {
         .chars()
         .take(300)
         .collect();
-    redact_gcms_unlock_challenges(&detail)
+    detail.to_string()
 }
 
 fn tool_detail(name: &str, input: &serde_json::Value) -> String {
@@ -3572,8 +2970,8 @@ mod tests {
 
     #[test]
     fn normal_conversations_cannot_leave_answer_work_in_a_private_background_job() {
-        let prompt = conversation_completion_policy("检查 20 个站点", "gcms");
-        assert!(prompt.starts_with("检查 20 个站点"));
+        let prompt = conversation_completion_policy("检查 20 个页面", "cloudflare");
+        assert!(prompt.starts_with("检查 20 个页面"));
         assert!(prompt.contains("不得为这类工作使用 run_in_background"));
         assert!(prompt.contains("并等待 completed、failed 或 canceled"));
         assert!(prompt.contains("不得让 pending/running 的任务跨出本回合"));
@@ -3636,7 +3034,7 @@ mod tests {
     #[test]
     fn new_model_presets_are_passed_to_the_cli_without_aliasing() {
         let conn: Connection = serde_json::from_value(json!({
-            "id": "test", "name": "test", "kind": "ssh", "api_base": "", "skill_dir": ".",
+            "id": "test", "name": "test", "kind": "ssh", "skill_dir": ".",
             "key_prefix": "", "key_kind": "", "created_at": ""
         })).unwrap();
         for (model, effort) in [("gpt-6-sol", "ultra"), ("gpt-6-luna", "max"), ("gpt-6-luna", "ultra")] {
@@ -3673,46 +3071,6 @@ mod tests {
     }
 
     #[test]
-    fn gcms_codex_environment_survives_resume_and_unlock_changes() {
-        let mut conn: Connection = serde_json::from_value(json!({
-            "id": "test-gcms-environment", "name": "test", "kind": "gcms",
-            "api_base": "https://example.invalid", "skill_dir": ".",
-            "key_prefix": "", "key_kind": "", "created_at": ""
-        })).unwrap();
-        let initial = codex_server_environment_key(&conn, ".", "test-only-key", None);
-        for is_first in [true, false] {
-            let (cmd, _) = build_codex(&conn, "", "", "thread-test", is_first,
-                None, "test", "test-only-key", ".", PermMode::Plan, None).unwrap();
-            let args: Vec<_> = cmd.as_std().get_args().map(|s| s.to_string_lossy()).collect();
-            assert!(args.iter().any(|s| s.starts_with("shell_environment_policy={")));
-            assert!(args.iter().all(|s| !s.contains("test-only-key")));
-            assert_eq!(args.last().map(|s| s.as_ref()), Some("-"));
-            assert!(args.iter().any(|s| s.contains("read-only")));
-            let env: HashMap<_, _> = cmd.as_std().get_envs().collect();
-            assert_eq!(env.get(std::ffi::OsStr::new("GCMS_API_KEY")),
-                Some(&Some(std::ffi::OsStr::new("test-only-key"))));
-            assert_eq!(env.get(std::ffi::OsStr::new("GCMS_CONTROL_UNLOCK_TOKEN")), Some(&None));
-        }
-        conn.api_base = "https://changed.invalid".into();
-        assert_ne!(initial, codex_server_environment_key(&conn, ".", "test-only-key", None));
-        conn.api_base = "https://example.invalid".into();
-        store_gcms_unlock(&conn.id, "test-only-unlock".into(), u64::MAX);
-        let unlocked = codex_server_environment_key(&conn, ".", "test-only-key", None);
-        assert_ne!(initial, unlocked);
-        let (cmd, _) = build_codex(&conn, "", "", "thread-test", false,
-            None, "test", "test-only-key", ".", PermMode::Auto, None).unwrap();
-        let env: HashMap<_, _> = cmd.as_std().get_envs().collect();
-        assert_eq!(env.get(std::ffi::OsStr::new("GCMS_CONTROL_UNLOCK_TOKEN")),
-            Some(&Some(std::ffi::OsStr::new("test-only-unlock"))));
-        store_gcms_unlock(&conn.id, "expired-test-unlock".into(), 0);
-        assert_eq!(initial, codex_server_environment_key(&conn, ".", "test-only-key", None));
-        let (cmd, _) = build_codex(&conn, "", "", "thread-test", false,
-            None, "test", "test-only-key", ".", PermMode::Auto, None).unwrap();
-        let env: HashMap<_, _> = cmd.as_std().get_envs().collect();
-        assert_eq!(env.get(std::ffi::OsStr::new("GCMS_CONTROL_UNLOCK_TOKEN")), Some(&None));
-    }
-
-    #[test]
     fn codex_active_writer_errors_are_not_sent_to_exec_fallback() {
         for error in [
             "thread/resume failed: thread abc already has an active writer (code -32600)",
@@ -3727,18 +3085,6 @@ mod tests {
         assert!(message.contains("上一轮仍在收尾"));
         assert!(!message.contains("active writer"));
         assert!(!message.contains("-32600"));
-    }
-
-    #[test]
-    fn gcms_prompts_require_bounded_batch_work_instead_of_per_item_turns() {
-        let single = system_prompt("siteops", "demo", "演示站");
-        let multi = multi_site_system_prompt(&["a".into(), "b".into()], &[]);
-        for prompt in [&single, &multi] {
-            assert!(prompt.contains("批量读取最新状态与 ETag"));
-            assert!(prompt.contains("只对失败项"));
-            assert!(prompt.contains("严禁重复上传或覆盖成功项"));
-            assert!(prompt.contains("批量结束后统一读取结果并验收一次"));
-        }
     }
 
     #[test]
@@ -3830,76 +3176,6 @@ mod tests {
         assert_eq!(usage.output, 16);
     }
 
-    #[test]
-    fn gcms_sitebuild_prompt_is_platform_scoped_and_guarded() {
-        let fresh = platform_sitebuild_system_prompt("GCMS", "", "");
-        for required in [
-            "control-sites",
-            "site-create-plan",
-            "等待确认",
-            "site-create --confirm true",
-            "themes",
-            "theme-plan",
-            "theme-apply",
-            "不得询问、读取、记录或代为输入 GCMS 后台密码",
-            "不主动修改域名、DNS、Cloudflare、Caddy 或 HTTPS",
-        ] {
-            assert!(
-                fresh.contains(required),
-                "平台建站提示缺少安全流程：{required}"
-            );
-        }
-        assert!(fresh.contains("不要要求用户先选一个已有站点"));
-        assert!(!fresh.contains("目标站点固定用"));
-
-        let legacy = platform_sitebuild_system_prompt("GCMS", "main", "主站");
-        assert!(legacy.contains("只可用于读取结构或风格参考"));
-        assert!(legacy.contains("必须创建一个不同 slug 的新站点"));
-    }
-
-    #[test]
-    fn gcms_site_prompt_keeps_page_work_inside_pilot() {
-        let prompt = system_prompt("siteops", "demo-site", "演示站");
-        for required in [
-            "page-context --site demo-site",
-            "page-capabilities --site demo-site",
-            "page-projects --site demo-site",
-            "theme.inherit=true",
-            "shell=site",
-            "shell.mode=site",
-            "page-components",
-            "page-data-sources",
-            "page-binding-preview",
-            "真实数据绑定",
-            "page-validate",
-            "page-build",
-            "page-preview",
-            "可打开的预览",
-            "简短变更摘要",
-            "除非用户明确要求发布",
-            "page-publish-plan",
-            "page-publish",
-            "不要在助手回复中复述 `unlock_challenge`",
-            "重新运行 page-get",
-            "创建合并后的新修订",
-            "不要把操作责任推回网页后台",
-        ] {
-            assert!(
-                prompt.contains(required),
-                "单站页面工作流提示缺少关键约束：{required}"
-            );
-        }
-        assert!(
-            prompt.find("page-context").unwrap() < prompt.find("page-capabilities").unwrap(),
-            "必须先读取页面上下文，再判断页面平台能力"
-        );
-        assert!(
-            prompt.find("page-validate").unwrap() < prompt.find("page-build").unwrap()
-                && prompt.find("page-build").unwrap() < prompt.find("page-preview").unwrap(),
-            "草稿修改后必须按 validate → build → preview 顺序交付"
-        );
-    }
-
     /// 目录非空时必须明确告诉模型「先读再改、别推倒重写」——这是内置模板能不能生效的**唯一**开关。
     /// 以前 use_template 把模板拷进去后没人吭声，模型视角永远是空目录，那份起点直接被重写掉。
     #[test]
@@ -3938,7 +3214,7 @@ mod tests {
     #[test]
     fn codex_multiline_prompt_uses_stdin() {
         let conn: Connection = serde_json::from_value(json!({
-            "id": "test", "name": "test", "kind": "ssh", "api_base": "", "skill_dir": ".",
+            "id": "test", "name": "test", "kind": "ssh", "skill_dir": ".",
             "key_prefix": "", "key_kind": "", "created_at": ""
         }))
         .unwrap();
@@ -4025,12 +3301,12 @@ mod tests {
     #[test]
     fn claude_multiline_prompts_avoid_batch_arguments() {
         let conn: Connection = serde_json::from_value(json!({
-            "id": "test", "name": "test", "kind": "ssh", "api_base": "", "skill_dir": ".",
+            "id": "test", "name": "test", "kind": "ssh", "skill_dir": ".",
             "key_prefix": "", "key_kind": "", "created_at": ""
         }))
         .unwrap();
         let root =
-            std::env::temp_dir().join(format!("gcms-pilot-claude-argv-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("pilot-claude-argv-{}", uuid::Uuid::new_v4()));
         let perm = PermSpec {
             mode: PermMode::Plan,
             conv_id: "conv-test".into(),
@@ -4119,12 +3395,12 @@ mod tests {
     #[test]
     fn claude_effort_uses_native_cli_level_instead_of_fixed_token_budget() {
         let conn: Connection = serde_json::from_value(json!({
-            "id": "test", "name": "test", "kind": "ssh", "api_base": "", "skill_dir": ".",
+            "id": "test", "name": "test", "kind": "ssh", "skill_dir": ".",
             "key_prefix": "", "key_kind": "", "created_at": ""
         }))
         .unwrap();
         let root =
-            std::env::temp_dir().join(format!("gcms-pilot-claude-effort-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("pilot-claude-effort-{}", uuid::Uuid::new_v4()));
         let perm = PermSpec {
             mode: PermMode::Plan,
             conv_id: "conv-effort".into(),
@@ -4256,13 +3532,13 @@ mod tests {
             images: vec![],
         }));
         parse_claude(
-            &json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"node scripts/gcms.js list posts"}}]}}),
+            &json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"npm run build"}}]}}),
             &ch(),
             &c,
         );
         let g = c.lock().unwrap();
         assert_eq!(g.tools.len(), 1);
-        assert!(g.tools[0].detail.contains("gcms.js"));
+        assert!(g.tools[0].detail.contains("npm run build"));
     }
 
     #[test]
@@ -4400,301 +3676,6 @@ mod tests {
         assert!(!format!("{completed:?}").contains("/Users/private"));
         assert!(!format!("{completed:?}").contains("base64"));
 
-        let upload = native_activity(&json!({
-            "type": "response_item",
-            "payload": {
-                "type": "function_call",
-                "name": "exec",
-                "call_id": "call-upload-1",
-                "arguments": {
-                    "command": "node scripts/gcms.js upload --site cligx /private/tmp/cover.webp",
-                    "env": {"GCMS_API_KEY": "gcmsp_secret"}
-                }
-            }
-        }))
-        .expect("GCMS upload should become a semantic command activity");
-        assert_eq!(upload.1, "command");
-        assert_eq!(upload.3, "正在上传站点图片");
-        let exposed = format!("{upload:?}");
-        assert!(!exposed.contains("/private/tmp"));
-        assert!(!exposed.contains("gcmsp_secret"));
-
-        let update = native_activity(&json!({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "name": "exec",
-                "call_id": "call-update-1",
-                "input": "node scripts/gcms.js update posts 61 @payload.json"
-            }
-        }))
-        .expect("GCMS update should become a semantic command activity");
-        assert_eq!(update.3, "正在更新站点内容");
-    }
-
-    fn unlock_payload(operation: &str) -> serde_json::Value {
-        json!({
-            "error": "publish_confirmation_required",
-            "unlock_required": true,
-            "operation": operation,
-            "unlock_challenge": "gcmspc_abcdefghijklmnopqrstuvwxyzABCDE1234567890_-",
-            "page_id": 42,
-            "admin_path": "/admin/pages/42/project"
-        })
-    }
-
-    #[test]
-    fn codex_app_unlock_notification_reaches_ui_without_persisting_challenge() {
-        let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-        let captured = events.clone();
-        let channel = Channel::new(move |body| {
-            if let tauri::ipc::InvokeResponseBody::Json(raw) = body {
-                captured.lock().unwrap().push(serde_json::from_str(&raw).unwrap());
-            }
-            Ok(())
-        });
-        let collect = Arc::new(Mutex::new(Collect {
-            text: String::new(), tools: Vec::new(), session_ref: "thread-test".into(),
-            is_error: false, usage: None, raw_tail: String::new(), images: Vec::new(),
-        }));
-        let (done_tx, _done_rx) = oneshot::channel();
-        let sink = CodexTurnSink {
-            channel, collect: collect.clone(),
-            completed: Arc::new(Mutex::new(Some(done_tx))),
-            streamed_messages: Arc::new(Mutex::new(HashSet::new())),
-        };
-        let payload = unlock_payload("pages.publish");
-        let params = json!({
-            "threadId": "thread-test", "turnId": "turn-test",
-            "item": {
-                "id": "command-test", "type": "commandExecution", "status": "failed",
-                "command": "node scripts/gcms.js page-publish",
-                "aggregatedOutput": payload.to_string(), "exitCode": 1
-            }
-        });
-        handle_codex_app_notification("item/started", &params, &sink);
-        handle_codex_app_notification("item/completed", &params, &sink);
-        let events = events.lock().unwrap();
-        let unlocks: Vec<_> = events.iter()
-            .filter(|event| event["type"] == "gcms_unlock_required").collect();
-        assert_eq!(unlocks.len(), 1, "completed tool output must reach the native unlock UI");
-        assert_eq!(unlocks[0]["operation"], "pages.publish");
-        assert_eq!(unlocks[0]["admin_path"], payload["admin_path"]);
-        assert_eq!(unlocks[0]["unlock_challenge"], payload["unlock_challenge"]);
-        let challenge = payload["unlock_challenge"].as_str().unwrap();
-        let collect = collect.lock().unwrap();
-        assert!(!collect.text.contains(challenge));
-        assert!(!collect.raw_tail.contains(challenge));
-        assert!(collect.tools.iter().all(|tool| !tool.detail.contains(challenge)));
-    }
-
-    #[test]
-    fn codex_app_unlock_supports_completed_tool_output_formats() {
-        for operation in ["pages.publish", "pages.rollback", "page_capabilities.grant"] {
-            let payload = unlock_payload(operation);
-            let items = [
-                json!({"type":"commandExecution", "aggregatedOutput":format!("HTTP 409\n{payload}")}),
-                json!({"type":"mcpToolCall", "result":{"content":[{"type":"text","text":payload.to_string()}]}}),
-                json!({"type":"dynamicToolCall", "contentItems":[{"type":"inputText","text":payload.to_string()}]}),
-                json!({"type":"functionCallOutput", "output":payload.to_string()}),
-            ];
-            for item in items {
-                let params = json!({"threadId":"thread-1","turnId":"turn-1","item":item});
-                let request = codex_app_gcms_unlock_request("item/completed", &params)
-                    .expect("completed app-server tool output must request native confirmation");
-                assert_eq!(request.operation, operation);
-                assert_eq!(request.admin_path, "/admin/pages/42/project");
-                for method in ["item/started", "item/commandExecution/outputDelta", "turn/completed", "item.completed"] {
-                    assert!(codex_app_gcms_unlock_request(method, &params).is_none());
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn codex_app_unlock_ignores_inputs_prose_and_invalid_targets() {
-        let payload = unlock_payload("pages.publish");
-        for item in [
-            json!({"type":"agentMessage","text":payload.to_string()}),
-            json!({"type":"userMessage","content":[{"type":"text","text":payload.to_string()}]}),
-            json!({"type":"reasoning","summary":[payload.to_string()]}),
-            json!({"type":"commandExecution","command":payload.to_string()}),
-            json!({"type":"mcpToolCall","arguments":payload,"result":{"content":[]}}),
-            json!({"type":"dynamicToolCall","arguments":payload,"contentItems":[]}),
-        ] {
-            assert!(codex_app_gcms_unlock_request("item/completed", &json!({"item":item})).is_none());
-        }
-        for (field, value) in [
-            ("unlock_required", json!(false)),
-            ("unlock_challenge", json!("invalid")),
-            ("admin_path", json!("/admin/pages/43/project")),
-            ("operation", json!("posts.publish")),
-        ] {
-            let mut invalid = payload.clone();
-            invalid[field] = value;
-            let params = json!({"item":{"type":"commandExecution","aggregatedOutput":invalid.to_string()}});
-            assert!(codex_app_gcms_unlock_request("item/completed", &params).is_none());
-        }
-        let missing_output = json!({"item":{"type":"commandExecution"}});
-        assert!(codex_app_gcms_unlock_request("item/completed", &missing_output).is_none());
-    }
-
-    #[test]
-    fn gcms_unlock_parser_is_narrow_and_targeted() {
-        for operation in ["pages.publish", "pages.rollback", "page_capabilities.grant"] {
-            let wrapped = json!({
-                "content": format!("command failed\n{}", unlock_payload(operation))
-            });
-            let request =
-                gcms_unlock_from_tool_payload(&wrapped).expect("valid tool result challenge");
-            assert_eq!(request.operation, operation);
-            assert_eq!(request.admin_path, "/admin/pages/42/project");
-            assert!(request.unlock_challenge.starts_with("gcmspc_"));
-        }
-
-        let mut denied = unlock_payload("sites.delete");
-        assert!(gcms_unlock_from_tool_payload(&denied).is_none());
-        denied["operation"] = json!("pages.publish");
-        denied["unlock_required"] = json!(false);
-        assert!(gcms_unlock_from_tool_payload(&denied).is_none());
-        denied["unlock_required"] = json!(true);
-        denied["unlock_challenge"] = json!("not-a-server-challenge");
-        assert!(gcms_unlock_from_tool_payload(&denied).is_none());
-        denied["unlock_challenge"] = json!("gcmspc_abcdefghijklmnopqrstuvwxyzABCDE1234567890_-");
-        denied["admin_path"] = json!("/admin/pages/41/project");
-        assert!(
-            gcms_unlock_from_tool_payload(&denied).is_none(),
-            "admin path must identify the same page as the signed response"
-        );
-    }
-
-    #[test]
-    fn gcms_unlock_parser_accepts_machine_readable_and_legacy_control_results() {
-        let structured = json!({
-            "error": "unlock_required",
-            "message": "操作 navigation.delete 需要在 Pilot 中输入后台密码重新授权。",
-            "unlock_required": true,
-            "operation": "navigation.delete"
-        });
-        let request =
-            gcms_unlock_from_tool_payload(&structured).expect("structured control unlock");
-        assert_eq!(request.operation, "navigation.delete");
-        assert!(request.unlock_challenge.is_empty());
-        assert!(request.admin_path.is_empty());
-
-        let legacy = json!({
-            "error": "unlock_required",
-            "message": "操作 categories.delete 需要在 Pilot 中输入后台密码重新授权。"
-        });
-        assert_eq!(
-            gcms_unlock_from_tool_payload(&legacy)
-                .expect("legacy server response remains compatible")
-                .operation,
-            "categories.delete"
-        );
-
-        assert!(gcms_unlock_from_tool_payload(&json!({
-            "error": "unlock_required",
-            "message": "operation plugins.install needs unlock",
-            "unlock_required": true,
-            "operation": "plugins.install"
-        }))
-        .is_none());
-        assert!(gcms_unlock_from_tool_payload(&json!({
-            "error": "unlock_required",
-            "message": "navigation.delete and sites.delete"
-        }))
-        .is_none());
-    }
-
-    #[test]
-    fn claude_and_codex_only_parse_tool_results_not_assistant_text() {
-        let payload = unlock_payload("pages.publish");
-        let claude_tool_result = json!({
-            "type": "user",
-            "message": {"content": [{
-                "type": "tool_result",
-                "tool_use_id": "tool-1",
-                "content": [{"type": "text", "text": payload.to_string()}]
-            }]}
-        });
-        assert_eq!(
-            claude_gcms_unlock_request(&claude_tool_result)
-                .expect("Claude tool result should emit")
-                .operation,
-            "pages.publish"
-        );
-        assert!(claude_gcms_unlock_request(&json!({
-            "type": "assistant",
-            "message": {"content": [{"type": "text", "text": payload.to_string()}]}
-        }))
-        .is_none());
-
-        let codex_tool_result = json!({
-            "type": "item.completed",
-            "item": {
-                "type": "command_execution",
-                "command": "node scripts/gcms.js page-publish",
-                "aggregated_output": payload.to_string()
-            }
-        });
-        assert_eq!(
-            codex_gcms_unlock_request(&codex_tool_result)
-                .expect("Codex command result should emit")
-                .operation,
-            "pages.publish"
-        );
-        assert!(codex_gcms_unlock_request(&json!({
-            "type": "item.completed",
-            "item": {"type": "agent_message", "text": payload.to_string()}
-        }))
-        .is_none());
-
-        let control = json!({
-            "error": "unlock_required",
-            "message": "操作 navigation.delete 需要在 Pilot 中输入后台密码重新授权。",
-            "unlock_required": true,
-            "operation": "navigation.delete"
-        });
-        assert_eq!(
-            claude_gcms_unlock_request(&json!({
-                "type": "tool_result",
-                "content": [{"type":"text","text":control.to_string()}]
-            }))
-            .expect("Claude control result should emit")
-            .operation,
-            "navigation.delete"
-        );
-        assert_eq!(
-            codex_gcms_unlock_request(&json!({
-                "type": "item.completed",
-                "item": {
-                    "type": "command_execution",
-                    "aggregated_output": control.to_string()
-                }
-            }))
-            .expect("Codex control result should emit")
-            .operation,
-            "navigation.delete"
-        );
-    }
-
-    #[test]
-    fn page_challenges_are_redacted_before_history_persistence() {
-        let challenge = "gcmspc_abcdefghijklmnopqrstuvwxyzABCDE1234567890_-";
-        let text = format!("unlock_required {challenge}\n{{\"unlock_challenge\":\"{challenge}\"}}");
-        let redacted = redact_gcms_unlock_challenges(&text);
-        assert!(!redacted.contains(challenge));
-        assert_eq!(
-            redacted
-                .matches("[页面确认挑战已由 Pilot 临时接管]")
-                .count(),
-            2
-        );
-        assert_eq!(
-            redact_gcms_unlock_challenges("gcmspc_short 保留"),
-            "gcmspc_short 保留"
-        );
     }
 
     #[test]
@@ -4813,28 +3794,4 @@ mod tests {
         assert!(solo.starts_with("生成的图片："), "{solo}");
     }
 
-    #[test]
-    fn extract_proposal_parses_and_strips() {
-        let text = "好的，我准备了一个定时任务建议，请确认。\nPILOT_TASK: {\"title\":\"每日速写\",\"prompt\":\"写一篇当日科技热点文章存草稿\",\"every_minutes\":1440,\"first_run\":\"2026-07-05T09:00:00+08:00\"}";
-        let (clean, p) = extract_proposal(text);
-        let p = p.expect("proposal parsed");
-        assert_eq!(p.title, "每日速写");
-        assert_eq!(p.every_minutes, 1440);
-        assert!(!clean.contains("PILOT_TASK"));
-        assert!(clean.contains("请确认"));
-    }
-
-    #[test]
-    fn extract_proposal_none_when_absent() {
-        let (clean, p) = extract_proposal("普通回复，没有任务提议。");
-        assert!(p.is_none());
-        assert_eq!(clean, "普通回复，没有任务提议。");
-    }
-
-    #[test]
-    fn extract_proposal_rejects_incomplete() {
-        // every_minutes 缺失 → 解析失败，不当作提议。
-        let (_, p) = extract_proposal("PILOT_TASK: {\"title\":\"x\",\"prompt\":\"y\"}");
-        assert!(p.is_none());
-    }
 }

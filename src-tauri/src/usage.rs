@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn append_and_stats_windows() {
         let dir =
-            std::env::temp_dir().join(format!("gcms-pilot-usage-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("pilot-usage-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mk = |ts: i64, brain: &str, output: u64| UsageEntry {
             ts,

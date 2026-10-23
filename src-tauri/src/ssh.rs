@@ -2,7 +2,7 @@
 //!
 //! 安全边界（改这个文件前先读）：
 //! - 密码 / 密钥口令只在内存里传递，源头是钥匙串；**绝不落盘、绝不进 AI 子进程的环境变量**。
-//!   （对比 gcms/CF：那两家把 api key 塞进子进程 env 是可接受的，SSH 口令给一个 shell 就不行。）
+//!   （对比 CF：把 api token 塞进子进程 env 是可接受的，SSH 口令给一个 shell 就不行。）
 //! - 主机密钥 **TOFU**：首连时 `expect=None`，接受并把指纹交给 UI 让用户确认；此后每次连接
 //!   都带上已确认的指纹，**不匹配直接拒绝**（防中间人）。绝不做「无条件 Ok(true)」的省事写法。
 //! - PTY 原始字节可能不是合法 UTF-8（也含 ANSI 转义），一律 base64 传给前端，由 xterm 解码写入，
@@ -127,7 +127,7 @@ fn posix_shell_quote(value: &str) -> String {
 
 /// 由「已存的连接 + 钥匙串」组装认证材料。凭据只在 Rust 侧流转，绝不出这个进程。
 /// 无口令私钥不会有钥匙串条目 —— get_key 失败按「无口令」处理，不是错误。
-pub fn auth_for(conn: &crate::pack::Connection) -> Result<SshAuth, String> {
+pub fn auth_for(conn: &crate::conns::Connection) -> Result<SshAuth, String> {
     let secret = crate::keychain::get_key(&conn.id).ok();
     Ok(if conn.ssh_auth == "key" {
         SshAuth {
@@ -682,19 +682,6 @@ impl SshSessions {
             });
         }
         self.exec_inner(conn_id, cmd, timeout_secs, sink, None)
-            .await
-    }
-
-    /// 跑一条需要标准输入的一次性命令。标准输入不会拼进命令文本，也不会回显到终端；
-    /// 适合传递密码等短暂敏感数据。发送后立即关闭 stdin，让远端程序能可靠读到 EOF。
-    pub async fn exec_with_stdin(
-        &self,
-        conn_id: &str,
-        cmd: &str,
-        stdin: &[u8],
-        timeout_secs: u64,
-    ) -> Result<ExecOut, String> {
-        self.exec_inner(conn_id, cmd, timeout_secs, None, Some(stdin))
             .await
     }
 
@@ -1352,56 +1339,6 @@ impl SshSessions {
         Ok(n)
     }
 
-    /// 在两条已认证 SSH 连接之间流式转发文件。数据只经过 Pilot 进程内存中的固定大小
-    /// 缓冲区，不写入本机磁盘，也不会把任一连接的 SSH 凭据交给另一台服务器。
-    pub async fn relay_file<F>(
-        &self,
-        source_conn_id: &str,
-        source_remote: &str,
-        target_conn_id: &str,
-        target_remote: &str,
-        mut on_progress: F,
-    ) -> Result<u64, String>
-    where
-        F: FnMut(u64),
-    {
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
-        let source_sftp = self.sftp(source_conn_id).await?;
-        let target_sftp = self.sftp(target_conn_id).await?;
-        let mut source = source_sftp
-            .open(source_remote)
-            .await
-            .map_err(|e| format!("打开源服务器文件 {source_remote} 失败: {e}"))?;
-        let mut target = target_sftp
-            .create(target_remote)
-            .await
-            .map_err(|e| format!("创建目标服务器文件 {target_remote} 失败: {e}"))?;
-        let mut buffer = vec![0_u8; 128 * 1024];
-        let mut transferred = 0_u64;
-        on_progress(0);
-        loop {
-            let read = source
-                .read(&mut buffer)
-                .await
-                .map_err(|e| format!("读取源服务器快照失败: {e}"))?;
-            if read == 0 {
-                break;
-            }
-            target
-                .write_all(&buffer[..read])
-                .await
-                .map_err(|e| format!("写入目标服务器快照失败: {e}"))?;
-            transferred = transferred.saturating_add(read as u64);
-            on_progress(transferred);
-        }
-        // SFTP close 才代表服务端已经接收完整文件；不能只依赖 write_all 的成功。
-        target
-            .shutdown()
-            .await
-            .map_err(|e| format!("目标服务器文件收尾失败: {e}"))?;
-        Ok(transferred)
-    }
 }
 
 /// russh-sftp write_all queues writes; flush drains the server acknowledgements.

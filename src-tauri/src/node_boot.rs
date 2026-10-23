@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 pub const NODE_VERSION: &str = "v22.14.0";
 
 /// macOS ~/.zprofile 守卫块标记（存在即视为已写入，跳过）。
-pub const ZPROFILE_MARK: &str = "# gcms-pilot managed node";
+pub const ZPROFILE_MARK: &str = "# cligc-pilot managed node";
 
 /// 平台/架构 → 发行包文件名；不支持的组合返回 None（调用方回退官方脚本渠道）。
 pub fn dist_filename(os: &str, arch: &str) -> Option<String> {

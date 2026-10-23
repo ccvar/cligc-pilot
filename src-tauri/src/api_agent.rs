@@ -5,7 +5,7 @@ use crate::agent::{RunRegistry, TurnEvent, TurnResult, TurnUsage};
 use crate::api_execution::{ApiExecutionPolicy, StopReason};
 use crate::api_profiles::{self, ApiProfile};
 use crate::convo::ToolCall;
-use crate::pack::Connection;
+use crate::conns::Connection;
 use crate::permit::{self, PermMode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,9 +25,6 @@ const MAX_HISTORY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 8 * 1024 * 1024;
 static ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-#[cfg(test)]
-#[path = "api_agent_managed_tests.rs"]
-mod managed_tests;
 
 #[derive(Serialize, Deserialize)]
 struct History {
@@ -180,7 +177,6 @@ pub(crate) async fn run_turn(
     model: String,
     effort: String,
     mode: PermMode,
-    selected_skills: Vec<String>,
     data_dir: PathBuf,
     lease: Option<&crate::bridge::Lease>,
     session_ref: String,
@@ -198,21 +194,17 @@ pub(crate) async fn run_turn(
         tools: vec![],
         error: String::new(),
         session_ref: session_ref.clone(),
-        proposal: None,
         usage: None,
         limit_reset: None,
     };
     let (_canceled, mut stop) = registry.register(&turn_id);
-    let operation = with_execution_deadline(
-        policy.total_timeout,
-        execute(
+    let operation = execute(
             &conn,
             &work_dir,
             &profile_id,
             &model,
             &effort,
             mode,
-            &selected_skills,
             &data_dir,
             lease,
             &session_ref,
@@ -224,7 +216,6 @@ pub(crate) async fn run_turn(
             &site_key,
             &mut result,
             &policy,
-        ),
     );
     let outcome = tokio::select! { out = operation => out, _ = &mut stop => Err("已停止；已执行的操作不会自动重试".into()) };
     registry.unregister(&turn_id);
@@ -234,28 +225,12 @@ pub(crate) async fn run_turn(
     if !result.ok {
         result.limit_reset = crate::agent::detect_usage_limit(&result.error);
     }
-    let (text, proposal) =
-        crate::agent::extract_proposal(&crate::agent::redact_gcms_unlock_challenges(&result.text));
-    result.text = text;
-    result.proposal = proposal;
+    result.text = result.text.trim().to_string();
     let _ = channel.send(TurnEvent::Done {
         ok: result.ok,
         error: result.error.clone(),
     });
     result
-}
-
-async fn with_execution_deadline<T>(
-    timeout: Option<Duration>,
-    operation: impl std::future::Future<Output = Result<T, String>>,
-) -> Result<T, String> {
-    if let Some(timeout) = timeout {
-        tokio::time::timeout(timeout, operation)
-            .await
-            .map_err(|_| StopReason::Deadline.to_string())?
-    } else {
-        operation.await
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -266,7 +241,6 @@ async fn execute(
     model: &str,
     effort: &str,
     mode: PermMode,
-    selected_skills: &[String],
     data_dir: &Path,
     lease: Option<&crate::bridge::Lease>,
     session_ref: &str,
@@ -279,9 +253,7 @@ async fn execute(
     result: &mut TurnResult,
     policy: &ApiExecutionPolicy,
 ) -> Result<(), String> {
-    policy
-        .check_boundary(0, 0, Duration::ZERO)
-        .map_err(|stop| stop.to_string())?;
+    policy.check_boundary(0).map_err(|stop| stop.to_string())?;
     let loaded = api_profiles::load_enabled(data_dir, profile_id)?;
     let profile = &loaded.profile;
     let model = if model.trim().is_empty() {
@@ -310,7 +282,6 @@ async fn execute(
         conn,
         &work,
         data_dir,
-        selected_skills,
         mode,
         turn_id,
         lease,
@@ -416,12 +387,8 @@ async fn execute_model_loop_with_policy(
     result: &mut TurnResult,
     policy: &ApiExecutionPolicy,
 ) -> Result<(), String> {
-    with_execution_deadline(
-        policy.total_timeout,
-        execute_model_loop_inner(
-            profile, model, effort, api_key, tools, history, path, channel, site_key, result,
-            policy,
-        ),
+    execute_model_loop_inner(
+        profile, model, effort, api_key, tools, history, path, channel, site_key, result, policy,
     )
     .await
 }
@@ -440,10 +407,7 @@ async fn execute_model_loop_inner(
     result: &mut TurnResult,
     policy: &ApiExecutionPolicy,
 ) -> Result<(), String> {
-    let started = std::time::Instant::now();
-    policy
-        .check_boundary(0, total_usage(result.usage.as_ref()), started.elapsed())
-        .map_err(|stop| stop.to_string())?;
+    policy.check_boundary(0).map_err(|stop| stop.to_string())?;
     let instructions = format!("{}\n\n{}", history.system, tools.instructions());
     let definitions = tools.definitions();
     let removed_thinking = history.prepare_thinking_prefix(&instructions, &definitions);
@@ -466,32 +430,10 @@ async fn execute_model_loop_inner(
     let client = api_profiles::http_client()?;
     let mut recovered = false;
     let mut retry_pending = false;
-    let mut progress = ManagedProgress::default();
-    let mut missing_usage = false;
     for request_index in 0..policy.max_requests {
         policy
-            .check_boundary(
-                request_index,
-                total_usage(result.usage.as_ref()),
-                started.elapsed(),
-            )
+            .check_boundary(request_index)
             .map_err(|stop| stop.to_string())?;
-        if missing_usage {
-            return Err(StopReason::MissingUsage.to_string());
-        }
-        // This is a continuation of the exact saved transcript, not a new user
-        // turn or a retry. No system/tool change or conversation rebuild here.
-        if policy.managed && request_index > 0 && request_index % policy.stage_requests.max(1) == 0
-        {
-            let _ = channel.send(TurnEvent::Activity {
-                activity_id: format!("api-managed-stage-{}", request_index / policy.stage_requests.max(1) + 1),
-                label: "托管继续执行".into(),
-                detail: format!("前 {request_index} 次模型请求的完整结果已保存，正在原会话中继续；不重放已完成工具"),
-                error: String::new(), status: "completed".into(), kind: "reasoning".into(),
-                phase: "继续同一托管任务".into(), current: Some(request_index as u64),
-                total: Some(policy.max_requests as u64),
-            });
-        }
         let body = request_body(
             profile,
             model,
@@ -504,7 +446,6 @@ async fn execute_model_loop_inner(
             return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
         }
         let text_checkpoint = result.text.len();
-        policy.record_request();
         let reply = stream_request(&client, profile, api_key, body, |delta| {
             let safe = tool_runtime::redact(delta, &[api_key, site_key]);
             result.text.push_str(&safe);
@@ -513,7 +454,6 @@ async fn execute_model_loop_inner(
         .await
         .map_err(|e| tool_runtime::redact(&e, &[api_key, site_key]))?;
         add_usage(&mut result.usage, &reply.usage);
-        missing_usage = policy.managed && total_usage(Some(&reply.usage)) == 0;
         if reply.output_limited {
             // A confirmed terminal max_tokens response cannot run ANY tools,
             // even complete-looking calls preceding a clipped JSON block.
@@ -592,8 +532,6 @@ async fn execute_model_loop_inner(
         history.interrupted = true;
         save_history(&path, &history)?;
         let mut outputs = Vec::new();
-        let mut round_results = Vec::new();
-        let mut stop_reason: Option<StopReason> = None;
         for call in calls {
             let detail = tool_runtime::redact(&call.arguments.to_string(), &[api_key, site_key]);
             result.tools.push(ToolCall {
@@ -605,19 +543,7 @@ async fn execute_model_loop_inner(
                 detail: detail.clone(),
             });
             activity(channel, &call.id, &call.name, &detail, "running", "");
-            if policy.managed && stop_reason.is_none() {
-                if progress.repeated_effect(&call) {
-                    stop_reason = Some(StopReason::RepeatedEffect);
-                }
-            }
-            let output = if let Some(stop) = &stop_reason {
-                Err(format!("未执行此工具：{stop}"))
-            } else {
-                if policy.managed {
-                    progress.start_effect(&call);
-                }
-                tools.execute(&call.name, &call.arguments).await
-            };
+            let output = tools.execute(&call.name, &call.arguments).await;
             let failed = output
                 .as_ref()
                 .map(|v| v["success"] == false)
@@ -626,23 +552,7 @@ async fn execute_model_loop_inner(
                 Ok(value) => value,
                 Err(error) => json!({"error":error}),
             };
-            if let Some(unlock) = crate::agent::gcms_unlock_from_tool_payload(&output) {
-                let _ = channel.send(TurnEvent::GcmsUnlockRequired {
-                    operation: unlock.operation,
-                    unlock_challenge: unlock.unlock_challenge,
-                    admin_path: unlock.admin_path,
-                });
-            }
-            let safe = crate::agent::redact_gcms_unlock_challenges(&tool_runtime::redact(
-                &output.to_string(),
-                &[api_key, site_key],
-            ));
-            if policy.managed && failed && !trusted_read_only(&call) && stop_reason.is_none() {
-                // A failed shell/write may already have changed state. Do not
-                // ask the model to try variants or execute the rest of its batch.
-                stop_reason = Some(StopReason::UncertainEffect);
-            }
-            round_results.push((result_fingerprint(&call, &output), failed));
+            let safe = tool_runtime::redact(&output.to_string(), &[api_key, site_key]);
             activity(
                 channel,
                 &call.id,
@@ -659,188 +569,11 @@ async fn execute_model_loop_inner(
         // side effects remain blocked rather than being replayed.
         history.interrupted = false;
         save_history(&path, &history)?;
-        if let Some(stop) = stop_reason {
-            return Err(stop.to_string());
-        }
-        if policy.managed {
-            progress
-                .observe_round(&round_results, policy)
-                .map_err(|stop| stop.to_string())?;
-        }
     }
     Err(StopReason::RequestBudget {
         limit: policy.max_requests,
-        managed: policy.managed,
     }
     .to_string())
-}
-
-fn total_usage(usage: Option<&TurnUsage>) -> u64 {
-    usage
-        .map(|u| {
-            u.input
-                .saturating_add(u.output)
-                .saturating_add(u.cache_read)
-                .saturating_add(u.cache_create)
-        })
-        .unwrap_or(0)
-}
-
-fn canonical_json(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => {
-            let sorted: BTreeMap<_, _> = object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_json(value)))
-                .collect();
-            serde_json::to_value(sorted).unwrap_or(Value::Null)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(canonical_json).collect()),
-        _ => value.clone(),
-    }
-}
-
-fn canonical_result(value: &Value) -> Value {
-    match value {
-        Value::Object(object) => {
-            let sorted: BTreeMap<_, _> = object
-                .iter()
-                .map(|(key, value)| (key.clone(), canonical_result(value)))
-                .collect();
-            serde_json::to_value(sorted).unwrap_or(Value::Null)
-        }
-        Value::Array(items) => Value::Array(items.iter().map(canonical_result).collect()),
-        // CLI wrappers often return JSON as stdout. Normalize JSON formatting
-        // in results only: strings in arguments (especially write_file content)
-        // are bytes the user may intend to change and must stay distinct.
-        Value::String(text) if text.trim_start().starts_with(['{', '[']) => {
-            serde_json::from_str::<Value>(text)
-                .ok()
-                .filter(|v| v.is_object() || v.is_array())
-                .map(|v| Value::String(canonical_json(&v).to_string()))
-                .unwrap_or_else(|| value.clone())
-        }
-        _ => value.clone(),
-    }
-}
-fn invocation_fingerprint(call: &Call) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(
-            json!([call.name, canonical_json(&call.arguments)])
-                .to_string()
-                .as_bytes()
-        )
-    )
-}
-fn result_fingerprint(call: &Call, output: &Value) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(
-            json!([
-                call.name,
-                canonical_json(&call.arguments),
-                canonical_result(output)
-            ])
-            .to_string()
-            .as_bytes()
-        )
-    )
-}
-
-/// Only source-owned, known read operations are exempt from the side-effect
-/// guard. A model cannot claim its shell/SSH command is read-only in arguments.
-/// These exact gcms.js branches use GET and return before mutation branches.
-/// In particular, `doctor` probes POST /media and is intentionally NOT exempt.
-fn trusted_read_only(call: &Call) -> bool {
-    if matches!(call.name.as_str(), "read_file" | "list_files") {
-        return true;
-    }
-    if call.name != "site_command" {
-        return false;
-    }
-    matches!(
-        call.arguments["args"][0].as_str(),
-        Some(
-            "help"
-                | "types"
-                | "languages"
-                | "get"
-                | "list"
-                | "similar"
-                | "categories"
-                | "category-entry"
-                | "site-profile"
-                | "theme-options"
-                | "navigation"
-                | "search-stats"
-                | "traffic-stats"
-                | "page-stats"
-                | "analytics-stats"
-                | "tg-stats"
-                | "page-context"
-                | "page-capabilities"
-                | "page-projects"
-                | "page-get"
-                | "page-revisions"
-                | "page-revision"
-                | "page-components"
-                | "page-data-sources"
-                | "page-assets"
-                | "page-app-source-read"
-                | "page-capability-list"
-                | "page-build-get"
-                | "page-publications"
-        )
-    )
-}
-
-#[derive(Default)]
-struct ManagedProgress {
-    seen_results: HashSet<String>,
-    last_effect: Option<String>,
-    no_progress_rounds: usize,
-    failed_rounds: usize,
-}
-impl ManagedProgress {
-    fn repeated_effect(&self, call: &Call) -> bool {
-        !trusted_read_only(call)
-            && self.last_effect.as_deref() == Some(invocation_fingerprint(call).as_str())
-    }
-    fn start_effect(&mut self, call: &Call) {
-        if !trusted_read_only(call) {
-            self.last_effect = Some(invocation_fingerprint(call));
-        }
-    }
-    fn observe_round(
-        &mut self,
-        results: &[(String, bool)],
-        policy: &ApiExecutionPolicy,
-    ) -> Result<(), StopReason> {
-        let repeated = !results.is_empty()
-            && results
-                .iter()
-                .all(|(key, _)| self.seen_results.contains(key));
-        self.no_progress_rounds = if repeated {
-            self.no_progress_rounds.saturating_add(1)
-        } else {
-            0
-        };
-        self.failed_rounds = if !results.is_empty() && results.iter().all(|(_, failed)| *failed) {
-            self.failed_rounds.saturating_add(1)
-        } else {
-            0
-        };
-        self.seen_results
-            .extend(results.iter().map(|(key, _)| key.clone()));
-        if self.failed_rounds >= policy.max_failure_rounds.max(1) {
-            return Err(StopReason::RepeatedFailure);
-        }
-        if self.no_progress_rounds >= policy.max_no_progress_rounds.max(1) {
-            return Err(StopReason::NoProgress);
-        }
-        Ok(())
-    }
 }
 
 fn activity(
@@ -1397,159 +1130,6 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn managed_call(name: &str, arguments: Value) -> Call {
-        Call {
-            id: "call-one".into(),
-            name: name.into(),
-            arguments,
-        }
-    }
-
-    #[test]
-    fn managed_fingerprint_normalizes_object_order_and_result_json_not_call_ids() {
-        let first = managed_call(
-            "read_file",
-            json!({"path":"draft.json","options":{"b":2,"a":1}}),
-        );
-        let mut second = managed_call(
-            "read_file",
-            serde_json::from_str(r#"{"options":{"a":1,"b":2},"path":"draft.json"}"#).unwrap(),
-        );
-        second.id = "different-provider-id".into();
-        assert_eq!(
-            invocation_fingerprint(&first),
-            invocation_fingerprint(&second)
-        );
-        assert_eq!(
-            result_fingerprint(
-                &first,
-                &json!({"stdout":"{\n  \"b\": 2, \"a\": 1\n}","success":true})
-            ),
-            result_fingerprint(
-                &second,
-                &json!({"success":true,"stdout":"{\"a\":1,\"b\":2}"})
-            ),
-        );
-        assert_ne!(
-            result_fingerprint(&first, &json!({"stdout":"{\"a\":1}"})),
-            result_fingerprint(&second, &json!({"stdout":"{\"a\":2}"})),
-        );
-    }
-
-    #[test]
-    fn managed_fingerprint_preserves_arrays_and_file_content_bytes() {
-        assert_ne!(
-            canonical_json(&json!([1, 2])),
-            canonical_json(&json!([2, 1]))
-        );
-        let first = managed_call(
-            "write_file",
-            json!({"path":"draft.json","content":"{\"a\":1}"}),
-        );
-        let second = managed_call(
-            "write_file",
-            json!({"path":"draft.json","content":"{\n \"a\": 1\n}"}),
-        );
-        assert_ne!(
-            invocation_fingerprint(&first),
-            invocation_fingerprint(&second)
-        );
-    }
-
-    #[test]
-    fn managed_effect_guard_allows_same_submission_after_different_file_write() {
-        let submission = managed_call(
-            "site_command",
-            json!({"args":["update","posts","42","@draft.json"]}),
-        );
-        let read = managed_call("read_file", json!({"path":"draft.json"}));
-        let edited_draft = managed_call(
-            "write_file",
-            json!({"path":"draft.json","content":"revised"}),
-        );
-        let mut progress = ManagedProgress::default();
-        assert!(!progress.repeated_effect(&submission));
-        progress.start_effect(&submission);
-        progress.start_effect(&read);
-        assert!(
-            progress.repeated_effect(&submission),
-            "read-only calls do not reset write guard"
-        );
-        progress.start_effect(&edited_draft);
-        assert!(
-            !progress.repeated_effect(&submission),
-            "changed payload may be submitted with the same command args"
-        );
-        progress.start_effect(&submission);
-        assert!(progress.repeated_effect(&submission));
-    }
-
-    #[test]
-    fn managed_read_classifier_uses_source_owned_commands_not_model_claims() {
-        for command in [
-            "site-profile",
-            "navigation",
-            "category-entry",
-            "page-app-source-read",
-            "page-capability-list",
-        ] {
-            assert!(trusted_read_only(&managed_call(
-                "site_command",
-                json!({"args":[command]})
-            )));
-        }
-        for command in [
-            "doctor",
-            "site-profile-update",
-            "navigation-update",
-            "update-category-entry",
-            "preview-url",
-            "page-app-source-edit",
-            "page-capability-grant",
-            "new-unknown-command",
-        ] {
-            assert!(!trusted_read_only(&managed_call(
-                "site_command",
-                json!({"args":[command],"read_only":true})
-            )));
-        }
-        assert!(!trusted_read_only(&managed_call(
-            "run_command",
-            json!({"command":"cat draft.json","read_only":true})
-        )));
-        assert!(!trusted_read_only(&managed_call(
-            "ssh_command",
-            json!({"command":"pwd","read_only":true})
-        )));
-    }
-
-    #[test]
-    fn managed_progress_counts_repeated_results_not_provider_ids() {
-        let policy = ApiExecutionPolicy::managed(None);
-        let mut progress = ManagedProgress::default();
-        let mut call = managed_call("list_files", json!({"path":"."}));
-        let result = json!({"files":["draft.md"]});
-        for index in 0..3 {
-            call.id = format!("random-id-{index}");
-            assert!(progress
-                .observe_round(&[(result_fingerprint(&call, &result), false)], &policy)
-                .is_ok());
-        }
-        call.id = "one-more-random-id".into();
-        assert_eq!(
-            progress.observe_round(&[(result_fingerprint(&call, &result), false)], &policy),
-            Err(StopReason::NoProgress)
-        );
-        assert!(progress
-            .observe_round(
-                &[(
-                    result_fingerprint(&call, &json!({"files":["changed.md"]})),
-                    false
-                )],
-                &policy
-            )
-            .is_ok());
-    }
     pub(super) fn profile(protocol: &str, url: &str) -> ApiProfile {
         ApiProfile {
             id: "11111111-1111-4111-8111-111111111111".into(),
@@ -1564,7 +1144,7 @@ mod tests {
     }
     pub(super) fn conn() -> Connection {
         serde_json::from_value(
-            json!({"id":"workspace-a","name":"test","kind":"workspace","api_base":"","skill_dir":"",
+            json!({"id":"workspace-a","name":"test","kind":"workspace","skill_dir":"",
             "key_prefix":"","key_kind":"","created_at":""}),
         )
         .unwrap()
