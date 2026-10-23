@@ -25,9 +25,8 @@
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}
     </div>
     {#if on}
-      <div class="convs">
-        {#each sidebar.grouped.flatMap((g) => g.subs.flatMap((x) => x.items)) as conv (conv.id)}{@render convRow(conv)}{:else}<p class="empty">还没有对话：在下方的对话面板里直接说想让这台机器做什么。</p>{/each}
-      </div>
+      {@const convs = sidebar.grouped.flatMap((g) => g.subs.flatMap((x) => x.items))}
+      {#if convs.length}<div class="convs">{#each convs as conv (conv.id)}{@render convRow(conv)}{/each}</div>{/if}
     {/if}
   {/each}
   <button class="add" onclick={() => openSshConnect()}>
@@ -48,7 +47,6 @@
   .main small { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
   .convs { padding: 1px 0 6px 12px; animation: rr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
-  .empty { margin: 4px 12px 6px 18px; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
   .add { margin: 6px 8px 0; width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: none; background: none; border-radius: 9px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; transition: background-color .12s, color .12s; }
   .add:hover { background: #f1efe9; color: var(--text); }
   @keyframes pulse { 50% { opacity: .35; } }
