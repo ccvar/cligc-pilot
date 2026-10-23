@@ -47,6 +47,12 @@ pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String) -> Result<
     site_runner::start(ctx(&app), &id, "work", "manual", Some(item_id))
 }
 
+/// 失败的改动重新构建、检查并按规则上线（不再让 AI 改一遍）。
+#[tauri::command]
+pub fn queue_recheck(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
+    site_runner::start(ctx(&app), &id, "recheck", "manual", Some(item_id))
+}
+
 #[tauri::command]
 pub fn queue_accept(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
     site_runner::start(ctx(&app), &id, "accept", "manual", Some(item_id))

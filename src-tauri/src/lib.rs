@@ -38,6 +38,7 @@ mod site_deploy;
 mod site_git;
 mod site_icon;
 mod site_stage;
+mod window_memory;
 mod site_github;
 mod site_jobs;
 mod site_ops;
@@ -4361,6 +4362,10 @@ pub fn run() {
             });
             setup_tray(app.handle())?;
             site_runner::start_scheduler(app.handle().clone());
+            // 先恢复上次的窗口大小 / 位置，再显示
+            if let Some(w) = app.get_webview_window("main") {
+                window_memory::restore(&w, &data_dir);
+            }
             // 每次启动都把主窗口显示并置前——修复自动更新 relaunch 后 macOS 不激活、窗口看不到（要点 Dock 才出来）。
             show_main(app.handle());
             #[cfg(target_os = "windows")]
@@ -4377,6 +4382,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Resized(_) | WindowEvent::Moved(_)) {
+                if let Some(w) = window.app_handle().get_webview_window("main") {
+                    window_memory::schedule_save(&w);
+                }
+            }
             if matches!(event, WindowEvent::Destroyed) {
                 sftp_transfer::cancel_owner(window.label());
                 sftp_drop::clear_owner(window.label());
@@ -4529,6 +4539,7 @@ pub fn run() {
             ops_cmds::queue_add,
             ops_cmds::run_ops_task,
             ops_cmds::queue_work,
+            ops_cmds::queue_recheck,
             ops_cmds::queue_accept,
             ops_cmds::queue_rollback,
             ops_cmds::queue_dismiss,

@@ -43,8 +43,14 @@ pub(super) struct Tools<'a> {
     /// 站点数据（只读缓存）：<数据目录>/sites，以及查询脚本。
     sites_root: PathBuf,
     site_data_script: PathBuf,
+    /// 见 ApiExecutionPolicy::safe_commands
+    safe_commands: bool,
 }
 impl<'a> Tools<'a> {
+    pub fn with_safe_commands(mut self, on: bool) -> Self {
+        self.safe_commands = on;
+        self
+    }
     pub fn new(
         conn: &'a Connection,
         work: &Path,
@@ -79,6 +85,7 @@ impl<'a> Tools<'a> {
             ssh_script: crate::tools::ssh_js_path(data),
             sites_root: data.join("sites"),
             site_data_script: crate::tools::site_data_js_path(data),
+            safe_commands: false,
         })
     }
     pub fn instructions(&self) -> String {
@@ -235,7 +242,7 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         scoped_path(&self.work, &self.reads, raw, write)
     }
     async fn authorize(&self, name: &str, detail: &str, host: bool) -> Result<(), String> {
-        match decision(self.mode, name, detail) {
+        match decision(self.mode, name, detail, self.safe_commands) {
             Gate::Allow => return Ok(()),
             Gate::Deny => return Err("当前权限档位不允许此操作".into()),
             Gate::Confirm => {}
@@ -373,12 +380,15 @@ enum Gate {
     Deny,
     Confirm,
 }
-fn decision(mode: PermMode, name: &str, detail: &str) -> Gate {
+fn decision(mode: PermMode, name: &str, detail: &str, safe_commands: bool) -> Gate {
     if mode == PermMode::Plan {
         return Gate::Deny;
     }
     if mode == PermMode::Full {
         return Gate::Allow;
+    }
+    if name == "run_command" && safe_commands && mode == PermMode::Auto {
+        return if crate::permit::is_dangerous(detail) { Gate::Confirm } else { Gate::Allow };
     }
     if name == "run_command" || mode == PermMode::Ask {
         return Gate::Confirm;
@@ -547,16 +557,21 @@ mod tests {
     #[test]
     fn host_commands_require_confirmation_except_full() {
         for mode in [PermMode::Ask, PermMode::Auto] {
-            assert_eq!(decision(mode, "run_command", "echo safe"), Gate::Confirm);
+            assert_eq!(decision(mode, "run_command", "echo safe", false), Gate::Confirm);
         }
         assert_eq!(
-            decision(PermMode::Plan, "run_command", "echo safe"),
+            decision(PermMode::Plan, "run_command", "echo safe", false),
             Gate::Deny
         );
         assert_eq!(
-            decision(PermMode::Full, "run_command", "echo safe"),
+            decision(PermMode::Full, "run_command", "echo safe", false),
             Gate::Allow
         );
+        // 运营任务的工作树：安全命令直接跑，危险命令仍要确认，计划档仍不许
+        assert_eq!(decision(PermMode::Auto, "run_command", "npm run build", true), Gate::Allow);
+        assert_eq!(decision(PermMode::Auto, "run_command", "git push origin main", true), Gate::Confirm);
+        assert_eq!(decision(PermMode::Ask, "run_command", "npm run build", true), Gate::Confirm);
+        assert_eq!(decision(PermMode::Plan, "run_command", "npm run build", true), Gate::Deny);
     }
     #[test]
     fn read_scope_denies_private_paths_and_parent_escape() {

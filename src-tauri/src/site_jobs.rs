@@ -22,6 +22,9 @@ pub struct StepState {
     pub detail: String,
 }
 
+/// env 里值为它的变量从子进程环境里去掉（而不是设成空串）。
+pub const UNSET_ENV: &str = "\u{0}";
+
 #[derive(Clone, Serialize, Debug)]
 pub struct JobState {
     pub id: String,
@@ -262,7 +265,11 @@ impl Job {
             .env("NO_COLOR", "1")
             .kill_on_drop(true);
         for (k, v) in env {
-            c.env(k, v);
+            if v == UNSET_ENV {
+                c.env_remove(k);
+            } else {
+                c.env(k, v);
+            }
         }
         #[cfg(unix)]
         c.process_group(0);

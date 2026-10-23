@@ -216,6 +216,18 @@ fn write_install_stamp(dir: &Path, stamp: &Path) {
 }
 
 /// 构建要用的环境：站点构建变量（钥匙串）。
+const PROXY_VARS: [&str; 6] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"];
+
+fn has_proxy_env() -> bool {
+    PROXY_VARS.iter().any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty()))
+}
+
+fn without_proxy(env: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = env.iter().filter(|(k, _)| !PROXY_VARS.contains(&k.as_str())).cloned().collect();
+    out.extend(PROXY_VARS.iter().map(|k| (k.to_string(), crate::site_jobs::UNSET_ENV.to_string())));
+    out
+}
+
 pub fn build_env(site: &Site, job: &Job) -> Vec<(String, String)> {
     let env = crate::sites::load_env(&site.id);
     for (_, v) in &env {
@@ -269,7 +281,14 @@ pub async fn build_and_check(site: &Site, code: &Path, stamp: Option<&Path>, job
         job.step("build", "skipped", "纯静态站，不需要构建");
     } else {
         job.step("build", "running", &site.build.build);
-        job.shell(&site.build.build, dir, &env, STEP_TIMEOUT).await.map_err(|e| {
+        let mut r = job.shell(&site.build.build, dir, &env, STEP_TIMEOUT).await;
+        // 本机设了 HTTP(S)_PROXY 时，wrangler 会把本地预渲染的请求也走代理（不看 NO_PROXY），
+        // 构建报「fetch failed / other side closed」。去掉代理变量再试一次。
+        if r.is_err() && !job.canceled() && has_proxy_env() {
+            job.line("构建失败，本机设了代理环境变量（有的构建工具连本地请求也走代理），去掉代理再试一次");
+            r = job.shell(&site.build.build, dir, &without_proxy(&env), STEP_TIMEOUT).await;
+        }
+        r.map_err(|e| {
             job.step("build", "failed", "");
             format!("构建失败：{e}")
         })?;

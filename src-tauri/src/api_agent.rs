@@ -286,7 +286,8 @@ async fn execute(
         turn_id,
         lease,
         site_key,
-    )?;
+    )?
+    .with_safe_commands(policy.safe_commands);
     let mut history = if !is_first && !session_ref.is_empty() {
         let raw = std::fs::read(&path).map_err(|_| "无法恢复此 API 会话（工作区、接口或模型可能已变化），请新建会话；不会借用其他工作区历史".to_string())?;
         if raw.len() > MAX_HISTORY_BYTES {

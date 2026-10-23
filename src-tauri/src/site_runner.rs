@@ -167,6 +167,7 @@ pub fn task_label(task: &str) -> &'static str {
         "cycle" => "立即执行一轮",
         "watch" => "上线后检查",
         "rollback" => "回滚",
+        "recheck" => "重新检查",
         _ => "运营任务",
     }
 }
@@ -252,6 +253,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "处理机会"), ("ship", "提交 / 上线")],
+        "recheck" => &[("work", "AI 的改动"), ("ship", "检查 / 上线")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
         "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认")],
         "watch" => &[("watch", "上线后检查")],
@@ -275,6 +277,7 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
             "report" => report(&ctx, &site, &job).await,
             "review" => review(&ctx, &site, &job).await,
             "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+            "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
             "plan" => plan(&ctx, &site, &job).await,
             "cycle" => cycle(&ctx, &site, &job).await,
             "watch" => watch(&ctx, &site, &job).await,
@@ -464,6 +467,37 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
             i.status = "failed".into();
             i.note = e.clone();
+        });
+    }
+    r
+}
+
+/// 重新检查一条失败的改动：AI 的提交还在分支上（比如只是构建环境出了问题），重新构建、检查并按规则上线，不再让 AI 改一遍。
+async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条机会不存在")?;
+    if item.status != "failed" {
+        return Err("只有失败的条目可以重新检查".into());
+    }
+    let wt = site_dir.join("work").join(&item.id);
+    if item.branch.is_empty() || item.base_sha.is_empty() || !wt.is_dir() {
+        return Err("这条的改动分支已经不在了，只能让 AI 重新改".into());
+    }
+    let cb = code_base(ctx, site, job).await?;
+    site_ops::update_item(&site_dir, &item.id, now(), |i| {
+        i.status = "working".into();
+        i.note.clear();
+    })?;
+    ctx.emit_queue(&site.id);
+    job.step("work", "ok", "沿用 AI 已经提交的改动");
+    let level = effective_level(site, &item).max(3);
+    let r = verify_and_ship(ctx, site, job, &item, level, &cb, &wt, &item.base_sha, &item.branch).await;
+    if let Err(e) = &r {
+        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+            if i.status == "working" {
+                i.status = "failed".into();
+                i.note = e.clone();
+            }
         });
     }
     r
@@ -687,8 +721,8 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
         st.data_dir.clone(),
         st.ssh.clone(),
         // 无人值守：写一整篇新页面要读站点、查数据、写文件、跑检查，32 次模型调用不够；
-        // 上限只防死循环，费用由每站每周 token 额度管
-        crate::api_execution::ApiExecutionPolicy { max_requests: OPS_MAX_REQUESTS },
+        // 上限只防死循环，费用由每站每周 token 额度管。改动任务（auto）在独立工作树里，可以自己跑构建和提交。
+        crate::api_execution::ApiExecutionPolicy { max_requests: OPS_MAX_REQUESTS, safe_commands: perm == "auto" && !work_dir.is_empty() },
         "ops".into(),
     )
     .await?;
@@ -818,6 +852,15 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         let msg = format!("ops: improve {}", path_of(&item.opp.page));
         let _ = crate::site_git::git_commit_ok(&wt, &["commit", "-qm", &msg]).await;
     }
+    verify_and_ship(ctx, site, job, item, level, &cb, &wt, &base_sha, &branch).await
+}
+
+/// AI 改完之后由 Pilot 做的事：确认有提交 → 构建和检查 → 按规则判定 → 推送 / 开 PR → 自动上线或留给你确认。
+/// 「重新检查」也走这里（改动已经在分支上，不再让 AI 改一遍）。
+#[allow(clippy::too_many_arguments)]
+async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u8, cb: &CodeBase, wt: &Path, base_sha: &str, branch: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let (wt, base_sha, branch) = (wt.to_path_buf(), base_sha.to_string(), branch.to_string());
     let commits = crate::site_git::commits_between(&wt, &base_sha, "HEAD").await;
     if commits.is_empty() {
         crate::site_git::remove_worktree(&cb.main, &wt).await;

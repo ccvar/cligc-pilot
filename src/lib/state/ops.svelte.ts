@@ -84,6 +84,10 @@ export async function workItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_work', { id: siteId, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
+export async function recheckItem(siteId: string, item: OpsItem) {
+  try { await invoke('queue_recheck', { id: siteId, itemId: item.id }); }
+  catch (e) { say(String(e), 'err'); }
+}
 export async function acceptItem(site: Site, item: OpsItem) {
   const what = item.branch
     ? site.source === 'github' ? `合并 PR #${item.pr_number}` : `把本地分支 ${item.branch} 压缩合并进 ${site.default_branch}`

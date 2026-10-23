@@ -5,11 +5,14 @@ use std::fmt;
 #[derive(Clone, Debug)]
 pub(crate) struct ApiExecutionPolicy {
     pub(crate) max_requests: usize,
+    /// 无人值守的运营任务：在 Pilot 准备的独立工作树里，不在危险清单上的命令（构建、检查、git 提交）
+    /// 直接执行，和 Claude CLI 自动档同一条规则；危险命令照样要确认（无人值守时一律被拒绝）。
+    pub(crate) safe_commands: bool,
 }
 
 impl Default for ApiExecutionPolicy {
     fn default() -> Self {
-        Self { max_requests: 32 }
+        Self { max_requests: 32, safe_commands: false }
     }
 }
 
