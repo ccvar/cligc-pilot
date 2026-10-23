@@ -366,11 +366,46 @@ pub fn touches_money(line: &str) -> bool {
 }
 
 /// 全托管的判定：返回不能自动上线的原因（空＝可以）。
+/// 公开内容里不该出现的内部痕迹（开发注释、占位、内部说明）。只认很明确的标记，避免误伤正文。
+const LEAK_MARKERS: &[&str] = &["TODO", "FIXME", "TBD", "lorem ipsum", "placeholder", "待补图", "待补充", "占位图", "占位文字", "上线前替换", "此处插入", "本文由 AI 生成", "按提示词", "via.placeholder.com", "dummyimage.com", "placehold.co"];
+
+/// 文字量：汉字按字、其它按词（粗算，只用于判断「新页面是不是太薄」）。
+pub fn text_units(s: &str) -> usize {
+    let cjk = s.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c) || ('\u{3040}'..='\u{30ff}').contains(c) || ('\u{ac00}'..='\u{d7af}').contains(c)).count();
+    let words = s.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() >= 2).count();
+    cjk + words
+}
+
+/// 新页面至少要有这么多正文（约 800 字，去掉 frontmatter 和标签之后算）。
+pub const MIN_NEW_PAGE_UNITS: usize = 600;
+
+fn is_page_file(f: &str) -> bool {
+    ["md", "mdx", "markdown", "html", "htm", "astro"].iter().any(|e| f.ends_with(&format!(".{e}")))
+}
+
+/// 去掉 frontmatter 分隔、HTML / JSX 标签、代码围栏后的正文文字。
+fn prose_of(line: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in line.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 pub fn managed_verdict(diff: &str, allow_new_content: bool) -> Vec<String> {
     let mut reasons = Vec::new();
     let mut file = String::new();
     let mut new_file = false;
     let mut changed = 0usize;
+    // 新页面的正文量：文件名 → 文字量
+    let mut new_pages: Vec<(String, usize)> = Vec::new();
+    let mut in_frontmatter = false;
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
     for line in diff.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
@@ -385,6 +420,10 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool) -> Vec<String> {
         }
         if line.starts_with("new file mode") {
             new_file = true;
+            in_frontmatter = false;
+            if is_page_file(&file) {
+                new_pages.push((file.clone(), 0));
+            }
             if !allow_new_content {
                 reasons.push(format!("{file}：新内容需要运营人员确认后发布"));
             }
@@ -407,6 +446,27 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool) -> Vec<String> {
             if !new_file && touches_money(added) {
                 reasons.push(format!("{file}：新增了推荐 / 邀请相关的内容"));
             }
+            if is_page_file(&file) {
+                let lower = added.to_lowercase();
+                if let Some(m) = LEAK_MARKERS.iter().find(|m| lower.contains(&m.to_lowercase())) {
+                    reasons.push(format!("{file}：正文里像是混进了内部说明或占位（「{m}」），留给你确认"));
+                }
+            }
+            if new_file && is_page_file(&file) {
+                let t = added.trim();
+                if t == "---" {
+                    in_frontmatter = !in_frontmatter;
+                } else if !in_frontmatter && !t.starts_with("```") && !t.starts_with("import ") {
+                    if let Some(p) = new_pages.last_mut() {
+                        p.1 += text_units(&prose_of(t));
+                    }
+                }
+            }
+        }
+    }
+    for (f, n) in &new_pages {
+        if *n < MIN_NEW_PAGE_UNITS {
+            reasons.push(format!("{f}：新页面正文只有约 {n} 字，内容偏薄，容易被搜索引擎当成低质页面，留给你确认"));
         }
     }
     if changed > 400 {
@@ -515,6 +575,19 @@ mod group_tests {
     }
 
     #[test]
+    fn thin_new_pages_and_leaked_internal_notes_are_not_auto_shipped() {
+        let thin = "diff --git a/src/content/a.md b/src/content/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/a.md\n@@ -0,0 +1,4 @@\n+---\n+title: 很短的页面\n+---\n+只有一句话。\n";
+        let r = managed_verdict(thin, true);
+        assert!(r.iter().any(|x| x.contains("内容偏薄")), "{r:?}");
+        let body: String = "这是一段足够长的正文，讲清楚了具体步骤、注意事项和常见错误。".repeat(30);
+        let full = format!("diff --git a/src/content/b.md b/src/content/b.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/b.md\n@@ -0,0 +1,4 @@\n+---\n+title: 完整的页面\n+---\n+{body}\n");
+        assert!(managed_verdict(&full, true).is_empty(), "{:?}", managed_verdict(&full, true));
+        let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
+        assert!(managed_verdict(leak, true).iter().any(|x| x.contains("待补图")));
+        assert_eq!(text_units("Gate KYC 认证"), 4);
+    }
+
+    #[test]
     fn plan_replies_carry_positioning_and_tasks() {
         let r = "好的\n```json\n{\"positioning\":\"面向中文用户的交易所教程站\",\"tasks\":[{\"title\":\"写 KYC 教程\",\"change\":\"new_content\"}]}\n```";
         let (p, t) = parse_plan_full(r).unwrap();
@@ -567,7 +640,8 @@ mod tests {
         assert!(managed_verdict(money, true).iter().any(|r| r.contains("推荐")));
         let newpage = "diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+# 新页面\n";
         assert!(managed_verdict(newpage, false).iter().any(|r| r.contains("新内容")));
-        assert!(managed_verdict(newpage, true).is_empty());
+        // 允许自动发布新页面时，只剩「内容偏薄」这一条（这个测试页只有一行）
+        assert!(managed_verdict(newpage, true).iter().all(|r| r.contains("内容偏薄")));
     }
 
     #[test]

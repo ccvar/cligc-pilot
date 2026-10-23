@@ -3477,7 +3477,8 @@ fn site_prompt(
     sites: &sites::SiteStore,
 ) -> String {
     let tool = site_data::tool_prompt(data_dir, &sites.data_dir(&site.id));
-    site_cmds::site_system_prompt(site, &conn.login, &tool)
+    let shot = data_dir.join("tools").join("shot.js");
+    format!("{}\n\n{}", site_cmds::site_system_prompt(site, &conn.login, &tool), agent::site_shot_prompt(&shot.to_string_lossy()))
 }
 
 fn fresh_session_seed(brain: &str) -> String {
