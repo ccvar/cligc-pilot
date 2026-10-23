@@ -442,6 +442,8 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     Ok(format!("{planned}；处理 {done} 个，上线 {shipped} 个，{waiting} 条等你确认。{}", notes.join("；")))
 }
 
+const OPS_MAX_REQUESTS: usize = 120;
+
 const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周 token」，或等用量滚出最近 7 天。";
 
 /// 手动对某一条机会立即按站点档位处理。
@@ -684,7 +686,9 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
         channel,
         st.data_dir.clone(),
         st.ssh.clone(),
-        Default::default(),
+        // 无人值守：写一整篇新页面要读站点、查数据、写文件、跑检查，32 次模型调用不够；
+        // 上限只防死循环，费用由每站每周 token 额度管
+        crate::api_execution::ApiExecutionPolicy { max_requests: OPS_MAX_REQUESTS },
         "ops".into(),
     )
     .await?;
@@ -787,6 +791,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     let plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
     let msg = format!(
         "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
+读站点要省：只看这次要改的页面、它的模板，以及准备互相链接的两三篇，不要逐篇通读；需要查询词等数据用站点数据工具查。\n\
 1. 找到这个页面对应的源文件，按上面的依据修改。改动方向：{guide}\n\
 2. 改动小而集中，只处理这一个机会；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\

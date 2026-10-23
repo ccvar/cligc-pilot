@@ -32,7 +32,7 @@ pub(crate) enum StopReason {
 impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RequestBudget { limit } => write!(f, "本轮已达到 {limit} 次模型调用上限，已停止；请核对执行记录，避免重复操作"),
+            Self::RequestBudget { limit } => write!(f, "这一轮已经调用模型 {limit} 次，先停在这里（防止陷入循环）。回复「继续」可以接着做，已经做过的步骤 AI 能看到，不会从头再来"),
         }
     }
 }

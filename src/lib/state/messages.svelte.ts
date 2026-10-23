@@ -89,7 +89,17 @@ export function activityLabel(activity: ExecutionActivity): string {
   if (key === 'edit') return '正在修改文件';
   if (key === 'search' || key === 'grep') return '正在查找信息';
   if (key === 'fetch') return '正在获取网页';
+  // API 执行器的工具：名字是 read_file / site_data，详情是 JSON 参数，写成「读取 README.md」
+  const h = jsonTool(activity);
+  if (h) return h.target ? `${h.verb} ${h.target}` : h.verb;
   return activity.detail.trim() || label || '正在执行下一步';
+}
+function jsonTool(activity: ExecutionActivity): { verb: string; target: string } | null {
+  const label = activity.label.trim();
+  const detail = activity.detail.trim();
+  if (!(label in TOOL_VERB) && !detail.startsWith('{')) return null;
+  const h = humanTool({ label, detail } as ToolCall);
+  return { verb: h.verb, target: h.target.length > 120 ? `${h.target.slice(0, 120)}…` : h.target };
 }
 export function executionProgress(live: LiveTurn, now: number) {
   const activities = Object.values(live.activities).sort((a, b) => a.startedAt - b.startedAt);
@@ -105,7 +115,8 @@ export function executionProgress(live: LiveTurn, now: number) {
   const waitingForFirstActivity = activities.length === 0 && !live.text;
   let title = latest ? activityLabel(latest) : '正在思考下一步';
   if (waitingForFirstActivity) title = '正在思考';
-  else if (quiet) title = '后台任务仍在运行';
+  // 没有工具在跑、只是很久没新动作：模型在思考或在写一大段内容（比如整篇新页面），不是「后台任务」
+  else if (quiet) title = runningActivities.length ? '这一步还在进行' : 'AI 正在思考或撰写较长的内容';
   else if (!runningActivities.length && activities.length) title = live.text ? '正在整理并继续处理' : '正在等待下一步';
   const parts: string[] = [];
   const generated = activities.filter((activity) => activity.kind === 'image_generation' && activity.status === 'completed').length;
@@ -150,6 +161,8 @@ export function activityDetail(activity: ExecutionActivity): string {
   // 原始 shell 命令、绝对路径和参数不适合直接暴露给普通用户。完整命令已经保留在
   // 上方可折叠的“执行记录”中；任务卡只呈现语义状态和真实终态。
   if (activity.kind === 'command') return '';
+  // 标题已经写成「动作 + 对象」，JSON 参数不再重复显示
+  if (jsonTool(activity)) return '';
   return activity.detail.trim();
 }
 export function compactToolRows(tools: ToolCall[]): Array<ToolCall & { count: number }> {
