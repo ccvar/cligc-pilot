@@ -6,6 +6,7 @@
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import { connections, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, remoteConns } from '$lib/state/connections.svelte.js';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
+  import { startRemoteDrag } from '$lib/state/remotePanes.svelte.js';
 
   // 远程模式的左栏：新对话下面列出全部远程连接（和站点模式一样），当前这台展开它的对话。
   let { convRow }: { convRow: Snippet<[Conversation]> } = $props();
@@ -19,7 +20,7 @@
     {@const on = c.id === app.activeConnId}
     <div class="host" class:on={on && app.view === 'remote'} class:ctx={on && app.view !== 'remote'} class:menu={connections.connCtx?.conn.id === c.id}
       role="button" tabindex="0" title="{c.ssh_user}@{c.ssh_host}{c.ssh_port && c.ssh_port !== 22 ? ':' + c.ssh_port : ''}"
-      onclick={() => selectConn(c.id)} onkeydown={(e) => e.key === 'Enter' && selectConn(c.id)} oncontextmenu={(e) => openConnCtx(e, c)}>
+      onpointerdown={(e) => startRemoteDrag(e, c.id)} onclick={() => selectConn(c.id)} onkeydown={(e) => e.key === 'Enter' && selectConn(c.id)} oncontextmenu={(e) => openConnCtx(e, c)}>
       <span class="ic"><DistroMark id={distroOf(c)} size={14} /></span>
       <span class="main"><b>{connectionDisplayName(c)}</b><small>{sshSub(c)}</small></span>
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}

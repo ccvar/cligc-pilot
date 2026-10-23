@@ -46,13 +46,34 @@ class WorkbenchState {
   statPrev: Record<string, SshStats> = {};
   stat = $state<null | { cpu: number | null; memPct: number; memText: string; diskPct: number; diskText: string }>(null);
   // ---------- 远程终端（xterm + PTY 流） ----------
-  termEl = $state<HTMLDivElement | null>(null);
-  termOn = $state(false);
-  termBusy = $state(false); // 建连中：刷新键转起来 + 禁重复点
-  termErr = $state('');
-  term: import('@xterm/xterm').Terminal | null = null;
-  termFit: import('@xterm/addon-fit').FitAddon | null = null;
-  termConnId = '';
+  // 每台机器一个终端，各自常驻：分屏时同时显示好几台，切走的那台只是挪到后台（不断开、不重连）。
+  // 下面这几个读的是「当前机器」（聚焦的那台）的终端，兼容原来只有一个终端时的写法。
+  termState = $state<Record<string, { on: boolean; busy: boolean; err: string }>>({});
+  get termOn() { return this.termState[app.activeConnId]?.on ?? false; }
+  get termBusy() { return this.termState[app.activeConnId]?.busy ?? false; }
+  get termErr() { return this.termState[app.activeConnId]?.err ?? ''; }
+  get termConnId() { return slots.has(app.activeConnId) ? app.activeConnId : ''; }
+  get term(): import('@xterm/xterm').Terminal | null { return slots.get(app.activeConnId)?.term ?? null; }
+  get termFit(): import('@xterm/addon-fit').FitAddon | null { return slots.get(app.activeConnId)?.fit ?? null; }
+}
+
+/** 一台机器的终端：自己的 DOM 容器（在各个窗格之间挪来挪去）+ xterm 实例。 */
+type TermSlot = { el: HTMLDivElement; term: import('@xterm/xterm').Terminal | null; fit: import('@xterm/addon-fit').FitAddon | null };
+const slots = new Map<string, TermSlot>();
+/** 没显示的终端停在这里：仍在文档里、尺寸正常，xterm 和 WebGL 都不掉。 */
+let parking: HTMLDivElement | null = null;
+function park(el: HTMLDivElement) {
+  if (!parking) {
+    parking = document.createElement('div');
+    parking.setAttribute('aria-hidden', 'true');
+    parking.style.cssText = 'position:fixed;left:-20000px;top:0;width:900px;height:600px;overflow:hidden;visibility:hidden;pointer-events:none';
+    document.body.appendChild(parking);
+  }
+  parking.appendChild(el);
+}
+function setTermState(id: string, patch: Partial<{ on: boolean; busy: boolean; err: string }>) {
+  const cur = workbench.termState[id] ?? { on: false, busy: false, err: '' };
+  workbench.termState = { ...workbench.termState, [id]: { ...cur, ...patch } };
 }
 
 export const workbench = new WorkbenchState();
@@ -160,7 +181,7 @@ async function pasteIntoTerm(t: import('@xterm/xterm').Terminal) {
   try {
     const text = await navigator.clipboard.readText();
     // 读剪贴板是异步的；期间用户可能已经切换连接/拆掉旧终端。
-    if (workbench.term === t && text) t.paste(text);
+    if ([...slots.values()].some((x) => x.term === t) && text) t.paste(text);
   } catch {
     say('读取剪贴板失败，可在终端中右键选择“粘贴”', 'err');
   }
@@ -230,20 +251,50 @@ export function strToB64(s: string): string {
   for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
   return btoa(bin);
 }
-export function disposeTerm() {
-  if (workbench.term) { try { workbench.term.dispose(); } catch { /* */ } }
-  workbench.term = null; workbench.termFit = null; workbench.termOn = false; workbench.termBusy = false; workbench.termErr = ''; workbench.termConnId = '';
+/** 拆掉终端：传连接 id 只拆那一台（删除 / 改了连接时），不传就全拆。 */
+export function disposeTerm(id?: string) {
+  for (const [k, slot] of [...slots]) {
+    if (id && k !== id) continue;
+    try { slot.term?.dispose(); } catch { /* */ }
+    slot.el.remove();
+    slots.delete(k);
+    const { [k]: _gone, ...rest } = workbench.termState;
+    workbench.termState = rest;
+  }
+}
+/** 把这台机器的终端放进 host（窗格里的容器）：已有就挪过来，没有就新建并连上。 */
+export function mountTerm(id: string, host: HTMLElement) {
+  const slot = slots.get(id);
+  if (slot) {
+    host.appendChild(slot.el);
+    requestAnimationFrame(() => { try { slot.fit?.fit(); } catch { /* */ } });
+    return;
+  }
+  const el = document.createElement('div');
+  el.className = 'term-inst';
+  host.appendChild(el);
+  void startTerm(id, el);
+}
+/** 窗格不再显示这台机器：终端挪去后台停着，不断开。 */
+export function unmountTerm(id: string, host: HTMLElement) {
+  const slot = slots.get(id);
+  if (slot && slot.el.parentElement === host) park(slot.el);
+}
+export function fitTerm(id: string) {
+  try { slots.get(id)?.fit?.fit(); } catch { /* 终端已拆 */ }
 }
 export async function startTerm(id: string, el: HTMLDivElement) {
-  disposeTerm();
-  workbench.termConnId = id;
-  workbench.termBusy = true;
-  workbench.termErr = '';
+  const prev = slots.get(id);
+  if (prev && prev.el !== el) { try { prev.term?.dispose(); } catch { /* */ } prev.el.remove(); }
+  const slot: TermSlot = { el, term: null, fit: null };
+  slots.set(id, slot);
+  setTermState(id, { on: false, busy: true, err: '' });
   // xterm 要 DOM，动态 import（SSR 关着，但仍别在模块顶层拉进来）。
   const [{ Terminal }, { FitAddon }] = await Promise.all([
     import('@xterm/xterm'),
     import('@xterm/addon-fit'),
   ]);
+  if (slots.get(id) !== slot) return; // 等加载期间被拆了
   // macOS 的 SF Mono/Menlo 在 Retina 下 12px 已经很清楚；Windows WebView2 在 100% DPI
   // 下同字号会显得细小、行距又紧。优先使用 Windows Terminal 同款 Cascadia Mono，
   // 未安装时回退 Consolas，并单独放大一档；FitAddon 会据此重新计算行列，不会裁字。
@@ -277,8 +328,9 @@ export async function startTerm(id: string, el: HTMLDivElement) {
     },
   });
   const f = new FitAddon();
-  t.loadAddon(f); t.open(el); f.fit();
-  workbench.term = t; workbench.termFit = f;
+  t.loadAddon(f); t.open(el);
+  try { f.fit(); } catch { /* 还没布局好，ResizeObserver 会再 fit */ }
+  slot.term = t; slot.fit = f;
   t.attachCustomKeyEventHandler((e) => handleTermKey(t, e));
   // GPU 渲染：默认的 DOM 渲染器在 Retina 上敲字会发涩（每个字符都是 DOM 活儿）。
   // 必须 open() 之后再挂，且要能回退 —— WebView 里 WebGL 不一定可用，
@@ -289,20 +341,30 @@ export async function startTerm(id: string, el: HTMLDivElement) {
     gl.onContextLoss(() => { try { gl.dispose(); } catch { /* 退回 DOM 渲染 */ } });
     t.loadAddon(gl);
   } catch { /* 没 WebGL 就用默认的 DOM 渲染器，功能不受影响 */ }
+  // WKWebView 有时会在 xterm 的自定义按键处理器之前吞掉 Escape：在容器的 capture 阶段截获写进 PTY，
+  // 保证 vi/vim 的「退出插入模式」不依赖 WebView 默认行为。
+  el.addEventListener('keydown', (event: KeyboardEvent) => {
+    if ((event.key !== 'Escape' && event.key !== 'Esc' && event.keyCode !== 27) || !workbench.termState[id]?.on) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void invoke('ssh_input', { connId: id, b64: strToB64('\x1b') });
+  }, true);
+  const alive = () => slots.get(id)?.term === t;
   const ch = new Channel<{ type: string; b64?: string; error?: string }>();
   ch.onmessage = (ev) => {
-    if (workbench.term !== t) return; // 已被拆掉/换连接，丢弃尾包
+    if (!alive()) return; // 已被拆掉/重连，丢弃尾包
     if (ev.type === 'data' && ev.b64) t.write(b64ToBytes(ev.b64));
     else if (ev.type === 'closed') {
-      workbench.termOn = false;
+      setTermState(id, { on: false });
       t.write(`\r\n\x1b[90m—— 连接已关闭${ev.error ? '：' + ev.error : ''}，按回车重新连接 ——\x1b[0m\r\n`);
     }
   };
   t.onData((d) => {
     // 关闭态：回车＝就地重连（iTerm/VS Code 的肌肉记忆），其余按键不再灌进死管道；
-    // 连接中（termBusy）也别触发，免得连点回车叠一队重连。
-    if (!workbench.termOn) {
-      if (d.includes('\r') && !workbench.termBusy) void reconnectTerm();
+    // 连接中（busy）也别触发，免得连点回车叠一队重连。
+    const st = workbench.termState[id];
+    if (!st?.on) {
+      if (d.includes('\r') && !st?.busy) void reconnectTerm(id);
       return;
     }
     void invoke('ssh_input', { connId: id, b64: strToB64(d) });
@@ -310,23 +372,31 @@ export async function startTerm(id: string, el: HTMLDivElement) {
   t.onResize(({ cols, rows }) => { void invoke('ssh_resize', { connId: id, cols, rows }); });
   // 「正在连接」用浮层（见 .term-connecting），**不往终端里写**：
   // 写进去就是终端缓冲的一部分，连上之后擦不干净（服务器的 banner 可能已经跟着来了，
-  // 光标位置不由我们说了算）—— 那行字就会一直赖在最上面。浮层随 termBusy 自动收。
+  // 光标位置不由我们说了算）—— 那行字就会一直赖在最上面。浮层随 busy 自动收。
   try {
     await invoke('ssh_open_shell', { connId: id, cols: t.cols, rows: t.rows, onEvent: ch });
-    workbench.termOn = true;
+    if (alive()) setTermState(id, { on: true });
   } catch (e) {
-    workbench.termErr = String(e);
-    t.write(`\r\n\x1b[31m${workbench.termErr}\x1b[0m\r\n`);
+    if (alive()) {
+      setTermState(id, { err: String(e) });
+      t.write(`\r\n\x1b[31m${String(e)}\x1b[0m\r\n`);
+    }
   } finally {
-    if (workbench.term === t) workbench.termBusy = false; // 已被换掉的旧终端别去动当前状态
+    if (alive()) setTermState(id, { busy: false }); // 已被换掉的旧终端别去动当前状态
   }
 }
-export async function reconnectTerm() {
-  const id = app.activeConnId; const el = workbench.termEl;
-  if (!id || !el || workbench.termBusy) return;
-  workbench.termBusy = true; // 立刻转起来：ssh_close 也要等一下，别让这段时间看着像没反应
+/** 重连：同一个容器里重新起终端（默认当前机器）。 */
+export async function reconnectTerm(id: string = app.activeConnId) {
+  const slot = slots.get(id);
+  if (!id || workbench.termState[id]?.busy) return;
+  setTermState(id, { busy: true }); // 立刻转起来：ssh_close 也要等一下，别让这段时间看着像没反应
   try { await invoke('ssh_close', { connId: id }); } catch { /* 本来就没连上，照样重来 */ }
-  await startTerm(id, el);
+  const host = slot?.el.parentElement;
+  try { slot?.term?.dispose(); } catch { /* */ }
+  slot?.el.remove();
+  slots.delete(id);
+  if (host && host !== parking) mountTerm(id, host);
+  else setTermState(id, { busy: false, on: false });
 }
 export function missingSshCredential(error: string): boolean {
   return error.includes('钥匙串里没有这个连接的密码');
@@ -362,41 +432,5 @@ export function initWorkbench() {
     void pollStats(id);
     const t = setInterval(() => { if (!document.hidden) void pollStats(id); }, STAT_EVERY_MS);
     return () => clearInterval(t);
-  });
-  // 终端容器一变大小就重排：开关面板、拖面板边、拉窗口——一个 ResizeObserver 全包了，
-  // 不用在每个改布局的地方各记一次 fit()（漏一个就是花屏）。
-  $effect(() => {
-    const el = workbench.termEl;
-    if (!el) return;
-    let raf = 0;
-    const ro = new ResizeObserver(() => {
-      // 合并同一帧里的连续变化（拖拽时每像素都会触发）
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => { try { workbench.termFit?.fit(); } catch { /* 终端已拆 */ } });
-    });
-    ro.observe(el);
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  });
-  // WKWebView 有时会在 xterm 的自定义按键处理器之前吞掉 Escape。直接在终端容器的
-  // capture 阶段截获并写入 PTY，保证 vi/vim 的“退出插入模式”不依赖 WebView 默认行为。
-  $effect(() => {
-    const el = workbench.termEl;
-    if (!el) return;
-    const onEscape = (event: KeyboardEvent) => {
-      if ((event.key !== 'Escape' && event.key !== 'Esc' && event.keyCode !== 27) || !workbench.termOn || !workbench.termConnId) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void invoke('ssh_input', { connId: workbench.termConnId, b64: strToB64('\x1b') });
-    };
-    el.addEventListener('keydown', onEscape, true);
-    return () => el.removeEventListener('keydown', onEscape, true);
-  });
-  // 进 remote 视图且容器就位 → 起终端；切走/换连接由 $effect 的清理拆掉。
-  $effect(() => {
-    const id = app.activeConnId;
-    const el = workbench.termEl;
-    if (app.view !== 'remote' || !app.isSshConn || !el || !id) return;
-    if (workbench.termConnId === id && workbench.term) return; // 同一连接已在跑
-    void startTerm(id, el);
   });
 }

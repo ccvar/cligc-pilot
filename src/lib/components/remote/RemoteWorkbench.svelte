@@ -6,21 +6,25 @@
   import { convPane } from '$lib/components/conversation/ConversationView.svelte';
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import SftpPanel from '$lib/components/remote/SftpPanel.svelte';
+  import TermHost from '$lib/components/remote/TermHost.svelte';
+  import { closeRemotePane } from '$lib/state/remotePanes.svelte.js';
+  // 分屏时作为聚焦窗格显示：多一个关闭按钮
+  let { paneId = '' }: { paneId?: string } = $props();
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { workbench, reconnectTerm, toggleWbTerm, toggleWbChat, toggleWbFiles, missingSshCredential, repairActiveSshCredential, startWbResize } from '$lib/state/workbench.svelte.js';
   import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey } from '$lib/state/composer.svelte.js';
   import { launcher, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
   import { startChat } from '$lib/state/turns.svelte.js';
-  import { distroOf } from '$lib/state/connections.svelte.js';
+  import { distroOf, connectionDisplayName } from '$lib/state/connections.svelte.js';
   import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint } from '$lib/state/models';
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- 工作台头部只留一行（机器地址 + 状态）：标题「远程连接」是废话——侧栏已经写着你在哪台机器上。 -->
 <header class="thread-head slim" data-tauri-drag-region onmousedown={startDrag}>
-  <div class="th-info"><small class="rhead-line">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port} · {workbench.termOn ? '已连接' : '未连接'}
-    <button class="th-rfz" data-tip={workbench.termBusy ? '连接中…' : '重新连接'} aria-label="重新连接" disabled={workbench.termBusy} onclick={reconnectTerm}><RefreshIcon spinning={workbench.termBusy} /></button>
+  <div class="th-info">{#if paneId && app.activeConn}<span class="wb-name"><DistroMark id={distroOf(app.activeConn)} size={13} /><b>{connectionDisplayName(app.activeConn)}</b></span>{/if}<small class="rhead-line">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port} · {workbench.termOn ? '已连接' : '未连接'}
+    <button class="th-rfz" data-tip={workbench.termBusy ? '连接中…' : '重新连接'} aria-label="重新连接" disabled={workbench.termBusy} onclick={() => reconnectTerm()}><RefreshIcon spinning={workbench.termBusy} /></button>
     {#if workbench.stat}
       <span class="hstats">
         {@render loadStat('CPU', workbench.stat.cpu, workbench.stat.cpu === null ? '正在取样…（要两次采样才算得出占用）' : `CPU 占用 ${workbench.stat.cpu}%`)}
@@ -39,6 +43,7 @@
     <button class="wb-tg" class:on={workbench.wb.files} aria-pressed={workbench.wb.files} data-tip="右侧文件" aria-label="右侧文件" onclick={toggleWbFiles}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.8" y="2.6" width="12.4" height="10.8" rx="2" stroke="currentColor" stroke-width="1.3" /><path d="M9.6 2.6v10.8" stroke="currentColor" stroke-width="1.3" /><path d="M9.6 2.6h2.6a2 2 0 0 1 2 2v6.8a2 2 0 0 1-2 2H9.6z" fill="currentColor" opacity=".9" /></svg>
     </button>
+    {#if paneId}<button class="wb-tg wb-close" data-tip="关闭窗格（终端留在后台，不断开）" aria-label="关闭这个窗格" onclick={() => closeRemotePane(paneId)}>×</button>{/if}
   </div>
 </header>
 <!-- 工作台：终端占主区，底部对话 / 右侧文件按需开，两条分隔线可拖。
@@ -50,7 +55,7 @@
          ★ 关掉命令行只是 display:none **藏起来**，绝不拆 DOM —— 拆了 xterm 就没了，
          回来还得重连一次（连接是真的，掉一次要重登服务器）。 -->
     <div class="term-wrap" class:hid={!workbench.wb.term} class:with-chat={workbench.wb.chat}>
-      <div class="term" bind:this={workbench.termEl}></div>
+      {#if app.activeConnId}<TermHost connId={app.activeConnId} />{/if}
       {#if workbench.termBusy}
         <!-- 建连要走网络+认证，一两秒是常事，别让黑框干愣着。浮层而非写进终端：见 startTerm。 -->
         <div class="term-connecting"><span class="tc-spin"></span>正在连接 {app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}…</div>
@@ -192,8 +197,12 @@
   .term-connecting { position: absolute; left: 14px; top: 12px; display: flex; align-items: center; gap: 7px; color: #8b857c; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; }
   .term-credential-repair { position: absolute; left: 14px; top: 12px; border: 1px solid rgba(248, 113, 113, .35); border-radius: 7px; background: rgba(127, 29, 29, .3); color: #fca5a5; padding: 6px 9px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
   .term-credential-repair:hover { background: rgba(153, 27, 27, .42); color: #fecaca; }
+  .wb-close { font-size: 17px; line-height: 1; }
+  /* 分屏时和旁边的窗格一样，先写机器名 */
+  .th-info:has(.wb-name) { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .wb-name { display: inline-flex; align-items: center; gap: 7px; flex: none; font-size: 12px; }
+  .wb-name b { font-weight: 600; color: var(--text); }
   .tc-spin { width: 9px; height: 9px; border: 1.5px solid #4b4640; border-top-color: #8b857c; border-radius: 50%; animation: spin .7s linear infinite; }
-  .term { width: 100%; height: 100%; }
   /* 远程视图头部：终端/文件 页签 */
   .rhead-acts { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }
   /* 头部的「重新连接」：只留图标，紧跟在连接状态后面 */

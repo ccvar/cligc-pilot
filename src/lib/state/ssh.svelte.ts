@@ -4,7 +4,7 @@ import { tick } from 'svelte';
 import { open } from '@tauri-apps/plugin-dialog';
 import { say, refreshConns, app } from './app.svelte.js';
 import { probeOs, selectConn } from './connections.svelte.js';
-import { disposeTerm, workbench, startTerm } from './workbench.svelte.js';
+import { workbench, reconnectTerm } from './workbench.svelte.js';
 import { sftp, sftpGo } from './sftp.svelte.js';
 
 const SSH_BLANK = { name: '', host: '', port: 22, user: '', auth: 'password', password: '', keyPath: '', keyPass: '' };
@@ -84,11 +84,10 @@ export async function saveSshEdit() {
     sshForm.sshOpen = false; say(`已更新「${conn.name}」`);
     await refreshConns();
     if (app.activeConnId === conn.id) {
-      disposeTerm();
       void probeOs(conn.id);
       // 补录凭据后原地恢复工作台，不要求用户再点终端和文件区的刷新按钮。
       await tick();
-      if (app.view === 'remote' && workbench.wb.term && workbench.termEl) void startTerm(conn.id, workbench.termEl);
+      if (app.view === 'remote' && workbench.wb.term) void reconnectTerm(conn.id);
       if (app.view === 'remote' && workbench.wb.files && sftp.sftpConnId === conn.id) void sftpGo(sftp.sftpPath);
     }
   } catch (e) { sshForm.sshErr = String(e); }

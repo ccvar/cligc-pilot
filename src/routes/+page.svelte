@@ -9,6 +9,8 @@
   import Launcher from '$lib/components/launcher/Launcher.svelte';
   import TemplateLibrary from '$lib/components/library/TemplateLibrary.svelte';
   import RemoteWorkbench from '$lib/components/remote/RemoteWorkbench.svelte';
+  import RemotePane from '$lib/components/remote/RemotePane.svelte';
+  import { remotePanes, initRemotePanes, focusRemotePane, addRemotePane, resizeRemoteLayout, endRemoteDrag } from '$lib/state/remotePanes.svelte.js';
   import PromptLibrary from '$lib/components/library/PromptLibrary.svelte';
   import SearchDialog from '$lib/components/SearchDialog.svelte';
   import SettingsSheet from '$lib/components/settings/SettingsSheet.svelte';
@@ -67,6 +69,7 @@
   initUpdater();
   initApp();
   initWorkbench();
+  initRemotePanes();
   initSftp();
   initEditor();
   initLibrary();
@@ -78,6 +81,10 @@
   initManaged();
   initOpsLive();
 </script>
+
+{#snippet remoteContent(connId: string, paneId: string)}
+  {#if connId === app.activeConnId}<RemoteWorkbench {paneId} />{:else}<RemotePane {connId} {paneId} />{/if}
+{/snippet}
 
 <svelte:window
   oncontextmenu={onCtxMenu}
@@ -151,6 +158,7 @@
     ondragleave={(e)=>{if(!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))panes.singleDropEdge=null;}}
     ondrop={(e)=>{if(panes.splitDragId&&panes.singleDropEdge){e.preventDefault();const id=panes.splitDragId,edge=panes.singleDropEdge;endConversationDrag();void addSplit(id,edge);}}}>
     {#if panes.singleDropEdge && !panes.splitVisible}<div class={`single-split-preview ${panes.singleDropEdge}`} aria-hidden="true"><span>分屏视图</span></div>{/if}
+    {#if remotePanes.singleEdge && !remotePanes.visible}<div class={`single-split-preview ${remotePanes.singleEdge}`} aria-hidden="true"><span>分屏视图</span></div>{/if}
     {#if ui.imgTip}
       {@const iu = ui.imgTip.url}
       <div class="imgtip" class:ready={ui.imgTipReady} class:below={ui.imgTip.below} style="left:{ui.imgTip.x}px; top:{ui.imgTip.y}px">
@@ -182,6 +190,11 @@
 
     {:else if app.view === 'templates'}
       <TemplateLibrary />
+
+    {:else if remotePanes.visible && remotePanes.layout}
+      <!-- 远程分屏：聚焦的窗格是完整工作台，其余窗格只显示各自的终端 -->
+      <ConversationCanvas layout={remotePanes.layout} focused={remotePanes.focused} dragging={!!remotePanes.dragId} dragConversation={remotePanes.dragId} preview={remotePanes.preview} content={remoteContent}
+        onfocus={focusRemotePane} ondrop={(target,edge)=>{const id=remotePanes.dragId;endRemoteDrag();addRemotePane(id,edge,target);}} onresize={resizeRemoteLayout}/>
 
     {:else if app.view === 'remote'}
       <RemoteWorkbench />

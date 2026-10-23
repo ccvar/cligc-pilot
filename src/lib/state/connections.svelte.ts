@@ -157,7 +157,7 @@ export async function selectConn(id: string) {
     void probeOs(id); // 系统版本：没探过才连，探到就存着，之后一直是本地读
     app.view = 'remote';
     if (switching) {
-      disposeTerm();
+      // 不拆终端：每台机器的终端常驻，切回来就是原样（分屏时还要同时显示好几台）
       // 远程连接绝不默认「全自动」：那是别人的真机，默认得让每条命令都过一次你的眼。
       if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
     }
@@ -240,6 +240,7 @@ export async function removeConn(id: string, preserveMenu = false) {
   if (preserveMenu) connections.connCtx = null;
   try {
     await invoke('remove_connection', { id });
+    disposeTerm(id);
     if (app.activeConv?.conn_id === id) { app.activeConv = null; app.activeConvId = ''; app.view = 'launcher'; }
     await refreshConns();
     await refreshConvos();
