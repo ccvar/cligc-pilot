@@ -73,7 +73,7 @@
       <span class="n">{st.deployed ? '✓' : 3}</span>
       <div class="lb">
         <b>在 Pilot 里上线一次</b>
-        <small>{st.deployed ? '已上线过' : 'Pilot 构建、检查后上传到 Pages。'}</small>
+        <small>{st.deployed ? '已上线过' : site.deploy.mode === 'vps' ? 'Pilot 跑完检查后执行发布脚本，发布到你的服务器。' : site.deploy.mode === 'workers' ? 'Pilot 构建、检查后部署到 Workers。' : 'Pilot 构建、检查后上传到 Pages。'}</small>
         {#if !st.deployed && pilotDeploys(site.deploy.mode)}<div class="row"><button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button></div>{/if}
       </div>
     </div>
