@@ -100,12 +100,26 @@ export function bootConnId(): string {
   if (pilotWindowLabel.startsWith(CONN_WIN_PREFIX)) return pilotWindowLabel.slice(CONN_WIN_PREFIX.length);
   try { return localStorage.getItem(LAST_CONN_KEY) || ''; } catch { return ''; }
 }
+const LAST_REMOTE_KEY = 'cligc.pilot.lastRemote';
+/** 所有远程连接（SSH），切换器里合并成一行「远程连接」。 */
+export const remoteConns = () => app.conns.filter((c) => c.kind === 'ssh');
+/** 进入远程连接：打开上次用过的那台，没有就第一台。 */
+export function openRemote() {
+  connections.switcherOpen = false;
+  const list = remoteConns();
+  if (!list.length) return;
+  let last = '';
+  try { last = localStorage.getItem(LAST_REMOTE_KEY) || ''; } catch { /* */ }
+  void selectConn(list.find((c) => c.id === last)?.id ?? list[0].id);
+}
+
 export async function selectConn(id: string) {
   const switching = id !== app.activeConnId;
   const conn = app.conns.find((c) => c.id === id);
   switchConversationWorkspace(id);
   const seq = ++connections.selSeq; app.activeConnId = id;
   if (isMainWindow) { try { localStorage.setItem(LAST_CONN_KEY, id); } catch { /* */ } }
+  if (conn?.kind === 'ssh') { try { localStorage.setItem(LAST_REMOTE_KEY, id); } catch { /* */ } }
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;

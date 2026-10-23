@@ -6,7 +6,7 @@
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import GearIcon from '$lib/components/icons/GearIcon.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
-  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs } from '$lib/state/connections.svelte.js';
+  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote } from '$lib/state/connections.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { WORKSPACE_CONN_ID } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
@@ -38,7 +38,15 @@
           <span class="cs-main"><b>站点</b><small>{sites.list.length ? `${sites.list.length} 个站点${fleet.pendingCount ? ` · ${fleet.pendingCount} 条待确认` : ''}` : '导入用代码管理的静态站，接数据、做运营'}</small></span>
           {#if app.isSitesMode}<span class="cs-check">✓</span>{/if}
         </button>
-        {#each app.conns.filter((c) => !isDataConn(c)) as c (c.id)}
+        <!-- 远程连接同样合并成一行：进去之后左栏列出全部机器。一台都没有就不显示。 -->
+        {#if remoteConns().length}
+          <button class="cs-item {app.isSshConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSshConn} onclick={openRemote}>
+            <SshMark size={18} />
+            <span class="cs-main"><b>远程连接</b><small>{remoteConns().length} 台机器{app.isSshConn && app.activeConn ? ` · 当前 ${connectionDisplayName(app.activeConn)}` : ''}</small></span>
+            {#if app.isSshConn}<span class="cs-check">✓</span>{/if}
+          </button>
+        {/if}
+        {#each app.conns.filter((c) => !isDataConn(c) && c.kind !== 'ssh') as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={18} />

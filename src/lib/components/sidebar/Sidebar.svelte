@@ -21,6 +21,7 @@
   import { permits } from '$lib/state/permits.svelte.js';
   import type { Conversation } from '$lib/types';
   import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
+  import RemoteRail from '$lib/components/sidebar/RemoteRail.svelte';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { managed, openManaged } from '$lib/state/managed.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
@@ -86,6 +87,8 @@
 
   {#if app.isSitesMode}
     <SitesRail {convRow} />
+  {:else if app.isSshConn}
+    <RemoteRail {convRow} />
   {:else}
   <div class="convos" class:scrolled={ui.convosScrolled} onscroll={(e) => (ui.convosScrolled = (e.currentTarget as HTMLElement).scrollTop > 2)}>
     {#if sidebar.grouped.length === 0}
