@@ -21,6 +21,11 @@
   import RemoteFileEditor from '$lib/components/remote/RemoteFileEditor.svelte';
   import CloudflareConnectDialog from '$lib/components/cloudflare/CloudflareConnectDialog.svelte';
   import GithubConnectDialog from '$lib/components/github/GithubConnectDialog.svelte';
+  import SiteImportDialog from '$lib/components/site/SiteImportDialog.svelte';
+  import SiteWorkbench from '$lib/components/site/SiteWorkbench.svelte';
+  import { initSites } from '$lib/state/sites.svelte.js';
+  import { initOps } from '$lib/state/ops.svelte.js';
+  import DataConnectDialog from '$lib/components/site/DataConnectDialog.svelte';
   import TemplateSaveDialog from '$lib/components/library/TemplateSaveDialog.svelte';
   import TemplateUseDialog from '$lib/components/library/TemplateUseDialog.svelte';
   import PromptEditDialog from '$lib/components/library/PromptEditDialog.svelte';
@@ -62,6 +67,8 @@
   initLibrary();
   initMessages();
   initTurns();
+  initSites();
+  initOps();
 </script>
 
 <svelte:window
@@ -153,6 +160,9 @@
     {:else if !app.activeConn}
       <Welcome />
 
+    {:else if app.view === 'site' && app.isSiteConn}
+      <SiteWorkbench />
+
     {:else if app.view === 'launcher'}
       <Launcher />
 
@@ -182,6 +192,8 @@
 <RemoteFileEditor />
 <CloudflareConnectDialog />
 <GithubConnectDialog />
+<SiteImportDialog />
+<DataConnectDialog />
 <TemplateSaveDialog />
 <TemplateUseDialog />
 <PromptEditDialog />

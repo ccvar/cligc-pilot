@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import { openSiteImport } from '$lib/state/sites.svelte.js';
   import AppIcon from '$lib/AppIcon.svelte';
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
@@ -23,6 +25,7 @@
       <button class="btn soft hero-import" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
       <button class="btn soft hero-import" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
       <button class="btn soft hero-import" onclick={openSshConnect}><SshMark size={15} />新建远程连接</button>
+      <button class="btn soft hero-import" onclick={() => openSiteImport()}><SiteMark size={15} />导入站点</button>
     </div>
     <CliGuide />
   </div>

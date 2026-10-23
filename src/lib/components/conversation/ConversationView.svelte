@@ -21,6 +21,7 @@
   import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage } from '$lib/state/composer.svelte.js';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
   import { openSaveTmpl } from '$lib/state/library.svelte.js';
+  import { importCfProject } from '$lib/state/launch.svelte.js';
   import { distroOf } from '$lib/state/connections.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
 
@@ -329,6 +330,7 @@
         <span class="tipwrap" data-tip={cfReady ? '在本机跑起来看效果（关预览窗即停）' : '先让 AI 建出页面再预览'}><button class="cb-prev" onclick={()=>scoped?panePrefill(id,()=>void startPreview()):void startPreview()} disabled={cf.previewBusy || !cfReady}><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1.6 8s2.4-4.4 6.4-4.4S14.4 8 14.4 8s-2.4 4.4-6.4 4.4S1.6 8 1.6 8Z" stroke="currentColor" stroke-width="1.2" /><circle cx="8" cy="8" r="1.9" stroke="currentColor" stroke-width="1.2" /></svg>{cf.previewBusy ? '启动中…' : '预览'}</button></span>
         <span class="tipwrap" data-tip={cfReady ? '发布到 Cloudflare 上线' : '先让 AI 建出页面再部署'}><button class="cb-prev" onclick={()=>scoped?panePrefill(id,fillDeploy):fillDeploy()} disabled={viewBusy || !cfReady}><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 12.5V4M4.5 7 8 3.5 11.5 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>部署</button></span>
         <span class="tipwrap" data-tip={cfReady ? '存成模板，以后一键复用' : '先让 AI 建出页面再存'}><button class="cb-prev dim" onclick={()=>scoped?panePrefill(id,openSaveTmpl):openSaveTmpl()} disabled={!cfReady}><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><rect x="2.6" y="2.6" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="9.1" y="2.6" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="2.6" y="9.1" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="9.1" y="9.1" width="4.3" height="4.3" rx="1" stroke="currentColor" stroke-width="1.3" /></svg>存模板</button></span>
+        <span class="tipwrap" data-tip={cfReady ? '变成一个站点：接 GitHub、域名、GA4 / Search Console 数据，开始运营' : '先让 AI 建出页面'}><button class="cb-prev dim" onclick={()=>context && void importCfProject(context.conn_id, context.site_slug)} disabled={!cfReady || viewBusy}><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="6.6" stroke="currentColor" stroke-width="1.5" /><path d="M3.6 10h12.8M10 3.4c1.9 1.8 2.9 4.1 2.9 6.6s-1 4.8-2.9 6.6M10 3.4C8.1 5.2 7.1 7.5 7.1 10s1 4.8 2.9 6.6" stroke="currentColor" stroke-width="1.3" /></svg>转为站点</button></span>
       </div>
     {/if}
     <div class="composer" class:fileover={!scoped&&composer.composerFileOver} role="group" aria-label="消息输入"

@@ -73,8 +73,8 @@ export interface CliUpdateInfo {
 
 // ---- 对话 ----
 
-/** sitebuild = Cloudflare 项目；remote = SSH 机器；repo = GitHub 仓库；workspace = 本地对话（可接入一个文件夹）。 */
-export type TaskType = 'sitebuild' | 'remote' | 'repo' | 'workspace';
+/** sitebuild = Cloudflare 项目；remote = SSH 机器；repo = GitHub 仓库；workspace = 本地对话（可接入一个文件夹）；site = 站点会话。 */
+export type TaskType = 'sitebuild' | 'remote' | 'repo' | 'workspace' | 'site';
 
 /** fine-grained Token 能访问的 GitHub 仓库。 */
 export interface GhRepo {
@@ -130,6 +130,8 @@ export interface Conversation {
   ctx_tokens?: number;
   /** 本会话累计处理 token。 */
   total_tokens?: number;
+  /** 会话由谁发起：空＝用户；ops＝站点运营任务。 */
+  origin?: string;
 }
 
 export type TurnEvent =
@@ -151,3 +153,203 @@ export type TurnEvent =
     }
   | { type: 'context_compacted'; pre_tokens: number }
   | { type: 'done'; ok: boolean; error: string };
+
+// ---- 站点 ----
+
+export interface SiteBuild {
+  install: string;
+  build: string;
+  out_dir: string;
+  checks: string[];
+  /** 构建变量名（值只在钥匙串）。 */
+  env_keys: string[];
+}
+export interface SiteDeploy {
+  /** direct = Pilot 构建后上传；pages_git = Pages 绑定 GitHub；none = 暂不部署 */
+  mode: 'direct' | 'pages_git' | 'none' | '';
+  cf_conn_id: string;
+  project: string;
+  branch: string;
+}
+export interface SiteData {
+  google_conn_id: string;
+  ga4_property: string;
+  ga4_property_name: string;
+  gsc_site: string;
+  bing_conn_id: string;
+  bing_site: string;
+  indexnow_key: string;
+}
+export interface SiteOps {
+  level: number;
+  whitelist: string[];
+  scan: string;
+  health: string;
+  report: string;
+  review: string;
+  budget: { changes_per_week: number; items_per_run: number; tokens_per_week: number };
+  brain: string;
+  model: string;
+  downgraded: string[];
+  min_impressions: number;
+}
+export interface Site {
+  id: string;
+  name: string;
+  domain: string;
+  source: 'github' | 'local';
+  gh_conn_id: string;
+  repo: string;
+  local_dir: string;
+  default_branch: string;
+  framework: string;
+  build: SiteBuild;
+  deploy: SiteDeploy;
+  data: SiteData;
+  ops: SiteOps;
+  created_at: number;
+  updated_at: number;
+}
+export interface SiteDetected {
+  framework: string;
+  build: SiteBuild;
+  env: [string, string][];
+  cf_project: string;
+  branch: string;
+  domain: string;
+  indexnow_key: string;
+  git: boolean;
+  git_branch: string;
+  git_default_branch: string;
+  github_repo: string;
+  has_dotenv: boolean;
+  dotenv_example_keys: string[];
+  notes: string[];
+}
+export interface SiteImportPreview { detected: SiteDetected; name: string; dir: string }
+export interface PagesProject {
+  name: string;
+  subdomain: string;
+  domains: string[];
+  production_branch: string;
+  source_type: string;
+  source_repo: string;
+}
+export interface PagesDeployment {
+  id: string;
+  url: string;
+  environment: string;
+  branch: string;
+  commit: string;
+  message: string;
+  status: string;
+  stage: string;
+  created_on: string;
+}
+export interface JobStep { key: string; label: string; status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped'; detail: string }
+export interface SiteJob {
+  id: string;
+  site_id: string;
+  kind: string;
+  title: string;
+  status: 'running' | 'ok' | 'failed' | 'canceled';
+  started_at: number;
+  finished_at: number;
+  steps: JobStep[];
+  log: string[];
+  url: string;
+  error: string;
+}
+export interface DeployRecord {
+  id: string;
+  ts: number;
+  ok: boolean;
+  trigger: string;
+  commit: string;
+  message: string;
+  url: string;
+  changed: number;
+  indexnow: string;
+  error: string;
+  duration: number;
+  dirty: boolean;
+}
+export interface SiteStatus {
+  code_dir: string;
+  exists: boolean;
+  git: boolean;
+  branch: string;
+  dirty: boolean;
+  head: string;
+  head_subject: string;
+  job: SiteJob | null;
+  last_deploy: DeployRecord | null;
+}
+
+// ---- 站点数据 ----
+export interface SourceMeta { fetched_at: number; start: string; end: string; error: string }
+export interface CacheMeta { ga4: SourceMeta; gsc: SourceMeta; bing: SourceMeta }
+export interface DataRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
+export interface ComparedRow extends DataRow { prev_clicks: number; prev_impressions: number; prev_position: number }
+export interface GaRow { key: string; key2?: string; sessions: number; users: number; views: number; engaged: number }
+export interface EventRow { event: string; dim: string; value: string; count: number; users: number }
+export interface Opportunity {
+  key: string;
+  kind: string;
+  title: string;
+  page: string;
+  queries: DataRow[];
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  prev_clicks: number;
+  score: number;
+  change: string;
+  evidence: string;
+}
+export interface Dashboard {
+  meta: CacheMeta;
+  gsc_daily: DataRow[];
+  gsc_totals: { clicks: number; impressions: number; ctr: number; position: number };
+  gsc_prev_totals: { clicks: number; impressions: number; ctr: number; position: number };
+  gsc_queries: ComparedRow[];
+  gsc_pages: ComparedRow[];
+  gsc_sitemaps: unknown;
+  ga4_daily: GaRow[];
+  ga4_totals: { sessions: number; users: number; views: number; engaged: number };
+  ga4_prev_views: number;
+  ga4_pages: GaRow[];
+  ga4_sources: GaRow[];
+  ga4_events: EventRow[];
+  bing_daily: DataRow[];
+  bing_totals: { clicks: number; impressions: number; ctr: number; position: number };
+  bing_queries: DataRow[];
+  bing_pages: DataRow[];
+  bing_crawl: unknown;
+  opportunities: Opportunity[];
+}
+
+// ---- 运营 ----
+export interface OpsItem {
+  id: string;
+  opp: Opportunity;
+  /** open | working | proposed | merged | deployed | dismissed | rolled_back | failed */
+  status: string;
+  created_at: number;
+  updated_at: number;
+  conv_id: string;
+  branch: string;
+  base_sha: string;
+  head_sha: string;
+  pr_number: number;
+  pr_url: string;
+  change_kind: string;
+  verdict: string;
+  merge_sha: string;
+  deployed_at: number;
+  review: string;
+  review_note: string;
+  note: string;
+  auto: boolean;
+}

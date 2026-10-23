@@ -4,13 +4,14 @@
   import { openSshEdit } from '$lib/state/ssh.svelte.js';
   import { openCfUpdate } from '$lib/state/cloudflare.svelte.js';
   import { openGhUpdate } from '$lib/state/github.svelte.js';
+  import { openDataUpdate, isDataConn } from '$lib/state/datasrc.svelte.js';
 </script>
 
 {#if connections.connCtx}
   <!-- 连接切换器的右键菜单。菜单项按连接类型给：能做的才列，做不了的不摆在那儿灰着。 -->
   {@const c = connections.connCtx.conn}
   <div bind:this={connections.connCtxMenuEl} class="ctx-menu fctx conn-ctx-menu" class:ready={connections.connCtx.ready} style="left:{connections.connCtx.x}px; top:{connections.connCtx.y}px" role="menu" tabindex="-1">
-    <button class="ctx-item" role="menuitem" onclick={() => openConnWindow(c.id)}>新窗口打开</button>
+    {#if !isDataConn(c)}<button class="ctx-item" role="menuitem" onclick={() => openConnWindow(c.id)}>新窗口打开</button>{/if}
     {#if c.kind === 'ssh'}
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; selectConn(c.id); openRemote(); }}>远程终端</button>
       <div class="ctx-div"></div>
@@ -23,6 +24,9 @@
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
+    {:else if isDataConn(c)}
+      <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c)}>更新凭据…</button>
     {/if}
     <div class="ctx-div"></div>
     <button

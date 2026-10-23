@@ -8,6 +8,7 @@ import { switchConversationWorkspace } from './panes.svelte.js';
 import { launcher } from './launcher.svelte.js';
 import { disposeTerm } from './workbench.svelte.js';
 import { loadGhRepos } from './github.svelte.js';
+import { isSiteConnId, siteIdOf, loadSiteStatus, sites } from './sites.svelte.js';
 
 class ConnectionsState {
   switcherOpen = $state(false);
@@ -108,8 +109,20 @@ export async function selectConn(id: string) {
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;
-    if (app.view === 'thread' || app.view === 'remote'
+    if (app.view === 'thread' || app.view === 'remote' || app.view === 'site'
       || ((app.view === 'templates' || app.view === 'prompts') && conn?.kind !== 'cloudflare')) app.view = 'launcher';
+  }
+  if (isSiteConnId(id)) {
+    // 站点：进入站点页（看板 / 待处理 / 部署 / 设置），侧栏是该站的会话。
+    // 站点会话会改代码、可能推送：和 GitHub / CF 一样默认「自动」而非「全自动」。
+    if (switching) {
+      app.view = 'site';
+      launcher.lSite = '';
+      if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
+      if (sites.tab === 'settings') sites.draft = null;
+    }
+    void loadSiteStatus(siteIdOf(id));
+    return;
   }
   if (conn?.kind === 'ssh') {
     // SSH 连接没有项目可发现，也没有独立的启动页/对话页——**一切都在远程工作台里**

@@ -44,6 +44,8 @@ function selectContext(conns, overrides = {}) {
     conns, activeConnId: '__workspace__', selSeq: 0, isMainWindow: false, view: 'launcher',
     activeConvId: '', activeConv: null, lPerm: 'full', lSite: 'old', lStyle: 'x', cfProjects: ['old'],
     switchConversationWorkspace() {}, probeOs() {}, disposeTerm() {}, say() {},
+    isSiteConnId: (id) => id.startsWith('site:'), siteIdOf: (id) => id.slice(5), loadSiteStatus() {}, loadGhRepos() {},
+    sites: { tab: 'overview', draft: null },
     invoke: async () => ['site-a'], localStorage: { setItem() {} },
     ...overrides,
   }));
@@ -70,4 +72,15 @@ test('switching back to the local workspace clears the Cloudflare project and re
   assert.equal(ctx.activeConnId, '__workspace__');
   assert.equal(ctx.lSite, '');
   assert.equal(ctx.view, 'launcher');
+});
+
+test('switching to a site opens its board and never keeps full automation', async () => {
+  for (const perm of ['ask', 'auto', 'full']) {
+    const ctx = selectContext([], { lPerm: perm });
+    await ctx.selectConn('site:s1');
+    assert.equal(ctx.activeConnId, 'site:s1');
+    assert.equal(ctx.view, 'site');
+    assert.equal(ctx.lPerm, perm === 'full' ? 'auto' : perm);
+    assert.equal(ctx.lSite, '');
+  }
 });

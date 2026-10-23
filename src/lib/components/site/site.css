@@ -1,0 +1,86 @@
+/* 站点界面共用样式：全部挂在 .su 根下，避免和其它组件的同名类互相影响。
+   尺度沿用全局约定：13px 控件字号、--ctl-h 单行高度、8px 圆角、暖灰中性色。 */
+.su { --su-gap: 14px; color: var(--text); }
+.su .tin { width: 100%; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; box-sizing: border-box; }
+.su input.tin { height: var(--ctl-h); padding-top: 0; padding-bottom: 0; line-height: normal; }
+.su textarea.tin { resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.su .tin:focus { outline: none; border-color: #b7b2a6; }
+.su .tin.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.su .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; white-space: nowrap; }
+.su .btn:hover { background: #f6f5f1; }
+.su .btn:disabled { opacity: .5; cursor: default; }
+.su .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.su .btn.primary:hover { background: var(--accent-h); }
+.su .btn.ghost { border-color: var(--border); }
+.su .btn.danger { color: var(--err); border-color: var(--err-border); }
+.su .btn.danger:hover { background: var(--err-soft); }
+.su .btn.small { padding: 4px 10px; font-size: 12px; }
+.su .btn.tiny { padding: 2px 8px; font-size: 11.5px; border-width: 1px; border-radius: 6px; }
+.su .link-btn { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; font: inherit; }
+.su .hint { color: var(--dim); font-size: 12px; margin: 2px 0; line-height: 1.6; }
+.su .warn-text { color: var(--warn); }
+.su .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.su .ok-note { color: var(--ok); background: #edf7f0; border: 1px solid #cfe7d7; border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+.su .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.su .dim { color: var(--dim); }
+.su .faint { color: var(--faint); }
+.su code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; background: var(--accent-soft); padding: 0 4px; border-radius: 4px; }
+
+/* 表单 */
+.su .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.su .field > label, .su .field > .lbl { font-size: 12px; font-weight: 550; color: var(--text); }
+.su .field > small { color: var(--faint); font-size: 11px; line-height: 1.5; }
+.su .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.su .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 14px; }
+.su .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.su .row.wrap { flex-wrap: wrap; }
+.su .row-end { display: flex; justify-content: flex-end; align-items: center; gap: 7px; }
+.su .seg { align-self: flex-start; display: inline-flex; border: 1.5px solid var(--border2); border-radius: 9px; padding: 2px; gap: 2px; background: #fff; }
+.su .seg button { border: none; background: none; border-radius: 7px; padding: 4px 11px; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; }
+.su .seg button.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
+.su .check { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; cursor: pointer; line-height: 1.5; }
+.su .check input { margin-top: 3px; accent-color: var(--accent); }
+
+/* 卡片与分区 */
+.su .card { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px 16px; min-width: 0; }
+.su .card > h3 { margin: 0 0 10px; font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.su .card > h3 .grow { flex: 1; }
+.su .section-t { margin: 18px 0 8px; font-size: 13px; font-weight: 600; color: var(--text); }
+.su .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; font-size: 12.5px; }
+.su .kv > dt { color: var(--dim); }
+.su .kv > dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.su .pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 550; background: var(--accent-soft); color: var(--dim); white-space: nowrap; }
+.su .pill.ok { background: #e7f4ec; color: var(--ok); }
+.su .pill.warn { background: #faf1d8; color: #8a5a08; }
+.su .pill.err { background: var(--err-soft); color: var(--err); }
+.su .pill.run { background: #e8eefb; color: #2f5fb8; }
+
+/* 表格 */
+.su table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.su table.tbl th { text-align: left; font-weight: 550; color: var(--dim); font-size: 11.5px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.su table.tbl td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.su table.tbl td.num, .su table.tbl th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.su table.tbl tr:last-child td { border-bottom: none; }
+.su table.tbl td.trunc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 作业步骤与日志 */
+.su .steps { display: flex; flex-direction: column; gap: 4px; }
+.su .step { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+.su .step .dot { width: 16px; height: 16px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; border: 1.5px solid var(--border2); color: var(--faint); }
+.su .step.ok .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
+.su .step.failed .dot { background: var(--err); border-color: var(--err); color: #fff; }
+.su .step.running .dot { border-color: #2f80ed; border-top-color: transparent; animation: su-spin .8s linear infinite; }
+.su .step.skipped { color: var(--faint); }
+.su .step .detail { color: var(--faint); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.su pre.log { margin: 0; max-height: 280px; overflow: auto; background: #1f1d1a; color: #e9e6df; border-radius: 10px; padding: 10px 12px; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+@keyframes su-spin { to { transform: rotate(360deg); } }
+
+/* 弹窗 */
+.su-mask { position: fixed; inset: 0; background: rgba(25,20,10,.28); z-index: 70; }
+.su.modal { position: fixed; z-index: 80; inset: 0; margin: auto; height: fit-content; max-height: 88vh; width: min(560px, 94vw); border-radius: 14px; overflow: hidden; background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.su.modal > .sheet-head { box-sizing: border-box; min-height: 48px; display: flex; justify-content: space-between; align-items: center; padding: 7px 14px; border-bottom: 1px solid var(--border); flex: none; }
+.su.modal > .sheet-head b { display: inline-flex; align-items: center; gap: 6px; }
+.su.modal > .sheet-body { min-width: 0; padding: 16px 18px; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.su.modal > .sheet-foot { flex: none; display: flex; justify-content: flex-end; align-items: center; gap: 7px; padding: 7px 14px; border-top: 1px solid var(--border); }
+.su .x { background: none; border: none; color: var(--faint); font-size: 20px; cursor: pointer; line-height: 1; }
+.su .x:hover { color: var(--err); }

@@ -12,7 +12,8 @@ class SidebarState {
       if (c.conn_id !== app.activeConnId) continue;
       const key = conversationGroupKey(c);
       let g = bySite.get(key);
-      const groupName = key === WORKSPACE_CONN_ID ? '自由对话'
+      const groupName = key === '__site__' ? '对话' : key === '__site_ops__' ? '运营任务'
+        : key === WORKSPACE_CONN_ID ? '自由对话'
         : c.task_type === 'workspace' ? workspaceFolderName(key)
           : c.site_name || c.site_slug || key;
       if (!g) { g = { slug: key, name: groupName, recent: 0, convs: [] }; bySite.set(key, g); }
@@ -39,7 +40,7 @@ class SidebarState {
 export const sidebar = new SidebarState();
 
 function taskLabel(t: string): string {
-  return t === 'sitebuild' ? '建站' : t === 'remote' ? '远程运维' : t === 'repo' ? '仓库' : '自由对话';
+  return t === 'sitebuild' ? '建站' : t === 'remote' ? '远程运维' : t === 'repo' ? '仓库' : t === 'site' ? '站点' : '自由对话';
 }
 function conversationTaskLabel(c: Conversation | null | undefined): string {
   return taskLabel(c?.task_type ?? '');
@@ -48,11 +49,13 @@ function conversationTaskLabel(c: Conversation | null | undefined): string {
 export function conversationGroupKey(c: Conversation): string {
   if (c.task_type === 'workspace') return c.workspace_dir?.trim() || WORKSPACE_CONN_ID;
   if (c.task_type === 'remote') return '__remote__';
+  // 站点会话按来源分两组：你发起的对话 / 运营任务开出来的会话。
+  if (c.task_type === 'site') return c.origin === 'ops' ? '__site_ops__' : '__site__';
   return c.site_slug || '(未命名项目)';
 }
 
 // 会话按「分组 → 任务类型」两级分组：分组按最近活动倒序；任务类型固定顺序，只留有会话的。
-const TASK_ORDER = ['sitebuild', 'repo', 'remote', 'workspace'];
+const TASK_ORDER = ['site', 'sitebuild', 'repo', 'remote', 'workspace'];
 export function faviconOf(u: string): string { try { return new URL(u).origin + '/favicon.ico'; } catch { return ''; } }
 function loadCollapsedSites(): Set<string> { try { return new Set<string>(JSON.parse(localStorage.getItem('cligc.pilot.collapsedSites') || '[]')); } catch { return new Set(); } }
 function persistCollapsedSites() { try { localStorage.setItem('cligc.pilot.collapsedSites', JSON.stringify([...sidebar.collapsedSites])); } catch { /* */ } }

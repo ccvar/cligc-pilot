@@ -1,3 +1,4 @@
+import { sites } from './sites.svelte.js';
 import { type Layout, type Edge, leaves, pane, replacePane, removePane, outerDropEdge, dropEdge, splitPane } from '$lib/conversationLayout';
 import { onDestroy, tick, untrack } from 'svelte';
 import type { Conversation, Brain } from '$lib/types';
@@ -68,6 +69,7 @@ export function conversationConnection(c:Conversation|null) {
   return c && c.task_type!=='workspace' ? app.conns.find(x=>x.id===c.conn_id)??null : null;
 }
 export function conversationPresentation(c:Conversation|null) {
+  if(c?.task_type==='site'){const s=sites.list.find(x=>x.id===c.site_slug);return {conn:null,url:s?.domain?`https://${s.domain}`:''};}
   const conn=conversationConnection(c);
   if(conn?.kind==='github'&&c?.site_slug)return {conn,url:`https://github.com/${c.site_slug}`};
   return {conn,url:conn?.kind==='cloudflare'&&c ? detectSiteUrl([c]) : ''};

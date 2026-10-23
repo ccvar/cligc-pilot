@@ -11,6 +11,7 @@ import { launcher, STYLE_DIRECTIVES, workspaceFolderName } from './launcher.svel
 import { mdRender, ATT_MARKER } from './messages.svelte.js';
 import { cf, checkCfReady } from './cloudflare.svelte.js';
 import { workbench, setWbFlags } from './workbench.svelte.js';
+import { sites } from './sites.svelte.js';
 
 class TurnsState {
   autoRetried = $state<Record<string, boolean>>({}); // convId → 本轮已自动重试过（每个用户轮只自动重试一次）
@@ -183,10 +184,11 @@ export async function failTurn(e: unknown, convId: string) {
 
 export async function startChat() {
   const workspace = app.isWorkspaceChat;
-  const targetReady = app.isSshConn || workspace || !!launcher.lSite.trim();
+  const site = app.isSiteConn ? sites.active : null;
+  const targetReady = app.isSshConn || workspace || !!site || !!launcher.lSite.trim();
   const textReady = !!launcher.lDraft.trim() || (app.isSshConn && composer.attachments.length > 0);
   if (!app.activeConn || !targetReady || !textReady || !brainUsable(launcher.lBrain)) return;
-  const taskType: TaskType = app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : app.isGhConn ? 'repo' : 'workspace';
+  const taskType: TaskType = site ? 'site' : app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : app.isGhConn ? 'repo' : 'workspace';
   launcher.prefs.brain = launcher.lBrain; launcher.prefs.model = launcher.lModel; launcher.prefs.perm = launcher.lPerm; launcher.prefs.effort = launcher.lEffort; savePrefs(launcher.prefs);
   const model = launcher.lModel;
   // CF 建站：把所选视觉风格的 tokens 指令拼进首条消息（可见、可追溯）。
@@ -198,8 +200,8 @@ export async function startChat() {
   const id = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   // 远程连接没有项目：slug 留空，侧栏分组名用 user@host（那就是这台机器的身份）。
-  const mSlug = workspace || app.isSshConn ? '' : launcher.lSite;
-  const mName = app.isSshConn ? `${app.activeConn.ssh_user}@${app.activeConn.ssh_host}` : workspace ? (launcher.workspaceDir ? workspaceFolderName(launcher.workspaceDir) : '自由对话') : launcher.lSite;
+  const mSlug = site ? site.id : workspace || app.isSshConn ? '' : launcher.lSite;
+  const mName = site ? site.name : app.isSshConn ? `${app.activeConn.ssh_user}@${app.activeConn.ssh_host}` : workspace ? (launcher.workspaceDir ? workspaceFolderName(launcher.workspaceDir) : '自由对话') : launcher.lSite;
   const conversationConnId = app.activeConnId;
   const optimistic: Conversation = {
     id, conn_id: conversationConnId, conn_name: app.activeConn.name, site_slug: mSlug, site_name: mName,

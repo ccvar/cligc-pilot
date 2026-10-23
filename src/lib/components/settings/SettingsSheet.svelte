@@ -17,6 +17,9 @@
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
   import { openGhConnect } from '$lib/state/github.svelte.js';
+  import { openDataConnect, openDataUpdate, isDataConn } from '$lib/state/datasrc.svelte.js';
+  import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import BingMark from '$lib/components/icons/BingMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
@@ -55,6 +58,12 @@
               <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openSshConnect(); }}>
                 <SshMark size={15} /><span>新建远程连接</span>
               </button>
+              <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openDataConnect('google'); }}>
+                <GoogleMark size={15} /><span>连接 Google（GA4 + Search Console）</span>
+              </button>
+              <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openDataConnect('bing'); }}>
+                <BingMark size={15} /><span>连接 Bing Webmaster</span>
+              </button>
             </div>
           {/if}
         </div>
@@ -63,8 +72,8 @@
       <div class="conn-list">
         {#each app.conns as c (c.id)}
           <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
-            onclick={() => selectConn(c.id)}
-            onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
+            onclick={() => (isDataConn(c) ? openDataUpdate(c) : selectConn(c.id))}
+            onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && (isDataConn(c) ? openDataUpdate(c) : selectConn(c.id))}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={22} />
             <span class="conn-main"><b>{connectionDisplayName(c)}</b>
@@ -74,6 +83,10 @@
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
               {:else if c.kind === 'github'}
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.login}</span> · GitHub</small>
+              {:else if c.kind === 'google'}
+                <small>{c.remark?.trim() || c.login} · Google {c.key_kind === 'oauth' ? 'OAuth' : '服务账号'}</small>
+              {:else if c.kind === 'bing'}
+                <small>{c.remark?.trim() || c.key_prefix} · Bing Webmaster</small>
               {/if}</span>
             <button
               class="icon-btn sm"

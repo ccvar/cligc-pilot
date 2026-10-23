@@ -6,6 +6,7 @@ import { brainUsable } from './models';
 import { selectConn, bootConnId } from './connections.svelte.js';
 import { detectSiteUrl } from './messages.svelte.js';
 import type { LiveTurn } from './messages.svelte.js';
+import { sites, siteConnection, isSiteConnId, siteIdOf } from './sites.svelte.js';
 
 type ConfirmKind = 'warning' | 'danger' | 'info';
 
@@ -20,7 +21,14 @@ class AppState {
   flashKind = $state<'ok' | 'err'>('ok');
   confirmState = $state<null | { message: string; title: string; kind: ConfirmKind; confirmText: string; cancelText: string }>(null);
   confirmResolve: ((value: boolean) => void) | null = null;
-  activeConn = $derived(this.activeConnId === WORKSPACE_CONN_ID ? LOCAL_CONN : this.conns.find((c) => c.id === this.activeConnId) ?? null);
+  activeConn = $derived.by(() => {
+    if (this.activeConnId === WORKSPACE_CONN_ID) return LOCAL_CONN;
+    if (isSiteConnId(this.activeConnId)) {
+      const s = sites.list.find((x) => x.id === siteIdOf(this.activeConnId));
+      return s ? siteConnection(s) : null;
+    }
+    return this.conns.find((c) => c.id === this.activeConnId) ?? null;
+  });
   /** 全部厂商（顺序即下拉展示顺序）。新增厂商在此登记，brainUsable/brainLabel/模型档随之生效。 */
   ALL_BRAINS = $derived<Brain[]>(['claude', 'codex', 'grok', ...this.apiProfiles.map((p): Brain => `api:${p.id}`)]);
 
@@ -28,7 +36,7 @@ class AppState {
   convos = $state<Conversation[]>([]);
   activeConvId = $state('');
   activeConv = $state<Conversation | null>(null);
-  view = $state<'launcher' | 'thread' | 'sites' | 'schedule' | 'tasks' | 'managed' | 'templates' | 'prompts' | 'remote' | 'skills' | 'skillchat'>('launcher');
+  view = $state<'launcher' | 'thread' | 'site' | 'templates' | 'prompts' | 'remote'>('launcher');
   // Cloudflare 建站：连接是 CF 时，lSite 复用为「项目名」，站点选择器换成项目输入。
   isCfConn = $derived(this.activeConn?.kind === 'cloudflare');
   cfProjects = $state<string[]>([]);
@@ -44,6 +52,7 @@ class AppState {
   activeSiteUrl = $derived.by(() => {
     const c = this.activeConv;
     if (!c) return '';
+    if (c.task_type === 'site') { const s = sites.list.find((x) => x.id === c.site_slug); return s?.domain ? `https://${s.domain}` : ''; }
     if (this.activeConvIsGh) return c.site_slug ? `https://github.com/${c.site_slug}` : '';
     if (!this.activeConvIsCf) return '';
     return detectSiteUrl([c]);
@@ -54,6 +63,9 @@ class AppState {
   isGhConn = $derived(this.activeConn?.kind === 'github');
   activeConvIsGh = $derived(this.activeConvConn?.kind === 'github');
   isWorkspaceChat = $derived(this.activeConn?.kind === 'workspace');
+  /** 当前选中的是站点（合成连接 site:<id>）。 */
+  isSiteConn = $derived(this.activeConn?.kind === 'site');
+  activeConvIsSite = $derived(this.activeConv?.task_type === 'site');
 }
 
 export const app = new AppState();
@@ -88,12 +100,12 @@ export function say(m: string, k: 'ok' | 'err' = 'ok', ms = 0) { app.flash = m; 
 export async function refreshConns() {
   try {
     app.conns = await invoke<Connection[]>('list_connections');
-    if (app.activeConnId && app.activeConnId !== WORKSPACE_CONN_ID && !app.conns.some((c) => c.id === app.activeConnId)) {
+    if (app.activeConnId && app.activeConnId !== WORKSPACE_CONN_ID && !isSiteConnId(app.activeConnId) && !app.conns.some((c) => c.id === app.activeConnId)) {
       // 当前连接被删掉了：退回本地对话，不留一个指向空连接的界面。
       void selectConn(WORKSPACE_CONN_ID);
     } else if (!app.activeConnId) {
       const want = bootConnId();
-      void selectConn(want && app.conns.some((c) => c.id === want) ? want : WORKSPACE_CONN_ID);
+      void selectConn(want && (app.conns.some((c) => c.id === want) || isSiteConnId(want)) ? want : WORKSPACE_CONN_ID);
     }
   } catch (e) {
     say(String(e), 'err');

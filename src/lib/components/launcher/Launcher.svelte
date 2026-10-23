@@ -3,6 +3,8 @@
   import ModelFx from '$lib/ModelFx.svelte';
   import UsageRing from '$lib/UsageRing.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
+  import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import { sites, openSiteBoard } from '$lib/state/sites.svelte.js';
   import { gh, loadGhRepos } from '$lib/state/github.svelte.js';
   import CliGuide from '$lib/components/launcher/CliGuide.svelte';
   import WranglerNote from '$lib/components/launcher/WranglerNote.svelte';
@@ -17,7 +19,10 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="center launch-center" data-tauri-drag-region onmousedown={startDrag}>
   <div class="launcher">
-    {#if app.isCfConn}
+    {#if app.isSiteConn}
+      <h1>想让它在「{sites.active?.name}」里做点什么？</h1>
+      <p class="sub">{sites.active?.source === 'github' ? '它在仓库检出里改代码、走分支和 PR；' : '改动直接落在站点的本地文件夹；'}能查这个站点的 GA4 / Search Console / Bing 数据。上线由 Pilot 在站点页执行，模型拿不到 Cloudflare 凭据。</p>
+    {:else if app.isCfConn}
       <h1>让 AI 帮你建个站</h1>
       <p class="sub">给项目起个名，描述你想要的网站——边聊边建，随时本地预览，满意了再部署到 Cloudflare。</p>
     {:else if app.isGhConn}
@@ -33,12 +38,14 @@
 
       <div class="composer big">
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
-            placeholder={app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
+            placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
             oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
             onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
-            {#if app.isSshConn}
+            {#if app.isSiteConn}
+              <button type="button" class="ssh-target site-target" onclick={() => openSiteBoard()} data-tip="打开站点看板"><SiteMark size={13} />{sites.active?.name}</button>
+            {:else if app.isSshConn}
               <!-- 远程连接没有站点/项目可选：对象就是那台机器 -->
               <span class="ssh-target"><SshMark size={13} />{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port}</span>
             {:else if app.isGhConn}
@@ -69,7 +76,7 @@
     {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
     {#if app.isWorkspaceChat && app.brains && !app.anyBrainUsable}<CliGuide />{/if}
     {#if app.isCfConn && app.brains?.wrangler && !app.brains.wrangler.found}<WranglerNote />{/if}
-    {#if app.isGhConn && launcher.lBrain === 'codex'}<p class="hint warn-text">{CODEX_GITHUB_NOTE}</p>{/if}
+    {#if (app.isGhConn || (app.isSiteConn && sites.active?.source === 'github')) && launcher.lBrain === 'codex'}<p class="hint warn-text">{CODEX_GITHUB_NOTE}</p>{/if}
     {#if app.isGhConn && gh.reposErr}<p class="hint warn-text">读取仓库失败：{gh.reposErr} <button class="link-btn" type="button" onclick={() => app.activeConnId && loadGhRepos(app.activeConnId, true)}>重试</button></p>{/if}
     {#if app.isGhConn && launcher.lSite && gh.repos.find((r) => r.full_name === launcher.lSite)?.can_push === false}<p class="hint">这枚 Token 对该仓库只有读权限：可以读代码、在本地改，但推不了分支、提不了 PR。</p>{/if}
   </div>
@@ -81,6 +88,8 @@
   /* 启动页：远程连接的目标机器（占站点选择器的位子——那台机器就是本次对话的对象） */
   .ssh-target { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--rail); color: var(--dim); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .ssh-target :global(svg) { color: var(--faint); flex: none; }
+  .site-target { cursor: pointer; font-family: inherit; }
+  .site-target:hover { color: var(--text); }
   .ssh-target :global(svg.distro) { transform: translateY(1px); }
   .workspace-picker { min-width: 0; display: inline-flex; align-items: center; gap: 2px; }
   .workspace-folder { min-width: 0; max-width: 210px; height: 27px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--rail); color: var(--dim); font: inherit; font-size: 11.5px; cursor: pointer; }
