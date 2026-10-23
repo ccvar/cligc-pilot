@@ -363,6 +363,11 @@ export function initSites() {
       if (log.length > 400) log.splice(0, log.length - 400);
       sites.jobs = { ...sites.jobs, [site_id]: { ...j, log } };
     });
-    return () => { void un1.then((f) => f()); void un2.then((f) => f()); };
+    // 每天早上的自动同步：拉完一个站点，开着的看板就刷新
+    const un3 = listen<{ site_id: string; errors: string[] }>('site-data', (ev) => {
+      const id = ev.payload.site_id;
+      if (sites.dash[id]) void loadDashboard(id);
+    });
+    return () => { void un1.then((f) => f()); void un2.then((f) => f()); void un3.then((f) => f()); };
   });
 }

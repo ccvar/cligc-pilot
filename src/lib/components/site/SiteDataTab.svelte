@@ -39,7 +39,7 @@
     </div>
   {:else}
     <div class="bar">
-      <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'}</span>
+      <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'} · 每天早上 7 点自动同步</span>
       <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
     {#if d?.meta.gsc.error}<div class="err-note src"><GoogleMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}

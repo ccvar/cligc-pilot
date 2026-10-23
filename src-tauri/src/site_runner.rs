@@ -2011,6 +2011,35 @@ pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
 // 调度：客户端在运行（托盘常驻）时每 10 分钟看一次；启动后先补跑错过的任务。
 // ---------------------------------------------------------------------------
 
+/// 每天几点自动同步站点数据（本地时间）。
+pub const DATA_SYNC_HOUR: u8 = 7;
+
+fn data_sync_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("data_sync.json")
+}
+
+fn last_data_sync(data_dir: &Path) -> String {
+    std::fs::read(data_sync_path(data_dir)).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).and_then(|v| v["date"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
+fn set_last_data_sync(data_dir: &Path, date: &str) {
+    let _ = std::fs::write(data_sync_path(data_dir), serde_json::json!({ "date": date, "at": now() }).to_string());
+}
+
+/// 一个一个站点拉取数据（不占站点作业，不和构建、运营任务抢）；每个站点拉完发 site-data 事件，开着的看板会刷新。
+async fn daily_data_sync(ctx: Ctx) {
+    let st = ctx.state();
+    for site in st.sites.list() {
+        let d = &site.data;
+        if d.gsc_site.is_empty() && d.ga4_property.is_empty() && d.bing_site.is_empty() {
+            continue;
+        }
+        let meta = crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&site.id), true).await;
+        let errors: Vec<String> = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)].iter().filter(|(_, e)| !e.is_empty()).map(|(l, e)| format!("{l}：{e}")).collect();
+        let _ = ctx.app.emit("site-data", serde_json::json!({ "site_id": site.id, "errors": errors }));
+    }
+}
+
 pub fn start_scheduler(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         // 启动后稍等，别和窗口初始化抢资源
@@ -2027,6 +2056,11 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 let mut c = mcfg.clone();
                 c.last_digest = today();
                 let _ = crate::managed::save(&st.data_dir, &c);
+            }
+            // 每天早上 7 点同步一次所有站点的 GA4 / Search Console / Bing（错过了就在之后第一次检查时补上）
+            if hour >= DATA_SYNC_HOUR && last_data_sync(&st.data_dir) != today() {
+                set_last_data_sync(&st.data_dir, &today());
+                daily_data_sync(ctx.clone()).await;
             }
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
