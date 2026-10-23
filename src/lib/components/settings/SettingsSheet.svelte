@@ -12,6 +12,7 @@
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import UpdateIcon from '$lib/components/icons/UpdateIcon.svelte';
+  import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import { settings, refreshBrainsManual, authorize, rebind, upgradeCli, saveClaudeToken, closeClaudeToken, installClaude, installCodex, installGrok, copyCmd, removeCustom, addCustom } from '$lib/state/settings.svelte.js';
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
@@ -60,11 +61,11 @@
             onclick={() => selectConn(c.id)}
             onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
             oncontextmenu={(e) => openConnCtx(e, c)}>
-            {#if c.kind === 'ssh'}<SshMark size={22} />{:else}<CfMark size={22} />{/if}
+            <ConnectionMark kind={c.kind} size={22} />
             <span class="conn-main"><b>{connectionDisplayName(c)}</b>
               {#if c.kind === 'ssh'}
                 <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
-              {:else}
+              {:else if c.kind === 'cloudflare'}
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
               {/if}</span>
             <button

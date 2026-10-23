@@ -5,7 +5,7 @@
   import PromptIcon from '$lib/components/icons/PromptIcon.svelte';
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
-  import CfMark from '$lib/components/icons/CfMark.svelte';
+  import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import { search, pickEntry } from '$lib/state/search.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
   import { brainLabel, modelIcon } from '$lib/state/models';
@@ -54,8 +54,8 @@
                   {#if it.t.builtin}<span class="si-tag">内置</span>{/if}
                 {:else}
                   <!-- 与连接切换器同一个标 -->
-                  {#if it.c.kind === 'ssh'}<SshMark size={15} />{:else}<CfMark size={15} />{/if}
-                  <span class="si-main"><b>{it.c.name}</b><small>{#if it.c.kind === 'ssh'}{it.c.ssh_user}@{it.c.ssh_host}{it.c.ssh_port && it.c.ssh_port !== 22 ? ':' + it.c.ssh_port : ''}{it.c.ssh_os ? ` · ${it.c.ssh_os}` : ''}{:else}Cloudflare · {it.c.remark?.trim() || it.c.key_prefix}{/if}</small></span>
+                  <ConnectionMark kind={it.c.kind} size={15} />
+                  <span class="si-main"><b>{it.c.name}</b><small>{#if it.c.kind === 'ssh'}{it.c.ssh_user}@{it.c.ssh_host}{it.c.ssh_port && it.c.ssh_port !== 22 ? ':' + it.c.ssh_port : ''}{it.c.ssh_os ? ` · ${it.c.ssh_os}` : ''}{:else if it.c.kind === 'cloudflare'}Cloudflare · {it.c.remark?.trim() || it.c.key_prefix}{/if}</small></span>
                   {#if app.activeConnId === it.c.id}<span class="si-tag">当前</span>{/if}
                 {/if}
               </button>

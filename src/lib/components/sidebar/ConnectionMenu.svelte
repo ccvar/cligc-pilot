@@ -14,7 +14,7 @@
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; selectConn(c.id); openRemote(); }}>远程终端</button>
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshEdit(c); }}>编辑连接…</button>
-    {:else}
+    {:else if c.kind === 'cloudflare'}
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openCfUpdate(c)}>更新 Token…</button>

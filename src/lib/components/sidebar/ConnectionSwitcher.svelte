@@ -5,6 +5,7 @@
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import GearIcon from '$lib/components/icons/GearIcon.svelte';
+  import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs } from '$lib/state/connections.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { WORKSPACE_CONN_ID } from '$lib/state/env';
@@ -26,11 +27,11 @@
         {#each app.conns as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
-            {#if c.kind === 'ssh'}<SshMark size={18} />{:else}<CfMark size={18} />{/if}
+            <ConnectionMark kind={c.kind} size={18} />
             <span class="cs-main"><b>{connectionDisplayName(c)}</b>
               {#if c.kind === 'ssh'}
                 <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
-              {:else}
+              {:else if c.kind === 'cloudflare'}
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
               {/if}</span>
             {#if app.activeConnId === c.id}<span class="cs-check">✓</span>{/if}
