@@ -24,10 +24,6 @@ class FleetState {
   rows = $state<SiteRow[]>([]);
   loaded = $state(false);
   pending = $state<PendingItem[]>([]);
-  // 左栏
-  railQuery = $state('');
-  railFilter = $state<SiteFilter>('all');
-  railTag = $state('');
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -74,10 +70,6 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
     return c || a.name.localeCompare(b.name, 'zh');
   });
   return desc ? out.reverse() : out;
-}
-/** 左栏顺序：置顶在前，其余按名称（稳定，不随活动跳来跳去）。 */
-export function railOrder(rows: SiteRow[]): SiteRow[] {
-  return [...rows].sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'));
 }
 
 let loading = false;

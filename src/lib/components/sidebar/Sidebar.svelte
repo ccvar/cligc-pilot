@@ -21,7 +21,7 @@
   import { permits } from '$lib/state/permits.svelte.js';
   import type { Conversation } from '$lib/types';
   import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
-  import { openSiteImport } from '$lib/state/sites.svelte.js';
+  import { fleet } from '$lib/state/fleet.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
 </script>
@@ -57,10 +57,7 @@
     <button class="railnav {app.view === 'sites' ? 'on' : ''}" onclick={() => selectConn(SITES_CONN_ID)}>
       <SiteMark size={14} />
       全部站点
-    </button>
-    <button class="railnav" onclick={() => openSiteImport()}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
-      导入站点
+      {#if fleet.pendingCount}<span class="nav-cnt" title="{fleet.pendingCount} 条改动等你确认">{fleet.pendingCount}</span>{/if}
     </button>
     {/if}
     {#if app.isSiteConn}
@@ -137,6 +134,7 @@
   .railnav.on { background: #e9e7e0; color: var(--text); font-weight: 550; }
   .railnav:disabled { opacity: .45; cursor: default; }
   .railnav :global(svg) { flex: none; }
+  .nav-cnt { margin-left: auto; min-width: 17px; height: 17px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: #faf1d8; color: #8a5a08; font-size: 10.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .convos { flex: 1; overflow-y: auto; padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 1px; border-top: 1px solid transparent; transition: border-color .15s; }
   .convos > button.site-grp:first-of-type { padding-top: 3px; margin-top: 0; }
   .convos.scrolled { border-top-color: rgba(30, 25, 15, 0.07); }

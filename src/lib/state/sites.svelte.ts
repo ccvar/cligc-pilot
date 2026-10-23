@@ -52,8 +52,14 @@ function blankImport(): ImportForm {
   };
 }
 
+const RECENT_KEY = 'cligc.pilot.recentSites';
+const RECENT_MAX = 8;
+function loadRecent(): string[] { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; } }
+
 class SitesState {
   list = $state<Site[]>([]);
+  /** 最近打开过的站点（左栏「最近」用），新的在前。 */
+  recent = $state<string[]>(loadRecent());
   loaded = $state(false);
   tab = $state<SiteTab>('overview');
   status = $state<Record<string, SiteStatus>>({});
@@ -85,6 +91,13 @@ export function openSite(id: string, tab: SiteTab = 'overview') {
   sites.tab = tab;
   if (app.activeConnId === SITE_PREFIX + id) { openSiteBoard(tab); return; }
   void selectConn(SITE_PREFIX + id);
+}
+
+/** 记一次「打开过这个站点」：左栏只放置顶和最近的站点，全部站点在总览里找。 */
+export function touchRecent(id: string) {
+  const next = [id, ...sites.recent.filter((x) => x !== id)].slice(0, RECENT_MAX);
+  sites.recent = next;
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* */ }
 }
 
 export function openSiteBoard(tab?: SiteTab) {

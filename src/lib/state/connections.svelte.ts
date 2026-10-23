@@ -8,7 +8,7 @@ import { switchConversationWorkspace } from './panes.svelte.js';
 import { launcher } from './launcher.svelte.js';
 import { disposeTerm } from './workbench.svelte.js';
 import { loadGhRepos } from './github.svelte.js';
-import { isSiteConnId, siteIdOf, loadSiteStatus, sites } from './sites.svelte.js';
+import { isSiteConnId, siteIdOf, loadSiteStatus, sites, touchRecent } from './sites.svelte.js';
 
 class ConnectionsState {
   switcherOpen = $state(false);
@@ -126,6 +126,7 @@ export async function selectConn(id: string) {
       if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
       if (sites.tab === 'settings') sites.draft = null;
     }
+    touchRecent(siteIdOf(id));
     void loadSiteStatus(siteIdOf(id));
     return;
   }

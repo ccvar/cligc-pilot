@@ -1,4 +1,6 @@
-import type { Conversation, Connection } from '$lib/types';
+import type { Conversation, Connection, SiteRow } from '$lib/types';
+import { fleet } from './fleet.svelte.js';
+import { openSite } from './sites.svelte.js';
 import { app } from './app.svelte.js';
 import { connHay, selectConn } from './connections.svelte.js';
 import { openConv } from './conversations';
@@ -9,7 +11,8 @@ type SearchEntry =
   | { kind: 'view'; view: 'templates' | 'prompts'; label: string }
   | { kind: 'conv'; c: Conversation }
   | { kind: 'template'; t: Template }
-  | { kind: 'conn'; c: Connection };
+  | { kind: 'conn'; c: Connection }
+  | { kind: 'site'; s: SiteRow };
 
 class SearchState {
   // 全局搜索（分区）：视图导航 / 连接 / 模板 / 会话。
@@ -43,6 +46,12 @@ class SearchState {
       // 连接：名称 / IP / user@host / 端口 / 系统。
       // ★ 这一段**不按 activeConnId 过滤** —— 别的分区搜的是「当前连接内部的东西」，
       //   而连接本身是**跨连接**的：机器一多，全局搜索就是最快的切换方式（记不住哪台是哪个 IP）。
+      // 站点：名称 / 域名 / 仓库 / 标签。和连接一样跨工作区——站点一多，这就是最快的跳转方式。
+      const siteHits = fleet.rows
+        .filter((r) => `${r.name} ${r.domain} ${r.repo} ${r.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(q))
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'))
+        .slice(0, 8);
+      if (siteHits.length) out.push({ title: '站点', entries: siteHits.map((s) => ({ kind: 'site' as const, s })) });
       const connHits = app.conns.filter((c) => connHay(c).includes(q)).slice(0, 8);
       if (connHits.length) out.push({ title: '连接', entries: connHits.map((c) => ({ kind: 'conn' as const, c })) });
       // 模板：名称 / 描述 / slug / 分类（模板库视图里因此不再摆搜索框）
@@ -80,6 +89,8 @@ export function pickEntry(it: SearchEntry) {
     library.tmplCat = '全部';
     openTemplates();
     void focusTemplate(it.t.slug);
+  } else if (it.kind === 'site') {
+    openSite(it.s.id);
   } else if (it.kind === 'conn') {
     // 走和切换器同一条路：连接切换牵着视图守卫、SSH 探系统、终端重建，别在这儿另起一套
     void selectConn(it.c.id);

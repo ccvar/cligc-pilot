@@ -22,7 +22,7 @@
           <circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.4" />
           <path d="M11.7 11.7L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
         </svg>
-        <input bind:this={search.searchInput} bind:value={search.searchQ} placeholder="搜索会话、连接（名称/IP）、模板…" spellcheck="false" autocapitalize="off" autocorrect="off" />
+        <input bind:this={search.searchInput} bind:value={search.searchQ} placeholder="搜索站点、会话、连接（名称/IP）、模板…" spellcheck="false" autocapitalize="off" autocorrect="off" />
         <kbd>esc</kbd>
       </div>
       <div class="search-list">
@@ -52,6 +52,10 @@
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="9" y="2.5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="2.5" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.3" /><rect x="9" y="9" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.3" /></svg>
                   <span class="si-main"><b>{it.t.name}</b><small>{catOf(it.t)}{it.t.desc ? ` · ${it.t.desc}` : ''}</small></span>
                   {#if it.t.builtin}<span class="si-tag">内置</span>{/if}
+                {:else if it.kind === 'site'}
+                  <ConnectionMark kind="site" size={15} />
+                  <span class="si-main"><b>{it.s.name}</b><small>{it.s.domain && it.s.domain !== it.s.name ? it.s.domain : it.s.source === 'github' ? it.s.repo : '本地文件夹'}{it.s.tags.length ? ` · ${it.s.tags.map((t) => `#${t}`).join(' ')}` : ''}{it.s.proposed ? ` · ${it.s.proposed} 条待确认` : ''}</small></span>
+                  {#if app.activeConnId === `site:${it.s.id}`}<span class="si-tag">当前</span>{/if}
                 {:else}
                   <!-- 与连接切换器同一个标 -->
                   <ConnectionMark kind={it.c.kind} size={15} />
