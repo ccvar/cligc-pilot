@@ -399,7 +399,7 @@ export interface ManagedConfig {
   model: string;
   fallback_brain: string;
   fallback_model: string;
-  /** auto 自动发布 | review 运营人员点头后再发布 */
+  /** auto 自动发布 | review 人审人发（运营人员审核后再发布） */
   new_content: 'auto' | 'review';
   daily_changes: number;
   tokens_per_week: number;

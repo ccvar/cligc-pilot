@@ -80,7 +80,7 @@
         <p class="hint">托管后，AI 每周读数据和代码给每个站点定计划，然后在独立分支里改好、跑构建和检查、自动上线；上线 1 小时后检查页面，效果复盘变差就自动回滚。你只需要处理「需要你」里的例外。</p>
         <ul>
           <li>依赖、构建 / 部署配置、Worker 代码、推荐与邀请相关的内容，永远不会自动改。</li>
-          <li>新页面可以自动发布，也可以设成运营人员点头后再发布。</li>
+          <li>新页面可以自动发布，也可以设成人审人发。</li>
           <li>主模型额度不够时自动换备用模型；每站每天、每周都有上限，随时可以一键暂停。</li>
         </ul>
         <ul>
@@ -202,7 +202,7 @@
             {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
             <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}</span>
-            <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '点头后发布'}</span>
+            <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}</span>
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
             <span><Icon name="gauge" size={12} />每站每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限 token'}</span>
           </div>

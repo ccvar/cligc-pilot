@@ -22,7 +22,7 @@ pub struct ManagedConfig {
     pub fallback_brain: String,
     #[serde(default)]
     pub fallback_model: String,
-    /// 新写的整篇内容（新页面）：auto 自动发布 | review 运营人员点头后再发布。
+    /// 新写的整篇内容（新页面）：auto 自动发布 | review 人审人发（运营人员审核后再发布）。
     #[serde(default = "default_review")]
     pub new_content: String,
     /// 每个站点每天最多自动上线几条。

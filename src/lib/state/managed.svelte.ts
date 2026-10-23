@@ -90,7 +90,7 @@ function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
   return {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false,
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
-    new_content: c?.new_content ?? 'review', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
+    new_content: 'auto', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
     goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', created_at: 0,
   };
 }

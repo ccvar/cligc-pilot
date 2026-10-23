@@ -13,6 +13,14 @@
   const groups = $derived(managed.overview?.groups ?? []);
   const modelOpts = $derived(launcher.comboOpts.filter((x) => !x.value.startsWith('codex::')).map((x) => ({ value: x.value, label: x.label, sub: x.sub, icon: x.icon, disabled: x.disabled })));
   const primary = $derived(g ? `${g.brain}::${g.model}` : '');
+  // 主模型没选（或选的已不可用）：默认第一个可用的
+  $effect(() => {
+    if (!g || !modelOpts.length) return;
+    if (!modelOpts.some((o) => o.value === primary && !o.disabled)) {
+      const first = modelOpts.find((o) => !o.disabled);
+      if (first) pick(first.value, 'primary');
+    }
+  });
   const fallback = $derived(g && g.fallback_brain ? `${g.fallback_brain}::${g.fallback_model}` : '');
   function pick(v: string, which: 'primary' | 'fallback') {
     if (!g) return;
@@ -163,12 +171,14 @@
       </div>
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
-        <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>运营人员点头后发布</button></div>
-        <small>标题、描述、内链和已有页面的内容改动，检查通过就自动上线。依赖、配置、代码、推荐 / 邀请相关内容、超过 400 行的改动永远不自动上线。</small>
+        <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
+        <small>{g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}标题、描述、内链和已有页面的改动，检查通过就自动上线；依赖、配置、代码、推荐 / 邀请相关内容、超过 400 行的改动永远不自动上线。</small>
       </div>
       <div class="grid2">
-        <div class="field"><label for="ge-daily">每个站点每天最多自动上线</label><input id="ge-daily" class="tin" type="number" min="0" max="50" bind:value={g.daily_changes} /></div>
-        <div class="field"><label for="ge-tok">每个站点每周模型用量（token，0＝不限）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} /></div>
+        <div class="field"><label for="ge-daily">每站每天自动上线上限（条）</label><input id="ge-daily" class="tin" type="number" min="0" max="50" bind:value={g.daily_changes} />
+          <small>超出的改动转进「需要你」等你决定；0＝全部人审人发。</small></div>
+        <div class="field"><label for="ge-tok">每站每周模型用量上限（token）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} />
+          <small>用完就暂停这个站点到下周并通知你。0＝不限。</small></div>
       </div>
 
       <div class="sec"><Icon name="cpu" size={13} />模型</div>
@@ -229,6 +239,7 @@
   .chips .pill { gap: 5px; }
   .ch-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .chosen .link-btn { font-size: 12px; }
+  .ch-top .link-btn { flex: none; white-space: nowrap; }
   .ch-sub { font-size: 12px; color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tin.plain { font-family: inherit; font-size: 13px; line-height: 1.6; }
   .tin.guide { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; min-height: 200px; }
