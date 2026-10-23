@@ -4,6 +4,7 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
+  import { say } from '$lib/state/app.svelte.js';
   import { mdRender } from '$lib/state/messages.svelte.js';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
@@ -39,6 +40,11 @@
   const siteName = (id: string) => sitesById.get(id)?.name ?? id;
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
   const groups = $derived(o?.groups ?? []);
+  async function runNow(id: string) {
+    await runTask(id, 'plan');
+    say(`已开始为 ${siteName(id)} 制定本周计划，完成后在「计划」里查看`);
+    void loadManaged();
+  }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 日报设置（全局）：只比较这两项
   const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
@@ -226,6 +232,11 @@
                   <button class="gs-name" onclick={() => openSite(id)}><SiteIcon {id} size={15} /><span>{siteName(id)}</span></button>
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
                   {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting} · <span class="warn-text">需要你 {s.waiting}</span>{/if}</span>{/if}
+                  {#if s?.job}
+                    <span class="pill run gs-job"><span class="spin"></span>{s.job}中</span>
+                  {:else}
+                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在就让 AI 读数据和站点、制定本周计划；结果在「计划」里，各项进入站点的「待处理」"><Icon name="play" size={10} />立即执行</button>
+                  {/if}
                   <span class="grow"></span>
                   <span class="gs-state" class:on={on && !g.paused}>{g.paused ? '方案已暂停' : on ? '托管中' : '已停止'}</span>
                   <button class="switch" class:on class:dim={g.paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
@@ -276,6 +287,9 @@
   .pos-t .grow { flex: 1; }
   .pos-t .link-btn { font-size: 12px; font-weight: 400; }
   .pos p { margin: 4px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
+  .gs-run { opacity: .55; transition: opacity .12s; }
+  .gs:hover .gs-run, .gs-run:focus-visible { opacity: 1; }
+  .gs-job { flex: none; }
   .gs-meta { font-size: 11.5px; white-space: nowrap; }
   .gs .grow { flex: 1; }
   .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
