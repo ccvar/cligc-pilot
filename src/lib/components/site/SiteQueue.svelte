@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import type { Site, OpsItem } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -25,6 +26,23 @@
   const inGroup = (i: OpsItem, k: keyof typeof groups) => (groups[k] as readonly string[]).includes(i.status) || (k === 'todo' && i.status === 'deployed' && !!i.attention);
   const shown = $derived(all.filter((i) => inGroup(i, filter)));
   const counts = $derived(Object.fromEntries((Object.keys(groups) as (keyof typeof groups)[]).map((k) => [k, all.filter((i) => inGroup(i, k)).length])) as Record<string, number>);
+  // 进来时选哪一栏：别处指定了就用它；否则「需要你处理」是空的、有未处理的机会，就直接看机会
+  let picked0 = '';
+  let explicit = false;
+  // 从别处跳过来指定了栏目（页面已经开着也生效），之后不再自动改
+  $effect(() => {
+    const want = sites.queueFilter;
+    if (want) untrack(() => { filter = want; explicit = true; sites.queueFilter = ''; });
+  });
+  $effect(() => {
+    const id = site.id;
+    if (picked0 === id || !ops.queue[id]) return;
+    picked0 = id;
+    untrack(() => {
+      if (explicit) { explicit = false; return; }
+      filter = !counts.todo && counts.open ? 'open' : 'todo';
+    });
+  });
   let openChecks = $state<Set<string>>(new Set());
   function toggleChecks(id: string) { const n = new Set(openChecks); if (n.has(id)) n.delete(id); else n.add(id); openChecks = n; }
   const job = $derived(sites.jobs[site.id]);

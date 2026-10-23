@@ -69,6 +69,8 @@ class SitesState {
   recent = $state<string[]>(loadRecent());
   loaded = $state(false);
   tab = $state<SiteTab>('overview');
+  /** 打开「待处理」时要先看哪一栏（从别处跳过来时指定，用一次就清掉）；空＝自动挑有内容的那栏 */
+  queueFilter = $state<'' | 'todo' | 'open' | 'live' | 'closed'>('');
   status = $state<Record<string, SiteStatus>>({});
   jobs = $state<Record<string, SiteJob>>({});
   deploys = $state<Record<string, DeployRecord[]>>({});
@@ -105,9 +107,10 @@ export async function loadSiteIcons(force = false) {
   try { sites.icons = (await invoke<Record<string, string>>('site_icons')) ?? {}; } catch { /* 图标拿不到就用默认标识 */ }
 }
 
-export function openSite(id: string, tab: SiteTab = 'overview') {
+export function openSite(id: string, tab: SiteTab = 'overview', queueFilter: '' | 'todo' | 'open' | 'live' | 'closed' = '') {
   connections.switcherOpen = false;
   sites.tab = tab;
+  sites.queueFilter = queueFilter;
   if (app.activeConnId === SITE_PREFIX + id) { openSiteBoard(tab); return; }
   void selectConn(SITE_PREFIX + id);
 }

@@ -122,7 +122,7 @@
     </div>
   </header>
   <nav class="tabs">
-    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}><Icon name={t.i} size={13} />{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{/if}</button>{/each}
+    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}><Icon name={t.i} size={13} />{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{:else if t.k === 'needs' && stuck.length}<span class="cnt warn" data-tip="{stuck.reduce((n, x) => n + x.queued, 0)} 条任务排着没动（{stuck[0].why}）">{stuck.reduce((n, x) => n + x.queued, 0)}</span>{/if}</button>{/each}
   </nav>
 
   <div class="page-body">
@@ -174,7 +174,7 @@
         <p class="hint">只放要你动手的：判定不能自动上线的改动（新页面待审、改到推荐 / 邀请内容、超出每日上限）、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。</p>
         {#if !needs.length}<p class="hint">没有需要你处理的事。</p>{/if}
         {#each stuck as x (x.id)}
-          <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><button class="link-btn" onclick={() => openSite(x.id, 'queue')}>去看看</button></div>
+          <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><button class="link-btn" onclick={() => openSite(x.id, 'queue', 'open')}>去看看</button></div>
         {/each}
         <table class="tbl">
           <tbody>
