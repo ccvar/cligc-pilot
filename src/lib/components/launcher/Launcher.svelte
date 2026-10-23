@@ -22,7 +22,7 @@
       <p class="sub">给项目起个名，描述你想要的网站——边聊边建，随时本地预览，满意了再部署到 Cloudflare。</p>
     {:else if app.isGhConn}
       <h1>想让它在仓库里做点什么？</h1>
-      <p class="sub">选一个仓库，说清要改什么——它会克隆仓库、新建分支改代码并跑测试，推送和提 PR 前都会先问你。</p>
+      <p class="sub">选一个仓库，说清要改什么——它会克隆仓库、新建分支改代码并跑测试；在「询问」「自动」档下，推送和提 PR 前都会先问你。</p>
     {:else if app.isSshConn}
       <h1>想让它在这台机器上做点什么？</h1>
       <p class="sub">它通过 Pilot 在 {app.activeConn?.ssh_user}@{app.activeConn?.ssh_host} 上执行命令；每条命令按你选的权限档位确认，凭据始终不交给模型。</p>
