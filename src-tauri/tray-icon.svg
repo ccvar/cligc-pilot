@@ -1,6 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 19 64 64">
-  <!-- macOS 菜单栏模板图标：只有错落双柱，纯黑 + 透明，系统按菜单栏深浅自动染色。
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 64 64">
+  <!-- macOS 菜单栏模板图标：只有斜置双柱，纯黑 + 透明，系统按菜单栏深浅自动染色。
        托盘图标会被缩放到 18pt 高，因此字形几乎撑满画布。 -->
-  <rect x="33" y="22" width="14" height="46" rx="7" fill="#000"/>
-  <rect x="53" y="34" width="14" height="46" rx="7" fill="#000"/>
+  <g transform="translate(3.5 0) rotate(30 50 50)">
+    <rect x="35" y="24" width="13" height="52" rx="6.5" fill="#000"/>
+    <rect x="53" y="40" width="13" height="36" rx="6.5" fill="#000"/>
+  </g>
 </svg>
