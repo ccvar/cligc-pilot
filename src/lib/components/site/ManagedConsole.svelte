@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { mdRender } from '$lib/state/messages.svelte.js';
@@ -17,11 +18,11 @@
   const managedIds = $derived(new Set((o?.sites ?? []).map((s) => s.id)));
   const needs = $derived(fleet.pending.filter((p) => managedIds.has(p.site_id)));
   const TABS = [
-    { k: 'activity' as const, l: '动态' },
-    { k: 'plans' as const, l: '计划' },
-    { k: 'needs' as const, l: '需要你' },
-    { k: 'digests' as const, l: '日报' },
-    { k: 'settings' as const, l: '设置' },
+    { k: 'activity' as const, l: '动态', i: 'activity' },
+    { k: 'plans' as const, l: '计划', i: 'checks' },
+    { k: 'needs' as const, l: '需要你', i: 'bell' },
+    { k: 'digests' as const, l: '日报', i: 'news' },
+    { k: 'settings' as const, l: '设置', i: 'sliders' },
   ];
   $effect(() => {
     void loadManaged();
@@ -47,10 +48,10 @@
   const candidates = $derived(fleet.rows.filter((r) => !managedIds.has(r.id) && (!siteQ.trim() || `${r.name} ${r.domain} ${r.tags.join(' ')}`.toLowerCase().includes(siteQ.trim().toLowerCase()))));
   function toggle(id: string) { const n = new Set(picked); if (n.has(id)) n.delete(id); else n.add(id); picked = n; }
 
-  const KIND: Record<string, { l: string; c: string }> = {
-    shipped: { l: '已上线', c: 'ok' }, planned: { l: '计划', c: 'run' }, proposed: { l: '待你确认', c: 'warn' }, rolled_back: { l: '已回滚', c: 'err' },
-    failed: { l: '失败', c: 'err' }, watch_ok: { l: '检查通过', c: '' }, watch_failed: { l: '检查失败', c: 'err' }, fallback: { l: '备用模型', c: 'warn' },
-    budget: { l: '预算', c: 'warn' }, digest: { l: '日报', c: '' }, paused: { l: '暂停', c: 'warn' }, resumed: { l: '恢复', c: 'ok' }, joined: { l: '开始托管', c: 'ok' }, left: { l: '退出托管', c: '' },
+  const KIND: Record<string, { l: string; c: string; i: string }> = {
+    shipped: { l: '已上线', c: 'ok', i: 'rocket' }, planned: { l: '计划', c: 'run', i: 'checks' }, proposed: { l: '待你确认', c: 'warn', i: 'bell' }, rolled_back: { l: '已回滚', c: 'err', i: 'undo' },
+    failed: { l: '失败', c: 'err', i: 'x' }, watch_ok: { l: '检查通过', c: '', i: 'check' }, watch_failed: { l: '检查失败', c: 'err', i: 'x' }, fallback: { l: '备用模型', c: 'warn', i: 'cpu' },
+    budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' },
   };
   const when = ago;
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
@@ -66,12 +67,12 @@
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
-      {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}>生成今日日报</button>{/if}
-      {#if o}<button class="btn small {paused ? 'primary' : ''}" onclick={() => setPaused(!paused)}>{paused ? '恢复托管' : '暂停托管'}</button>{/if}
+      {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
+      {#if o}<button class="btn small {paused ? 'primary' : ''}" onclick={() => setPaused(!paused)}><Icon name={paused ? 'play' : 'pause'} size={12} />{paused ? '恢复托管' : '暂停托管'}</button>{/if}
     </div>
   </header>
   <nav class="tabs">
-    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}>{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{/if}</button>{/each}
+    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}><Icon name={t.i} size={13} />{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{/if}</button>{/each}
   </nav>
 
   <div class="page-body">
@@ -79,7 +80,7 @@
    <div class="pane">
     {#if o && !o.sites.length && managed.tab !== 'settings'}
       <div class="card intro">
-        <h3>把站点交给 AI 全托管</h3>
+        <h3><Icon name="sparkles" />把站点交给 AI 全托管</h3>
         <p class="hint">托管后，AI 每周读数据和代码给每个站点定计划，然后在独立分支里改好、跑构建和检查、自动上线；上线 1 小时后检查页面，效果复盘变差就自动回滚。你只需要处理「需要你」里的例外。</p>
         <ul>
           <li>依赖、构建 / 部署配置、Worker 代码、推荐与邀请相关的内容，永远不会自动改。</li>
@@ -93,7 +94,7 @@
         <div class="sites">
           {#each o.sites as s (s.id)}
             <button class="sc" onclick={() => openSite(s.id)}>
-              <span class="sc-top"><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{/if}</span>
+              <span class="sc-top"><span class="sc-ic"><Icon name="globe" size={14} /></span><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{/if}</span>
               <small>{s.plan_date ? `本周计划 ${s.plan_count} 项 · ${md(s.plan_date)}制定` : '还没有计划'}</small>
               <span class="sc-nums">
                 <span><b>{s.shipped_week}</b>本周上线</span>
@@ -107,12 +108,12 @@
         </div>
       {/if}
       <div class="card">
-        <h3>动态</h3>
+        <h3><Icon name="activity" />动态</h3>
         {#if !managed.activity.length}<p class="hint">还没有动态。托管站点的计划、上线、检查、回滚都会记在这里。</p>{/if}
         <div class="list feed">
           {#each managed.activity as a, i (i)}
             <div class="li ev">
-              <span class="pill {KIND[a.kind]?.c ?? ''}">{KIND[a.kind]?.l ?? a.kind}</span>
+              <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
                 <b>{a.title}</b>
                 <small>{#if a.site_name}<button class="link-btn plain" onclick={() => openSite(a.site_id)}>{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
@@ -127,8 +128,8 @@
         {@const p = managed.plans.find((x) => x.site_id === s.id)}
         <div class="card">
           <h3>{s.name} <span class="sub">{p ? `${md(p.plan.date)}制定` : '还没有计划'}</span><span class="grow"></span>
-            {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}>看 AI 的分析</button>{/if}
-            <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}>{p ? '重新制定' : '现在制定'}</button>
+            {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
+            <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}><Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}</button>
           </h3>
           {#if p}
             <ol class="plan">
@@ -141,7 +142,7 @@
       {/each}
     {:else if managed.tab === 'needs'}
       <div class="card">
-        <h3>需要你</h3>
+        <h3><Icon name="bell" />需要你</h3>
         <p class="hint">只放例外：判定不能自动上线的改动（新页面待审、改到推荐 / 邀请内容、超出每日上限）和失败的任务。</p>
         {#if !needs.length}<p class="hint">没有需要你处理的事。</p>{/if}
         <table class="tbl">
@@ -158,14 +159,14 @@
       </div>
     {:else if managed.tab === 'digests'}
       <div class="card">
-        <h3>日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}>生成今日日报</button></h3>
+        <h3><Icon name="news" />日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}><Icon name="news" size={11} />生成今日日报</button></h3>
         {#if !managed.digests.length}<p class="hint">还没有日报。每天{o?.config.digest_hour ?? 9} 点后自动生成一份，并发系统通知。</p>{/if}
         <div class="seg digs">{#each managed.digests as n (n)}<button class:on={managed.digest?.name === n} onclick={() => openDigest(n)}>{md(n)}</button>{/each}</div>
         {#if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
       </div>
     {:else if d}
       <div class="card">
-        <h3>托管的站点</h3>
+        <h3><Icon name="globe" />托管的站点</h3>
         {#if o?.sites.length}
           <div class="row wrap">
             {#each o.sites as s (s.id)}<span class="pill">{s.name}<button class="x mini" title="退出托管" onclick={() => setManagedSites([s.id], false)}>×</button></span>{/each}
@@ -185,7 +186,7 @@
       </div>
 
       <div class="card">
-        <h3>发布规则</h3>
+        <h3><Icon name="shield" />发布规则</h3>
         <div class="field"><span class="lbl">新页面（整篇新内容）</span>
           <div class="seg"><button class:on={d.new_content === 'auto'} onclick={() => (d.new_content = 'auto')}>自动发布</button><button class:on={d.new_content === 'review'} onclick={() => (d.new_content = 'review')}>运营人员点头后发布</button></div>
           <small>标题、描述、内链和已有页面的内容改动，检查通过就自动上线。依赖、配置、代码、推荐 / 邀请相关内容、超过 400 行的改动永远不自动上线。</small>
@@ -197,7 +198,7 @@
       </div>
 
       <div class="card">
-        <h3>模型</h3>
+        <h3><Icon name="cpu" />模型</h3>
         <div class="grid2">
           <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
           <div class="field"><span class="lbl">备用模型</span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} />
@@ -207,7 +208,7 @@
       </div>
 
       <div class="card">
-        <h3>日报</h3>
+        <h3><Icon name="calendar" />日报</h3>
         <div class="row">
           <label class="check"><input type="checkbox" bind:checked={d.digest} /><span>每天发一份托管日报（系统通知 + 报告）</span></label>
           {#if d.digest}<span class="faint" style="font-size:12px">时间</span><input class="tin" type="number" min="0" max="23" style="width:70px" bind:value={d.digest_hour} /><span class="faint" style="font-size:12px">点之后</span>{/if}
@@ -229,6 +230,7 @@
   .sc:hover { border-color: var(--border2); box-shadow: var(--shadow); transform: translateY(-1px); }
   .sc:active { transform: none; box-shadow: var(--shadow-sm); }
   .sc-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .sc-ic { color: var(--dim); display: inline-flex; }
   .sc-top b { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sc small { font-size: 11.5px; color: var(--dim); }
   .sc-nums { display: flex; gap: 18px; margin: 8px 0 10px; }
@@ -240,7 +242,7 @@
   .meter i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s var(--su-ease); }
   .meter-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .ev { display: flex; align-items: flex-start; gap: 12px; }
-  .ev .pill { flex: none; min-width: 64px; justify-content: center; margin-top: 1px; }
+  .ev .pill { flex: none; min-width: 76px; justify-content: flex-start; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
   .ev-main b { display: block; font-size: 13px; font-weight: 550; line-height: 1.5; }
   .ev-main small { display: block; font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; line-height: 1.55; }

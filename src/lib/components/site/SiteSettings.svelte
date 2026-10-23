@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site } from '$lib/types';
   import Dropdown from '$lib/Dropdown.svelte';
   import SiteDataSettings from './SiteDataSettings.svelte';
@@ -42,7 +43,7 @@
 {#if d}
   <div class="st">
     <div class="card">
-      <h3>基本信息</h3>
+      <h3><Icon name="info" />基本信息</h3>
       <div class="grid2">
         <div class="field"><label for="ss-name">站点名称</label><input id="ss-name" class="tin" bind:value={d.name} /></div>
         <div class="field"><label for="ss-domain">主域名</label><input id="ss-domain" class="tin" bind:value={d.domain} placeholder="example.com" spellcheck="false" /><small>用于数据匹配、IndexNow 提交与站点链接。</small></div>
@@ -67,7 +68,7 @@
     </div>
 
     <div class="card">
-      <h3>构建</h3>
+      <h3><Icon name="hammer" />构建</h3>
       <div class="grid3">
         <div class="field"><label for="ss-install">安装依赖</label><input id="ss-install" class="tin mono" bind:value={d.build.install} placeholder="（不需要）" spellcheck="false" /></div>
         <div class="field"><label for="ss-build">构建命令</label><input id="ss-build" class="tin mono" bind:value={d.build.build} placeholder="（纯静态）" spellcheck="false" /></div>
@@ -93,7 +94,7 @@
     </div>
 
     <div class="card">
-      <h3>部署</h3>
+      <h3><Icon name="rocket" />部署</h3>
       <div class="grid2">
         <div class="field"><span class="lbl">方式</span><Dropdown bind:value={d.deploy.mode} options={modeOpts} /></div>
         {#if d.deploy.mode === 'vps'}
@@ -108,7 +109,7 @@
     </div>
 
     {#if site.deploy.mode === 'vps'}
-      <div class="card"><h3>VPS 部署授权</h3><VpsAuth {site} /></div>
+      <div class="card"><h3><Icon name="key" />VPS 部署授权</h3><VpsAuth {site} /></div>
     {/if}
 
     <SiteDataSettings draft={d} {site} />
@@ -123,7 +124,7 @@
 
     <div class="card danger-zone">
       <div class="dz">
-        <div><b>移除站点</b><p class="hint">只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
+        <div><b><Icon name="trash" />移除站点</b><p class="hint">只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
         <button class="btn small danger" onclick={() => removeSite(site)}>移除这个站点</button>
       </div>
     </div>

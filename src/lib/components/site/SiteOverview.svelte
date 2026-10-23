@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
@@ -32,7 +33,7 @@
 
   <div class="cards">
     <div class="card">
-      <h3>代码</h3>
+      <h3><Icon name="code" />代码</h3>
       <dl class="kv">
         <dt>来源</dt><dd>{site.source === 'github' ? `GitHub · ${site.repo}` : '本地文件夹'}</dd>
         <dt>位置</dt><dd class="mono small one" title={st?.code_dir}>{st?.code_dir ? shortPath(st.code_dir) : '—'}{st && !st.exists ? '（尚未克隆，首次对话或上线时自动克隆）' : ''}</dd>
@@ -44,7 +45,7 @@
       </dl>
     </div>
     <div class="card">
-      <h3>部署 <span class="grow"></span>{#if pilotDeploys(site.deploy.mode)}<button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button>{/if}</h3>
+      <h3><Icon name="rocket" />部署 <span class="grow"></span>{#if pilotDeploys(site.deploy.mode)}<button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}><Icon name="rocket" size={12} />构建并上线</button>{/if}</h3>
       <dl class="kv">
         <dt>方式</dt><dd>{DEPLOY_LABEL[site.deploy.mode] ?? '暂不部署'}</dd>
         {#if site.deploy.mode !== 'none'}
@@ -67,7 +68,7 @@
       </dl>
     </div>
     <div class="card">
-      <h3>运营 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'ops')}>设置</button></h3>
+      <h3><Icon name="sparkles" />运营 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'ops')}><Icon name="sliders" size={12} />设置</button></h3>
       <dl class="kv">
         <dt>自动化档位</dt><dd>{LEVEL_LABEL[site.ops.level] ?? site.ops.level}</dd>
         <dt>待处理</dt><dd>{#if queue.length}<button class="link-btn" onclick={() => (sites.tab = 'queue')}>{queue.length} 条</button>{:else}暂无{/if}</dd>

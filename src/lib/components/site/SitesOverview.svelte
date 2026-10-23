@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
@@ -49,13 +50,13 @@
       <p class="hint">{totals.sites} 个站点 · 近 28 天 Google 点击 {n(totals.clicks)}{#if total.text} <span class:up={total.dir > 0} class:down={total.dir < 0}>{total.text}</span>{/if}</p>
     </div>
     <div class="row">
-      <button class="btn small primary" onclick={() => openSiteImport()}>导入站点</button>
+      <button class="btn small primary" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
     </div>
   </header>
 
   <div class="tabs">
-    <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}>站点</button>
-    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}>待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
+    <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
+    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
   </div>
 
   <div class="page-body">

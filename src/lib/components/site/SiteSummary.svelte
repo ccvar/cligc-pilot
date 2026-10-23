@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site } from '$lib/types';
   import OpportunityRow from './OpportunityRow.svelte';
   import { num as n, delta } from './fmt';
@@ -24,7 +25,7 @@
 
 {#if d}
   <div class="card">
-    <h3>近 28 天 <span class="sub">与前 28 天对比</span><span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'data')}>完整数据</button></h3>
+    <h3><Icon name="trend" />近 28 天 <span class="sub">与前 28 天对比</span><span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'data')}><Icon name="chart" size={12} />完整数据</button></h3>
     <div class="stats">
       {#each stats as k (k.l)}
         <div class="stat"><small>{k.l}</small><b>{k.v}</b>{#if k.dl}<em class:up={k.dl.dir > 0} class:down={k.dl.dir < 0}>{k.dl.text || '—'}</em>{:else}<em>&nbsp;</em>{/if}</div>

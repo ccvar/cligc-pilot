@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site, OpsItem } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
@@ -37,7 +38,7 @@
     </div>
     <span class="grow"></span>
     <button class="link-btn lvl" onclick={() => (sites.tab = 'ops')} title="自动化档位">档位 {LEVEL_LABEL[site.ops.level]}</button>
-    <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}立即扫描{/if}</button>
+    <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}<Icon name="scan" size={12} />立即扫描{/if}</button>
   </div>
 
   {#if job && job.kind.startsWith('ops:') && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 300)}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
@@ -72,14 +73,14 @@
             {#if i.note}<p class="verdict">{i.note}</p>{/if}
             {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
             <div class="row wrap acts">
-              {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}>{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
-              {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy || site.ops.level < 2}>{site.ops.level < 2 ? '第 1 档只分析' : site.ops.level === 2 ? '让 AI 出方案' : '让 AI 改'}</button>{/if}
-              {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}>查看差异</button>{/if}
-              {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}>打开会话</button>{/if}
-              {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}>我已手动处理</button>{/if}
-              {#if ['dismissed', 'failed'].includes(i.status)}<button class="btn tiny" onclick={() => restoreItem(site.id, i)}>放回待处理</button>{/if}
-              {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}>回滚</button>{/if}
-              {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}>驳回</button>{/if}
+              {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
+              {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy || site.ops.level < 2}><Icon name="sparkles" size={11} />{site.ops.level < 2 ? '第 1 档只分析' : site.ops.level === 2 ? '让 AI 出方案' : '让 AI 改'}</button>{/if}
+              {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
+              {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
+              {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}
+              {#if ['dismissed', 'failed'].includes(i.status)}<button class="btn tiny" onclick={() => restoreItem(site.id, i)}><Icon name="inbox" size={11} />放回待处理</button>{/if}
+              {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
+              {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
             </div>
           </div>
         {/each}

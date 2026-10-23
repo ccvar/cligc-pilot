@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site, Opportunity } from '$lib/types';
   import { ops, addToQueue, workOnOpportunity, KIND_LABEL, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
 
@@ -21,8 +22,8 @@
       <span class="pill {queued.status === 'dismissed' ? '' : 'line'}">{queued.status === 'dismissed' ? '已驳回' : '已在待处理'}</span>
     {:else}
       <span class="acts">
-        <button class="btn tiny" onclick={() => addToQueue(site.id, opp)}>加入待处理</button>
-        <button class="btn tiny" onclick={() => workOnOpportunity(site, opp)}>开会话处理</button>
+        <button class="btn tiny" onclick={() => addToQueue(site.id, opp)}><Icon name="plus" size={11} />加入待处理</button>
+        <button class="btn tiny" onclick={() => workOnOpportunity(site, opp)}><Icon name="chat" size={11} />开会话处理</button>
       </span>
     {/if}
   </div>

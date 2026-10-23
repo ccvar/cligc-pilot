@@ -1,5 +1,7 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
+  import CfMark from '$lib/components/icons/CfMark.svelte';
   import type { Site } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
@@ -33,7 +35,7 @@
   {:else}
     {#if site.deploy.mode === 'direct' || site.deploy.mode === 'workers' || site.deploy.mode === 'vps'}
       <div class="card">
-        <h3>构建并上线 <span class="grow"></span><button class="btn small" onclick={() => checkSite(site.id)} disabled={running} data-tip="只安装、构建并跑检查，不上传">预检</button><button class="btn small primary" onclick={() => deploySite(site.id)} disabled={running}>{#if running}<span class="spin"></span>{job?.title}中{:else}构建并上线{/if}</button></h3>
+        <h3><Icon name="rocket" />构建并上线 <span class="grow"></span><button class="btn small" onclick={() => checkSite(site.id)} disabled={running} data-tip="只安装、构建并跑检查，不上传"><Icon name="checks" size={12} />预检</button><button class="btn small primary" onclick={() => deploySite(site.id)} disabled={running}>{#if running}<span class="spin"></span>{job?.title}中{:else}<Icon name="rocket" size={12} />构建并上线{/if}</button></h3>
         <ol class="chain">
           {#each chain as c, i (i)}<li>{#if c.code}<code>{c.t}</code>{:else}{c.t}{/if}</li>{/each}
         </ol>
@@ -42,14 +44,14 @@
       </div>
     {:else}
       <div class="card">
-        <h3>由 Cloudflare 自动构建</h3>
+        <h3><Icon name="branch" />由 Cloudflare 自动构建</h3>
         <p class="hint">这个 Pages 项目绑定了 GitHub：合并到 <code>{site.deploy.branch}</code> 后 Cloudflare 会自动构建上线。可以在下方对某次部署重新构建，或把线上版本切回历史部署。</p>
       </div>
     {/if}
 
     {#if site.deploy.mode !== 'vps'}
     <div class="card">
-      <h3>{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="btn tiny" onclick={() => loadPagesDeploys(site.id)}>刷新</button></h3>
+      <h3><CfMark size={14} />{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="btn tiny" onclick={() => loadPagesDeploys(site.id)}><Icon name="refresh" size={12} />刷新</button></h3>
       {#if sites.pagesErr[site.id]}<div class="err-note">{sites.pagesErr[site.id]}</div>
       {:else if !pages.length}<p class="hint">还没有部署记录（项目尚未创建，或首次上线前）。</p>
       {:else}
@@ -63,9 +65,9 @@
                 <td class="trunc" title={p.message}><span class="mono faint">{p.commit.slice(0, 7)}</span> {p.message}</td>
                 <td><span class="pill {p.status === 'success' ? 'ok' : p.status === 'failure' ? 'err' : 'run'}" title="{p.stage} · {p.status}">{pagesStatus(p.status)}</span></td>
                 <td class="act">
-                  {#if p.url}<button class="btn tiny" onclick={() => openUrl(p.url)}>打开</button>{/if}
+                  {#if p.url}<button class="btn tiny" onclick={() => openUrl(p.url)}><Icon name="external" size={11} />打开</button>{/if}
                   {#if site.deploy.mode === 'pages_git'}<button class="btn tiny" onclick={() => retryPagesDeploy(site.id, p.id)}>重新构建</button>{/if}
-                  {#if site.deploy.mode !== 'workers' && p.environment === 'production' && p.status === 'success'}<button class="btn tiny" onclick={() => rollbackPagesDeploy(site.id, p.id)}>切回此版本</button>{/if}
+                  {#if site.deploy.mode !== 'workers' && p.environment === 'production' && p.status === 'success'}<button class="btn tiny" onclick={() => rollbackPagesDeploy(site.id, p.id)}><Icon name="undo" size={11} />切回此版本</button>{/if}
                 </td>
               </tr>
             {/each}
@@ -78,7 +80,7 @@
 
   {#if history.length}
     <div class="card">
-      <h3>Pilot 上线记录</h3>
+      <h3><Icon name="history" />Pilot 上线记录</h3>
       <table class="tbl">
         <thead><tr><th style="width:120px">时间</th><th style="width:72px">触发</th><th>提交</th><th class="num" style="width:72px">变化页面</th><th style="width:80px">IndexNow</th><th class="num" style="width:104px">结果</th></tr></thead>
         <tbody>

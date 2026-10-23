@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site } from '$lib/types';
   import Dropdown from '$lib/Dropdown.svelte';
   import { mdRender } from '$lib/state/messages.svelte.js';
@@ -38,7 +39,7 @@
 {#if d}
   <div class="op">
     <div class="card">
-      <h3>自动化档位</h3>
+      <h3><Icon name="gauge" />自动化档位</h3>
       <div class="levels">
         {#each [1, 2, 3, 4, 5] as lv (lv)}
           <button class="lv" class:on={d.ops.level === lv} aria-pressed={d.ops.level === lv} onclick={() => (lv === 5 ? void setManagedSites([site.id], true).then(() => { const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s); }) : (d.ops.level = lv))}>
@@ -66,7 +67,7 @@
     </div>
 
     <div class="card">
-      <h3>任务与周期</h3>
+      <h3><Icon name="calendar" />任务与周期</h3>
       <table class="tbl">
         <thead><tr><th>任务</th><th>周期</th><th>上次</th><th>下次</th><th></th></tr></thead>
         <tbody>
@@ -76,7 +77,7 @@
               <td style="width:120px"><Dropdown compact bind:value={d.ops[t.key]} options={SCHED} /></td>
               <td class="t">{when(ov?.state.last[t.key] ?? 0)}</td>
               <td class="t">{ov?.next[t.key] ? when(ov.next[t.key]) : '—'}</td>
-              <td class="act"><button class="btn tiny" onclick={() => runTask(site.id, t.key)} disabled={busy}>立即运行</button></td>
+              <td class="act"><button class="btn tiny" onclick={() => runTask(site.id, t.key)} disabled={busy}><Icon name="play" size={11} />立即运行</button></td>
             </tr>
           {/each}
         </tbody>
@@ -85,7 +86,7 @@
     </div>
 
     <div class="card">
-      <h3>模型与预算</h3>
+      <h3><Icon name="cpu" />模型与预算</h3>
       <div class="grid3">
         <div class="field"><span class="lbl">无人值守用的模型服务</span>
           <Dropdown bind:value={d.ops.brain} options={brains.map((b) => ({ value: b, label: brainLabel(b) }))} />
@@ -113,7 +114,7 @@
     {/if}
 
     <div class="card">
-      <h3>报告</h3>
+      <h3><Icon name="doc" />报告</h3>
       {#if !reports.length}<p class="hint">还没有报告。运行一次周报或体检就会生成。</p>{/if}
       {#if reports.length}
         <div class="seg reports">
@@ -127,7 +128,7 @@
 
     {#if ov?.state.runs.length}
       <div class="card">
-        <h3>运行记录</h3>
+        <h3><Icon name="history" />运行记录</h3>
         <table class="tbl">
           <thead><tr><th style="width:130px">时间</th><th style="width:90px">任务</th><th style="width:56px">触发</th><th>结果</th></tr></thead>
           <tbody>

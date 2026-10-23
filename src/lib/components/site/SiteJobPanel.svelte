@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { SiteJob } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { cancelSiteJob } from '$lib/state/sites.svelte.js';
@@ -18,15 +19,15 @@
 
 <div class="su job">
   <div class="row job-head">
-    {#if !bare}<b>{job.title}</b>{/if}
+    {#if !bare}<b><Icon name={job.kind.startsWith('ops:') ? 'sparkles' : job.kind === 'check' ? 'checks' : 'rocket'} size={14} />{job.title}</b>{/if}
     <span class="pill {job.status === 'ok' ? 'ok' : job.status === 'failed' ? 'err' : job.status === 'canceled' ? 'warn' : 'run'}">
       {job.status === 'running' ? '进行中' : job.status === 'ok' ? '完成' : job.status === 'failed' ? '失败' : '已取消'}
     </span>
     {#if elapsed}<span class="faint" style="font-size:11.5px">用时 {elapsed} 秒</span>{/if}
     <span style="flex:1"></span>
-    {#if job.url}<button class="btn tiny" onclick={() => openUrl(job.url)}>打开 ↗</button>{/if}
-    {#if job.status === 'running'}<button class="btn tiny danger" onclick={() => cancelSiteJob(job.site_id)}>停止</button>{/if}
-    <button class="btn tiny" onclick={() => (showLog = !showLog)} aria-expanded={showLog}>{showLog ? '收起日志' : '日志'}</button>
+    {#if job.url}<button class="btn tiny" onclick={() => openUrl(job.url)}><Icon name="external" size={11} />打开</button>{/if}
+    {#if job.status === 'running'}<button class="btn tiny danger" onclick={() => cancelSiteJob(job.site_id)}><Icon name="stop" size={11} />停止</button>{/if}
+    <button class="btn tiny" onclick={() => (showLog = !showLog)} aria-expanded={showLog}><Icon name="terminal" size={11} />{showLog ? '收起日志' : '日志'}</button>
   </div>
   {#if !compact || job.status === 'running'}
     <div class="steps" role="list">
@@ -43,6 +44,7 @@
 <style>
   .job { display: flex; flex-direction: column; gap: 10px; }
   .job-head { min-height: 24px; }
-  .job-head b { font-size: 13.5px; font-weight: 600; }
+  .job-head b { font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
+  .job-head b :global(.ico) { color: var(--dim); }
   .step-detail { font-size: 11.5px; margin-top: -2px; }
 </style>

@@ -1,5 +1,7 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
   import SiteOverview from './SiteOverview.svelte';
@@ -17,13 +19,13 @@
   const st = $derived(site ? sites.status[site.id] : undefined);
   const job = $derived(site ? sites.jobs[site.id] : undefined);
   const openCount = $derived(site ? (ops.queue[site.id] ?? []).filter((q) => q.status === 'open' || q.status === 'proposed').length : 0);
-  const TABS: { key: SiteTab; label: string }[] = [
-    { key: 'overview', label: '概览' },
-    { key: 'data', label: '数据' },
-    { key: 'queue', label: '待处理' },
-    { key: 'ops', label: '运营' },
-    { key: 'deploy', label: '部署' },
-    { key: 'settings', label: '设置' },
+  const TABS: { key: SiteTab; label: string; icon: string }[] = [
+    { key: 'overview', label: '概览', icon: 'grid' },
+    { key: 'data', label: '数据', icon: 'chart' },
+    { key: 'queue', label: '待处理', icon: 'inbox' },
+    { key: 'ops', label: '运营', icon: 'sparkles' },
+    { key: 'deploy', label: '部署', icon: 'rocket' },
+    { key: 'settings', label: '设置', icon: 'sliders' },
   ];
   $effect(() => { if (site) { void loadSiteStatus(site.id); void loadQueue(site.id); } });
 </script>
@@ -43,17 +45,17 @@
         </div>
       </div>
       <div class="row">
-        {#if site.source === 'github'}<button class="btn small ghost" onclick={() => openUrl(`https://github.com/${site.repo}`)}>仓库 ↗</button>{/if}
-        {#if st?.code_dir && st.exists}<button class="btn small ghost" onclick={() => revealItemInDir(st.code_dir)}>打开文件夹</button>{/if}
-        <button class="btn small" onclick={newChat}>新对话</button>
+        {#if site.source === 'github'}<button class="btn small ghost" onclick={() => openUrl(`https://github.com/${site.repo}`)}><GhMark size={13} />仓库</button>{/if}
+        {#if st?.code_dir && st.exists}<button class="btn small ghost" onclick={() => revealItemInDir(st.code_dir)}><Icon name="folder" size={13} />打开文件夹</button>{/if}
+        <button class="btn small" onclick={newChat}><Icon name="chat" size={13} />新对话</button>
         {#if pilotDeploys(site.deploy.mode)}
-          <button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{#if job?.status === 'running'}<span class="spin"></span>{job.title}中{:else}构建并上线{/if}</button>
+          <button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{#if job?.status === 'running'}<span class="spin"></span>{job.title}中{:else}<Icon name="rocket" size={13} />构建并上线{/if}</button>
         {/if}
       </div>
     </header>
     <nav class="tabs">
       {#each TABS as t (t.key)}
-        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}>{t.label}{#if t.key === 'queue' && openCount}<span class="cnt">{openCount}</span>{/if}</button>
+        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && openCount}<span class="cnt">{openCount}</span>{/if}</button>
       {/each}
     </nav>
     <div class="page-body">

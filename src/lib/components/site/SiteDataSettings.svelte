@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site } from '$lib/types';
   import Dropdown from '$lib/Dropdown.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
@@ -54,7 +55,7 @@
 </script>
 
 <div class="card">
-  <h3>数据源</h3>
+  <h3><Icon name="database" />数据源</h3>
   <p class="hint">数据源账号在「连接与模型设置 → 数据源」里统一管理，这里只选这个站点用哪个资源（按域名自动匹配）。模型只能通过只读工具查询本地缓存，拿不到凭据。</p>
 
   <div class="ds-block">

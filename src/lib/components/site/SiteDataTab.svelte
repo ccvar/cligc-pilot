@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import Icon from './Icon.svelte';
   import type { Site, Opportunity } from '$lib/types';
   import LineChart from './LineChart.svelte';
   import OpportunityRow from './OpportunityRow.svelte';
@@ -30,14 +31,14 @@
 <div class="dt">
   {#if !hasSources}
     <div class="card">
-      <h3>还没有接入数据源</h3>
+      <h3><Icon name="database" />还没有接入数据源</h3>
       <p class="hint">在站点设置里接入 Google（GA4 + Search Console）和 Bing 后，这里会显示趋势、查询词、页面和 Pilot 按规则找出的运营机会。</p>
       <div class="row"><button class="btn small primary" onclick={() => (sites.tab = 'settings')}>去接入</button></div>
     </div>
   {:else}
     <div class="bar">
       <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'}</span>
-      <button class="btn small" onclick={() => refreshSiteData(site.id, true)} disabled={busy}>{#if busy}<span class="spin"></span>同步中{:else}同步数据{/if}</button>
+      <button class="btn small" onclick={() => refreshSiteData(site.id, true)} disabled={busy}>{#if busy}<span class="spin"></span>同步中{:else}<Icon name="refresh" size={12} />同步数据{/if}</button>
     </div>
     {#each [['Search Console', d?.meta.gsc.error], ['GA4', d?.meta.ga4.error], ['Bing', d?.meta.bing.error]] as [label, err] (label)}
       {#if err}<div class="err-note">{label}：{err}</div>{/if}
@@ -84,7 +85,7 @@
 
       {#if d.gsc_daily.length || d.ga4_daily.length}
         <div class="card">
-          <h3>趋势 <span class="sub">近 90 天</span></h3>
+          <h3><Icon name="trend" />趋势 <span class="sub">近 90 天</span></h3>
           {#if d.gsc_daily.length}
             <LineChart labels={d.gsc_daily.map((r) => r.key)} series={[
               { label: '点击', color: '#2f6fd8', values: d.gsc_daily.map((r) => r.clicks) },
@@ -101,7 +102,7 @@
       {/if}
 
       <div class="card">
-        <h3>运营机会 <span class="sub">按固定规则从数据里算出，可复现</span></h3>
+        <h3><Icon name="bulb" />运营机会 <span class="sub">按固定规则从数据里算出，可复现</span></h3>
         {#if opps.length}
           <div class="list">{#each opps.slice(0, 12) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
         {:else}
@@ -111,7 +112,7 @@
 
       <div class="two">
         <div class="card">
-          <h3>查询词 <span class="grow"></span>
+          <h3><Icon name="search" />查询词 <span class="grow"></span>
             {#if site.data.bing_site && site.data.gsc_site}<span class="seg mini"><button class:on={qTab === 'gsc'} onclick={() => (qTab = 'gsc')}>Google</button><button class:on={qTab === 'bing'} onclick={() => (qTab = 'bing')}>Bing</button></span>{/if}
           </h3>
           <table class="tbl">
@@ -130,7 +131,7 @@
           </table>
         </div>
         <div class="card">
-          <h3>页面 <span class="grow"></span>
+          <h3><Icon name="file" />页面 <span class="grow"></span>
             <span class="seg mini">
               {#if site.data.gsc_site}<button class:on={pTab === 'gsc'} onclick={() => (pTab = 'gsc')}>Google</button>{/if}
               {#if site.data.ga4_property}<button class:on={pTab === 'ga4'} onclick={() => (pTab = 'ga4')}>GA4</button>{/if}
@@ -158,14 +159,14 @@
       {#if site.data.ga4_property}
         <div class="two">
           <div class="card">
-            <h3>流量来源 <span class="sub">近 28 天</span></h3>
+            <h3><Icon name="route" />流量来源 <span class="sub">近 28 天</span></h3>
             <table class="tbl">
               <thead><tr><th>来源 / 媒介</th><th class="num">会话</th><th class="num">用户</th></tr></thead>
               <tbody>{#each d.ga4_sources.slice(0, 15) as r (r.key)}<tr><td class="trunc">{r.key}</td><td class="num">{n(r.sessions)}</td><td class="num">{n(r.users)}</td></tr>{:else}<tr><td colspan="3" class="faint">没有数据</td></tr>{/each}</tbody>
             </table>
           </div>
           <div class="card">
-            <h3>转化事件 <span class="sub">近 28 天</span></h3>
+            <h3><Icon name="target" />转化事件 <span class="sub">近 28 天</span></h3>
             {#if evNames.length}
               {#each evNames as ev (ev)}
                 {@const total = events.find((e) => e.event === ev && !e.dim)}
@@ -196,7 +197,8 @@
   .grp { min-width: 0; padding: 14px 18px 16px; border-left: 1px solid var(--border); }
   .grp:first-child { border-left: none; }
   .grp header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; margin-bottom: 10px; white-space: nowrap; }
-  .grp header .faint { font-weight: 400; margin-left: 2px; }
+  .grp header .faint { font-weight: 400; margin-left: 2px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .grp header :global(svg), .grp header .ga { flex: none; }
   .grp .stats { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); gap: 12px 16px; }
   @container page (max-width: 900px) {
     .groups { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
