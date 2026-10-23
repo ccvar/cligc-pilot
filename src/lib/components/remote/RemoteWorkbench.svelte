@@ -64,13 +64,15 @@
       {/if}
     </div>
     {#if workbench.wb.chat}
-      {#if workbench.wb.term}
+      <!-- 还没有对话时底部只有一个输入框：高度跟着输入框走，终端吃满上面；有了对话才用可拖的固定高度 -->
+      {@const hasConv = !!app.activeConv && app.activeConv.conn_id === app.activeConnId}
+      {#if workbench.wb.term && hasConv}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <div class="wb-split h" title="拖动调整高度" role="separator" aria-orientation="horizontal" onmousedown={(e) => startWbResize(e, 'h')}></div>
       {/if}
       <!-- 命令行关着时对话吃满整个主区（固定高度只在两者共存时才有意义） -->
-      <div class="wb-chat" class:solo={!workbench.wb.term} style={workbench.wb.term ? `height:${workbench.wb.chatH}px` : ''}>
-        {#if app.activeConv && app.activeConv.conn_id === app.activeConnId}
+      <div class="wb-chat" class:solo={!workbench.wb.term} style={workbench.wb.term && hasConv ? `height:${workbench.wb.chatH}px` : ''}>
+        {#if hasConv && app.activeConv}
           {@render convPane(app.activeConv)}
         {:else}
           <!-- 还没有对话：这里就是起点（发出去就新建一条，走 startChat 那套）。
