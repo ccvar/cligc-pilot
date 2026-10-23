@@ -10,7 +10,6 @@
   import SiteSettings from './SiteSettings.svelte';
   import SiteDataTab from './SiteDataTab.svelte';
   import SiteQueue from './SiteQueue.svelte';
-  import SiteOpsTab from './SiteOpsTab.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { sites, loadSiteStatus, deploySite, pilotDeploys, type SiteTab } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
@@ -24,7 +23,6 @@
     { key: 'overview', label: '概览', icon: 'grid' },
     { key: 'data', label: '数据', icon: 'chart' },
     { key: 'queue', label: '待处理', icon: 'inbox' },
-    { key: 'ops', label: '运营', icon: 'sparkles' },
     { key: 'deploy', label: '部署', icon: 'rocket' },
     { key: 'settings', label: '设置', icon: 'sliders' },
   ];
@@ -65,7 +63,6 @@
           {#if sites.tab === 'overview'}<SiteOverview {site} />
           {:else if sites.tab === 'data'}<SiteDataTab {site} />
           {:else if sites.tab === 'queue'}<SiteQueue {site} />
-          {:else if sites.tab === 'ops'}<SiteOpsTab {site} />
           {:else if sites.tab === 'deploy'}<SiteDeployTab {site} />
           {:else}<SiteSettings {site} />{/if}
         </div>

@@ -114,7 +114,8 @@ pub fn ops_overview(state: tauri::State<'_, AppState>, id: String) -> Result<Ops
     let st = site_runner::load_state(&dir);
     let mut next = std::collections::HashMap::new();
     for t in site_runner::TASKS {
-        let sched = site_runner::schedule_of(&site, t);
+        let in_plan = crate::managed::load(&state.data_dir).group_of(&id).is_some();
+        let sched = site_runner::schedule_of(&site, t, in_plan);
         let n = site_runner::period(sched).map(|p| st.last.get(*t).copied().unwrap_or(0).max(site.created_at) + p).unwrap_or(0);
         next.insert(t.to_string(), n);
     }

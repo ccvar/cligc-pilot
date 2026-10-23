@@ -128,6 +128,15 @@
     </div>
     <small class="faint">每次上线后，Pilot 只把内容有变化的页面提交给 IndexNow（Bing、Yandex 等共享）。{site.source === 'github' ? 'GitHub 来源会开一个 PR 加入验证文件。' : ''}</small>
   </div>
+
+  <div class="ds-block">
+    <div class="ds-title">运营机会</div>
+    <div class="row">
+      <label for="ds-minimp" class="dim" style="font-size:12.5px">展现量下限</label>
+      <input id="ds-minimp" class="tin" type="number" min="10" step="10" style="max-width:140px" bind:value={draft.ops.min_impressions} />
+    </div>
+    <small class="faint">近 28 天展现低于它的页面和查询词不算运营机会。小站可以调低（默认 100）。</small>
+  </div>
 </div>
 
 <style>

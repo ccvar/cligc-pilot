@@ -173,8 +173,9 @@ pub struct OpsConfig {
     pub stage: String,
 }
 
+/// 新导入的站点默认自己运营（第 1 档）：照常同步数据、找机会、体检，不自动改代码；要自动运营就加入托管方案。
 fn default_level() -> u8 {
-    2
+    1
 }
 fn default_weekly() -> String {
     "weekly".into()
@@ -1248,9 +1249,9 @@ mod tests {
     }
 
     #[test]
-    fn ops_config_defaults_to_level_two_with_an_empty_whitelist() {
+    fn ops_config_defaults_to_self_run_level_one_with_an_empty_whitelist() {
         let c: OpsConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(c.level, 2);
+        assert_eq!(c.level, 1);
         assert!(c.whitelist.is_empty());
         assert_eq!(c.budget.changes_per_week, 10);
         assert_eq!(c.brain, "claude");

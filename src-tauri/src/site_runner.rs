@@ -137,9 +137,10 @@ pub fn due(schedule: &str, last: u64, now: u64) -> bool {
 
 pub const TASKS: &[&str] = &["scan", "health", "report", "review", "plan"];
 
-pub fn schedule_of<'a>(site: &'a Site, task: &str) -> &'a str {
-    // 全托管：扫描和体检每天，计划、周报、复盘每周，不看站点里各自的周期设置。
-    if site.ops.level >= 5 {
+/// 任务周期。在托管方案里的站点：扫描和体检每天，计划、周报、复盘每周；
+/// 没托管的站点（你自己运营）：不做计划，其它按站点自己的周期（默认每周）。
+pub fn schedule_of<'a>(site: &'a Site, task: &str, in_plan: bool) -> &'a str {
+    if in_plan {
         return match task {
             "scan" | "health" => "daily",
             _ => "weekly",
@@ -218,12 +219,12 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
         .filter(|c| c.conn_id == conn_id && c.origin == "ops" && c.updated_at >= since)
         .map(|c| c.total_tokens)
         .sum();
-    // 全托管站点用所在托管方案的上限；站点数据目录是 <数据目录>/sites/<id>
-    let tokens_limit = if site.ops.level >= 5 {
-        site_dir.parent().and_then(Path::parent).map(|root| crate::managed::load(root).rules_for(&site.id).tokens_per_week).unwrap_or(2_000_000)
-    } else {
-        site.ops.budget.tokens_per_week
-    };
+    // 托管站点用所在方案的上限；站点数据目录是 <数据目录>/sites/<id>
+    let tokens_limit = site_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(|root| crate::managed::load(root).group_of(&site.id).map(|g| g.tokens_per_week))
+        .unwrap_or(site.ops.budget.tokens_per_week);
     Budget { changes_used: changes, changes_limit: site.ops.budget.changes_per_week, tokens_used: tokens, tokens_limit }
 }
 
@@ -359,7 +360,7 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
             break;
         }
         job.step("work", "running", &item.opp.title);
-        match process(ctx, site, job, &item).await {
+        match process(ctx, site, job, &item, false).await {
             Ok(msg) => {
                 done += 1;
                 notes.push(msg);
@@ -395,7 +396,8 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
         return Err(why);
     }
     job.step("work", "running", &item.opp.title);
-    let r = process(ctx, site, job, &item).await;
+    // 你手动点「让 AI 改」：没托管或「只出建议」的站点也按「改好等你确认」处理
+    let r = process(ctx, site, job, &item, true).await;
     if let Err(e) = &r {
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
             i.status = "failed".into();
@@ -467,7 +469,7 @@ fn shipped_today(site_dir: &Path) -> usize {
     site_ops::load_queue(site_dir).iter().filter(|i| i.auto && i.deployed_at >= start).count()
 }
 
-async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<String, String> {
+async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
     if site.ops.brain == "codex" {
         return Err("无人值守任务不能用 Codex".into());
     }
@@ -478,7 +480,8 @@ async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<
         i.note.clear();
     })?;
     ctx.emit_queue(&site.id);
-    match effective_level(site, item) {
+    let level = effective_level(site, item);
+    match if manual { level.max(3) } else { level } {
         0 | 1 => Ok(String::new()),
         2 => propose(ctx, site, item).await,
         level => implement(ctx, site, job, item, level).await,
@@ -537,8 +540,7 @@ pub fn ops_model(site: &Site) -> Result<String, String> {
 
 /// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用所在托管方案里运营人员选的那一对。
 pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Option<(String, String)>), String> {
-    if site.ops.level >= 5 {
-        let m = crate::managed::load(data_dir).rules_for(&site.id);
+    if let Some(m) = crate::managed::load(data_dir).group_of(&site.id).cloned() {
         let pick = |b: &str, model: &str| -> Result<(String, String), String> {
             if !model.trim().is_empty() {
                 return Ok((b.to_string(), model.trim().to_string()));
@@ -680,9 +682,9 @@ fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     }
 }
 
-/// 全托管站点所在方案的规则（不是全托管返回 None）。
+/// 站点所在托管方案的规则（没托管返回 None）。
 fn group_rules(ctx: &Ctx, site: &Site) -> Option<crate::managed::ManagedGroup> {
-    (site.ops.level >= 5).then(|| crate::managed::load(&ctx.state().data_dir).rules_for(&site.id))
+    crate::managed::load(&ctx.state().data_dir).group_of(&site.id).cloned()
 }
 
 /// 第 3、4 档：在独立工作树的分支上让 AI 改好并提交；Pilot 跑检查、按差异判定类型、推送开 PR；
@@ -1453,7 +1455,8 @@ pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     let st = app.state::<crate::AppState>();
     let since = now().saturating_sub(DAY);
     let acts: Vec<crate::managed::Activity> = crate::managed::activity(&st.data_dir, 2000).into_iter().filter(|a| a.ts >= since).collect();
-    let managed: Vec<Site> = st.sites.list().into_iter().filter(|s| s.ops.level >= 5).collect();
+    let cfg = crate::managed::load(&st.data_dir);
+    let managed: Vec<Site> = st.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()).collect();
     let count = |k: &str| acts.iter().filter(|a| a.kind == k).count();
     let mut needs = 0usize;
     let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；过去 24 小时 AI 自动上线 {} 项、出计划 {} 次、回滚 {} 项。\n\n", today(), managed.len(), count("shipped"), count("planned"), count("rolled_back"));
@@ -1507,15 +1510,11 @@ pub fn start_scheduler(app: tauri::AppHandle) {
         loop {
             let ctx = Ctx { app: app.clone() };
             let st = ctx.state();
-            let mut mcfg = crate::managed::load(&st.data_dir);
-            // 老数据：第 5 档但不在任何托管方案里的站点，收进「默认方案」
-            let managed_ids: Vec<String> = st.sites.list().into_iter().filter(|s| s.ops.level >= 5).map(|s| s.id).collect();
-            if crate::managed::adopt_orphans(&mut mcfg, &managed_ids) {
-                let _ = crate::managed::save(&st.data_dir, &mcfg);
-            }
+            // 老数据迁移、站点档位与所在方案的自主程度对齐
+            let mcfg = crate::managed_cmds::sync(&st);
             // 每日摘要：过了设定的时间、今天还没发过、有托管站点
             let hour: u8 = chrono::Local::now().format("%H").to_string().parse().unwrap_or(0);
-            if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && st.sites.list().iter().any(|s| s.ops.level >= 5) {
+            if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && !mcfg.groups.iter().all(|g| g.sites.is_empty()) {
                 let _ = digest(&app);
                 let mut c = mcfg.clone();
                 c.last_digest = today();
@@ -1525,7 +1524,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 if st.site_jobs.running(&site.id) {
                     continue;
                 }
-                if site.ops.level >= 5 {
+                let in_plan = mcfg.group_of(&site.id).is_some();
+                if in_plan {
                     // 总暂停、所在方案暂停、或这个站点单独停止托管：都不自动运行
                     if mcfg.paused || !mcfg.group_of(&site.id).is_some_and(|g| g.active_for(&site.id)) {
                         continue;
@@ -1547,7 +1547,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     if needs_data && !has_data {
                         continue;
                     }
-                    if due(schedule_of(&site, task), last, now()) {
+                    if due(schedule_of(&site, task, in_plan), last, now()) {
                         let _ = start(ctx.clone(), &site.id, task, "schedule", None);
                         break; // 每站每轮最多起一个，下一轮再看别的
                     }

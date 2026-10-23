@@ -18,6 +18,9 @@ pub struct SiteRow {
     pub pinned: bool,
     pub tags: Vec<String>,
     pub level: u8,
+    /// 所在托管方案名（没托管为空）与自主程度：suggest / review / auto，方案暂停或站点停止时为 stopped。
+    pub plan: String,
+    pub autonomy: String,
     pub deploy_mode: String,
     pub has_data: bool,
     pub summary: crate::site_data::Summary,
@@ -41,11 +44,15 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
             *e = (*e).max(c.updated_at);
         }
     }
+    let cfg = crate::managed::load(&state.data_dir);
     state
         .sites
         .list()
         .into_iter()
         .map(|s| {
+            let group = cfg.group_of(&s.id);
+            let plan = group.map(|g| g.name.clone()).unwrap_or_default();
+            let autonomy = group.map(|g| if g.active_for(&s.id) { g.autonomy.clone() } else { "stopped".to_string() }).unwrap_or_default();
             let dir = state.sites.data_dir(&s.id);
             let q = crate::site_ops::load_queue(&dir);
             let count = |st: &str| q.iter().filter(|i| i.status == st).count();
@@ -70,6 +77,8 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 pinned: s.pinned,
                 tags: s.tags,
                 level: s.ops.level,
+                plan,
+                autonomy,
                 deploy_mode: s.deploy.mode,
             }
         })

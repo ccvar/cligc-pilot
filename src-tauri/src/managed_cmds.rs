@@ -28,12 +28,38 @@ fn log_site(state: &AppState, site_id: &str, kind: &str, title: String) {
     managed::log(&state.data_dir, managed::Activity { ts: crate::now_secs(), site_id: site_id.into(), site_name: name, kind: kind.into(), title, ..Default::default() });
 }
 
-/// 站点进 / 出全托管时同步它的自动化档位（第 5 档 ⇔ 在某个托管方案里）。
-fn set_level(state: &AppState, site_id: &str, managed_on: bool) {
+/// 站点的执行档位跟着所在方案的自主程度走；没托管（你自己运营）＝第 1 档：照常同步数据、找机会、体检，不自动改代码。
+fn set_level(state: &AppState, site_id: &str, level: u8) {
     let _ = state.sites.update(site_id, crate::now_secs(), |s| {
-        s.ops.level = if managed_on { 5 } else if s.ops.level >= 5 { 3 } else { s.ops.level };
+        s.ops.level = level;
         Ok(())
     });
+}
+
+/// 迁移老数据并对齐档位：第 5 档的孤儿站点进「默认方案」；第 1–4 档的站点（只做一次）按档位归进方案；
+/// 每个站点的档位都和所在方案的自主程度一致，不在方案里的是第 1 档。
+pub fn sync(state: &AppState) -> ManagedConfig {
+    let mut cfg = managed::load(&state.data_dir);
+    let sites = state.sites.list();
+    let five: Vec<String> = sites.iter().filter(|s| s.ops.level >= 5).map(|s| s.id.clone()).collect();
+    let mut changed = managed::adopt_orphans(&mut cfg, &five);
+    let moved = managed::migrate_levels(&mut cfg, &sites);
+    changed |= !moved.is_empty() || cfg.levels_migrated != managed::load(&state.data_dir).levels_migrated;
+    if changed {
+        let _ = managed::save(&state.data_dir, &cfg);
+    }
+    for s in &sites {
+        let want = cfg.group_of(&s.id).map(|g| managed::level_of(&g.autonomy)).unwrap_or(1);
+        if s.ops.level != want {
+            set_level(state, &s.id, want);
+        }
+    }
+    for (id, gid) in moved {
+        if let Some(g) = cfg.groups.iter().find(|g| g.id == gid) {
+            log_site(state, &id, "joined", format!("归入托管方案「{}」（{}）", g.name, managed::autonomy_label(&g.autonomy)));
+        }
+    }
+    cfg
 }
 
 /// 新建或保存一个托管方案。勾进来的站点会从别的方案里移出；被移出的站点退回第 3 档。
@@ -65,14 +91,17 @@ pub fn save_managed_group(state: tauri::State<'_, AppState>, group: ManagedGroup
         None => c.groups.push(g.clone()),
     }
     managed::save(&state.data_dir, &c)?;
+    let level = managed::level_of(&g.autonomy);
+    for id in &g.sites {
+        set_level(&state, id, level);
+    }
     for id in g.sites.iter().filter(|id| !before.contains(id)) {
-        set_level(&state, id, true);
-        log_site(&state, id, "joined", format!("加入托管方案「{}」", g.name));
+        log_site(&state, id, "joined", format!("加入托管方案「{}」（{}）", g.name, managed::autonomy_label(&g.autonomy)));
     }
     for id in before.iter().filter(|id| !g.sites.contains(id)) {
         if c.group_of(id).is_none() {
-            set_level(&state, id, false);
-            log_site(&state, id, "left", format!("移出托管方案「{}」（改为第 3 档）", g.name));
+            set_level(&state, id, 1);
+            log_site(&state, id, "left", format!("移出托管方案「{}」，改为自己运营", g.name));
         }
     }
     Ok(g)
@@ -86,8 +115,8 @@ pub fn delete_managed_group(state: tauri::State<'_, AppState>, id: String) -> Re
     let g = c.groups.remove(i);
     managed::save(&state.data_dir, &c)?;
     for sid in &g.sites {
-        set_level(&state, sid, false);
-        log_site(&state, sid, "left", format!("托管方案「{}」已删除，退出托管（改为第 3 档）", g.name));
+        set_level(&state, sid, 1);
+        log_site(&state, sid, "left", format!("托管方案「{}」已删除，改为自己运营", g.name));
     }
     Ok(())
 }
@@ -157,8 +186,8 @@ pub fn set_sites_managed(state: tauri::State<'_, AppState>, ids: Vec<String>, ma
         }
         managed::save(&state.data_dir, &c)?;
         for id in &ids {
-            set_level(&state, id, false);
-            log_site(&state, id, "left", "退出托管（改为第 3 档）".into());
+            set_level(&state, id, 1);
+            log_site(&state, id, "left", "退出托管，改为自己运营".into());
         }
     }
     Ok(ids.len())
@@ -197,18 +226,14 @@ pub struct ManagedOverview {
 pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
     let since_week = crate::now_secs().saturating_sub(7 * 86_400);
     let since_day = crate::now_secs().saturating_sub(86_400);
-    let mut cfg = managed::load(&state.data_dir);
-    let managed_ids: Vec<String> = state.sites.list().into_iter().filter(|s| s.ops.level >= 5).map(|s| s.id).collect();
-    if managed::adopt_orphans(&mut cfg, &managed_ids) {
-        let _ = managed::save(&state.data_dir, &cfg);
-    }
+    let cfg = sync(&state);
     let mut shipped_today = 0;
     let mut waiting_total = 0;
     let sites = state
         .sites
         .list()
         .into_iter()
-        .filter(|s| s.ops.level >= 5)
+        .filter(|s| cfg.group_of(&s.id).is_some())
         .map(|s| {
             let dir = state.sites.data_dir(&s.id);
             let q = crate::site_ops::load_queue(&dir);
@@ -256,11 +281,12 @@ pub struct SitePlan {
 
 #[tauri::command]
 pub fn managed_plans(state: tauri::State<'_, AppState>) -> Vec<SitePlan> {
+    let cfg = managed::load(&state.data_dir);
     state
         .sites
         .list()
         .into_iter()
-        .filter(|s| s.ops.level >= 5)
+        .filter(|s| cfg.group_of(&s.id).is_some())
         .filter_map(|s| {
             let dir = state.sites.data_dir(&s.id);
             let p = crate::site_runner::latest_plan(&dir)?;

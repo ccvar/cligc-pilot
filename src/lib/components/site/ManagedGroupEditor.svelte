@@ -6,7 +6,7 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, METRIC_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
+  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, METRIC_LABEL, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
 
   const g = $derived(managed.editor);
@@ -169,6 +169,16 @@
         <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
         <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 看{METRIC_LABEL[g.metric] ?? '点击'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
       </div>
+      <div class="sec"><Icon name="gauge" size={13} />AI 自主程度</div>
+      <div class="auto">
+        {#each AUTONOMY as a (a.key)}
+          <button class="au" class:on={g.autonomy === a.key} onclick={() => g && (g.autonomy = a.key)} aria-pressed={g.autonomy === a.key}>
+            <span class="au-top"><b>{a.label}</b>{#if g.autonomy === a.key}<Icon name="check" size={12} />{/if}</span>
+            <small>{a.sub}</small>
+          </button>
+        {/each}
+      </div>
+      {#if g.autonomy === 'auto'}
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
@@ -183,6 +193,7 @@
           <small>用完就暂停这个站点到下周并通知你。0＝不限。</small></div>
       </div>
 
+      {/if}
       <div class="sec"><Icon name="cpu" size={13} />模型</div>
       <div class="grid2">
         <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
@@ -203,7 +214,7 @@
       {#if step < 3}
         <button class="btn small primary" onclick={() => (step = (step + 1) as 2 | 3)} disabled={!canNext}>下一步：{STEPS[step]}<Icon name="arrow" size={12} /></button>
       {:else}
-        <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim() || !g.actions.length}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : `开始托管 ${g.sites.length} 个站点`}{/if}</button>
+        <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim() || !g.actions.length}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : `开始托管 ${g.sites.length} 个站点（${AUTONOMY_LABEL[g.autonomy]}）`}{/if}</button>
       {/if}
     </footer>
   </div>
@@ -249,6 +260,14 @@
   .lbl-row label { font-size: 12px; font-weight: 550; }
   .lbl-row .grow { flex: 1; }
   .link-btn.sm { font-size: 12px; }
+  .auto { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  @container page (max-width: 560px) { .auto { grid-template-columns: 1fr; } }
+  .au { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border: 1px solid var(--border2); border-radius: 9px; background: #fff; font: inherit; color: var(--text); cursor: pointer; transition: border-color .12s, background-color .12s; }
+  .au:hover:not(.on) { background: var(--su-hover); }
+  .au.on { border-color: var(--accent); background: #fcfbf8; box-shadow: inset 0 0 0 .5px var(--accent); }
+  .au-top { display: flex; align-items: center; justify-content: space-between; }
+  .au b { font-size: 13px; font-weight: 600; }
+  .au small { font-size: 11.5px; color: var(--dim); line-height: 1.5; }
   .presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 6px; }
   .preset { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 9px; background: #fff; font: inherit; color: var(--text); cursor: pointer; transition: border-color .12s, background-color .12s; }
   .preset:hover:not(.on) { background: var(--su-hover); }

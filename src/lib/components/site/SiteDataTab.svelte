@@ -4,6 +4,7 @@
   import type { Site, Opportunity } from '$lib/types';
   import LineChart from './LineChart.svelte';
   import OpportunityRow from './OpportunityRow.svelte';
+  import SiteReports from './SiteReports.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import { ago as agoTs, num, pct as pctF, delta as dlt } from './fmt';
@@ -106,7 +107,7 @@
         {#if opps.length}
           <div class="list">{#each opps.slice(0, 12) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
         {:else}
-          <p class="hint">暂时没有发现明显的机会（或数据还不够）。阈值可以在「运营」里调低。</p>
+          <p class="hint">暂时没有发现明显的机会（或数据还不够）。小站可以在「设置 → 数据源」里调低机会阈值。</p>
         {/if}
       </div>
 
@@ -188,6 +189,7 @@
       <p class="hint">正在读取…</p>
     {/if}
   {/if}
+  <SiteReports {site} />
 </div>
 
 <style>

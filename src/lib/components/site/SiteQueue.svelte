@@ -5,9 +5,10 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { clock } from './fmt';
+  import { managed, AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { ops, loadQueue, runTask, workItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL, LEVEL_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
   let { site }: { site: Site } = $props();
@@ -26,6 +27,7 @@
   const busy = $derived(job?.status === 'running');
   const when = clock;
   const tone = (s: string) => (s === 'proposed' ? 'warn' : s === 'deployed' || s === 'done' ? 'ok' : s === 'failed' ? 'err' : s === 'working' ? 'run' : '');
+  const myPlan = $derived(managed.overview?.groups.find((g) => g.sites.includes(site.id)));
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
   function toggleWhy(id: string) { const n = new Set(openWhy); if (n.has(id)) n.delete(id); else n.add(id); openWhy = n; }
@@ -40,7 +42,7 @@
       <button class:on={filter === 'closed'} onclick={() => (filter = 'closed')}>已驳回 / 回滚{#if counts.closed}<span class="n">{counts.closed}</span>{/if}</button>
     </div>
     <span class="grow"></span>
-    <button class="link-btn lvl" onclick={() => (sites.tab = 'ops')} title="自动化档位">档位 {LEVEL_LABEL[site.ops.level]}</button>
+    <button class="link-btn lvl" onclick={() => (sites.tab = 'overview')}>{myPlan ? `托管：${myPlan.name} · ${AUTONOMY_LABEL[myPlan.autonomy] ?? ''}` : '自己运营'}</button>
     <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}<Icon name="scan" size={12} />立即扫描{/if}</button>
   </div>
 
@@ -90,7 +92,7 @@
             {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
             <div class="row wrap acts">
               {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
-              {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy || site.ops.level < 2}><Icon name="sparkles" size={11} />{site.ops.level < 2 ? '第 1 档只分析' : site.ops.level === 2 ? '让 AI 出方案' : '让 AI 改'}</button>{/if}
+              {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy}><Icon name="sparkles" size={11} />让 AI 改</button>{/if}
               {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
               {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}

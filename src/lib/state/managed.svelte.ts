@@ -32,6 +32,13 @@ export const ACTIONS: { key: string; label: string; sub: string }[] = [
   { key: 'technical', label: '修技术问题', sub: '死链、跳转、sitemap、抓取错误' },
 ];
 
+export const AUTONOMY_LABEL: Record<string, string> = { suggest: '只出建议', review: '改好等你确认', auto: '全自动' };
+export const AUTONOMY: { key: string; label: string; sub: string }[] = [
+  { key: 'suggest', label: '只出建议', sub: 'AI 每周读数据和站点，出计划和改进建议，不改代码。想做哪条，在「待处理」里点「让 AI 改」。' },
+  { key: 'review', label: '改好等你确认', sub: 'AI 在独立分支里改好、跑完构建和检查，每一条都等你确认再上线。' },
+  { key: 'auto', label: '全自动', sub: 'AI 按下面的发布规则自动上线，上线后检查页面，效果变差自动回滚；只把例外交给你。' },
+];
+
 export const METRIC_LABEL: Record<string, string> = {
   clicks: '点击', ctr: '点击率', impressions: '展现和覆盖的查询词', position: '平均排名', conversions: 'GA4 转化事件', health: '体检问题数',
 };
@@ -112,7 +119,7 @@ export const GUIDELINE_TEMPLATE = `# 内容准则
 
 function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
   return {
-    id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false,
+    id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false, autonomy: 'auto',
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
     new_content: 'auto', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
     goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, created_at: 0,
@@ -135,7 +142,8 @@ export function editGroup(g: ManagedGroup) { managed.editor = JSON.parse(JSON.st
 export async function saveGroup(): Promise<boolean> {
   const g = managed.editor;
   if (!g) return false;
-  if (!g.id && g.sites.length && !(await confirmDialog(`把 ${g.sites.length} 个站点交给 AI 全托管？AI 会按这个方案的规则制定计划、自动修改并上线页面内容（依赖、配置、代码、推荐 / 邀请相关内容永远不会自动改），上线后自动检查，变差就回滚。可以随时停止某个站点、暂停整个方案。`, { title: '新建托管方案', kind: 'info', confirmText: '开始托管' }))) return false;
+  const how = g.autonomy === 'suggest' ? 'AI 会按这个方案每周读数据和站点，出计划和改进建议，不改代码。' : g.autonomy === 'review' ? 'AI 会按这个方案的规则改好页面、跑完检查，每一条都等你确认再上线。' : 'AI 会按这个方案的规则制定计划、自动修改并上线页面内容（依赖、配置、代码、推荐 / 邀请相关内容永远不会自动改），上线后自动检查，变差就回滚。';
+  if (!g.id && g.sites.length && !(await confirmDialog(`把 ${g.sites.length} 个站点交给 AI 运营？${how}可以随时停止某个站点、暂停整个方案。`, { title: '新建托管方案', kind: 'info', confirmText: '开始托管' }))) return false;
   managed.saving = true;
   try {
     await invoke<ManagedGroup>('save_managed_group', { group: g });
@@ -147,7 +155,7 @@ export async function saveGroup(): Promise<boolean> {
   finally { managed.saving = false; }
 }
 export async function deleteGroup(g: ManagedGroup) {
-  if (!(await confirmDialog(`删除托管方案「${g.name}」？里面的 ${g.sites.length} 个站点会退出托管（改为第 3 档：AI 改好后由你确认再上线）。`, { title: '删除托管方案', kind: 'warning', confirmText: '删除' }))) return;
+  if (!(await confirmDialog(`删除托管方案「${g.name}」？里面的 ${g.sites.length} 个站点会退出托管，改为你自己运营（Pilot 照常同步数据、找机会、体检，不再自动改代码）。`, { title: '删除托管方案', kind: 'warning', confirmText: '删除' }))) return;
   try { await invoke('delete_managed_group', { id: g.id }); managed.editor = null; await refreshSites(); void loadFleet(); await loadManaged(); say(`已删除「${g.name}」`); }
   catch (e) { say(String(e), 'err'); }
 }
@@ -204,11 +212,12 @@ export async function setPaused(paused: boolean) {
 }
 export async function setManagedSites(ids: string[], on: boolean, groupId?: string) {
   if (!ids.length) return;
-  if (on && !(await confirmDialog(`把 ${ids.length} 个站点交给 AI 全托管？AI 会每周制定计划、自动修改并上线页面内容（依赖、配置、代码、推荐 / 邀请相关内容永远不会自动改），上线后自动检查，变差就回滚。随时可以退出或暂停。`, { title: '开始托管', kind: 'info', confirmText: '开始托管' }))) return;
+  const g = managed.overview?.groups.find((x) => x.id === groupId);
+  if (on && !(await confirmDialog(`把 ${ids.length} 个站点加入托管方案${g ? `「${g.name}」（${AUTONOMY_LABEL[g.autonomy] ?? ''}）` : ''}？之后按这个方案的规则运营，随时可以停止或退出。`, { title: '加入托管', kind: 'info', confirmText: '加入' }))) return;
   try {
     await invoke<number>('set_sites_managed', { ids, managed: on, groupId: groupId ?? null });
     await refreshSites(); void loadFleet(); await loadManaged();
-    say(on ? `已托管 ${ids.length} 个站点` : `${ids.length} 个站点已退出托管（改为第 3 档）`);
+    say(on ? `已托管 ${ids.length} 个站点` : `${ids.length} 个站点已退出托管，改为自己运营`);
   } catch (e) { say(String(e), 'err'); }
 }
 

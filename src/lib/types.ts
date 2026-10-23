@@ -386,7 +386,11 @@ export interface SiteSummary {
 }
 export interface SiteRow {
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
-  level: number; deploy_mode: string; has_data: boolean; summary: SiteSummary;
+  level: number;
+  /** 所在托管方案名（没托管为空） */
+  plan: string;
+  /** suggest / review / auto；方案暂停或站点停止时为 stopped；没托管为空 */
+  autonomy: string; deploy_mode: string; has_data: boolean; summary: SiteSummary;
   proposed: number; failed: number; open: number; job: string;
   last_deploy_ts: number; last_deploy_ok: boolean | null; active_at: number;
 }
@@ -418,6 +422,8 @@ export interface ManagedGroup {
   /** 方案里单独停止托管的站点 */
   stopped: string[];
   paused: boolean;
+  /** AI 自主程度：suggest 只出建议 | review 改好等你确认 | auto 全自动 */
+  autonomy: string;
   brain: string;
   model: string;
   fallback_brain: string;

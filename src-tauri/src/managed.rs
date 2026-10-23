@@ -43,6 +43,9 @@ pub struct ManagedConfig {
     /// 只用于迁移和新建方案时的默认值。
     #[serde(default)]
     pub groups: Vec<ManagedGroup>,
+    /// 已把老的第 1–4 档站点归进托管方案（只做一次）。
+    #[serde(default)]
+    pub levels_migrated: bool,
 }
 
 fn default_brain() -> String {
@@ -77,6 +80,9 @@ pub struct ManagedGroup {
     /// 整个方案暂停。
     #[serde(default)]
     pub paused: bool,
+    /// AI 自主程度：suggest 只出建议（不动代码）| review 改好等你确认 | auto 全自动（按发布规则自动上线）。
+    #[serde(default = "default_autonomy")]
+    pub autonomy: String,
     #[serde(default = "default_brain")]
     pub brain: String,
     #[serde(default)]
@@ -111,6 +117,26 @@ pub struct ManagedGroup {
     pub metric: String,
     #[serde(default)]
     pub created_at: u64,
+}
+
+fn default_autonomy() -> String {
+    "auto".into()
+}
+pub const AUTONOMY: &[&str] = &["suggest", "review", "auto"];
+pub fn autonomy_label(a: &str) -> &'static str {
+    match a {
+        "suggest" => "只出建议",
+        "review" => "改好等你确认",
+        _ => "全自动",
+    }
+}
+/// 自主程度对应的执行档位（运行逻辑仍按档位走）：只出建议＝1，改好等你确认＝3，全自动＝5。
+pub fn level_of(autonomy: &str) -> u8 {
+    match autonomy {
+        "suggest" => 1,
+        "review" => 3,
+        _ => 5,
+    }
 }
 
 fn default_min_page() -> u32 {
@@ -155,6 +181,7 @@ impl ManagedGroup {
             sites: Vec::new(),
             stopped: Vec::new(),
             paused: false,
+            autonomy: default_autonomy(),
             brain: c.brain.clone(),
             model: c.model.clone(),
             fallback_brain: c.fallback_brain.clone(),
@@ -243,6 +270,54 @@ pub fn save(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {
     std::fs::rename(&tmp, d.join("config.json")).map_err(|e| e.to_string())
 }
 
+/// 老站点迁移（只做一次）：第 1–4 档、不在任何方案里的站点按档位和模型归进方案，
+/// 模型和每周模型用量沿用站点原来的设置。返回 (站点 id, 归进的方案 id) 列表。
+pub fn migrate_levels(c: &mut ManagedConfig, sites: &[crate::sites::Site]) -> Vec<(String, String)> {
+    if c.levels_migrated {
+        return Vec::new();
+    }
+    c.levels_migrated = true;
+    let mut out = Vec::new();
+    let todo: Vec<&crate::sites::Site> = sites.iter().filter(|s| s.ops.level < 5 && c.group_of(&s.id).is_none()).collect();
+    for s in todo {
+        let autonomy = match s.ops.level { 1 | 2 => "suggest", 3 => "review", _ => "auto" };
+        let model = if s.ops.brain == "codex" { ("claude".to_string(), String::new()) } else { (s.ops.brain.clone(), s.ops.model.clone()) };
+        let base = autonomy_label(autonomy).to_string();
+        let found = c.groups.iter().position(|g| g.autonomy == autonomy && g.brain == model.0 && g.model == model.1 && g.name.starts_with(&base));
+        let i = match found {
+            Some(i) => i,
+            None => {
+                let mut g = ManagedGroup::from_legacy(c, &base);
+                g.id = uuid::Uuid::new_v4().to_string();
+                g.created_at = crate::now_secs();
+                g.autonomy = autonomy.into();
+                g.brain = model.0.clone();
+                g.model = model.1.clone();
+                g.fallback_brain.clear();
+                g.fallback_model.clear();
+                g.tokens_per_week = s.ops.budget.tokens_per_week;
+                if c.groups.iter().any(|x| x.name == g.name) {
+                    g.name = format!("{base} · {}", if model.1.is_empty() { &model.0 } else { &model.1 });
+                }
+                if autonomy == "auto" {
+                    // 第 4 档：只把白名单里的改动自动上线，新页面人审人发
+                    let mut acts: Vec<String> = s.ops.whitelist.iter().filter_map(|w| match w.as_str() { "title" | "meta_description" => Some("meta"), "internal_links" => Some("internal_links"), "sitemap" => Some("technical"), _ => None }).map(str::to_string).collect();
+                    acts.sort();
+                    acts.dedup();
+                    g.actions = if acts.is_empty() { vec!["meta".into()] } else { acts };
+                    g.new_content = "review".into();
+                }
+                c.groups.push(g);
+                c.groups.len() - 1
+            }
+        };
+        c.groups[i].sites.push(s.id.clone());
+        c.groups[i].tokens_per_week = c.groups[i].tokens_per_week.max(s.ops.budget.tokens_per_week);
+        out.push((s.id.clone(), c.groups[i].id.clone()));
+    }
+    out
+}
+
 pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     if g.name.trim().is_empty() {
         return Err("给这个托管方案起个名字".into());
@@ -269,6 +344,9 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     }
     if !METRICS.contains(&g.metric.as_str()) {
         return Err(format!("未知的衡量标准：{}", g.metric));
+    }
+    if !AUTONOMY.contains(&g.autonomy.as_str()) {
+        return Err(format!("未知的自主程度：{}", g.autonomy));
     }
     if g.min_page_chars > 10000 {
         return Err("新页面正文下限超出范围（0–10000 字）".into());
@@ -611,6 +689,30 @@ mod group_tests {
         assert_eq!(t[0].change, "new_content");
         let (p, t) = parse_plan_full("[{\"title\":\"x\",\"change\":\"meta\"}]").unwrap();
         assert!(p.is_empty() && t.len() == 1);
+    }
+
+    #[test]
+    fn old_levels_move_into_plans_once() {
+        let mk = |id: &str, level: u8| {
+            let mut s: crate::sites::Site = serde_json::from_value(serde_json::json!({ "id": id, "name": id, "domain": "", "source": "local", "local_dir": "/tmp", "created_at": 0, "updated_at": 0 })).unwrap();
+            s.ops.level = level;
+            s
+        };
+        let mut four = mk("d", 4);
+        four.ops.whitelist = vec!["title".into(), "internal_links".into()];
+        let sites = vec![mk("a", 1), mk("b", 2), mk("c", 3), four, mk("e", 5)];
+        let mut c = ManagedConfig::default();
+        let moved = migrate_levels(&mut c, &sites);
+        assert_eq!(moved.len(), 4, "第 5 档不在这里迁移");
+        let g_of = |id: &str| c.group_of(id).unwrap().clone();
+        assert_eq!(g_of("a").id, g_of("b").id);
+        assert_eq!(g_of("a").autonomy, "suggest");
+        assert_eq!(g_of("c").autonomy, "review");
+        assert_eq!(g_of("d").autonomy, "auto");
+        assert_eq!(g_of("d").actions, vec!["internal_links", "meta"]);
+        assert_eq!(g_of("d").new_content, "review");
+        assert!(migrate_levels(&mut c, &sites).is_empty(), "只迁移一次");
+        assert_eq!(level_of("review"), 3);
     }
 
     #[test]

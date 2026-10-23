@@ -8,7 +8,8 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, setPinned, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
-  import { LEVEL_LABEL, STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
+  import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
+  import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, num, delta } from './fmt';
 
   const filtered = $derived(sortRows(applyFilter(fleet.rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
@@ -30,7 +31,6 @@
   const when = ago;
   const total = $derived(delta(totals.clicks, totals.prev));
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
-  const lvlName = (l: number) => (LEVEL_LABEL[l] ?? '').replace(/^\d+\s*·\s*/, '');
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
   const FILTERS = $derived([
@@ -86,7 +86,7 @@
               <th class="num"><button class="th" onclick={() => sortBy('change')}>变化{arrow('change')}</button></th>
               <th class="num c-opp">机会</th>
               <th><button class="th" onclick={() => sortBy('pending')}>状态{arrow('pending')}</button></th>
-              <th class="c-lvl">档位</th>
+              <th class="c-lvl">托管</th>
               <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
             </tr></thead>
             <tbody>
@@ -107,7 +107,7 @@
                     <td class="num nodata" colspan="2">未接数据</td><td class="c-opp"></td>
                   {/if}
                   <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
-                  <td class="c-lvl"><span class="lvl" title={LEVEL_LABEL[r.level]}><span class="bars">{#each [1, 2, 3, 4, 5] as i (i)}<i class:on={i <= r.level}></i>{/each}</span><span class="lvl-t">{lvlName(r.level)}</span></span></td>
+                  <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" title={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
                   <td class="faint when c-when">{when(r.active_at)}</td>
                 </tr>
               {:else}
@@ -182,11 +182,13 @@
   .dm :global(svg) { flex: none; }
   .dm :global(.ico) { color: var(--dim); }
   .nodata { color: var(--faint); font-size: 12px; }
-  .lvl { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); white-space: nowrap; }
-  .bars { display: inline-flex; gap: 2px; align-items: flex-end; }
-  .bars i { width: 3px; border-radius: 1px; background: var(--border2); }
-  .bars i:nth-child(1) { height: 5px; } .bars i:nth-child(2) { height: 7px; } .bars i:nth-child(3) { height: 9px; } .bars i:nth-child(4) { height: 11px; } .bars i:nth-child(5) { height: 13px; }
-  .bars i.on { background: var(--accent); }
+  .am { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
+  .am::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--border2); }
+  .am-auto::before { background: var(--ok); }
+  .am-review::before { background: var(--su-run); }
+  .am-suggest::before { background: #b9a36a; }
+  .am-stopped::before { background: var(--faint); }
+  .am-none { color: var(--faint); }
   .when { font-size: 12px; white-space: nowrap; }
   .pin { border: none; background: none; padding: 2px; color: var(--border2); cursor: pointer; font-size: 13px; line-height: 1; border-radius: 4px; transition: color .12s, transform .12s; }
   .pin:hover { color: var(--dim); transform: scale(1.12); }
@@ -205,7 +207,6 @@
   @media (prefers-reduced-motion: reduce) { .sk-row i { animation: none; } }
   @container page (max-width: 760px) {
     .c-when { display: none; }
-    .lvl-t { display: none; }
   }
   @container page (max-width: 560px) {
     .c-opp, .c-lvl { display: none; }

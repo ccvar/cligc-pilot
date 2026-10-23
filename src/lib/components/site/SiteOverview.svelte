@@ -6,9 +6,10 @@
   import SiteJobPanel from './SiteJobPanel.svelte';
   import SiteSummary from './SiteSummary.svelte';
   import SiteLaunch from './SiteLaunch.svelte';
+  import SiteManagedCard from './SiteManagedCard.svelte';
   import { clock } from './fmt';
   import { sites, deploySite, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
-  import { ops, LEVEL_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops } from "$lib/state/ops.svelte.js";
   import { app } from '$lib/state/app.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -28,6 +29,8 @@
   {#if job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
     <div class="card"><SiteJobPanel {job} /></div>
   {/if}
+
+  <SiteManagedCard {site} />
 
   {#if hasData}<SiteSummary {site} />{/if}
 
@@ -65,14 +68,6 @@
             {#if last.ok && last.changed}<div class="faint">{last.changed} 个页面有变化</div>{/if}
           </dd>
         {/if}
-      </dl>
-    </div>
-    <div class="card">
-      <h3><Icon name="sparkles" />运营 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'ops')}><Icon name="sliders" size={12} />设置</button></h3>
-      <dl class="kv">
-        <dt>自动化档位</dt><dd>{LEVEL_LABEL[site.ops.level] ?? site.ops.level}</dd>
-        <dt>待处理</dt><dd>{#if queue.length}<button class="link-btn" onclick={() => (sites.tab = 'queue')}>{queue.length} 条</button>{:else}暂无{/if}</dd>
-        <dt>数据源</dt><dd>{[site.data.ga4_property && 'GA4', site.data.gsc_site && 'Search Console', site.data.bing_site && 'Bing'].filter(Boolean).join(' · ') || '未接入'}</dd>
       </dl>
     </div>
   </div>

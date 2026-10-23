@@ -13,7 +13,7 @@
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, METRIC_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -76,7 +76,7 @@
    <div class="pane">
     {#if o && !groups.length && managed.tab !== 'digests'}
       <div class="card intro">
-        <h3><Icon name="sparkles" />把站点交给 AI 全托管</h3>
+        <h3><Icon name="sparkles" />把站点交给 AI 运营</h3>
         <p class="hint">托管后，AI 每周读数据和代码给每个站点定计划，然后在独立分支里改好、跑构建和检查、自动上线；上线 1 小时后检查页面，效果复盘变差就自动回滚。你只需要处理「需要你」里的例外。</p>
         <ul>
           <li>依赖、构建 / 部署配置、Worker 代码、推荐与邀请相关的内容，永远不会自动改。</li>
@@ -90,20 +90,31 @@
       </div>
     {:else if managed.tab === 'activity'}
       {#if o?.sites.length}
-        <div class="sites">
-          {#each o.sites as s (s.id)}
-            <button class="sc" onclick={() => openSite(s.id)}>
-              <span class="sc-top"><span class="sc-ic"><SiteIcon id={s.id} size={16} /></span><b>{s.name}</b>{#if s.job}<span class="pill run"><span class="spin"></span>{s.job}中</span>{:else if !s.active}<span class="pill">已停止</span>{/if}</span>
-              <small>{s.plan_date ? `本周计划 ${s.plan_count} 项 · ${md(s.plan_date)}制定` : '还没有计划'}</small>
-              <span class="sc-nums">
-                <span><b>{s.shipped_week}</b>本周上线</span>
-                <span class:warn={s.waiting > 0}><b>{s.waiting}</b>需要你</span>
-                <span class:bad={s.failed > 0}><b>{s.failed}</b>失败</span>
-              </span>
-              <span class="meter" title="本周改动 {s.budget.changes_used} / {s.budget.changes_limit} 条"><i style="width:{ratio(s.budget.changes_used, s.budget.changes_limit) * 100}%"></i></span>
-              <span class="meter-l"><span>改动 {s.budget.changes_used}/{s.budget.changes_limit}</span><span>模型 {kTok(s.budget.tokens_used)}{s.budget.tokens_limit ? ` / ${kTok(s.budget.tokens_limit)}` : ''}</span></span>
-            </button>
-          {/each}
+        <div class="card tbl-card">
+          <table class="tbl mlist">
+            <thead><tr><th>站点</th><th>状态</th><th class="num">本周上线</th><th class="num">需要你</th><th class="num">失败</th><th>本周计划</th><th>本周用量</th></tr></thead>
+            <tbody>
+              {#each o.sites as s (s.id)}
+                {@const grp = groups.find((x) => x.id === s.group_id)}
+                {@const st = s.job ? { t: `${s.job}中`, c: 'run' } : o.config.paused ? { t: '全部暂停', c: 'warn' } : grp?.paused ? { t: '方案已暂停', c: 'warn' } : s.active ? { t: '托管中', c: 'ok' } : { t: '已停止', c: '' }}
+                <tr class="clickable" onclick={() => openSite(s.id)}>
+                  <td class="ms">
+                    <span class="ms-name"><SiteIcon id={s.id} size={15} /><b>{s.name}</b></span>
+                    {#if grp}<small>{grp.name} · {AUTONOMY_LABEL[grp.autonomy] ?? ''}</small>{/if}
+                  </td>
+                  <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
+                  <td class="num">{s.shipped_week || '—'}</td>
+                  <td class="num"><span class:warnn={s.waiting > 0}>{s.waiting || '—'}</span></td>
+                  <td class="num"><span class:bad={s.failed > 0}>{s.failed || '—'}</span></td>
+                  <td class="faint sm">{s.plan_date ? `${s.plan_count} 项 · ${md(s.plan_date)}` : '还没有'}</td>
+                  <td class="use" title="改动 {s.budget.changes_used} / {s.budget.changes_limit} 条 · 模型 {s.budget.tokens_used.toLocaleString()}{s.budget.tokens_limit ? ` / ${s.budget.tokens_limit.toLocaleString()}` : ''} token">
+                    <span class="meter"><i style="width:{ratio(s.budget.tokens_used, s.budget.tokens_limit) * 100}%"></i></span>
+                    <small>{kTok(s.budget.tokens_used)}{s.budget.tokens_limit ? ` / ${kTok(s.budget.tokens_limit)}` : ''} · 改动 {s.budget.changes_used}/{s.budget.changes_limit}</small>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
       {/if}
       <div class="card">
@@ -136,7 +147,7 @@
           </h3>
           {#if p?.positioning.text}
             <div class="pos">
-              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="link-btn" onclick={() => openSite(s.id, 'ops')}>修改</button></div>
+              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="link-btn" onclick={() => openSite(s.id, 'overview')}>修改</button></div>
               <p>{p.positioning.text}</p>
             </div>
           {/if}
@@ -186,12 +197,12 @@
       {/if}
     {:else}
       <div class="gbar">
-        <p class="hint">每个方案管一个或多个站点，各有自己的规则；一个站点只属于一个方案。方案和站点都能单独暂停。</p>
+        <p class="hint">每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。方案和站点都能单独暂停。</p>
         <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={12} />新增托管方案</button>
       </div>
       {#each groups as g (g.id)}
         <div class="card grp" class:off={g.paused}>
-          <h3><Icon name="sparkles" />{g.name}{#if g.paused}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
+          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if g.paused}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
             <button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>
             <button class="btn tiny" onclick={() => editGroup(g)}><Icon name="sliders" size={11} />编辑</button>
           </h3>
@@ -231,6 +242,19 @@
 </div>
 
 <style>
+  .tbl-card { padding: 2px 16px; overflow-x: auto; }
+  .mlist td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
+  .ms { max-width: 0; width: 28%; }
+  .ms-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ms-name b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ms small { display: block; padding-left: 23px; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sm { font-size: 12px; white-space: nowrap; }
+  .warnn { color: var(--su-warn-ink); font-weight: 600; }
+  .bad { color: var(--err); font-weight: 600; }
+  .use { width: 170px; }
+  .use .meter { display: block; width: 100%; }
+  .use small { display: block; margin-top: 3px; font-size: 11px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  @container page (max-width: 760px) { .mlist th:nth-child(6), .mlist td:nth-child(6) { display: none; } }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
@@ -263,22 +287,8 @@
   .switch.dim { opacity: .45; }
   .switch:focus-visible { box-shadow: var(--su-ring); }
   .intro ul { margin: 6px 0 14px; padding-left: 18px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
-  .sites { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-  .sc { text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px 16px; cursor: pointer; font: inherit; color: var(--text); display: flex; flex-direction: column; gap: 4px; transition: border-color .15s, box-shadow .15s, transform .15s var(--su-ease); }
-  .sc:hover { border-color: var(--border2); box-shadow: var(--shadow); transform: translateY(-1px); }
-  .sc:active { transform: none; box-shadow: var(--shadow-sm); }
-  .sc-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .sc-ic { color: var(--dim); display: inline-flex; }
-  .sc-top b { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sc small { font-size: 11.5px; color: var(--dim); }
-  .sc-nums { display: flex; gap: 18px; margin: 8px 0 10px; }
-  .sc-nums > span { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); }
-  .sc-nums b { font-size: 18px; font-weight: 600; line-height: 1.25; color: var(--text); font-variant-numeric: tabular-nums; }
-  .sc-nums .warn b { color: var(--su-warn-ink); }
-  .sc-nums .bad b { color: var(--err); }
   .meter { height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
   .meter i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s var(--su-ease); }
-  .meter-l { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .ev { display: flex; align-items: flex-start; gap: 12px; }
   .ev .pill { flex: none; min-width: 76px; justify-content: flex-start; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
