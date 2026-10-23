@@ -772,7 +772,7 @@ pub fn github_repo_from_url(url: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
-fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
+pub fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)

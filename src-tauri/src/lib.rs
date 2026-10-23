@@ -4503,6 +4503,8 @@ pub fn run() {
             site_cmds::detect_site_folder,
             site_cmds::detect_site_repo,
             site_cmds::list_cf_pages_projects,
+            site_cmds::detect_cf_deploy,
+            site_cmds::autodetect_cf_deploys,
             site_cmds::list_sites,
             site_cmds::import_site,
             site_cmds::save_site,

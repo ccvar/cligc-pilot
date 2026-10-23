@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { SiteRow, PendingItem, Site } from '$lib/types';
 import { say } from './app.svelte.js';
-import { sites } from './sites.svelte.js';
+import { sites, refreshSites } from './sites.svelte.js';
 
 export type SiteFilter = 'all' | 'pinned' | 'attention' | 'failed' | 'down' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending';
@@ -74,6 +74,19 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
 
 let loading = false;
 let again = false;
+// 每次启动只自动识别一次：没配置部署的站点，去 Cloudflare 按域名 / 仓库找对应的 Pages 项目并填上
+let autodetected = false;
+async function autodetectDeploys() {
+  autodetected = true;
+  try {
+    const filled = await invoke<string[]>('autodetect_cf_deploys');
+    if (filled.length) {
+      say(`在 Cloudflare 里认出了 ${filled.length} 个站点的部署：${filled.join('；')}`);
+      await refreshSites();
+      void loadFleet();
+    }
+  } catch { /* 识别不到不打扰 */ }
+}
 export async function loadFleet() {
   if (loading) { again = true; return; }
   loading = true;
@@ -81,6 +94,7 @@ export async function loadFleet() {
     const rows = await invoke<SiteRow[]>('sites_overview');
     fleet.rows = rows;
     fleet.loaded = true;
+    if (!autodetected && rows.some((r) => r.deploy_mode === 'none')) void autodetectDeploys();
   } catch (e) { say(String(e), 'err'); }
   finally {
     loading = false;

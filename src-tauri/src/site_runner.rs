@@ -1083,6 +1083,17 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
             Ok(Shipped { url: rec.url, checks: rec.checks, attention: rec.attention })
         }
         "pages_git" => {
+            // 本地文件夹：Cloudflare 从 GitHub 拉代码构建，先把这次的提交推到 GitHub 的生产分支
+            if site.source != "github" && !commit.is_empty() {
+                let main = crate::site_git::code_dir(site, None)?;
+                let branch = if site.deploy.branch.is_empty() { site.default_branch.clone() } else { site.deploy.branch.clone() };
+                job.step("upload", "running", &format!("推送到 GitHub 的 {branch}"));
+                job.line(&format!("$ git push origin {}:{branch}", commit.get(..7).unwrap_or(commit)));
+                crate::site_git::git_ok(&main, &["push", "origin", &format!("{commit}:refs/heads/{branch}")], "").await.map_err(|e| {
+                    job.step("upload", "failed", "");
+                    format!("推送到 GitHub 失败（Cloudflare 要从 GitHub 拉代码构建）：{e}")
+                })?;
+            }
             job.step("upload", "running", "等待 Cloudflare 构建");
             let cf = st.conns.get(&site.deploy.cf_conn_id)?;
             let token = crate::keychain::get_key(&cf.id)?;

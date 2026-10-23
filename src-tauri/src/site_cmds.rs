@@ -63,6 +63,105 @@ pub async fn list_cf_pages_projects(state: tauri::State<'_, AppState>, conn_id: 
     crate::cf::list_pages_projects(&token, &conn.account_id).await
 }
 
+/// 在 Cloudflare 里找到的部署：哪个连接下的哪个 Pages 项目、怎么部署。
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct DetectedDeploy {
+    pub conn_id: String,
+    pub conn_name: String,
+    /// pages_git（Pages 绑定了 GitHub：推送到生产分支即上线）| direct（直接上传型 Pages 项目）
+    pub mode: String,
+    pub project: String,
+    pub branch: String,
+    /// 项目绑定的 GitHub 仓库（绑定 GitHub 时）
+    pub source_repo: String,
+    /// 怎么认出来的：domain（自定义域名）| repo（绑定的仓库就是这个站点的仓库）
+    pub matched_by: String,
+}
+
+/// 这个站点的 GitHub 仓库：GitHub 来源用 repo，本地文件夹看 origin。
+fn site_github_repo(site: &crate::sites::Site) -> String {
+    if !site.repo.is_empty() {
+        return site.repo.clone();
+    }
+    crate::sites::git_out(std::path::Path::new(&site.local_dir), &["remote", "get-url", "origin"])
+        .and_then(|u| crate::sites::github_repo_from_url(&u))
+        .unwrap_or_default()
+}
+
+/// 每个 Cloudflare 连接下的 Pages 项目（读不到的连接跳过）。
+async fn all_pages_projects(conns: &crate::conns::ConnStore) -> Vec<(crate::conns::Connection, Vec<crate::cf::PagesProject>)> {
+    let mut out = Vec::new();
+    for c in conns.list().into_iter().filter(|c| c.kind == "cloudflare" && !c.account_id.is_empty()) {
+        let Ok(token) = crate::keychain::get_key(&c.id) else { continue };
+        if let Ok(p) = crate::cf::list_pages_projects(&token, &c.account_id).await {
+            out.push((c, p));
+        }
+    }
+    out
+}
+
+/// 在这些项目里找这个站点：自定义域名对得上，或者项目绑定的仓库就是这个站点的仓库。
+fn match_cf_deploy(all: &[(crate::conns::Connection, Vec<crate::cf::PagesProject>)], site: &crate::sites::Site) -> Option<DetectedDeploy> {
+    let bare = site.domain.trim().trim_start_matches("www.").to_ascii_lowercase();
+    let repo = site_github_repo(site).to_ascii_lowercase();
+    if bare.is_empty() && repo.is_empty() {
+        return None;
+    }
+    for (c, projects) in all {
+        let by_domain = projects.iter().find(|p| !bare.is_empty() && p.domains.iter().any(|d| d.trim_start_matches("www.").eq_ignore_ascii_case(&bare)));
+        let (p, how) = match by_domain.map(|p| (p, "domain")).or_else(|| projects.iter().find(|p| !repo.is_empty() && p.source_repo.eq_ignore_ascii_case(&repo)).map(|p| (p, "repo"))) {
+            Some(x) => x,
+            None => continue,
+        };
+        // 绑定了 GitHub、而且绑的就是这个站点的仓库：推送即上线；否则当直接上传型项目
+        let git = p.source_type == "github" && !p.source_repo.is_empty() && p.source_repo.eq_ignore_ascii_case(&repo);
+        return Some(DetectedDeploy {
+            conn_id: c.id.clone(),
+            conn_name: if c.remark.trim().is_empty() { c.name.clone() } else { c.remark.clone() },
+            mode: if git { "pages_git".into() } else { "direct".into() },
+            project: p.name.clone(),
+            branch: if p.production_branch.is_empty() { site.default_branch.clone() } else { p.production_branch.clone() },
+            source_repo: p.source_repo.clone(),
+            matched_by: how.into(),
+        });
+    }
+    None
+}
+
+/// 在 Cloudflare 里识别这个站点的部署（站点设置里「从 Cloudflare 识别」）。
+#[tauri::command]
+pub async fn detect_cf_deploy(state: tauri::State<'_, AppState>, id: String) -> Result<Option<DetectedDeploy>, String> {
+    let site = state.sites.get(&id)?;
+    Ok(match_cf_deploy(&all_pages_projects(&state.conns).await, &site))
+}
+
+/// 没配置部署的站点，在 Cloudflare 里按域名 / 仓库识别出来的直接填上（只填没配置的，不改你设过的）。返回填了几个。
+#[tauri::command]
+pub async fn autodetect_cf_deploys(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    let mut filled = Vec::new();
+    let todo: Vec<crate::sites::Site> = state.sites.list().into_iter().filter(|s| s.deploy.mode == "none" && !s.domain.is_empty()).collect();
+    if todo.is_empty() {
+        return Ok(filled);
+    }
+    let all = all_pages_projects(&state.conns).await;
+    for site in todo {
+        let Some(d) = match_cf_deploy(&all, &site) else { continue };
+        let ok = state.sites.update(&site.id, crate::now_secs(), |s| {
+            if s.deploy.mode == "none" {
+                s.deploy.mode = d.mode.clone();
+                s.deploy.cf_conn_id = d.conn_id.clone();
+                s.deploy.project = d.project.clone();
+                s.deploy.branch = d.branch.clone();
+            }
+            Ok(())
+        });
+        if ok.is_ok() {
+            filled.push(format!("{}：Pages 项目 {}（{}）", site.name, d.project, if d.mode == "pages_git" { "绑定 GitHub" } else { "直接上传" }));
+        }
+    }
+    Ok(filled)
+}
+
 #[derive(Deserialize)]
 pub struct ImportRequest {
     pub source: String,
@@ -151,8 +250,8 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
                 return Err(if site.deploy.mode == "workers" { "Worker 名称只能用小写字母、数字、- 和 _".into() } else { "Pages 项目名只能用小写字母、数字和连字符".into() });
             }
             site.deploy.project = p;
-            if site.deploy.mode == "pages_git" && site.source != "github" {
-                return Err("「Pages 绑定 GitHub」只适用于 GitHub 来源的站点".into());
+            if site.deploy.mode == "pages_git" && site.source != "github" && site_github_repo(&site).is_empty() {
+                return Err("「Pages 绑定 GitHub」要求站点代码在 GitHub 上：本地文件夹需要有指向 GitHub 的 origin".into());
             }
         }
         _ => return Err("请选择部署方式".into()),
@@ -610,4 +709,30 @@ pub fn save_site_positioning(state: tauri::State<'_, AppState>, id: String, text
     };
     crate::site_stage::save_positioning(&dir, &p)?;
     Ok(p)
+}
+
+#[cfg(test)]
+mod cf_match_tests {
+    use super::*;
+    #[test]
+    fn finds_pages_project_by_domain_or_repo() {
+        let conn: crate::conns::Connection = serde_json::from_value(serde_json::json!({"id": "cf1", "name": "CF", "kind": "cloudflare", "skill_dir": "", "key_prefix": "", "key_kind": "cf_token", "account_id": "a", "login": "", "created_at": "1"})).unwrap();
+        let pr = |name: &str, domains: &[&str], ty: &str, repo: &str| crate::cf::PagesProject { name: name.into(), domains: domains.iter().map(|d| d.to_string()).collect(), production_branch: "main".into(), source_type: ty.into(), source_repo: repo.into(), ..Default::default() };
+        let all = vec![(conn, vec![pr("other", &["other.com"], "", ""), pr("xtexe", &["xtexe.pages.dev", "xtexe.com"], "github", "ccvar/xtexe.com")])];
+        let mut site: crate::sites::Site = serde_json::from_value(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 0})).unwrap();
+        site.domain = "www.xtexe.com".into();
+        site.repo = "ccvar/xtexe.com".into();
+        let d = match_cf_deploy(&all, &site).unwrap();
+        assert_eq!((d.project.as_str(), d.mode.as_str(), d.matched_by.as_str(), d.branch.as_str()), ("xtexe", "pages_git", "domain", "main"));
+        // 仓库对不上：当直接上传型
+        site.repo = "someone/else".into();
+        assert_eq!(match_cf_deploy(&all, &site).unwrap().mode, "direct");
+        // 域名对不上、仓库对得上
+        site.domain = "new.example".into();
+        site.repo = "ccvar/xtexe.com".into();
+        assert_eq!(match_cf_deploy(&all, &site).unwrap().matched_by, "repo");
+        site.repo = String::new();
+        site.local_dir = "/nonexistent".into();
+        assert!(match_cf_deploy(&all, &site).is_none());
+    }
 }

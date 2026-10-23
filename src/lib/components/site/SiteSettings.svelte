@@ -5,7 +5,8 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import SiteDataSettings from './SiteDataSettings.svelte';
   import VpsAuth from './VpsAuth.svelte';
-  import { app } from '$lib/state/app.svelte.js';
+  import { app, say } from '$lib/state/app.svelte.js';
+  import { invoke } from '@tauri-apps/api/core';
   import { sites, editSite, saveSiteDraft, setSiteEnv, removeSite } from '$lib/state/sites.svelte.js';
   import { setTags, setPinned, fleet } from '$lib/state/fleet.svelte.js';
 
@@ -31,11 +32,24 @@
     if (!k) return;
     if (await setSiteEnv(site.id, [[k, envVal]], [])) { envKey = ''; envVal = ''; }
   }
+  // 从 Cloudflare 识别：按域名 / 仓库找这个站点的 Pages 项目，填进下面（保存后生效）
+  let detecting = $state(false);
+  async function detectDeploy() {
+    if (!d) return;
+    detecting = true;
+    try {
+      const r = await invoke<{ conn_id: string; conn_name: string; mode: string; project: string; branch: string; source_repo: string; matched_by: string } | null>('detect_cf_deploy', { id: site.id });
+      if (!r) { say('在已连接的 Cloudflare 账号里没找到这个站点的 Pages 项目（按域名和 GitHub 仓库找的）。用 Workers 部署的请直接选「部署到 Workers」。', 'err'); return; }
+      d.deploy.mode = r.mode as typeof d.deploy.mode; d.deploy.cf_conn_id = r.conn_id; d.deploy.project = r.project; d.deploy.branch = r.branch;
+      say(`找到了：${r.conn_name} 下的 Pages 项目 ${r.project}${r.mode === 'pages_git' ? `（绑定 GitHub ${r.source_repo}，推送到 ${r.branch} 即上线）` : '（直接上传）'}，${r.matched_by === 'domain' ? '按域名认出' : '按仓库认出'}。确认无误后保存。`);
+    } catch (e) { say(String(e), 'err'); }
+    finally { detecting = false; }
+  }
   const modeOpts = $derived([
     { value: 'direct', label: 'Pilot 构建后上传到 Pages' },
     { value: 'workers', label: 'Pilot 构建后部署到 Workers（wrangler deploy）' },
     { value: 'vps', label: 'VPS（项目自带的发布脚本）' },
-    ...(site.source === 'github' ? [{ value: 'pages_git', label: 'Pages 绑定 GitHub（合并即上线）' }] : []),
+    { value: 'pages_git', label: site.source === 'github' ? 'Pages 绑定 GitHub（合并即上线）' : 'Pages 绑定 GitHub（推送到 GitHub 即上线）' },
     { value: 'none', label: '暂不部署' },
   ]);
 </script>
@@ -96,7 +110,7 @@
     </div>
 
     <div class="card">
-      <h3><Icon name="rocket" />部署</h3>
+      <h3><Icon name="rocket" />部署<span class="grow"></span><button class="btn tiny" onclick={detectDeploy} disabled={detecting} data-tip="按域名和 GitHub 仓库，在已连接的 Cloudflare 账号里找这个站点的 Pages 项目"><Icon name="search" size={11} />{detecting ? '识别中…' : '从 Cloudflare 识别'}</button></h3>
       <div class="grid2">
         <div class="field"><span class="lbl">方式</span><Dropdown bind:value={d.deploy.mode} options={modeOpts} /></div>
         {#if d.deploy.mode === 'vps'}
@@ -105,7 +119,7 @@
         {:else if d.deploy.mode !== 'none'}
           <div class="field"><span class="lbl">Cloudflare 连接</span><Dropdown bind:value={d.deploy.cf_conn_id} placeholder="选择连接" options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
           <div class="field"><label for="ss-proj">{d.deploy.mode === 'workers' ? 'Worker 名称' : 'Pages 项目'}</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" />{#if d.deploy.mode === 'workers'}<small>路由、绑定、变量都按仓库里的 wrangler 配置部署。</small>{/if}</div>
-          {#if d.deploy.mode !== 'workers'}<div class="field"><label for="ss-pbranch">生产分支</label><input id="ss-pbranch" class="tin mono" bind:value={d.deploy.branch} spellcheck="false" /></div>{/if}
+          {#if d.deploy.mode !== 'workers'}<div class="field"><label for="ss-pbranch">生产分支</label><input id="ss-pbranch" class="tin mono" bind:value={d.deploy.branch} spellcheck="false" />{#if d.deploy.mode === 'pages_git' && site.source !== 'github'}<small>上线时 Pilot 把本地的提交推到 GitHub 的这个分支，Cloudflare 拉代码构建；推送用你本机 git 的登录。</small>{/if}</div>{/if}
         {/if}
       </div>
     </div>

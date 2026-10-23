@@ -239,7 +239,8 @@ function matchProject() {
   if (!hit) return;
   f.project = hit.name;
   if (hit.production_branch) f.branch = hit.production_branch;
-  f.mode = hit.source_type === 'github' && f.source === 'github' ? 'pages_git' : 'direct';
+  // 绑定了 GitHub、绑的就是这个站点的仓库（GitHub 来源，或本地文件夹的 origin）：推送即上线
+  f.mode = hit.source_type === 'github' && !!repo && hit.source_repo === repo ? 'pages_git' : 'direct';
 }
 
 /** 发布脚本里写的 user@host → 主机相同的 SSH 连接（用户名也相同的优先）。 */
