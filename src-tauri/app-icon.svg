@@ -1,12 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- macOS 图标网格：1024 画布，圆角主体 824×824 居中（四周 100px 透明边距），带淡投影。 -->
-  <defs>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.28"/>
-    </filter>
-  </defs>
+  <!-- macOS 图标网格：1024 画布，圆角主体 824×824 居中（四周 100px 透明边距），不加投影。 -->
   <g transform="translate(100 100) scale(12.875)">
-    <rect width="64" height="64" rx="14" fill="#2f2c27" filter="url(#shadow)"/>
+    <rect width="64" height="64" rx="14" fill="#2f2c27"/>
     <path d="M44 24a14 14 0 1 0 0 16" fill="none" stroke="#f1ece1" stroke-width="7" stroke-linecap="round"/>
     <circle cx="45.5" cy="42" r="4.6" fill="#f1ece1"/>
   </g>
