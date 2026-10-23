@@ -1403,6 +1403,23 @@ pub fn ssh_system_prompt(user: &str, host: &str, port: u16, ssh_js: &str) -> Str
     )
 }
 
+/// GitHub 仓库会话：在 Pilot 已克隆好的检出里改代码，走「分支 → 提交 → 推送 → PR」，
+/// 默认不直接改默认分支。凭据由 Pilot 注入，模型不得读取、打印或写进任何文件。
+pub fn github_system_prompt(repo: &str, login: &str) -> String {
+    format!(
+        "你在 GitHub 仓库 `{repo}` 的本地检出里工作（当前目录就是仓库根目录，Pilot 已克隆好并配置了凭据，\
+提交作者为 `{login}`）。先读 README、目录结构和相关代码，弄清现状再动手；改动前说明打算怎么改。\n\
+【工作流程】除非用户明确要求，否则不要直接提交到默认分支：先 `git switch -c pilot/<简短主题>` 新建分支，\
+小步提交、写清楚的提交说明；改完先运行项目已有的测试 / 构建 / lint 并如实报告结果。需要发布时 \
+`git push -u origin <分支>`，再用 `gh pr create` 创建 PR（标题和描述写清改了什么、为什么、怎么验证）。\
+没有安装 gh 时，推送分支后把 `https://github.com/{repo}/compare/<分支>?expand=1` 给用户。\n\
+【安全】GitHub 凭据由 Pilot 通过环境变量注入：不要读取、打印、回显 GITHUB_TOKEN / GH_TOKEN，\
+不要把 Token 写进远程地址、配置文件、代码或提交里，也不要修改 credential 相关的 git 配置。\
+强制推送、删除分支 / 仓库、合并 PR、改仓库设置、发 Release 都必须先征得用户明确同意。\
+用户所用语言回复，简洁说明做了什么、结果如何、还需要用户确认什么。"
+    )
+}
+
 /// 网页截图能力的系统提示补充（shot.js 由 Pilot 生成在数据目录，见 tools.rs）。
 /// 只给 Cloudflare 建站会话：截本地预览自查 / 截参考站。
 pub fn shot_prompt(shot_path: &str) -> String {
@@ -1524,6 +1541,40 @@ pub async fn run_turn(
     } else {
         work_dir
     };
+    // GitHub：首轮（或本地检出被删后）由 Pilot 用这枚 Token 克隆仓库，模型不必碰凭据。
+    if conn.kind == "github" {
+        let _ = channel.send(TurnEvent::Activity {
+            activity_id: "github-checkout".into(),
+            label: "准备仓库".into(),
+            detail: String::new(),
+            error: String::new(),
+            status: "running".into(),
+            kind: "command".into(),
+            phase: "正在准备仓库".into(),
+            current: None,
+            total: None,
+        });
+        let checkout =
+            crate::github::ensure_checkout(&conn.skill_dir, &work_dir, &api_key, &conn.login, &conn.account_id).await;
+        let (status, error) = match &checkout {
+            Ok(_) => ("completed", String::new()),
+            Err(e) => ("failed", e.clone()),
+        };
+        let _ = channel.send(TurnEvent::Activity {
+            activity_id: "github-checkout".into(),
+            label: "准备仓库".into(),
+            detail: String::new(),
+            error: error.clone(),
+            status: status.into(),
+            kind: "command".into(),
+            phase: if checkout.as_ref().is_ok_and(|cloned| *cloned) { "仓库已克隆".into() } else { "仓库已就绪".into() },
+            current: None,
+            total: None,
+        });
+        if let Err(e) = checkout {
+            return failed_turn_result(&session_ref, e, &channel);
+        }
+    }
     // 这是启动 Codex 前的最终兼容性闸门：覆盖首次安装、外部安装以及旧缓存残留。
     // 只做本地检查和可恢复的缓存改名，不在普通对话中偷偷升级 CLI。
     if brain == "codex" {
@@ -2038,6 +2089,7 @@ fn parse_usage(v: &serde_json::Value) -> Option<TurnUsage> {
 
 /// 按连接类型注入凭据 env + 设置 cwd：
 ///   cloudflare → CLOUDFLARE_API_TOKEN/ACCOUNT_ID，cwd=项目目录；
+///   github     → GITHUB_TOKEN/GH_TOKEN + 仅从环境读值的 git 凭据助手，cwd=仓库检出目录；
 ///   workspace  → **不注入任何连接凭据**，只设置用户明确选择/会话隔离的 cwd；
 ///   ssh        → **不注入任何凭据**（那是一台机器的 root shell，不是一个 API key），
 ///                只给本轮租约的目录+令牌，让 ssh.js 能把命令递给 Pilot 代跑。见 bridge.rs。
@@ -2064,6 +2116,11 @@ pub(crate) fn apply_env_cwd(
         cmd.env("CLOUDFLARE_API_TOKEN", api_key);
         if !conn.account_id.is_empty() {
             cmd.env("CLOUDFLARE_ACCOUNT_ID", &conn.account_id);
+        }
+    }
+    if conn.kind == "github" {
+        for (key, value) in crate::github::git_env(api_key) {
+            cmd.env(key, value);
         }
     }
 }

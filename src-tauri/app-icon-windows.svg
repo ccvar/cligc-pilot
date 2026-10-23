@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Windows 图标惯例为满版（不留 macOS 那样的透明边距），用于 icon.ico 与 Store Logo。 -->
+  <rect width="64" height="64" rx="14" fill="#2f2c27"/>
+  <path d="M44 24a14 14 0 1 0 0 16" fill="none" stroke="#f1ece1" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="45.5" cy="42" r="4.6" fill="#f1ece1"/>
+</svg>

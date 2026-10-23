@@ -18,17 +18,20 @@ pub struct Connection {
     /// 用户自定义备注；列表优先显示它，密钥仍只显示脱敏前缀。
     #[serde(default)]
     pub remark: String,
-    /// 连接类型：cloudflare（CF token 建站）| ssh（远程机器）。
+    /// 连接类型：cloudflare（CF token 建站）| ssh（远程机器）| github（fine-grained Token 改仓库）。
     pub kind: String,
     /// 该连接的工作区目录（CF 项目放在其下的 projects/）。
     pub skill_dir: String,
     /// 仅用于展示的 key 前缀，完整 key 在 Keychain。
     pub key_prefix: String,
-    /// cf_token（Cloudflare）/ ssh。
+    /// cf_token（Cloudflare）/ github_pat（GitHub）/ ssh。
     pub key_kind: String,
-    /// Cloudflare 账号 id（仅 kind=cloudflare）。
+    /// Cloudflare 账号 id；GitHub 为数字用户 id（生成 noreply 提交邮箱用）。
     #[serde(default)]
     pub account_id: String,
+    /// 账号登录名（仅 kind=github）：换 Token 时校验必须是同一账号，也用作提交作者名。
+    #[serde(default)]
+    pub login: String,
     /// 以下均仅 kind=ssh。密码/私钥口令进钥匙串（account = conn_id，与其它 kind 同约定，
     /// 因此 remove 无需特殊处理、不会留孤儿密钥）；私钥只存路径引用，不拷贝用户私钥。
     #[serde(default)]
@@ -131,6 +134,61 @@ impl ConnStore {
             key_prefix: prefix,
             key_kind: "cf_token".into(),
             account_id: account_id.trim().to_string(),
+            login: String::new(),
+            ssh_host: String::new(),
+            ssh_port: 0,
+            ssh_user: String::new(),
+            ssh_auth: String::new(),
+            ssh_key_path: String::new(),
+            ssh_fingerprint: String::new(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            created_at: chrono_now(),
+        };
+        let mut conns = self.list();
+        conns.push(conn.clone());
+        if let Err(e) = self.save(&conns) {
+            let _ = keychain::delete_key(&conn_id);
+            let _ = fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        Ok(conn)
+    }
+
+    /// 连接 GitHub：fine-grained Token 进钥匙串，建工作区目录（仓库检出在其下的 repos/）。
+    /// 调用方应已先验证过 Token 并取得账号（lib.rs 的 connect_github 会验证）。
+    pub fn add_github(
+        &self,
+        name: &str,
+        token: &str,
+        login: &str,
+        user_id: u64,
+    ) -> Result<Connection, String> {
+        let token = token.trim();
+        if token.is_empty() || login.trim().is_empty() {
+            return Err("Token 或账号为空".into());
+        }
+        let prefix = keychain::key_prefix(token);
+        let account_id = user_id.to_string();
+        if let Some(dup) = self.list().iter().find(|c| {
+            c.kind == "github" && c.account_id == account_id && c.key_prefix == prefix
+        }) {
+            return Err(format!("已存在相同的 GitHub 连接「{}」。", dup.name));
+        }
+        let conn_id = uuid::Uuid::new_v4().to_string();
+        let dir = self.workspaces_dir.join(&conn_id);
+        fs::create_dir_all(&dir).map_err(|e| format!("create github workspace: {e}"))?;
+        keychain::set_key(&conn_id, token)?;
+        let conn = Connection {
+            id: conn_id.clone(),
+            name: if name.trim().is_empty() { format!("GitHub · {}", login.trim()) } else { name.trim().into() },
+            remark: String::new(),
+            kind: "github".into(),
+            skill_dir: dir.to_string_lossy().into_owned(),
+            key_prefix: prefix,
+            key_kind: "github_pat".into(),
+            account_id,
+            login: login.trim().into(),
             ssh_host: String::new(),
             ssh_port: 0,
             ssh_user: String::new(),
@@ -225,6 +283,7 @@ impl ConnStore {
                 "ssh_password".into()
             },
             account_id: String::new(),
+            login: String::new(),
             ssh_host: host.into(),
             ssh_port: port,
             ssh_user: user.into(),
@@ -281,7 +340,7 @@ impl ConnStore {
 
     /// 只替换指定 Cloudflare 连接的 Token；连接 id、账号、Zone 绑定和工作区全部保留。
     /// 调用方必须先验证新 Token 仍可访问原 account_id。
-    pub fn replace_cloudflare_token(&self, id: &str, token: &str) -> Result<Connection, String> {
+    pub fn replace_token(&self, id: &str, kind: &str, token: &str) -> Result<Connection, String> {
         let token = token.trim();
         if token.is_empty() {
             return Err("Token 不能为空".into());
@@ -290,20 +349,17 @@ impl ConnStore {
         let Some(target) = conns.iter().position(|connection| connection.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
-        if conns[target].kind != "cloudflare" {
-            return Err("这不是 Cloudflare 连接".into());
+        if conns[target].kind != kind || !matches!(kind, "cloudflare" | "github") {
+            return Err("连接类型不匹配".into());
         }
         let prefix = keychain::key_prefix(token);
         if let Some(duplicate) = conns.iter().enumerate().find(|(index, connection)| {
             *index != target
-                && connection.kind == "cloudflare"
+                && connection.kind == kind
                 && connection.account_id == conns[target].account_id
                 && connection.key_prefix == prefix
         }) {
-            return Err(format!(
-                "这枚 Token 已用于 Cloudflare 连接「{}」",
-                duplicate.1.name
-            ));
+            return Err(format!("这枚 Token 已用于连接「{}」", duplicate.1.name));
         }
         let previous = keychain::get_key(id)?;
         keychain::set_key(id, token)?;
@@ -478,6 +534,7 @@ mod tests {
             key_prefix: "cf_ab".into(),
             key_kind: "cf_token".into(),
             account_id: String::new(),
+            login: String::new(),
             ssh_host: String::new(),
             ssh_port: 0,
             ssh_user: String::new(),
@@ -514,6 +571,7 @@ mod tests {
             key_prefix: String::new(),
             key_kind: String::new(),
             account_id: String::new(),
+            login: String::new(),
             ssh_host: host.into(),
             ssh_port: 22,
             ssh_user: user.into(),

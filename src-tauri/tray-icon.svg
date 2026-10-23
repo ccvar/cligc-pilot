@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="13.3 13 38 38">
+  <!-- macOS 菜单栏模板图标：只有「C」字形，纯黑 + 透明，系统按菜单栏深浅自动染色。
+       托盘图标会被缩放到 18pt 高，因此字形几乎撑满画布。 -->
+  <path d="M44 24a14 14 0 1 0 0 16" fill="none" stroke="#000" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="45.5" cy="42" r="4.6" fill="#000"/>
+</svg>
