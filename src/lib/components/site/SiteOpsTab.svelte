@@ -7,6 +7,7 @@
   import { brainLabel, launcherModelOpts } from '$lib/state/models';
   import { sites, editSite, saveSiteDraft } from '$lib/state/sites.svelte.js';
   import { ops, loadOverview, loadReports, openReport, runTask, WHITELIST, LEVEL_LABEL, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
+  import { openManaged, setManagedSites } from '$lib/state/managed.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { if (!sites.draft || sites.draft.id !== site.id) editSite(site); });
@@ -37,13 +38,16 @@
     <div class="card">
       <h3>自动化档位</h3>
       <div class="levels">
-        {#each [1, 2, 3, 4] as lv (lv)}
-          <button class="lv" class:on={d.ops.level === lv} onclick={() => (d.ops.level = lv)}>
+        {#each [1, 2, 3, 4, 5] as lv (lv)}
+          <button class="lv" class:on={d.ops.level === lv} onclick={() => (lv === 5 ? void setManagedSites([site.id], true).then(() => { const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s); }) : (d.ops.level = lv))}>
             <b>{LEVEL_LABEL[lv]}</b>
-            <small>{lv === 1 ? '定期拉数据、出报告和机会列表，不动代码' : lv === 2 ? '对每个机会写改动建议，开成会话等你处理' : lv === 3 ? `直接改好、跑检查、${site.source === 'github' ? '提 PR' : '留在本地分支'}，你确认后合并上线` : '白名单内的改动自动合并并上线；其余按第 3 档'}</small>
+            <small>{lv === 1 ? '定期拉数据、出报告和机会列表，不动代码' : lv === 2 ? '对每个机会写改动建议，开成会话等你处理' : lv === 3 ? `直接改好、跑检查、${site.source === 'github' ? '提 PR' : '留在本地分支'}，你确认后合并上线` : lv === 4 ? '白名单内的改动自动合并并上线；其余按第 3 档' : 'AI 每周定计划、自动改动上线、上线后检查，变差自动回滚；只把例外交给你'}</small>
           </button>
         {/each}
       </div>
+      {#if site.ops.level === 5}
+        <p class="hint">这个站点由「托管运营」统一管理：模型、新页面发布方式、每日上限都在那里设置。<button class="link-btn" onclick={() => openManaged('settings')}>打开托管运营</button></p>
+      {/if}
       {#if d.ops.level === 4}
         <div class="wl">
           <span class="lbl">低风险白名单（默认全部不勾；Pilot 按文件差异判定类型，超出边界自动降为待确认）</span>

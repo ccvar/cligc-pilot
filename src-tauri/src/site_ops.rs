@@ -290,6 +290,14 @@ pub struct QueueItem {
     pub before: Option<Row>,
     #[serde(default)]
     pub after: Option<Row>,
+    /// 全托管：上线后检查的时间点（0＝不需要）与结果（ok / 失败原因）。
+    #[serde(default)]
+    pub watch_due: u64,
+    #[serde(default)]
+    pub watched: String,
+    /// 处理这条用的模型（备用模型顶上时会写明）。
+    #[serde(default)]
+    pub model_used: String,
 }
 
 pub fn queue_path(site_dir: &Path) -> PathBuf {
@@ -577,6 +585,7 @@ pub fn kind_label(k: &str) -> &'static str {
         "content" => "内容",
         "new_content" => "新内容",
         "technical" => "技术问题",
+        "plan" => "AI 计划",
         _ => "其它",
     }
 }

@@ -372,3 +372,28 @@ export interface SiteRow {
 export interface PendingItem { site_id: string; site_name: string; item: OpsItem }
 export interface DataSourceRow { conn: Connection; sites: string[] }
 export interface BindReport { bound: [string, string][]; unmatched: string[]; kept: number; errors: string[] }
+
+// ---- 托管运营 ----
+export interface ManagedConfig {
+  paused: boolean;
+  brain: string;
+  model: string;
+  fallback_brain: string;
+  fallback_model: string;
+  /** auto 自动发布 | review 运营人员点头后再发布 */
+  new_content: 'auto' | 'review';
+  daily_changes: number;
+  tokens_per_week: number;
+  digest: boolean;
+  digest_hour: number;
+  last_digest: string;
+}
+export interface ManagedSite {
+  id: string; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
+  plan_date: string; plan_count: number; job: string;
+  budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
+}
+export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; shipped_today: number; waiting: number }
+export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string }
+export interface PlanTask { title: string; page: string; change: string; why: string; priority: number }
+export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; tasks: PlanTask[] } }

@@ -18,6 +18,8 @@ mod convo;
 mod data_cmds;
 mod keychain;
 mod launch_cmds;
+mod managed;
+mod managed_cmds;
 mod node_boot;
 mod ops_cmds;
 mod path_env;
@@ -4502,6 +4504,16 @@ pub fn run() {
             fleet_cmds::set_site_flags,
             fleet_cmds::data_sources_overview,
             fleet_cmds::auto_bind_sites,
+            managed_cmds::managed_config,
+            managed_cmds::save_managed_config,
+            managed_cmds::set_managed_paused,
+            managed_cmds::set_sites_managed,
+            managed_cmds::managed_overview,
+            managed_cmds::managed_activity,
+            managed_cmds::managed_plans,
+            managed_cmds::list_digests,
+            managed_cmds::read_digest,
+            managed_cmds::digest_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

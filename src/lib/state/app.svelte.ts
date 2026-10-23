@@ -37,7 +37,7 @@ class AppState {
   convos = $state<Conversation[]>([]);
   activeConvId = $state('');
   activeConv = $state<Conversation | null>(null);
-  view = $state<'launcher' | 'thread' | 'site' | 'sites' | 'templates' | 'prompts' | 'remote'>('launcher');
+  view = $state<'launcher' | 'thread' | 'site' | 'sites' | 'managed' | 'templates' | 'prompts' | 'remote'>('launcher');
   // Cloudflare 建站：连接是 CF 时，lSite 复用为「项目名」，站点选择器换成项目输入。
   isCfConn = $derived(this.activeConn?.kind === 'cloudflare');
   cfProjects = $state<string[]>([]);

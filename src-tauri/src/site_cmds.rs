@@ -150,8 +150,8 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
     if !site.data.indexnow_key.is_empty() && !sites::is_indexnow_key(&site.data.indexnow_key) {
         return Err("IndexNow 密钥格式不对（8–128 位字母、数字或连字符）".into());
     }
-    if !(1..=4).contains(&site.ops.level) {
-        return Err("自动化档位只能是 1–4".into());
+    if !(1..=5).contains(&site.ops.level) {
+        return Err("自动化档位只能是 1–5".into());
     }
     site.ops.whitelist.retain(|w| sites::WHITELIST_KINDS.contains(&w.as_str()));
     site.tags = sites::normalize_tags(&site.tags)?;

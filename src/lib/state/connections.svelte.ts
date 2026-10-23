@@ -109,7 +109,7 @@ export async function selectConn(id: string) {
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;
-    if (app.view === 'thread' || app.view === 'remote' || app.view === 'site' || app.view === 'sites'
+    if (app.view === 'thread' || app.view === 'remote' || app.view === 'site' || app.view === 'sites' || app.view === 'managed'
       || ((app.view === 'templates' || app.view === 'prompts') && conn?.kind !== 'cloudflare')) app.view = 'launcher';
   }
   if (id === SITES_CONN_ID) {

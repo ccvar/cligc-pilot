@@ -135,10 +135,18 @@ pub fn due(schedule: &str, last: u64, now: u64) -> bool {
     period(schedule).is_some_and(|p| now.saturating_sub(last) >= p)
 }
 
-pub const TASKS: &[&str] = &["scan", "health", "report", "review"];
+pub const TASKS: &[&str] = &["scan", "health", "report", "review", "plan"];
 
-fn schedule_of<'a>(site: &'a Site, task: &str) -> &'a str {
+pub fn schedule_of<'a>(site: &'a Site, task: &str) -> &'a str {
+    // 全托管：扫描和体检每天，计划、周报、复盘每周，不看站点里各自的周期设置。
+    if site.ops.level >= 5 {
+        return match task {
+            "scan" | "health" => "daily",
+            _ => "weekly",
+        };
+    }
     match task {
+        "plan" => "off",
         "scan" => &site.ops.scan,
         "health" => &site.ops.health,
         "report" => &site.ops.report,
@@ -154,6 +162,8 @@ pub fn task_label(task: &str) -> &'static str {
         "report" => "周报",
         "review" => "效果复盘",
         "accept" => "确认改动",
+        "plan" => "AI 制定计划",
+        "watch" => "上线后检查",
         "rollback" => "回滚",
         _ => "运营任务",
     }
@@ -197,6 +207,9 @@ pub struct Budget {
     pub tokens_limit: u64,
 }
 
+/// 托管设置里的每站每周 token 上限（调度器每轮从托管设置刷新一次）。
+static MANAGED_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2_000_000);
+
 pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) -> Budget {
     let since = now().saturating_sub(7 * DAY);
     let q = site_ops::load_queue(site_dir);
@@ -208,7 +221,8 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
         .filter(|c| c.conn_id == conn_id && c.origin == "ops" && c.updated_at >= since)
         .map(|c| c.total_tokens)
         .sum();
-    Budget { changes_used: changes, changes_limit: site.ops.budget.changes_per_week, tokens_used: tokens, tokens_limit: site.ops.budget.tokens_per_week }
+    let tokens_limit = if site.ops.level >= 5 { MANAGED_TOKENS.load(std::sync::atomic::Ordering::Relaxed) } else { site.ops.budget.tokens_per_week };
+    Budget { changes_used: changes, changes_limit: site.ops.budget.changes_per_week, tokens_used: tokens, tokens_limit }
 }
 
 fn over_budget(b: &Budget) -> Option<String> {
@@ -234,6 +248,8 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "处理机会"), ("ship", "提交 / 上线")],
+        "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
+        "watch" => &[("watch", "上线后检查")],
         _ => &[],
     }
 }
@@ -254,13 +270,15 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
             "report" => report(&ctx, &site, &job).await,
             "review" => review(&ctx, &site, &job).await,
             "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+            "plan" => plan(&ctx, &site, &job).await,
+            "watch" => watch(&ctx, &site, &job).await,
             "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
             "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
             _ => Err("未知的运营任务".into()),
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         job.finish(&res);
-        if matches!(task.as_str(), "scan" | "health" | "report" | "review") {
+        if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan") {
             record_run(
                 &site_dir,
                 RunRecord {
@@ -386,10 +404,35 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
 /// 某个机会实际可用的最高档位：新内容、技术问题、被复盘降档的类型最多到第 3 档；只分析档不处理。
 pub fn effective_level(site: &Site, item: &QueueItem) -> u8 {
     let mut level = site.ops.level;
+    if level >= 5 {
+        // 全托管：技术问题、复盘降档的类型留给你确认；新内容是否自动发布在上线那一步按托管设置判断。
+        if item.opp.change == "technical" || site.ops.downgraded.iter().any(|d| d == &item.opp.change) {
+            return 3;
+        }
+        return 5;
+    }
     if matches!(item.opp.change.as_str(), "new_content" | "technical") || site.ops.downgraded.iter().any(|d| d == &item.opp.change) {
         level = level.min(3);
     }
     level
+}
+
+fn log(ctx: &Ctx, site: &Site, kind: &str, title: &str, detail: &str, item_id: &str) {
+    crate::managed::log(&ctx.state().data_dir, crate::managed::Activity {
+        ts: now(),
+        site_id: site.id.clone(),
+        site_name: site.name.clone(),
+        kind: kind.into(),
+        title: title.into(),
+        detail: detail.into(),
+        item_id: item_id.into(),
+    });
+}
+
+/// 今天（本地时间）已经自动上线了几条。
+fn shipped_today(site_dir: &Path) -> usize {
+    let start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|d| d.and_local_timezone(chrono::Local).single()).map(|d| d.timestamp() as u64).unwrap_or(0);
+    site_ops::load_queue(site_dir).iter().filter(|i| i.auto && i.deployed_at >= start).count()
 }
 
 async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<String, String> {
@@ -460,12 +503,55 @@ pub fn ops_model(site: &Site) -> Result<String, String> {
     Err("请在站点「运营」设置里为无人值守任务选择模型".into())
 }
 
-/// 无人值守地开一条站点会话（origin=ops），跑完首轮才返回。
+/// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用托管设置里运营人员选的那一对。
+pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Option<(String, String)>), String> {
+    if site.ops.level >= 5 {
+        let m = crate::managed::load(data_dir);
+        let pick = |b: &str, model: &str| -> Result<(String, String), String> {
+            if !model.trim().is_empty() {
+                return Ok((b.to_string(), model.trim().to_string()));
+            }
+            if b == "claude" {
+                return Ok((b.to_string(), "sonnet".into()));
+            }
+            Err("请在「托管运营 → 设置」里为主模型 / 备用模型选择具体模型".into())
+        };
+        let primary = pick(&m.brain, &m.model)?;
+        let fallback = if m.fallback_brain.is_empty() { None } else { Some(pick(&m.fallback_brain, &m.fallback_model)?) };
+        return Ok((primary, fallback));
+    }
+    Ok(((site.ops.brain.clone(), ops_model(site)?), None))
+}
+
+/// 无人值守地开一条站点会话（origin=ops），跑完首轮才返回。主模型这一轮失败时，有备用模型就换它重跑一次
+/// （新开一条会话，接着同一个工作区；备用模型能看到主模型已经做了的改动）。
 async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String) -> Result<(String, crate::convo::Conversation), String> {
+    let st = ctx.state();
+    let (primary, fallback) = models_for(site, &st.data_dir)?;
+    match run_conversation_with(ctx, site, perm, work_dir, message.clone(), &primary).await {
+        Ok(r) => Ok(r),
+        Err(e) => {
+            let Some(fb) = fallback else { return Err(e) };
+            crate::managed::log(&st.data_dir, crate::managed::Activity {
+                ts: now(),
+                site_id: site.id.clone(),
+                site_name: site.name.clone(),
+                kind: "fallback".into(),
+                title: format!("主模型失败，改用备用模型 {}", format!("{} · {}", fb.0, fb.1)),
+                detail: e.lines().next().unwrap_or("").to_string(),
+                item_id: String::new(),
+            });
+            let note = format!("\n\n（上一次由另一个模型执行时中断了：{}。工作区里可能已有部分改动，先查看现状再继续。）", e.lines().next().unwrap_or(""));
+            run_conversation_with(ctx, site, perm, work_dir, format!("{message}{note}"), &fb).await
+        }
+    }
+}
+
+async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String, model: &(String, String)) -> Result<(String, crate::convo::Conversation), String> {
     let st = ctx.state();
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
-    let model = ops_model(site)?;
+    let (brain, model) = model.clone();
     let channel = tauri::ipc::Channel::<crate::agent::TurnEvent>::new(|_| Ok(()));
     let conv = crate::create_conversation(
         st.conns.clone(),
@@ -477,7 +563,7 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
         site.id.clone(),
         site.name.clone(),
         "site".into(),
-        site.ops.brain.clone(),
+        brain,
         model,
         perm.into(),
         String::new(),
@@ -597,8 +683,11 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
     );
     job.line(&format!("交给 AI：{}", item.opp.title));
-    let (conv_id, _) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
-    site_ops::update_item(&site_dir, &item.id, now(), |i| i.conv_id = conv_id.clone())?;
+    let (conv_id, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
+    site_ops::update_item(&site_dir, &item.id, now(), |i| {
+        i.conv_id = conv_id.clone();
+        i.model_used = format!("{} · {}", conv.brain, conv.model);
+    })?;
     // 收尾：没提交的改动由 Pilot 提交；完全没改动就算失败。
     if !crate::site_git::is_clean(&wt).await || crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
         crate::site_git::git_ok(&wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads"], "").await?;
@@ -620,13 +709,20 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
     let change_kind = if cls.kinds.is_empty() { "mixed".to_string() } else { cls.kinds.join(",") };
     let checks_ok = built.is_ok();
+    // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
+    // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
+    let managed = crate::managed::load(&ctx.state().data_dir);
+    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto") } else { cls.reasons.clone() };
     let mut verdict = if let Err(e) = &built {
         format!("检查没通过：{}", e.lines().next().unwrap_or(""))
-    } else if cls.reasons.is_empty() {
+    } else if reasons.is_empty() {
         "auto".to_string()
     } else {
-        cls.reasons.join("；")
+        reasons.join("；")
     };
+    if level >= 5 && verdict == "auto" && shipped_today(&site_dir) >= managed.daily_changes as usize {
+        verdict = format!("今天已自动上线 {} 条（上限），这一条留给你确认或明天再上", managed.daily_changes);
+    }
     // 推送 + 开 PR（GitHub）；本地来源留在本地分支。检查没通过的不推送。
     let mut pr = crate::site_github::Pr::default();
     if checks_ok && site.source == "github" {
@@ -651,13 +747,25 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     })?;
     ctx.emit_queue(&site.id);
     if !checks_ok {
+        if level >= 5 {
+            log(ctx, site, "failed", &item.opp.title, &verdict, &item.id);
+        }
         return Err(verdict);
     }
-    // 第 4 档：白名单内自动合并上线
+    if level >= 5 && verdict != "auto" {
+        log(ctx, site, "proposed", &item.opp.title, &verdict, &item.id);
+    }
+    // 第 4 档：白名单内自动合并上线；第 5 档：判定通过即自动上线，上线 1 小时后再检查一次页面。
     if level >= 4 && verdict == "auto" {
-        job.step("ship", "running", "白名单内改动，自动合并上线");
+        job.step("ship", "running", if level >= 5 { "全托管，自动合并上线" } else { "白名单内改动，自动合并上线" });
         match accept(ctx, site, job, &item.id, true).await {
-            Ok(m) => return Ok(m),
+            Ok(m) => {
+                if level >= 5 {
+                    site_ops::update_item(&site_dir, &item.id, now(), |i| i.watch_due = now() + 3600)?;
+                    log(ctx, site, "shipped", &item.opp.title, &m, &item.id);
+                }
+                return Ok(m);
+            }
             Err(e) => {
                 verdict = format!("自动上线失败：{e}");
                 site_ops::update_item(&site_dir, &item.id, now(), |i| {
@@ -1086,6 +1194,13 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             x.after = Some(after.clone());
         })?;
         lines.push(format!("{}：{}（{note}）", i.opp.title, match verdict { "positive" => "正面", "negative" => "负面", _ => "持平" }));
+        // 全托管：效果负面的自动改动直接回滚，并记一笔。
+        if verdict == "negative" && site.ops.level >= 5 && i.auto {
+            match rollback(ctx, site, job, &i.id).await {
+                Ok(_) => log(ctx, site, "rolled_back", &i.opp.title, &format!("效果复盘负面（{note}），已自动回滚"), &i.id),
+                Err(e) => log(ctx, site, "failed", &i.opp.title, &format!("效果负面，自动回滚失败：{e}"), &i.id),
+            }
+        }
     }
     save_state(&site_dir, &state);
     if downgraded != site.ops.downgraded {
@@ -1103,6 +1218,201 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// 全托管：AI 制定计划 / 上线后检查 / 每日摘要
+// ---------------------------------------------------------------------------
+
+/// 给计划会话的数据摘要（直接写进提示，不靠工具：计划会话是只读的「计划」档）。
+fn data_brief(site_dir: &Path) -> String {
+    let d = crate::site_data::dashboard(site_dir);
+    let mut s = String::new();
+    if d.meta.gsc.fetched_at > 0 {
+        s.push_str(&format!(
+            "Search Console（{} ~ {}）：点击 {:.0}（前 28 天 {:.0}），展现 {:.0}，平均排名 {:.1}。\n头部查询词：\n",
+            d.meta.gsc.start, d.meta.gsc.end, d.gsc_totals.clicks, d.gsc_prev_totals.clicks, d.gsc_totals.impressions, d.gsc_totals.position
+        ));
+        for q in d.gsc_queries.iter().take(25) {
+            s.push_str(&format!("- 「{}」点击 {:.0}（前 {:.0}）展现 {:.0} 排名 {:.1}\n", q.row.key, q.row.clicks, q.prev_clicks, q.row.impressions, q.row.position));
+        }
+        s.push_str("头部页面：\n");
+        for p in d.gsc_pages.iter().take(20) {
+            s.push_str(&format!("- {} 点击 {:.0}（前 {:.0}）展现 {:.0} 排名 {:.1}\n", path_of(&p.row.key), p.row.clicks, p.prev_clicks, p.row.impressions, p.row.position));
+        }
+    }
+    if d.meta.ga4.fetched_at > 0 {
+        s.push_str(&format!("GA4（近 28 天）：浏览 {:.0}（前 28 天 {:.0}），会话 {:.0}。\n", d.ga4_totals.views, d.ga4_prev_views, d.ga4_totals.sessions));
+        let ev: Vec<String> = d.ga4_events.iter().filter(|e| e.dim.is_empty() && !["page_view", "session_start", "first_visit", "user_engagement", "scroll"].contains(&e.event.as_str())).map(|e| format!("{} {:.0}", e.event, e.count)).collect();
+        if !ev.is_empty() {
+            s.push_str(&format!("转化事件：{}\n", ev.join("，")));
+        }
+    }
+    if !d.opportunities.is_empty() {
+        s.push_str("Pilot 规则算出的机会：\n");
+        for o in d.opportunities.iter().take(12) {
+            s.push_str(&format!("- [{}] {}：{}\n", crate::site_ops::kind_label(&o.change), o.title, o.evidence));
+        }
+    }
+    if s.is_empty() {
+        s.push_str("（还没有接入数据，先从站点内容本身找改进点：标题描述、内链、内容缺口、技术问题。）\n");
+    }
+    s
+}
+
+/// 每周：AI 当运营负责人，读数据和代码，写出本周计划；计划里的每一项进入队列，由执行层逐个处理。
+async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    refresh_data(ctx, site, job).await;
+    job.step("plan", "running", "");
+    let q = site_ops::load_queue(&site_dir);
+    let history: Vec<String> = q
+        .iter()
+        .filter(|i| !matches!(i.status.as_str(), "open"))
+        .take(20)
+        .map(|i| format!("- [{}] {}{}", i.status, i.opp.title, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
+        .collect();
+    let n = site.ops.budget.items_per_run.clamp(1, 8) * 2;
+    let msg = format!(
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是 Pilot 拉到的数据和最近的运营记录；请再读一下站点的代码和主要页面（目录结构、首页、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出计划：[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"meta|content|internal_links|new_content|technical\",\"why\":\"依据\",\"priority\":1}}]",
+        name = site.name,
+        domain = site.domain,
+        brief = data_brief(&site_dir),
+        hist = if history.is_empty() { "（暂无）".to_string() } else { history.join("\n") },
+    );
+    let (conv_id, conv) = run_conversation(ctx, site, "plan", "", msg).await?;
+    let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
+    let tasks = crate::managed::parse_plan(&reply)?;
+    let week = chrono::Local::now().format("%G-W%V").to_string();
+    let opps: Vec<Opportunity> = tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Opportunity {
+            key: format!("plan:{week}:{}", crate::site_git::slugify(&format!("{} {}", t.page, t.title), 48)),
+            kind: "plan".into(),
+            title: t.title.clone(),
+            page: t.page.clone(),
+            evidence: t.why.clone(),
+            change: t.change.clone(),
+            score: 1000.0 - (t.priority.max(1) as f64) * 10.0 - i as f64,
+            ..Default::default()
+        })
+        .collect();
+    let added = site_ops::enqueue(&site_dir, &opps, now(), COOLDOWN)?;
+    let pdir = site_dir.join("plans");
+    let _ = std::fs::create_dir_all(&pdir);
+    let _ = std::fs::write(pdir.join(format!("{}.json", today())), serde_json::to_vec_pretty(&serde_json::json!({ "date": today(), "conv_id": conv_id, "tasks": tasks })).unwrap_or_default());
+    log(ctx, site, "planned", &format!("本周计划 {} 项", tasks.len()), &tasks.iter().take(5).map(|t| t.title.clone()).collect::<Vec<_>>().join("；"), "");
+    job.step("plan", "ok", &format!("{} 项，新入队 {}", tasks.len(), added.len()));
+    ctx.emit_queue(&site.id);
+    Ok(format!("本周计划 {} 项", tasks.len()))
+}
+
+/// 最近一次计划（托管控制台「计划」页）。
+pub fn latest_plan(site_dir: &Path) -> Option<serde_json::Value> {
+    let d = site_dir.join("plans");
+    let mut names: Vec<String> = std::fs::read_dir(&d).ok()?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".json")).collect();
+    names.sort();
+    let raw = std::fs::read(d.join(names.last()?)).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+async fn page_ok(url: &str) -> Result<(), String> {
+    let mut last = String::new();
+    for _ in 0..2 {
+        match reqwest::Client::new().get(url).timeout(Duration::from_secs(20)).send().await {
+            Ok(r) if r.status().is_success() || r.status().is_redirection() => return Ok(()),
+            Ok(r) => last = format!("返回 {}", r.status()),
+            Err(e) => last = format!("打不开：{e}"),
+        }
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+    Err(last)
+}
+
+/// 上线 1 小时后检查：改动的页面和首页都要能正常打开，打不开就自动回滚。
+async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let due: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "deployed" && i.watch_due > 0 && i.watched.is_empty() && now() >= i.watch_due).collect();
+    job.step("watch", "running", &format!("{} 条", due.len()));
+    let mut out = Vec::new();
+    for i in due {
+        let mut urls = vec![format!("https://{}/", site.domain)];
+        if !i.opp.page.is_empty() && i.opp.page.starts_with("https://") {
+            urls.insert(0, i.opp.page.clone());
+        }
+        let mut failure = String::new();
+        for u in &urls {
+            if let Err(e) = page_ok(u).await {
+                failure = format!("{u} {e}");
+                break;
+            }
+        }
+        if failure.is_empty() {
+            site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = "ok".into())?;
+            log(ctx, site, "watch_ok", &i.opp.title, "上线后页面正常", &i.id);
+            out.push(format!("{} 正常", i.opp.title));
+        } else {
+            site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = failure.clone())?;
+            log(ctx, site, "watch_failed", &i.opp.title, &failure, &i.id);
+            match rollback(ctx, site, job, &i.id).await {
+                Ok(_) => log(ctx, site, "rolled_back", &i.opp.title, &format!("上线后检查失败（{failure}），已自动回滚"), &i.id),
+                Err(e) => log(ctx, site, "failed", &i.opp.title, &format!("自动回滚失败：{e}"), &i.id),
+            }
+            ctx.notify(&format!("{} · 已自动回滚", site.name), &i.opp.title);
+            out.push(format!("{} 已回滚", i.opp.title));
+        }
+    }
+    job.step("watch", "ok", "");
+    Ok(out.join("；"))
+}
+
+/// 每日摘要：所有托管站点过去 24 小时做了什么、什么需要你。写一份报告并发系统通知。
+pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
+    let st = app.state::<crate::AppState>();
+    let since = now().saturating_sub(DAY);
+    let acts: Vec<crate::managed::Activity> = crate::managed::activity(&st.data_dir, 2000).into_iter().filter(|a| a.ts >= since).collect();
+    let managed: Vec<Site> = st.sites.list().into_iter().filter(|s| s.ops.level >= 5).collect();
+    let count = |k: &str| acts.iter().filter(|a| a.kind == k).count();
+    let mut needs = 0usize;
+    let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；过去 24 小时 AI 自动上线 {} 项、出计划 {} 次、回滚 {} 项。\n\n", today(), managed.len(), count("shipped"), count("planned"), count("rolled_back"));
+    for s in &managed {
+        let dir = st.sites.data_dir(&s.id);
+        let q = site_ops::load_queue(&dir);
+        let waiting: Vec<&QueueItem> = q.iter().filter(|i| matches!(i.status.as_str(), "proposed" | "failed")).collect();
+        needs += waiting.len();
+        let sum = crate::site_data::summary(&dir);
+        md.push_str(&format!("## {}\n\n", s.name));
+        if sum.fetched_at > 0 {
+            md.push_str(&format!("- 近 28 天 Google 点击 {:.0}（前 28 天 {:.0}）\n", sum.gsc_clicks, sum.gsc_clicks_prev));
+        }
+        for a in acts.iter().filter(|a| a.site_id == s.id) {
+            let k = match a.kind.as_str() {
+                "shipped" => "已上线",
+                "planned" => "计划",
+                "proposed" => "待你确认",
+                "rolled_back" => "已回滚",
+                "failed" => "失败",
+                "watch_failed" => "上线后检查失败",
+                "fallback" => "换用备用模型",
+                "budget" => "预算",
+                _ => continue,
+            };
+            md.push_str(&format!("- [{k}] {}{}\n", a.title, if a.detail.is_empty() { String::new() } else { format!("：{}", a.detail.chars().take(120).collect::<String>()) }));
+        }
+        if !waiting.is_empty() {
+            md.push_str(&format!("- 需要你：{} 项（{}）\n", waiting.len(), waiting.iter().take(3).map(|i| i.opp.title.clone()).collect::<Vec<_>>().join("；")));
+        }
+        md.push('\n');
+    }
+    let d = crate::managed::digests_dir(&st.data_dir);
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    std::fs::write(d.join(format!("{}.md", today())), &md).map_err(|e| e.to_string())?;
+    let body = format!("{} 个站点 · AI 上线 {} 项 · {} 项需要你", managed.len(), count("shipped"), needs);
+    use tauri_plugin_notification::NotificationExt;
+    let _ = app.notification().builder().title("托管日报").body(&body).show();
+    crate::managed::log(&st.data_dir, crate::managed::Activity { ts: now(), kind: "digest".into(), title: "托管日报".into(), detail: body.clone(), ..Default::default() });
+    Ok(body)
+}
+
+// ---------------------------------------------------------------------------
 // 调度：客户端在运行（托盘常驻）时每 10 分钟看一次；启动后先补跑错过的任务。
 // ---------------------------------------------------------------------------
 
@@ -1113,16 +1423,37 @@ pub fn start_scheduler(app: tauri::AppHandle) {
         loop {
             let ctx = Ctx { app: app.clone() };
             let st = ctx.state();
+            let mcfg = crate::managed::load(&st.data_dir);
+            MANAGED_TOKENS.store(mcfg.tokens_per_week, std::sync::atomic::Ordering::Relaxed);
+            // 每日摘要：过了设定的时间、今天还没发过、有托管站点
+            let hour: u8 = chrono::Local::now().format("%H").to_string().parse().unwrap_or(0);
+            if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && st.sites.list().iter().any(|s| s.ops.level >= 5) {
+                let _ = digest(&app);
+                let mut c = mcfg.clone();
+                c.last_digest = today();
+                let _ = crate::managed::save(&st.data_dir, &c);
+            }
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;
+                }
+                if site.ops.level >= 5 {
+                    if mcfg.paused {
+                        continue;
+                    }
+                    // 上线后检查优先：有到期的就先跑它
+                    let site_dir = st.sites.data_dir(&site.id);
+                    if site_ops::load_queue(&site_dir).iter().any(|i| i.status == "deployed" && i.watch_due > 0 && i.watched.is_empty() && now() >= i.watch_due) {
+                        let _ = start(ctx.clone(), &site.id, "watch", "schedule", None);
+                        continue;
+                    }
                 }
                 let state = load_state(&st.sites.data_dir(&site.id));
                 for task in TASKS {
                     // 从没跑过的任务以站点导入时间为起点：刚导入的站点不会立刻在后台跑起构建，第一次在一个周期后。
                     let last = state.last.get(*task).copied().unwrap_or(0).max(site.created_at);
                     // 没有数据源的站点只做体检
-                    let needs_data = *task != "health";
+                    let needs_data = !matches!(*task, "health" | "plan");
                     let has_data = !site.data.gsc_site.is_empty() || !site.data.ga4_property.is_empty() || !site.data.bing_site.is_empty();
                     if needs_data && !has_data {
                         continue;

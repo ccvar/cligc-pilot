@@ -27,6 +27,8 @@
   import { initOps } from '$lib/state/ops.svelte.js';
   import { initFleet } from '$lib/state/fleet.svelte.js';
   import SitesOverview from '$lib/components/site/SitesOverview.svelte';
+  import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
+  import { initManaged } from '$lib/state/managed.svelte.js';
   import DataConnectDialog from '$lib/components/site/DataConnectDialog.svelte';
   import TemplateSaveDialog from '$lib/components/library/TemplateSaveDialog.svelte';
   import TemplateUseDialog from '$lib/components/library/TemplateUseDialog.svelte';
@@ -72,6 +74,7 @@
   initSites();
   initOps();
   initFleet();
+  initManaged();
 </script>
 
 <svelte:window
@@ -162,6 +165,9 @@
         onfocus={focusSplit} ondrop={(target,edge)=>{const id=panes.splitDragId;endConversationDrag();void addSplit(id,edge,target);}} onresize={(layout)=>panes.conversationLayout=layout}/>
     {:else if !app.activeConn}
       <Welcome />
+
+    {:else if app.activeConn.kind === 'sites' && app.view === 'managed'}
+      <ManagedConsole />
 
     {:else if app.activeConn.kind === 'sites'}
       <SitesOverview />

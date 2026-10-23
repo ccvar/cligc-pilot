@@ -114,12 +114,7 @@ pub fn ops_overview(state: tauri::State<'_, AppState>, id: String) -> Result<Ops
     let st = site_runner::load_state(&dir);
     let mut next = std::collections::HashMap::new();
     for t in site_runner::TASKS {
-        let sched = match *t {
-            "scan" => &site.ops.scan,
-            "health" => &site.ops.health,
-            "report" => &site.ops.report,
-            _ => &site.ops.review,
-        };
+        let sched = site_runner::schedule_of(&site, t);
         let n = site_runner::period(sched).map(|p| st.last.get(*t).copied().unwrap_or(0).max(site.created_at) + p).unwrap_or(0);
         next.insert(t.to_string(), n);
     }
