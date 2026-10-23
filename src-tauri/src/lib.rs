@@ -40,6 +40,7 @@ mod site_github;
 mod site_jobs;
 mod site_ops;
 mod site_runner;
+mod site_vps;
 mod sites;
 mod tools;
 mod turn_deadline;
@@ -4464,6 +4465,9 @@ pub fn run() {
             site_cmds::site_pages_deployments,
             site_cmds::retry_pages_deployment,
             site_cmds::rollback_pages_deployment,
+            site_cmds::vps_key_status,
+            site_cmds::setup_vps_key,
+            site_cmds::revoke_vps_key,
             data_cmds::verify_google_sa,
             data_cmds::connect_google_sa,
             data_cmds::update_google_sa,

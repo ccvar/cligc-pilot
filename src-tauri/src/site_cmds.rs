@@ -127,6 +127,17 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
     }
     match site.deploy.mode.as_str() {
         "none" => {}
+        "vps" => {
+            let c = state.conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请选择部署用的 SSH 连接".to_string())?;
+            if c.kind != "ssh" {
+                return Err("VPS 部署要选一条远程（SSH）连接".into());
+            }
+            sites::check_command(&site.deploy.command)?;
+            if site.deploy.command.trim().is_empty() {
+                return Err("请填写发布命令（项目自带的发布脚本）".into());
+            }
+            site.deploy.command = site.deploy.command.trim().to_string();
+        }
         "direct" | "pages_git" | "workers" => {
             let c = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "请选择 Cloudflare 连接".to_string())?;
             if c.kind != "cloudflare" {
@@ -340,7 +351,7 @@ pub fn cancel_site_job(state: tauri::State<'_, AppState>, id: String) -> bool {
 #[tauri::command]
 pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
-    if !matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+    if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err(if site.deploy.mode == "pages_git" {
             "这个站点由 Cloudflare 在合并后自动构建，可以在下方「重新部署」".into()
         } else {
@@ -379,7 +390,7 @@ fn cf_for(state: &AppState, site: &Site) -> Result<(String, String), String> {
 #[tauri::command]
 pub async fn site_pages_deployments(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<crate::cf::PagesDeployment>, String> {
     let site = state.sites.get(&id)?;
-    if site.deploy.project.is_empty() {
+    if site.deploy.project.is_empty() || site.deploy.mode == "vps" {
         return Ok(vec![]);
     }
     let (token, acct) = cf_for(&state, &site)?;
@@ -405,6 +416,48 @@ pub async fn rollback_pages_deployment(state: tauri::State<'_, AppState>, id: St
     let site = state.sites.get(&id)?;
     let (token, acct) = cf_for(&state, &site)?;
     crate::cf::rollback_deployment(&token, &acct, &site.deploy.project, &deployment_id).await
+}
+
+// ---------------------------------------------------------------------------
+// VPS 部署授权
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct VpsKeyStatus {
+    pub has_key: bool,
+    pub public_key: String,
+    pub host: String,
+}
+
+fn vps_conn(state: &AppState, site: &Site) -> Result<crate::conns::Connection, String> {
+    let c = state.conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接并保存".to_string())?;
+    if c.kind != "ssh" {
+        return Err("部署连接不是 SSH 连接".into());
+    }
+    Ok(c)
+}
+
+#[tauri::command]
+pub fn vps_key_status(state: tauri::State<'_, AppState>, id: String) -> Result<VpsKeyStatus, String> {
+    let site = state.sites.get(&id)?;
+    let c = vps_conn(&state, &site)?;
+    Ok(VpsKeyStatus { has_key: crate::site_vps::has_key(&c.id), public_key: crate::site_vps::public_key(&c.id).unwrap_or_default(), host: format!("{}@{}", c.ssh_user, c.ssh_host) })
+}
+
+/// 为部署授权：生成 Pilot 专用部署密钥，通过这条 SSH 连接加进服务器的 authorized_keys，并实际登录验证一次。
+#[tauri::command]
+pub async fn setup_vps_key(state: tauri::State<'_, AppState>, id: String) -> Result<VpsKeyStatus, String> {
+    let site = state.sites.get(&id)?;
+    let c = vps_conn(&state, &site)?;
+    let pk = crate::site_vps::install(&state.ssh, &c).await?;
+    Ok(VpsKeyStatus { has_key: true, public_key: pk, host: format!("{}@{}", c.ssh_user, c.ssh_host) })
+}
+
+#[tauri::command]
+pub async fn revoke_vps_key(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let site = state.sites.get(&id)?;
+    let c = vps_conn(&state, &site)?;
+    crate::site_vps::revoke(&state.ssh, &c).await
 }
 
 // ---------------------------------------------------------------------------

@@ -406,8 +406,11 @@ pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job
 }
 
 async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
-    if !matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+    if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err("这个站点不是由 Pilot 直接上传部署的".into());
+    }
+    if site.deploy.mode == "vps" {
+        return deploy_vps(site, conns, site_dir, job, rec).await;
     }
     if site.deploy.project.trim().is_empty() {
         return Err(if site.deploy.mode == "workers" { "请先在站点设置里填写 Worker 名称".into() } else { "请先在站点设置里填写 Cloudflare Pages 项目".into() });
@@ -475,6 +478,37 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
             }
         }
     }
+    Ok(())
+}
+
+/// VPS：准备代码 → 安装 → 构建 → 检查 → 执行项目自带的发布命令（带 Pilot 部署密钥的 ssh / scp 包装）。
+/// 发布脚本自己负责上传、备份、健康检查与失败恢复；IndexNow 通常由服务器上的程序自己推，这里不重复。
+async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
+    let _ = site_dir;
+    let ssh = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接".to_string())?;
+    job.step("prepare", "running", "");
+    let dir = crate::site_git::code_dir(site, conns.get(&site.gh_conn_id).ok().as_ref()).inspect_err(|_| job.step("prepare", "failed", ""))?;
+    if dir.join(".git").exists() {
+        rec.commit = crate::site_git::head_sha(&dir).await;
+        rec.message = crate::site_git::head_subject(&dir).await;
+        rec.dirty = !crate::site_git::is_clean(&dir).await;
+    }
+    job.step("prepare", "ok", rec.commit.get(..7).unwrap_or("非 git 目录"));
+    build_and_check(site, &dir, None, job).await?;
+    job.step("upload", "running", &format!("{}@{}", ssh.ssh_user, ssh.ssh_host));
+    let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;
+    let mut env = build_env(site, job);
+    env.extend(crate::site_vps::deploy_env(&shim));
+    job.shell(&site.deploy.command, &dir, &env, STEP_TIMEOUT).await.map_err(|e| {
+        job.step("upload", "failed", "");
+        format!("发布失败：{e}")
+    })?;
+    drop(shim);
+    job.step("upload", "ok", &site.domain);
+    rec.url = if site.domain.is_empty() { String::new() } else { format!("https://{}", site.domain) };
+    job.set_url(&rec.url);
+    job.step("indexnow", "skipped", "VPS 站点由服务器上的程序自己推送");
+    rec.indexnow = "skipped".into();
     Ok(())
 }
 

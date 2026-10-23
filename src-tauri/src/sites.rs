@@ -41,6 +41,12 @@ pub struct DeployConfig {
     /// 生产分支（Pages 的 production branch）。
     #[serde(default)]
     pub branch: String,
+    /// VPS 部署：用哪条 SSH 连接授权（Pilot 专用部署密钥加在这台服务器上）。
+    #[serde(default)]
+    pub ssh_conn_id: String,
+    /// VPS 部署：项目自带的发布命令（在站点根目录执行），如 `./scripts/publish-production.sh publish`。
+    #[serde(default)]
+    pub command: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
@@ -402,8 +408,10 @@ pub struct Detected {
     /// 从 deploy 脚本里解析出的构建时变量（如 `GA_MEASUREMENT_ID=G-XXXX npm run build`）。
     pub env: Vec<(String, String)>,
     pub cf_project: String,
-    /// pages | workers：deploy 脚本 / wrangler 配置显示的部署方式。
+    /// pages | workers | vps：deploy 脚本 / wrangler 配置 / 发布脚本显示的部署方式。
     pub deploy_kind: String,
+    /// VPS：识别出的发布命令。
+    pub deploy_command: String,
     pub branch: String,
     pub domain: String,
     pub indexnow_key: String,
@@ -762,6 +770,7 @@ pub fn detect(dir: &Path) -> Detected {
         Some(p) if has_dep(p, "vitepress") => ("vitepress", "docs/.vitepress/dist"),
         Some(p) if has_dep(p, "vite") => ("vite", "dist"),
         Some(_) => ("node", "dist"),
+        None if dir.join("go.mod").exists() => ("go", "."),
         None if dir.join("hugo.toml").exists() || dir.join("config.toml").exists() && dir.join("content").is_dir() => ("hugo", "public"),
         None if dir.join("_config.yml").exists() => ("jekyll", "_site"),
         None => ("static", "."),
@@ -834,6 +843,42 @@ pub fn detect(dir: &Path) -> Detected {
         .or_else(|| domain_from_files(dir))
         .or_else(|| wrangler.as_ref().and_then(|(_, _, hosts)| hosts.first().cloned()))
         .unwrap_or_default();
+    // VPS：项目自带发布脚本（scp / rsync 到自己的服务器）。Makefile 里的 check / test 目标当作检查。
+    if d.deploy_kind.is_empty() {
+        for s in ["scripts/publish-production.sh", "scripts/publish.sh", "scripts/deploy.sh", "deploy.sh"] {
+            if dir.join(s).is_file() {
+                d.deploy_kind = "vps".into();
+                d.deploy_command = if s.ends_with("publish-production.sh") { format!("./{s} publish") } else { format!("./{s}") };
+                break;
+            }
+        }
+    }
+    if let Ok(mk) = fs::read_to_string(dir.join("Makefile")) {
+        let has = |t: &str| mk.lines().any(|l| l.starts_with(&format!("{t}:")));
+        if d.build.checks.is_empty() {
+            for t in ["check", "test"] {
+                if has(t) {
+                    d.build.checks.push(format!("make {t}"));
+                }
+            }
+        }
+    }
+    if d.domain.is_empty() {
+        // .env.example 里的 BASE_URL / SITE_URL
+        if let Ok(t) = fs::read_to_string(dir.join(".env.example")) {
+            for l in t.lines() {
+                let l = l.trim();
+                if let Some(v) = l.strip_prefix("BASE_URL=").or_else(|| l.strip_prefix("SITE_URL=")) {
+                    if let Ok(h) = normalize_domain(v.trim_matches(['"', '\''])) {
+                        if !h.is_empty() && h != "localhost" {
+                            d.domain = h;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     if d.deploy_kind.is_empty() && (pilot.is_some() || !d.cf_project.is_empty()) {
         d.deploy_kind = "pages".into();
     }

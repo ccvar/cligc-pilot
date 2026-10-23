@@ -165,7 +165,8 @@ pub fn forbidden_path(path: &str) -> bool {
         || name.starts_with("vite.config")
         || name.starts_with("next.config")
         || name.starts_with("svelte.config")
-        || matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules")
+        || matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin")
+        || matches!(name, "go.mod" | "go.sum" | "Makefile" | "Dockerfile")
         || ["js", "ts", "mjs", "cjs", "jsx", "tsx", "py", "sh", "rs", "go", "toml", "yml", "yaml"].iter().any(|e| name.ends_with(&format!(".{e}")))
 }
 

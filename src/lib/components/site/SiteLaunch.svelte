@@ -57,7 +57,7 @@
       </div>
     </div>
 
-    {#if site.deploy.mode !== 'workers'}
+    {#if site.deploy.mode !== 'workers' && site.deploy.mode !== 'vps'}
     <div class="lstep" class:done={st.pages && (st.domain_attached || !site.domain)}>
       <span class="n">{st.pages && (st.domain_attached || !site.domain) ? '✓' : 2}</span>
       <div class="lb">

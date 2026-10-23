@@ -7,8 +7,8 @@ import { connections, selectConn } from './connections.svelte.js';
 
 export const SITE_PREFIX = 'site:';
 /** 由 Pilot 构建、检查、上传的部署方式（Pages 直接上传 / Workers）。 */
-export const pilotDeploys = (mode: string) => mode === 'direct' || mode === 'workers';
-export const DEPLOY_LABEL: Record<string, string> = { direct: 'Pilot 构建后上传到 Pages', workers: 'Pilot 构建后部署到 Workers（wrangler deploy）', pages_git: 'Pages 绑定 GitHub（合并即上线）', none: '暂不部署' };
+export const pilotDeploys = (mode: string) => mode === 'direct' || mode === 'workers' || mode === 'vps';
+export const DEPLOY_LABEL: Record<string, string> = { direct: 'Pilot 构建后上传到 Pages', workers: 'Pilot 构建后部署到 Workers（wrangler deploy）', vps: 'VPS：检查通过后执行项目自带的发布脚本', pages_git: 'Pages 绑定 GitHub（合并即上线）', none: '暂不部署' };
 export const isSiteConnId = (id: string) => id.startsWith(SITE_PREFIX);
 export const siteIdOf = (connId: string) => (isSiteConnId(connId) ? connId.slice(SITE_PREFIX.length) : '');
 
@@ -37,7 +37,9 @@ type ImportForm = {
   build: string;
   outDir: string;
   checks: string;
-  mode: 'direct' | 'workers' | 'pages_git' | 'none';
+  mode: 'direct' | 'workers' | 'vps' | 'pages_git' | 'none';
+  sshConnId: string;
+  command: string;
   cfConnId: string;
   project: string;
   branch: string;
@@ -51,7 +53,7 @@ function blankImport(): ImportForm {
   return {
     open: false, step: 'source', source: 'local', ghConnId: '', repo: '', repos: [], reposLoading: false, busy: false, err: '', preview: null,
     name: '', domain: '', install: '', build: '', outDir: '', checks: '', mode: 'direct', cfConnId: '', project: '', branch: 'main',
-    projects: [], projectsLoading: false, indexnowKey: '', keepEnv: true,
+    projects: [], projectsLoading: false, indexnowKey: '', keepEnv: true, sshConnId: '', command: '',
   };
 }
 
@@ -212,7 +214,7 @@ function matchProject() {
   const f = sites.imp;
   if (!f.preview || !f.projects.length) return;
   const d = f.preview.detected;
-  if (f.mode === 'workers' || d.deploy_kind === 'workers') return; // Workers 不在 Pages 项目列表里
+  if (f.mode === 'workers' || f.mode === 'vps' || d.deploy_kind === 'workers' || d.deploy_kind === 'vps') return; // 不在 Pages 项目列表里
   const repo = f.source === 'github' ? f.repo : d.github_repo;
   const hit = f.projects.find((p) => p.name === (f.project || d.cf_project))
     ?? f.projects.find((p) => !!f.domain && p.domains.includes(f.domain))
@@ -234,7 +236,8 @@ export async function detectImport(arg: { path?: string }) {
     Object.assign(f, {
       preview, step: 'review', name: preview.name, domain: d.domain, install: d.build.install, build: d.build.build,
       outDir: d.build.out_dir, checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
-      indexnowKey: d.indexnow_key, mode: f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
+      indexnowKey: d.indexnow_key, mode: d.deploy_kind === 'vps' ? 'vps' : f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
+      command: d.deploy_command,
     });
     matchProject();
   } catch (e) { f.err = String(e); }
@@ -259,7 +262,7 @@ export async function confirmImport() {
         framework: d.framework,
         default_branch: f.source === 'github' ? (f.repos.find((r) => r.full_name === f.repo)?.default_branch ?? d.git_default_branch) : (d.git_default_branch || d.git_branch),
         build: { install: f.install.trim(), build: f.build.trim(), out_dir: f.outDir.trim(), checks: f.checks.split('\n').map((c) => c.trim()).filter(Boolean), env_keys: [] },
-        deploy: { mode: f.mode, cf_conn_id: f.mode === 'none' ? '' : f.cfConnId, project: f.mode === 'none' ? '' : f.project.trim(), branch: f.branch.trim() },
+        deploy: { mode: f.mode, cf_conn_id: f.mode === 'none' || f.mode === 'vps' ? '' : f.cfConnId, project: f.mode === 'none' || f.mode === 'vps' ? '' : f.project.trim(), branch: f.branch.trim(), ssh_conn_id: f.mode === 'vps' ? f.sshConnId : '', command: f.mode === 'vps' ? f.command.trim() : '' },
         env: f.keepEnv ? d.env : [],
         indexnow_key: f.indexnowKey.trim(),
       },

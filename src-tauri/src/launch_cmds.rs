@@ -48,7 +48,7 @@ pub async fn import_cf_project(state: tauri::State<'_, AppState>, conn_id: Strin
         default_branch: "main".into(),
         framework: det.framework.clone(),
         build: det.build.clone(),
-        deploy: sites::DeployConfig { mode: "direct".into(), cf_conn_id: conn.id.clone(), project: slug, branch: "main".into() },
+        deploy: sites::DeployConfig { mode: "direct".into(), cf_conn_id: conn.id.clone(), project: slug, branch: "main".into(), ..Default::default() },
         data: sites::DataBinding { indexnow_key: det.indexnow_key.clone(), ..Default::default() },
         ops: sites::OpsConfig::default(),
         pinned: false,
@@ -101,8 +101,8 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String) -> Res
         deployed: crate::site_deploy::load_history(&state.sites.data_dir(&id)).iter().any(|r| r.ok),
         ..Default::default()
     };
-    if site.deploy.mode == "workers" {
-        // Workers 的路由 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
+    if matches!(site.deploy.mode.as_str(), "workers" | "vps") {
+        // Workers / VPS 的路由、域名由项目自己的配置管，不走 Pages 这一步。 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
         st.pages = true;
         st.domain_attached = true;
     } else if let Ok(cf) = state.conns.get(&site.deploy.cf_conn_id) {

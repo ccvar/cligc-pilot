@@ -3,6 +3,7 @@
   import type { Site } from '$lib/types';
   import Dropdown from '$lib/Dropdown.svelte';
   import SiteDataSettings from './SiteDataSettings.svelte';
+  import VpsAuth from './VpsAuth.svelte';
   import { app } from '$lib/state/app.svelte.js';
   import { sites, editSite, saveSiteDraft, setSiteEnv, removeSite } from '$lib/state/sites.svelte.js';
   import { setTags, setPinned, fleet } from '$lib/state/fleet.svelte.js';
@@ -32,6 +33,7 @@
   const modeOpts = $derived([
     { value: 'direct', label: 'Pilot 构建后上传到 Pages' },
     { value: 'workers', label: 'Pilot 构建后部署到 Workers（wrangler deploy）' },
+    { value: 'vps', label: 'VPS（项目自带的发布脚本）' },
     ...(site.source === 'github' ? [{ value: 'pages_git', label: 'Pages 绑定 GitHub（合并即上线）' }] : []),
     { value: 'none', label: '暂不部署' },
   ]);
@@ -94,13 +96,20 @@
       <h3>部署</h3>
       <div class="grid2">
         <div class="field"><span class="lbl">方式</span><Dropdown bind:value={d.deploy.mode} options={modeOpts} /></div>
-        {#if d.deploy.mode !== 'none'}
+        {#if d.deploy.mode === 'vps'}
+          <div class="field"><span class="lbl">服务器（SSH 连接）</span><Dropdown bind:value={d.deploy.ssh_conn_id} placeholder="选择远程连接" options={app.conns.filter((c) => c.kind === 'ssh').map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} /></div>
+          <div class="field" style="grid-column:1/-1"><label for="ss-cmd">发布命令</label><input id="ss-cmd" class="tin mono" bind:value={d.deploy.command} spellcheck="false" /><small>在站点根目录执行。发布脚本自己负责上传、备份、健康检查和失败恢复；Pilot 只在构建和检查通过后才执行它。</small></div>
+        {:else if d.deploy.mode !== 'none'}
           <div class="field"><span class="lbl">Cloudflare 连接</span><Dropdown bind:value={d.deploy.cf_conn_id} placeholder="选择连接" options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
           <div class="field"><label for="ss-proj">{d.deploy.mode === 'workers' ? 'Worker 名称' : 'Pages 项目'}</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" />{#if d.deploy.mode === 'workers'}<small>路由、绑定、变量都按仓库里的 wrangler 配置部署。</small>{/if}</div>
           {#if d.deploy.mode !== 'workers'}<div class="field"><label for="ss-pbranch">生产分支</label><input id="ss-pbranch" class="tin mono" bind:value={d.deploy.branch} spellcheck="false" /></div>{/if}
         {/if}
       </div>
     </div>
+
+    {#if site.deploy.mode === 'vps'}
+      <div class="card"><h3>VPS 部署授权</h3><VpsAuth {site} /></div>
+    {/if}
 
     <SiteDataSettings draft={d} {site} />
 

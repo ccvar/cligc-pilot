@@ -46,8 +46,13 @@
       <dl class="kv">
         <dt>方式</dt><dd>{DEPLOY_LABEL[site.deploy.mode] ?? '暂不部署'}</dd>
         {#if site.deploy.mode !== 'none'}
+          {#if site.deploy.mode === 'vps'}
+            <dt>服务器</dt><dd>{app.conns.find((c) => c.id === site.deploy.ssh_conn_id)?.name ?? '未选择连接'}</dd>
+            <dt>发布命令</dt><dd class="mono" style="font-size:11.5px">{site.deploy.command}</dd>
+          {:else}
           <dt>{site.deploy.mode === 'workers' ? 'Worker' : 'Pages'}</dt><dd>{site.deploy.project || '—'} · {cf ? cf.remark?.trim() || cf.name : '未选择连接'}</dd>
-          {#if site.deploy.mode !== 'workers'}<dt>生产分支</dt><dd class="mono">{site.deploy.branch}</dd>{/if}
+          {/if}
+          {#if site.deploy.mode !== 'workers' && site.deploy.mode !== 'vps'}<dt>生产分支</dt><dd class="mono">{site.deploy.branch}</dd>{/if}
         {/if}
         {#if last}
           <dt>上次上线</dt>

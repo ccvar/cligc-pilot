@@ -16,6 +16,7 @@
   const modeOpts = $derived([
     { value: 'direct', label: 'Pilot 构建后上传到 Pages', sub: '构建、检查、wrangler pages deploy 都由 Pilot 执行' },
     { value: 'workers', label: 'Pilot 构建后部署到 Workers', sub: '按仓库里的 wrangler 配置执行 wrangler deploy（静态资源 + Worker）' },
+    { value: 'vps', label: 'VPS（项目自带的发布脚本）', sub: '检查通过后执行发布脚本；SSH 用 Pilot 的部署密钥，不用输密码' },
     ...(f.source === 'github' ? [{ value: 'pages_git', label: 'Pages 绑定 GitHub', sub: '合并到生产分支后 Cloudflare 自动构建' }] : []),
     { value: 'none', label: '暂不部署', sub: '只管代码与数据，以后再配' },
   ]);
@@ -85,7 +86,15 @@
         <div class="field"><span class="lbl">部署</span>
           <Dropdown bind:value={f.mode} options={modeOpts} />
         </div>
-        {#if f.mode !== 'none'}
+        {#if f.mode === 'vps'}
+          <div class="grid2">
+            <div class="field"><span class="lbl">服务器（SSH 连接）</span>
+              <Dropdown bind:value={f.sshConnId} placeholder="选择远程连接" options={app.conns.filter((c) => c.kind === 'ssh').map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} />
+            </div>
+            <div class="field"><label for="si-cmd">发布命令</label><input id="si-cmd" class="tin mono" bind:value={f.command} spellcheck="false" /></div>
+          </div>
+          <p class="hint">导入后在站点设置里点「为部署授权」：Pilot 通过这条连接在服务器上加一把专用部署密钥，以后发布不用再输密码。</p>
+        {:else if f.mode !== 'none'}
           {#if !cfConns.length}
             <p class="hint">还没有 Cloudflare 连接。<button class="link-btn" onclick={() => { closeSiteImport(); openCfConnect(); }}>连接 Cloudflare</button>，或先选「暂不部署」。</p>
           {:else}
