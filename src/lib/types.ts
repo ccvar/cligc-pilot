@@ -222,6 +222,7 @@ export interface SiteDetected {
   cf_project: string;
   deploy_kind: string;
   deploy_command: string;
+  deploy_target: string;
   branch: string;
   domain: string;
   indexnow_key: string;

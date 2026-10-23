@@ -225,6 +225,14 @@ function matchProject() {
   f.mode = hit.source_type === 'github' && f.source === 'github' ? 'pages_git' : 'direct';
 }
 
+/** 发布脚本里写的 user@host → 主机相同的 SSH 连接（用户名也相同的优先）。 */
+function pickSshConn(target: string): string {
+  if (!target) return '';
+  const [user, host] = target.split('@');
+  const ssh = app.conns.filter((c) => c.kind === 'ssh' && c.ssh_host === host);
+  return (ssh.find((c) => c.ssh_user === user) ?? ssh[0])?.id ?? '';
+}
+
 export async function detectImport(arg: { path?: string }) {
   const f = sites.imp;
   f.busy = true; f.err = '';
@@ -238,6 +246,7 @@ export async function detectImport(arg: { path?: string }) {
       outDir: d.build.out_dir, checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
       indexnowKey: d.indexnow_key, mode: d.deploy_kind === 'vps' ? 'vps' : f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
       command: d.deploy_command,
+      sshConnId: pickSshConn(d.deploy_target),
     });
     matchProject();
   } catch (e) { f.err = String(e); }

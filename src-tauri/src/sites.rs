@@ -412,6 +412,8 @@ pub struct Detected {
     pub deploy_kind: String,
     /// VPS：识别出的发布命令。
     pub deploy_command: String,
+    /// VPS：发布脚本 / publish.env 里写的默认目标（user@host），用来自动选上对应的 SSH 连接。
+    pub deploy_target: String,
     pub branch: String,
     pub domain: String,
     pub indexnow_key: String,
@@ -606,6 +608,20 @@ pub fn wrangler_config(dir: &Path) -> Option<(String, bool, Vec<String>)> {
             }
         }
         return Some((name, workers, hosts));
+    }
+    None
+}
+
+/// 在脚本文本里找第一个 `user@host` 形式的 SSH 目标（host 为 IP 或域名）。
+pub fn find_ssh_target(text: &str) -> Option<String> {
+    for raw in text.split(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '=' | '{' | '}' | '(' | ')' | ':' | ',')) {
+        let raw = raw.trim_start_matches('-');
+        let Some((user, host)) = raw.split_once('@') else { continue };
+        let user_ok = !user.is_empty() && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        let host_ok = host.contains('.') && host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-')) && !host.ends_with('.');
+        if user_ok && host_ok && !host.contains("example") {
+            return Some(format!("{user}@{host}"));
+        }
     }
     None
 }
@@ -849,6 +865,13 @@ pub fn detect(dir: &Path) -> Detected {
             if dir.join(s).is_file() {
                 d.deploy_kind = "vps".into();
                 d.deploy_command = if s.ends_with("publish-production.sh") { format!("./{s} publish") } else { format!("./{s}") };
+                let mut text = fs::read_to_string(dir.join(s)).unwrap_or_default();
+                for extra in ["deploy/publish.env", "deploy/publish.env.example"] {
+                    if let Ok(t) = fs::read_to_string(dir.join(extra)) {
+                        text = format!("{t}\n{text}");
+                    }
+                }
+                d.deploy_target = find_ssh_target(&text).unwrap_or_default();
                 break;
             }
         }
@@ -1076,6 +1099,14 @@ mod tests {
         let t3 = tempfile::tempdir().unwrap();
         fs::write(t3.path().join("wrangler.toml"), "name = \"site\"\npages_build_output_dir = \"dist\"\n").unwrap();
         assert!(!wrangler_config(t3.path()).unwrap().1);
+    }
+
+    #[test]
+    fn ssh_targets_are_found_in_publish_scripts() {
+        assert_eq!(find_ssh_target("target=${OANEO_SSH_TARGET:-root@74.82.198.105}").as_deref(), Some("root@74.82.198.105"));
+        assert_eq!(find_ssh_target("OANEO_SSH_TARGET='deploy@srv.example.org'\nX=1").as_deref(), None);
+        assert_eq!(find_ssh_target("rsync -az dist/ web@my-box.net:/srv/www").as_deref(), Some("web@my-box.net"));
+        assert_eq!(find_ssh_target("echo hi"), None);
     }
 
     #[test]
