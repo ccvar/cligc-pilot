@@ -2,7 +2,8 @@
   // 客户端（Cligc Pilot）应用图标：浅色圆角方 + 绿色渐变错落双柱，与 src-tauri/icons 的 app 图标一致。
   // 界面里多处同时渲染，渐变 id 按实例区分，避免互相引用。
   let { size = 18 }: { size?: number } = $props();
-  const gid = `ai-g-${$props.id()}`;
+  const uid = $props.id();
+  const gid = `ai-g-${uid}`;
 </script>
 
 <svg class="ai" width={size} height={size} viewBox="6 6 88 88" role="img" aria-label="Cligc Pilot">
