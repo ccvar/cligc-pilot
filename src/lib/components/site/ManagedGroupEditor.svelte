@@ -6,7 +6,7 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, saveGroup, deleteGroup } from '$lib/state/managed.svelte.js';
+  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE } from '$lib/state/managed.svelte.js';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
@@ -36,11 +36,18 @@
   }
   const moving = $derived((g?.sites ?? []).filter((id) => otherOf(id)).length);
   function close() { if (!managed.saving) managed.editor = null; }
-  // 两步：先选站点，再看规则；新建时只有第二步才能「开始托管」，编辑时两步可以随便切
-  let step = $state<1 | 2>(1);
+  const isNew = $derived(!g?.id);
+  // 三步：选站点 → 运营方式 → 发布与模型；新建时只有最后一步才能「开始托管」，编辑时可以随便切
+  let step = $state<1 | 2 | 3>(1);
+  const STEPS = ['选择站点', '运营方式', '发布与模型'];
+  function toggleAction(k: string) {
+    if (!g) return;
+    g.actions = g.actions.includes(k) ? g.actions.filter((x) => x !== k) : [...g.actions, k];
+  }
+  const topicCount = $derived((g?.topics ?? '').split('\n').filter((l) => l.trim()).length);
+  const canNext = $derived(!!g && !!g.name.trim() && (!isNew || g.sites.length > 0) && (step !== 2 || g.actions.length > 0));
   let lastFor = '';
   $effect(() => { const k = g ? g.id || 'new' : ''; if (k !== lastFor) { lastFor = k; step = 1; q = ''; } });
-  const isNew = $derived(!g?.id);
   const siteName = (id: string) => sites.list.find((x) => x.id === id)?.name ?? id;
 </script>
 
@@ -50,9 +57,10 @@
     <header class="sheet-head">
       <b><Icon name="sparkles" />{g.id ? '编辑托管方案' : '新建托管方案'}</b>
       <nav class="stepper" aria-label="步骤">
-        <button class:on={step === 1} class:done={step === 2} onclick={() => (step = 1)}><span class="sn">{step === 2 ? '✓' : 1}</span>选择站点</button>
-        <span class="sl"></span>
-        <button class:on={step === 2} onclick={() => (step = 2)} disabled={isNew && !g.sites.length}><span class="sn">2</span>托管规则</button>
+        {#each STEPS as label, i (label)}
+          {#if i}<span class="sl"></span>{/if}
+          <button class:on={step === i + 1} class:done={step > i + 1} onclick={() => (step = (i + 1) as 1 | 2 | 3)} disabled={isNew && i > 0 && (!g.sites.length || (i === 2 && !g.actions.length))}><span class="sn">{step > i + 1 ? '✓' : i + 1}</span>{label}</button>
+        {/each}
       </nav>
       <button class="x" onclick={close} aria-label="关闭">×</button>
     </header>
@@ -79,10 +87,39 @@
         {#if moving}<small class="warn-text">{moving} 个站点会从原来的方案移到这里，改用这个方案的规则。</small>{/if}
       </div>
 
+     {:else if step === 2}
+      <div class="field"><label for="ge-goal">运营目标</label>
+        <textarea id="ge-goal" class="tin plain" rows="2" bind:value={g.goal} maxlength="500" placeholder="例如：提升中文页的 Google 自然流量，重点是费率、邀请和下载相关的查询词"></textarea>
+        <small>一两句话。每次制定计划、每个改动都会围绕它。</small>
+      </div>
+      <div class="field"><span class="lbl">允许的动作 <span class="faint cnt">健康巡查始终开启</span></span>
+        <div class="acts">
+          {#each ACTIONS as a (a.key)}
+            <label class="act" class:on={g.actions.includes(a.key)}>
+              <input type="checkbox" checked={g.actions.includes(a.key)} onchange={() => toggleAction(a.key)} />
+              <span><b>{a.label}</b><small>{a.sub}</small></span>
+            </label>
+          {/each}
+        </div>
+        {#if !g.actions.length}<small class="warn-text">至少选一种，否则托管什么也不会做。</small>{/if}
+      </div>
+      <div class="field"><label for="ge-topics">选题清单 <span class="faint cnt">{topicCount ? `${topicCount} 个` : '可选'}</span></label>
+        <textarea id="ge-topics" class="tin plain" rows="4" bind:value={g.topics} placeholder={'一行一个关键词或主题，例如：\ngate kyc 认证教程\ngate 手续费对比'}></textarea>
+        <small>写新页面时优先从这里选（已有页面覆盖的会跳过）。还没有数据的新站主要靠它。</small>
+      </div>
+      <div class="field">
+        <div class="lbl-row"><label for="ge-guide">内容准则</label><span class="grow"></span>
+          {#if g.guidelines !== GUIDELINE_TEMPLATE}<button class="link-btn sm" onclick={() => g && (g.guidelines = GUIDELINE_TEMPLATE)}>恢复默认模板</button>{/if}
+          {#if g.guidelines.trim()}<button class="link-btn sm" onclick={() => g && (g.guidelines = '')}>清空</button>{/if}
+        </div>
+        <textarea id="ge-guide" class="tin guide" rows="12" bind:value={g.guidelines} placeholder="写给 AI 的写作规则：读者、语气、结构、长度、事实要求、禁区……留空就不额外约束。"></textarea>
+        <small>原样交给 AI，写新页面和修改页面都必须遵守。默认模板只是起点，按你的站点改。</small>
+      </div>
      {:else}
       <div class="chosen">
         <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="link-btn" onclick={() => (step = 1)}>修改</button></div>
         <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
+        <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
       </div>
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
       <div class="field"><span class="lbl">新页面（整篇新内容）</span>
@@ -107,11 +144,14 @@
       <span class="grow"></span>
       {#if step === 1}
         <button class="btn small ghost" onclick={close} disabled={managed.saving}>取消</button>
-        {#if !isNew}<button class="btn small ghost" onclick={saveGroup} disabled={managed.saving || !g.name.trim()}>保存</button>{/if}
-        <button class="btn small primary" onclick={() => (step = 2)} disabled={!g.name.trim() || (isNew && !g.sites.length)}>下一步：托管规则<Icon name="arrow" size={12} /></button>
       {:else}
-        <button class="btn small ghost" onclick={() => (step = 1)} disabled={managed.saving}>上一步</button>
-        <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim()}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : `开始托管 ${g.sites.length} 个站点`}{/if}</button>
+        <button class="btn small ghost" onclick={() => (step = (step - 1) as 1 | 2)} disabled={managed.saving}>上一步</button>
+      {/if}
+      {#if !isNew && step < 3}<button class="btn small ghost" onclick={saveGroup} disabled={managed.saving || !g.name.trim() || !g.actions.length}>保存</button>{/if}
+      {#if step < 3}
+        <button class="btn small primary" onclick={() => (step = (step + 1) as 2 | 3)} disabled={!canNext}>下一步：{STEPS[step]}<Icon name="arrow" size={12} /></button>
+      {:else}
+        <button class="btn small primary" onclick={saveGroup} disabled={managed.saving || !g.name.trim() || !g.actions.length}>{#if managed.saving}<span class="spin"></span>保存中{:else}{g.id ? '保存' : `开始托管 ${g.sites.length} 个站点`}{/if}</button>
       {/if}
     </footer>
   </div>
@@ -149,5 +189,20 @@
   .chips .pill { gap: 5px; }
   .ch-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .chosen .link-btn { font-size: 12px; }
+  .ch-sub { font-size: 12px; color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tin.plain { font-family: inherit; font-size: 13px; line-height: 1.6; }
+  .tin.guide { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; min-height: 200px; }
+  .lbl-row { display: flex; align-items: baseline; gap: 10px; }
+  .lbl-row label { font-size: 12px; font-weight: 550; }
+  .lbl-row .grow { flex: 1; }
+  .link-btn.sm { font-size: 12px; }
+  .acts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+  .act { display: flex; align-items: flex-start; gap: 9px; padding: 8px 10px; border: 1px solid var(--border2); border-radius: 9px; cursor: pointer; transition: border-color .12s, background-color .12s; }
+  .act:hover { background: var(--su-hover); }
+  .act.on { border-color: var(--accent); background: #fcfbf8; }
+  .act input { margin: 3px 0 0; accent-color: var(--accent); }
+  .act span { display: flex; flex-direction: column; min-width: 0; }
+  .act b { font-size: 12.5px; font-weight: 600; }
+  .act small { font-size: 11px; color: var(--faint); line-height: 1.45; }
   .chosen + .sec { border-top: none; padding-top: 4px; }
 </style>

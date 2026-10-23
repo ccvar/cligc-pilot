@@ -91,8 +91,35 @@ pub struct ManagedGroup {
     pub daily_changes: u32,
     #[serde(default = "default_tokens")]
     pub tokens_per_week: u64,
+    /// 运营目标：一两句话，写进每次计划和改动的指令里。
+    #[serde(default)]
+    pub goal: String,
+    /// 允许的动作（改动类型）：meta / content / internal_links / new_content / technical。健康巡查始终开启。
+    #[serde(default = "all_actions")]
+    pub actions: Vec<String>,
+    /// 内容准则：运营人员写的写作规则（语言、语气、结构、长度、禁区……），原样交给 AI。空＝不额外约束。
+    #[serde(default)]
+    pub guidelines: String,
+    /// 选题清单：一行一个关键词 / 主题，新内容优先从这里选；没有数据的新站主要靠它。
+    #[serde(default)]
+    pub topics: String,
     #[serde(default)]
     pub created_at: u64,
+}
+
+pub const ACTIONS: &[&str] = &["meta", "content", "internal_links", "new_content", "technical"];
+fn all_actions() -> Vec<String> {
+    ACTIONS.iter().map(|s| s.to_string()).collect()
+}
+pub fn action_label(a: &str) -> &'static str {
+    match a {
+        "meta" => "改标题和描述",
+        "content" => "改进已有页面内容",
+        "internal_links" => "加站内链接",
+        "new_content" => "写新页面",
+        "technical" => "修技术问题",
+        _ => "其它",
+    }
 }
 
 impl ManagedGroup {
@@ -111,8 +138,38 @@ impl ManagedGroup {
             new_content: c.new_content.clone(),
             daily_changes: c.daily_changes,
             tokens_per_week: c.tokens_per_week,
+            goal: String::new(),
+            actions: all_actions(),
+            guidelines: String::new(),
+            topics: String::new(),
             created_at: 0,
         }
+    }
+    pub fn allows(&self, change: &str) -> bool {
+        // 计划里偶尔出现的细分类型（title / meta_description）都算「改标题和描述」
+        let c = match change { "title" | "meta_description" => "meta", other => other };
+        self.actions.iter().any(|a| a == c)
+    }
+    pub fn topic_list(&self) -> Vec<String> {
+        self.topics.lines().map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim().to_string()).filter(|l| !l.is_empty()).collect()
+    }
+    /// 写进 AI 指令的「这个方案的运营方式」：目标、允许的动作、选题、内容准则。全为空时返回空串。
+    pub fn brief(&self) -> String {
+        let mut out = String::new();
+        if !self.goal.trim().is_empty() {
+            out.push_str(&format!("【运营目标】\n{}\n\n", self.goal.trim()));
+        }
+        let allowed: Vec<&str> = ACTIONS.iter().filter(|a| self.allows(a)).map(|a| action_label(a)).collect();
+        let denied: Vec<&str> = ACTIONS.iter().filter(|a| !self.allows(a)).map(|a| action_label(a)).collect();
+        out.push_str(&format!("【允许的动作】{}{}\n\n", allowed.join("、"), if denied.is_empty() { String::new() } else { format!("（不要做：{}）", denied.join("、")) }));
+        let topics = self.topic_list();
+        if !topics.is_empty() {
+            out.push_str(&format!("【选题清单】新内容优先从这里选（已经有页面覆盖的跳过）：\n{}\n\n", topics.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n")));
+        }
+        if !self.guidelines.trim().is_empty() {
+            out.push_str(&format!("【内容准则】（运营人员制定，写作和修改都必须遵守）\n{}\n\n", self.guidelines.trim()));
+        }
+        out
     }
     /// 这个站点现在该不该自动运行（方案暂停或站点单独停止都不跑）。
     pub fn active_for(&self, site_id: &str) -> bool {
@@ -176,6 +233,15 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     }
     if g.daily_changes > 50 {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
+    }
+    if g.actions.is_empty() {
+        return Err("至少允许一种动作，否则托管什么也不会做".into());
+    }
+    if let Some(a) = g.actions.iter().find(|a| !ACTIONS.contains(&a.as_str())) {
+        return Err(format!("未知的动作：{a}"));
+    }
+    if g.guidelines.chars().count() > 8000 || g.topics.chars().count() > 8000 || g.goal.chars().count() > 500 {
+        return Err("目标 / 内容准则 / 选题清单太长了".into());
     }
     Ok(())
 }
@@ -375,6 +441,24 @@ mod group_tests {
         assert_eq!(c.groups[0].daily_changes, 7);
         assert!(!adopt_orphans(&mut c, &["a".into()]), "已在方案里的不再迁移");
         assert_eq!(c.rules_for("a").daily_changes, 7);
+    }
+
+    #[test]
+    fn plan_brief_carries_goal_actions_topics_and_guidelines() {
+        let mut g = ManagedGroup::from_legacy(&ManagedConfig::default(), "x");
+        g.goal = "提升中文页的 Google 流量".into();
+        g.actions = vec!["meta".into(), "new_content".into()];
+        g.topics = "- gate kyc\n\n• gate 手续费\n".into();
+        g.guidelines = "用简体中文".into();
+        let b = g.brief();
+        assert!(b.contains("提升中文页的 Google 流量"));
+        assert!(b.contains("改标题和描述、写新页面"));
+        assert!(b.contains("不要做：改进已有页面内容"));
+        assert!(b.contains("- gate kyc\n- gate 手续费"));
+        assert!(b.contains("用简体中文"));
+        assert!(g.allows("title") && !g.allows("content"));
+        assert!(validate_group(&ManagedGroup { actions: vec![], ..g.clone() }).is_err());
+        assert!(validate_group(&ManagedGroup { actions: vec!["deploy".into()], ..g }).is_err());
     }
 
     #[test]

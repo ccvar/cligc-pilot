@@ -338,7 +338,9 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
     // 处理：按分数挑前 N 个还没处理的
-    let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open").collect();
+    // 全托管：只挑方案允许的动作
+    let rules = group_rules(ctx, site);
+    let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
     picked.truncate(site.ops.budget.items_per_run.max(1) as usize);
     let mut done = 0;
@@ -650,6 +652,11 @@ fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     }
 }
 
+/// 全托管站点所在方案的规则（不是全托管返回 None）。
+fn group_rules(ctx: &Ctx, site: &Site) -> Option<crate::managed::ManagedGroup> {
+    (site.ops.level >= 5).then(|| crate::managed::load(&ctx.state().data_dir).rules_for(&site.id))
+}
+
 /// 第 3、4 档：在独立工作树的分支上让 AI 改好并提交；Pilot 跑检查、按差异判定类型、推送开 PR；
 /// 第 4 档且整份差异都在白名单内时自动合并上线。
 async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u8) -> Result<String, String> {
@@ -670,8 +677,9 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         i.base_sha = base_sha.clone();
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
+    let plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
     let msg = format!(
-        "【运营 · 改动】{title}\n\n{ev}\n当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
+        "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
 1. 找到这个页面对应的源文件，按上面的依据修改。改动方向：{guide}\n\
 2. 改动小而集中，只处理这一个机会；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
@@ -722,6 +730,9 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     } else {
         reasons.join("；")
     };
+    if level >= 5 && verdict == "auto" && !managed.allows(&item.opp.change) {
+        verdict = format!("托管方案「{}」不允许「{}」这类改动，留给你确认", managed.name, crate::managed::action_label(&item.opp.change));
+    }
     if level >= 5 && verdict == "auto" && shipped_today(&site_dir) >= managed.daily_changes as usize {
         verdict = format!("今天已自动上线 {} 条（上限），这一条留给你确认或明天再上", managed.daily_changes);
     }
@@ -1272,16 +1283,24 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         .map(|i| format!("- [{}] {}{}", i.status, i.opp.title, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
         .collect();
     let n = site.ops.budget.items_per_run.clamp(1, 8) * 2;
+    let rules = group_rules(ctx, site);
+    let plan_brief = rules.as_ref().map(|g| g.brief()).unwrap_or_default();
+    let kinds: Vec<&str> = crate::managed::ACTIONS.iter().copied().filter(|a| rules.as_ref().is_none_or(|g| g.allows(a))).collect();
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是 Pilot 拉到的数据和最近的运营记录；请再读一下站点的代码和主要页面（目录结构、首页、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出计划：[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"meta|content|internal_links|new_content|technical\",\"why\":\"依据\",\"priority\":1}}]",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是 Pilot 拉到的数据、这个站点所在托管方案的运营方式和最近的运营记录；请再读一下站点的代码和主要页面（目录结构、首页、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{plan_brief}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则、优先从选题清单里选。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出计划：[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据\",\"priority\":1}}]",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
         hist = if history.is_empty() { "（暂无）".to_string() } else { history.join("\n") },
+        kinds = kinds.join("|"),
     );
     let (conv_id, conv) = run_conversation(ctx, site, "plan", "", msg).await?;
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
-    let tasks = crate::managed::parse_plan(&reply)?;
+    let mut tasks = crate::managed::parse_plan(&reply)?;
+    // 模型偶尔会安排方案不允许的动作：直接丢掉
+    if let Some(g) = &rules {
+        tasks.retain(|t| g.allows(&t.change));
+    }
     let week = chrono::Local::now().format("%G-W%V").to_string();
     let opps: Vec<Opportunity> = tasks
         .iter()

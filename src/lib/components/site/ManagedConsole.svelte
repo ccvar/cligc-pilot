@@ -12,7 +12,7 @@
   import { openConv } from '$lib/state/conversations';
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
-  import { managed, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -38,6 +38,7 @@
   const siteName = (id: string) => sitesById.get(id)?.name ?? id;
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
   const groups = $derived(o?.groups ?? []);
+  const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 日报设置（全局）：只比较这两项
   const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
 
@@ -183,7 +184,11 @@
             <button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>
             <button class="btn tiny" onclick={() => editGroup(g)}><Icon name="sliders" size={11} />编辑</button>
           </h3>
+          {#if g.goal?.trim()}<p class="goal">{g.goal}</p>{/if}
           <div class="rules">
+            <span><Icon name="checks" size={12} />{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span>
+            {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
+            {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
             <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}</span>
             <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '点头后发布'}</span>
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
@@ -216,6 +221,7 @@
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
+  .goal { margin: -6px 0 10px; font-size: 12.5px; color: var(--text); line-height: 1.6; max-width: 80ch; }
   .rules { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; }
   .rules :global(.ico) { color: var(--faint); }

@@ -411,6 +411,14 @@ export interface ManagedGroup {
   new_content: 'auto' | 'review';
   daily_changes: number;
   tokens_per_week: number;
+  /** 运营目标（一两句话） */
+  goal: string;
+  /** 允许的动作：meta / content / internal_links / new_content / technical */
+  actions: string[];
+  /** 内容准则（运营人员编辑，原样交给 AI） */
+  guidelines: string;
+  /** 选题清单，一行一个 */
+  topics: string;
   created_at: number;
 }
 export interface ManagedSite {

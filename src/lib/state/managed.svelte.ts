@@ -23,11 +23,41 @@ class ManagedState {
   editor = $state<ManagedGroup | null>(null);
 }
 
+/** 托管方案允许的动作（和后端 managed::ACTIONS 一致）。 */
+export const ACTIONS: { key: string; label: string; sub: string }[] = [
+  { key: 'meta', label: '改标题和描述', sub: '点击率偏低的页面重写 title / description' },
+  { key: 'content', label: '改进已有页面', sub: '补充、更新正文，回应排在 8–20 位的查询词' },
+  { key: 'internal_links', label: '加站内链接', sub: '在相关页面之间补链接' },
+  { key: 'new_content', label: '写新页面', sub: '按选题清单或内容缺口写新内容' },
+  { key: 'technical', label: '修技术问题', sub: '死链、跳转、sitemap、抓取错误' },
+];
+
+/** 新建方案时预填的内容准则：只是起点，运营人员可以整段改写或清空。 */
+export const GUIDELINE_TEMPLATE = `# 内容准则
+
+## 读者与语气
+- 面向普通用户，用简体中文；句子短、直接，先给结论再解释。
+- 不夸大、不堆砌关键词；不写「稳赚」「100%」这类绝对化承诺。
+
+## 结构
+- 每页一个明确主题，H1 和页面标题一致，正文用 H2 / H3 分段。
+- 新页面 800–1500 字，开头两三句直接回答读者的问题；适合时加对比表和常见问题（FAQ）。
+- 标题不超过 32 个汉字，描述 70–120 字，包含主要关键词但读起来自然。
+
+## 事实
+- 费率、时间、数字以站点现有内容或官方来源为准，不确定的不写；不编造数据和用户评价。
+
+## 链接
+- 新页面至少链接两个相关的已有页面，并在一个相关的已有页面里加一条指向它的链接。
+- 不改推荐链接、邀请码和价格。
+`;
+
 function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
   return {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false,
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
-    new_content: c?.new_content ?? 'review', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000, created_at: 0,
+    new_content: c?.new_content ?? 'review', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
+    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', created_at: 0,
   };
 }
 
