@@ -199,9 +199,12 @@
   .term-credential-repair:hover { background: rgba(153, 27, 27, .42); color: #fecaca; }
   .wb-close { font-size: 17px; line-height: 1; }
   /* 分屏时和旁边的窗格一样，先写机器名 */
+  /* 窗格窄的时候先收地址那一行，机器名最后才省略 */
   .th-info:has(.wb-name) { display: flex; align-items: center; gap: 10px; min-width: 0; }
-  .wb-name { display: inline-flex; align-items: center; gap: 7px; flex: none; font-size: 12px; }
-  .wb-name b { font-weight: 600; color: var(--text); }
+  .th-info:has(.wb-name) small.rhead-line { flex: 0 100 auto; min-width: 0; }
+  .wb-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; font-size: 12px; }
+  .wb-name b { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wb-name :global(svg.distro) { flex: none; transform: none; }
   .tc-spin { width: 9px; height: 9px; border: 1.5px solid #4b4640; border-top-color: #8b857c; border-radius: 50%; animation: spin .7s linear infinite; }
   /* 远程视图头部：终端/文件 页签 */
   .rhead-acts { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }

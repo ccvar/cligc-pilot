@@ -27,6 +27,8 @@
 <style>
   .rp-head { flex: none; height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; min-width: 0; }
   .rp-ic { display: inline-flex; flex: none; }
+  /* 全局那条 translateY(-1px) 是给没有降部的英文小字补的；这里名字是粗体、常带中文，再上移就比字高了 */
+  .rp-ic :global(svg.distro) { transform: none; }
   .rp-name { font-weight: 600; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rp-st { flex: none; color: var(--faint); font-size: 11.5px; }
   .rp-st.on { color: var(--dim); }

@@ -92,11 +92,11 @@
   .multi .pane{outline:0}
   .multi .pane.focused{box-shadow:none}
   .divider{position:absolute;z-index:10;touch-action:none;background:transparent;outline:0}
-  .divider::after{content:'';position:absolute;background:var(--border,#e7e5df);pointer-events:none}
-  .divider.x::after{top:0;bottom:0;left:50%;width:1px;transform:translateX(-.5px)}
-  .divider.y::after{left:0;right:0;top:50%;height:1px;transform:translateY(-.5px)}
+  .divider::after{content:'';position:absolute;background:var(--pane-divider,var(--border,#e7e5df));pointer-events:none}
+  .divider.x::after{top:0;bottom:0;left:50%;width:var(--pane-divider-size,1px);transform:translateX(-50%)}
+  .divider.y::after{left:0;right:0;top:50%;height:var(--pane-divider-size,1px);transform:translateY(-50%)}
   .divider.x{transform:translateX(-50%);cursor:col-resize}.divider.y{transform:translateY(-50%);cursor:row-resize}
-  .divider:hover::after,.divider:focus-visible::after{background:var(--border2,#ddd9cf)}
+  .divider:hover::after,.divider:focus-visible::after{background:var(--pane-divider-hover,var(--border2,#ddd9cf))}
   .drop-preview{position:absolute;z-index:20;pointer-events:none;box-sizing:border-box;display:grid;place-items:center;background:color-mix(in srgb,var(--bg,#fff) 60%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border:2px solid #2f80ed;border-radius:8px;box-shadow:0 0 0 1px #2f80ed24}
   .drop-preview span{padding:6px 12px;border-radius:18px;background:#2f80ed;color:#fff;font-size:12px;font-weight:500;box-shadow:0 4px 14px #1a5ca733}
 </style>

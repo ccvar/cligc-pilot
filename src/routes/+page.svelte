@@ -205,8 +205,8 @@
 
     {:else if remotePanes.visible && remotePanes.layout}
       <!-- 远程分屏：聚焦的窗格是完整工作台，其余窗格只显示各自的终端 -->
-      <ConversationCanvas layout={remotePanes.layout} focused={remotePanes.focused} dragging={!!remotePanes.dragId} dragConversation={remotePanes.dragId} preview={remotePanes.preview} content={remoteContent}
-        onfocus={focusRemotePane} ondrop={(target,edge)=>{const id=remotePanes.dragId;endRemoteDrag();addRemotePane(id,edge,target);}} onresize={resizeRemoteLayout}/>
+      <div class="remote-split"><ConversationCanvas layout={remotePanes.layout} focused={remotePanes.focused} dragging={!!remotePanes.dragId} dragConversation={remotePanes.dragId} preview={remotePanes.preview} content={remoteContent}
+        onfocus={focusRemotePane} ondrop={(target,edge)=>{const id=remotePanes.dragId;endRemoteDrag();addRemotePane(id,edge,target);}} onresize={resizeRemoteLayout}/></div>
 
     {:else if app.view === 'remote'}
       <RemoteWorkbench />
@@ -252,6 +252,8 @@
 <style>
   .conversation-drag-ghost{position:fixed;z-index:1000;left:clamp(12px,calc(var(--drag-x) + 14px),calc(100vw - 312px))!important;top:clamp(12px,calc(var(--drag-y) + 12px),calc(100vh - 50px))!important;width:300px;max-width:calc(100vw - 24px);height:38px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 12px;background:color-mix(in srgb,var(--bg,#fff) 96%,transparent);border:1px solid var(--border,#e7e5df);border-radius:8px;box-shadow:0 8px 24px #2d29231c;pointer-events:none;color:var(--fg,#282723)}
   .conversation-drag-icon{display:inline-flex;align-items:center;line-height:0;flex:none}
+  /* 远程分屏：分隔线夹在两块黑底终端之间，用细的深色线，不要一道亮白缝 */
+  .remote-split{display:contents;--pane-divider:#3a3632;--pane-divider-hover:#5a544c;--pane-divider-size:.5px}
   .conversation-drag-sub{flex:none;margin-left:auto;font-size:11px;color:var(--faint,#9a958c)}
   .conversation-drag-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500}
   .single-split-preview{position:absolute;z-index:100;pointer-events:none;box-sizing:border-box;display:grid;place-items:center;background:color-mix(in srgb,var(--bg,#fff) 60%,transparent);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border:2px solid #2f80ed;border-radius:8px;box-shadow:0 0 0 1px #2f80ed24}
