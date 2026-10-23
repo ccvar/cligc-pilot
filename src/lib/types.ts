@@ -197,6 +197,8 @@ export interface SiteOps {
   model: string;
   downgraded: string[];
   min_impressions: number;
+  /** 托管用的站点阶段：空＝自动；new / growing / established＝手动指定 */
+  stage: string;
 }
 export interface Site {
   id: string;
@@ -422,11 +424,15 @@ export interface ManagedGroup {
   created_at: number;
 }
 export interface ManagedSite {
-  id: string; group_id: string; active: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
+  id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
   plan_date: string; plan_count: number; job: string;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
 }
 export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }
 export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string }
 export interface PlanTask { title: string; page: string; change: string; why: string; priority: number }
-export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; tasks: PlanTask[] } }
+export interface StageInfo { stage: string; auto_stage: string; reason: string; manual: string }
+/** AI 归纳的站点定位；by=user 表示运营人员改过，AI 不再覆盖。 */
+export interface Positioning { text: string; by: string; updated: number }
+export interface SiteStageView extends StageInfo { positioning: Positioning }
+export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; stage?: string; tasks: PlanTask[] }; positioning: Positioning; stage: StageInfo }

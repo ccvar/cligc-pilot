@@ -575,3 +575,36 @@ pub async fn site_icons(state: tauri::State<'_, AppState>) -> Result<std::collec
     }
     Ok(out)
 }
+
+#[derive(serde::Serialize)]
+pub struct SiteStageView {
+    #[serde(flatten)]
+    pub stage: crate::site_stage::StageInfo,
+    pub positioning: crate::site_stage::Positioning,
+}
+
+/// 站点阶段（自动判断 / 手动指定）和 AI 归纳的站点定位。
+#[tauri::command]
+pub fn site_stage_info(state: tauri::State<'_, AppState>, id: String) -> Result<SiteStageView, String> {
+    let site = state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    Ok(SiteStageView { stage: crate::site_stage::stage_of(&site, &dir), positioning: crate::site_stage::load_positioning(&dir) })
+}
+
+/// 运营人员改写站点定位（之后 AI 照用、不覆盖）；传空串＝交还给 AI 下次重新归纳。
+#[tauri::command]
+pub fn save_site_positioning(state: tauri::State<'_, AppState>, id: String, text: String) -> Result<crate::site_stage::Positioning, String> {
+    state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let text = text.trim();
+    if text.chars().count() > 1200 {
+        return Err("站点定位太长了（1200 字以内）".into());
+    }
+    let p = if text.is_empty() {
+        crate::site_stage::Positioning { by: "ai".into(), ..crate::site_stage::load_positioning(&dir) }
+    } else {
+        crate::site_stage::Positioning { text: text.into(), by: "user".into(), updated: crate::now_secs() }
+    };
+    crate::site_stage::save_positioning(&dir, &p)?;
+    Ok(p)
+}

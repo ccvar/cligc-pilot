@@ -6,6 +6,12 @@ import { launcher } from './launcher.svelte.js';
 import { SITE_PREFIX } from './sites.svelte.js';
 import { selectConn } from './connections.svelte.js';
 
+export const STAGE_LABEL: Record<string, string> = { new: '新站', growing: '成长期', established: '成熟期' };
+export const STAGE_FOCUS: Record<string, string> = {
+  new: '没有或很少搜索数据：不做数据调优，重点是体检修复和按站点定位补内容（支柱页、读者常问的问题、教程 / 对比 / 术语页），再补站内链接。',
+  growing: '有展现、点击还少：先补排在 8–20 位的查询词对应的内容、改标题描述，再补内容缺口，最后做和已有展现主题相邻的增量内容。',
+  established: '已有稳定流量：以 SEO 调整为主（低点击率、点击下滑、接近首页的页面），增量内容只做和已有流量主题紧密相关、有需求的选题。',
+};
 export const LEVEL_LABEL: Record<number, string> = { 1: '1 · 只分析', 2: '2 · 出方案', 3: '3 · 自动提 PR', 4: '4 · 低风险自动上线', 5: '5 · 全托管' };
 export const KIND_LABEL: Record<string, string> = {
   plan: 'AI 计划', low_ctr: '点击率偏低', striking: '排名 8–20', declining: '点击下滑', content_gap: '内容缺口', crawl_issue: '抓取错误', sitemap_error: 'sitemap 报错',

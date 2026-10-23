@@ -170,6 +170,9 @@ pub struct ManagedSite {
     pub group_id: String,
     /// 方案没暂停、站点也没单独停止。
     pub active: bool,
+    /// 站点阶段：new / growing / established；stage_manual 表示运营人员手动指定的。
+    pub stage: String,
+    pub stage_manual: bool,
     pub name: String,
     pub domain: String,
     pub shipped_week: usize,
@@ -215,7 +218,10 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             waiting_total += waiting;
             let plan = crate::site_runner::latest_plan(&dir);
             let group = cfg.group_of(&s.id);
+            let stg = crate::site_stage::stage_of(&s, &dir);
             ManagedSite {
+                stage: stg.stage.clone(),
+                stage_manual: !stg.manual.is_empty(),
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
                 active: group.is_some_and(|g| g.active_for(&s.id)),
                 failed: q.iter().filter(|i| i.status == "failed").count(),
@@ -244,6 +250,8 @@ pub struct SitePlan {
     pub site_id: String,
     pub site_name: String,
     pub plan: serde_json::Value,
+    pub positioning: crate::site_stage::Positioning,
+    pub stage: crate::site_stage::StageInfo,
 }
 
 #[tauri::command]
@@ -254,8 +262,9 @@ pub fn managed_plans(state: tauri::State<'_, AppState>) -> Vec<SitePlan> {
         .into_iter()
         .filter(|s| s.ops.level >= 5)
         .filter_map(|s| {
-            let p = crate::site_runner::latest_plan(&state.sites.data_dir(&s.id))?;
-            Some(SitePlan { site_id: s.id, site_name: s.name, plan: p })
+            let dir = state.sites.data_dir(&s.id);
+            let p = crate::site_runner::latest_plan(&dir)?;
+            Some(SitePlan { positioning: crate::site_stage::load_positioning(&dir), stage: crate::site_stage::stage_of(&s, &dir), site_id: s.id, site_name: s.name, plan: p })
         })
         .collect()
 }

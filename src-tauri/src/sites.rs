@@ -145,6 +145,9 @@ pub struct OpsConfig {
     /// 机会扫描阈值：展现量下限（小站可调低）。
     #[serde(default = "default_min_impressions")]
     pub min_impressions: u32,
+    /// 托管运营用的站点阶段：空＝按数据自动判断；new / growing / established＝运营人员手动指定。
+    #[serde(default)]
+    pub stage: String,
 }
 
 fn default_level() -> u8 {
@@ -174,6 +177,7 @@ impl Default for OpsConfig {
             model: String::new(),
             downgraded: Vec::new(),
             min_impressions: default_min_impressions(),
+            stage: String::new(),
         }
     }
 }

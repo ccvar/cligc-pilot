@@ -8,7 +8,7 @@
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
-  import { runTask, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { runTask, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
@@ -125,10 +125,16 @@
       {#each o?.sites ?? [] as s (s.id)}
         {@const p = managed.plans.find((x) => x.site_id === s.id)}
         <div class="card">
-          <h3>{s.name} <span class="sub">{p ? `${md(p.plan.date)}制定` : '还没有计划'}</span><span class="grow"></span>
+          <h3><SiteIcon id={s.id} size={15} />{s.name}<span class="stg {s.stage}">{STAGE_LABEL[s.stage] ?? s.stage}</span><span class="sub">{p ? `${md(p.plan.date)}制定` : '还没有计划'}</span><span class="grow"></span>
             {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
             <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}><Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}</button>
           </h3>
+          {#if p?.positioning.text}
+            <div class="pos">
+              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="link-btn" onclick={() => openSite(s.id, 'ops')}>修改</button></div>
+              <p>{p.positioning.text}</p>
+            </div>
+          {/if}
           {#if p}
             <ol class="plan">
               {#each p.plan.tasks as t, i (i)}
@@ -201,6 +207,7 @@
                 {@const on = !g.stopped.includes(id)}
                 <div class="li gs">
                   <button class="gs-name" onclick={() => openSite(id)}><SiteIcon {id} size={15} /><span>{siteName(id)}</span></button>
+                  {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
                   {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting} · <span class="warn-text">需要你 {s.waiting}</span>{/if}</span>{/if}
                   <span class="grow"></span>
                   <span class="gs-state" class:on={on && !g.paused}>{g.paused ? '方案已暂停' : on ? '托管中' : '已停止'}</span>
@@ -230,6 +237,15 @@
   .gs-name { display: inline-flex; align-items: center; gap: 8px; border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 550; color: var(--text); cursor: pointer; min-width: 0; }
   .gs-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gs-name:hover span { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border2); }
+  .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
+  .stg.growing { background: var(--su-run-soft); color: var(--su-run); }
+  .stg.established { background: var(--su-ok-soft); color: var(--ok); }
+  .pos { margin: -2px 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); }
+  .pos-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
+  .pos-t .faint { font-weight: 400; font-size: 11.5px; }
+  .pos-t .grow { flex: 1; }
+  .pos-t .link-btn { font-size: 12px; font-weight: 400; }
+  .pos p { margin: 4px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .gs-meta { font-size: 11.5px; white-space: nowrap; }
   .gs .grow { flex: 1; }
   .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }

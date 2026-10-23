@@ -7,7 +7,10 @@
   import { app } from '$lib/state/app.svelte.js';
   import { brainLabel, launcherModelOpts } from '$lib/state/models';
   import { sites, editSite, saveSiteDraft } from '$lib/state/sites.svelte.js';
-  import { ops, loadOverview, loadReports, openReport, runTask, WHITELIST, LEVEL_LABEL, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadOverview, loadReports, openReport, runTask, WHITELIST, LEVEL_LABEL, CHANGE_LABEL, STAGE_LABEL, STAGE_FOCUS } from '$lib/state/ops.svelte.js';
+  import { invoke } from '@tauri-apps/api/core';
+  import type { SiteStageView } from '$lib/types';
+  import { say } from '$lib/state/app.svelte.js';
   import { managed, openManaged, setManagedSites, newGroup, editGroup, setSiteActive, loadManaged } from '$lib/state/managed.svelte.js';
   import { clock, num } from './fmt';
 
@@ -29,6 +32,24 @@
     { key: 'review' as const, label: '效果复盘', sub: '上线满 4 周的改动前后对比，持续负面自动降档' },
   ];
   const when = clock;
+  // 站点阶段与定位
+  let sv = $state<SiteStageView | null>(null);
+  let posDraft = $state('');
+  let posSaving = $state(false);
+  async function loadStage(id: string) {
+    try { const v = await invoke<SiteStageView>('site_stage_info', { id }); sv = v; posDraft = v.positioning.text; } catch { sv = null; }
+  }
+  $effect(() => { void loadStage(site.id); });
+  const shownStage = $derived(d?.ops.stage || sv?.auto_stage || 'new');
+  async function savePositioning(text: string) {
+    posSaving = true;
+    try {
+      const p = await invoke<SiteStageView['positioning']>('save_site_positioning', { id: site.id, text });
+      if (sv) sv.positioning = p; posDraft = p.text;
+      say(text.trim() ? '站点定位已保存，AI 之后按它来' : '已交还给 AI，下次制定计划时重新归纳');
+    } catch (e) { say(String(e), 'err'); }
+    finally { posSaving = false; }
+  }
   // 全托管：站点属于哪个托管方案；还没加入时点第 5 档先选方案
   $effect(() => { if (!managed.overview) void loadManaged(); });
   const groups = $derived(managed.overview?.groups ?? []);
@@ -93,6 +114,31 @@
         <p class="hint warn-text">以下类型的改动因效果复盘持续负面，在这个站点最高只到第 3 档：{d.ops.downgraded.map((k) => CHANGE_LABEL[k] ?? k).join('、')}
           <button class="link-btn" onclick={() => (d.ops.downgraded = [])}>恢复</button></p>
       {/if}
+    </div>
+
+    <div class="card">
+      <h3><Icon name="target" />站点阶段与定位 <span class="sub">托管运营按它决定每周做什么、写什么</span></h3>
+      <div class="stage-row">
+        <div class="field st-pick"><span class="lbl">站点阶段</span>
+          <Dropdown bind:value={d.ops.stage} options={[
+            { value: '', label: `自动判断（当前：${STAGE_LABEL[sv?.auto_stage ?? 'new']}）`, sub: sv?.reason },
+            { value: 'new', label: '新站', sub: '没有或很少搜索数据' },
+            { value: 'growing', label: '成长期', sub: '有展现、点击还少' },
+            { value: 'established', label: '成熟期', sub: '已有稳定流量' },
+          ]} />
+        </div>
+        <p class="st-focus"><span class="pill {shownStage === 'established' ? 'ok' : shownStage === 'growing' ? 'run' : 'warn'}">{STAGE_LABEL[shownStage]}</span>{STAGE_FOCUS[shownStage]}</p>
+      </div>
+      <div class="field" style="margin-top:14px">
+        <div class="pos-head"><span class="lbl">站点定位</span>
+          {#if sv?.positioning.text}<span class="faint pos-by">{sv.positioning.by === 'user' ? '你改过 · AI 照用' : sv.positioning.updated ? `AI 归纳 · ${clock(sv.positioning.updated)}` : 'AI 归纳'}</span>{/if}
+          <span class="grow"></span>
+          {#if sv?.positioning.by === 'user'}<button class="link-btn sm" onclick={() => savePositioning('')} disabled={posSaving}>交还给 AI 重新归纳</button>{/if}
+        </div>
+        <textarea class="tin plain" rows="4" bind:value={posDraft} placeholder="还没有。AI 下次制定计划时会先读站点（首页、导航、栏目、主要页面），归纳出主题、目标读者、语言、已有栏目和内容类型、商业目标；你也可以现在就写。"></textarea>
+        <small>选题不确定时，AI 从这里推导增量内容：定位里还有哪些主题、读者问题没被现有页面覆盖。改过之后 AI 按你的版本来，不再覆盖。</small>
+        {#if posDraft.trim() !== (sv?.positioning.text ?? '').trim()}<div class="row-end"><button class="btn small ghost" onclick={() => (posDraft = sv?.positioning.text ?? '')}>撤销</button><button class="btn small primary" onclick={() => savePositioning(posDraft)} disabled={posSaving || !posDraft.trim()}>保存定位</button></div>{/if}
+      </div>
     </div>
 
     <div class="card">
@@ -185,6 +231,16 @@
   .lv.on { border-color: var(--accent); box-shadow: inset 0 0 0 .5px var(--accent); background: #fcfbf8; }
   .lv.on .lv-n { background: var(--accent); color: #fff; }
   .ok-ic { color: var(--accent); flex: none; }
+  .stage-row { display: grid; grid-template-columns: minmax(200px, 280px) 1fr; gap: 12px 20px; align-items: end; }
+  .st-focus { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
+  .st-focus .pill { margin-right: 8px; }
+  @container page (max-width: 640px) { .stage-row { grid-template-columns: 1fr; } }
+  .pos-head { display: flex; align-items: baseline; gap: 10px; }
+  .pos-head .lbl { font-size: 12px; font-weight: 550; color: var(--text); }
+  .pos-head .grow { flex: 1; }
+  .pos-by { font-size: 11.5px; }
+  .link-btn.sm { font-size: 12px; }
+  .tin.plain { font-family: inherit; font-size: 13px; line-height: 1.6; }
   .mg { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); font-size: 12.5px; color: var(--dim); }
   .mg :global(.ico) { color: var(--dim); flex: none; }
   .mg .grow { flex: 1; }

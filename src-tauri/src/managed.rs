@@ -405,6 +405,21 @@ pub struct PlanTask {
 }
 
 /// 从模型回复里取出计划 JSON（```json … ``` 代码块，或回复里第一个 JSON 数组）。
+/// 计划回复：`{"positioning": "...", "tasks": [...]}`，也兼容只有任务数组的老格式。
+pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
+    let body = if let Some(i) = reply.find("```json") {
+        reply[i + 7..].split("```").next().unwrap_or("").to_string()
+    } else {
+        let a = reply.find(['{', '[']).ok_or("回复里没有计划（缺少 JSON）")?;
+        let b = reply.rfind(['}', ']']).ok_or("回复里没有计划（缺少 JSON）")?;
+        reply[a..=b].to_string()
+    };
+    let v: serde_json::Value = serde_json::from_str(body.trim()).map_err(|e| format!("计划 JSON 无法解析：{e}"))?;
+    let positioning = v["positioning"].as_str().unwrap_or_default().to_string();
+    let tasks = parse_plan(&format!("```json\n{}\n```", if v.is_array() { v.to_string() } else { v["tasks"].to_string() }))?;
+    Ok((positioning, tasks))
+}
+
 pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
     let body = if let Some(i) = reply.find("```json") {
         let rest = &reply[i + 7..];
@@ -459,6 +474,16 @@ mod group_tests {
         assert!(g.allows("title") && !g.allows("content"));
         assert!(validate_group(&ManagedGroup { actions: vec![], ..g.clone() }).is_err());
         assert!(validate_group(&ManagedGroup { actions: vec!["deploy".into()], ..g }).is_err());
+    }
+
+    #[test]
+    fn plan_replies_carry_positioning_and_tasks() {
+        let r = "好的\n```json\n{\"positioning\":\"面向中文用户的交易所教程站\",\"tasks\":[{\"title\":\"写 KYC 教程\",\"change\":\"new_content\"}]}\n```";
+        let (p, t) = parse_plan_full(r).unwrap();
+        assert_eq!(p, "面向中文用户的交易所教程站");
+        assert_eq!(t[0].change, "new_content");
+        let (p, t) = parse_plan_full("[{\"title\":\"x\",\"change\":\"meta\"}]").unwrap();
+        assert!(p.is_empty() && t.len() == 1);
     }
 
     #[test]

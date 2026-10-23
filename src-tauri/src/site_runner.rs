@@ -1286,8 +1286,12 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let rules = group_rules(ctx, site);
     let plan_brief = rules.as_ref().map(|g| g.brief()).unwrap_or_default();
     let kinds: Vec<&str> = crate::managed::ACTIONS.iter().copied().filter(|a| rules.as_ref().is_none_or(|g| g.allows(a))).collect();
+    let stage = crate::site_stage::stage_of(site, &site_dir);
+    let stage_brief = crate::site_stage::plan_brief(site, &site_dir, rules.as_ref().is_some_and(|g| !g.topic_list().is_empty()));
+    let health = crate::site_stage::latest_health(&site_dir, if stage.stage == "new" { 2000 } else { 600 });
+    let health = if health.is_empty() { String::new() } else { format!("【最近一次体检】\n{health}\n\n") };
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是 Pilot 拉到的数据、这个站点所在托管方案的运营方式和最近的运营记录；请再读一下站点的代码和主要页面（目录结构、首页、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{plan_brief}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则、优先从选题清单里选。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出计划：[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据\",\"priority\":1}}]",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面（目录结构、导航、首页、各栏目、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据（数据，或它补的是定位里的哪一块、目标查询词）\",\"priority\":1}}]}}",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
@@ -1296,7 +1300,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     );
     let (conv_id, conv) = run_conversation(ctx, site, "plan", "", msg).await?;
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
-    let mut tasks = crate::managed::parse_plan(&reply)?;
+    let (positioning, mut tasks) = crate::managed::parse_plan_full(&reply)?;
+    crate::site_stage::update_from_ai(&site_dir, &positioning);
     // 模型偶尔会安排方案不允许的动作：直接丢掉
     if let Some(g) = &rules {
         tasks.retain(|t| g.allows(&t.change));
@@ -1319,7 +1324,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let added = site_ops::enqueue(&site_dir, &opps, now(), COOLDOWN)?;
     let pdir = site_dir.join("plans");
     let _ = std::fs::create_dir_all(&pdir);
-    let _ = std::fs::write(pdir.join(format!("{}.json", today())), serde_json::to_vec_pretty(&serde_json::json!({ "date": today(), "conv_id": conv_id, "tasks": tasks })).unwrap_or_default());
+    let _ = std::fs::write(pdir.join(format!("{}.json", today())), serde_json::to_vec_pretty(&serde_json::json!({ "date": today(), "conv_id": conv_id, "stage": stage.stage, "tasks": tasks })).unwrap_or_default());
     log(ctx, site, "planned", &format!("本周计划 {} 项", tasks.len()), &tasks.iter().take(5).map(|t| t.title.clone()).collect::<Vec<_>>().join("；"), "");
     job.step("plan", "ok", &format!("{} 项，新入队 {}", tasks.len(), added.len()));
     ctx.emit_queue(&site.id);
