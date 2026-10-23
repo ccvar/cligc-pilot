@@ -19,7 +19,7 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
-  import { SITES_CONN_ID } from '$lib/state/env';
+  import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
 </script>
 
@@ -27,20 +27,20 @@
   {#if connections.switcherOpen}
     <div class="conn-switch" role="menu" aria-label="切换连接">
       <div class="cs-scroll" aria-label="连接列表">
-        <button class="cs-item {app.activeConnId === WORKSPACE_CONN_ID ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === WORKSPACE_CONN_ID} onclick={openLocalWorkspace}>
+        <button class="cs-item {app.activeConnId === WORKSPACE_CONN_ID ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === WORKSPACE_CONN_ID} onclick={openLocalWorkspace} oncontextmenu={(e) => openConnCtx(e, LOCAL_CONN)}>
           <WorkspaceMark size={18} />
           <span class="cs-main"><b>本地对话</b><small>不连接任何服务，可接入本地文件夹</small></span>
           {#if app.activeConnId === WORKSPACE_CONN_ID}<span class="cs-check">✓</span>{/if}
         </button>
         <!-- 站点再多也只占一行：进去之后左栏就是可搜索的站点列表。 -->
-        <button class="cs-item {app.isSitesMode ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSitesMode} onclick={() => { connections.switcherOpen = false; void selectConn(SITES_CONN_ID); }}>
+        <button class="cs-item {app.isSitesMode ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSitesMode} onclick={() => { connections.switcherOpen = false; void selectConn(SITES_CONN_ID); }} oncontextmenu={(e) => openConnCtx(e, SITES_CONN)}>
           <SiteMark size={18} />
           <span class="cs-main"><b>站点</b><small>{sites.list.length ? `${sites.list.length} 个站点${fleet.pendingCount ? ` · ${fleet.pendingCount} 条待确认` : ''}` : '导入用代码管理的静态站，接数据、做运营'}</small></span>
           {#if app.isSitesMode}<span class="cs-check">✓</span>{/if}
         </button>
         <!-- 远程连接同样合并成一行：进去之后左栏列出全部机器。一台都没有就不显示。 -->
         {#if remoteConns().length}
-          <button class="cs-item {app.isSshConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSshConn} onclick={openRemote}>
+          <button class="cs-item {app.isSshConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSshConn} onclick={openRemote} oncontextmenu={(e) => openConnCtx(e, REMOTES_CONN)}>
             <SshMark size={18} />
             <span class="cs-main"><b>远程连接</b><small>{remoteConns().length} 台机器{app.isSshConn && app.activeConn ? ` · 当前 ${connectionDisplayName(app.activeConn)}` : ''}</small></span>
             {#if app.isSshConn}<span class="cs-check">✓</span>{/if}

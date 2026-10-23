@@ -1966,8 +1966,13 @@ async fn open_conn_window(
     state: tauri::State<'_, AppState>,
     conn_id: String,
 ) -> Result<(), String> {
-    let conn = state.conns.get(&conn_id)?;
-    // 标签只允许字母数字和 -/:_ —— uuid 正好合规。
+    // 本地对话 / 站点是虚拟连接，不在 connections.json 里
+    let title = match conn_id.as_str() {
+        "__workspace__" => "本地对话".to_string(),
+        "__sites__" => "站点".to_string(),
+        _ => state.conns.get(&conn_id)?.name,
+    };
+    // 标签只允许字母数字和 -/:_ —— uuid 和 __sites__ 都合规。
     let label = format!("conn-{conn_id}");
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.unminimize();
@@ -1989,7 +1994,7 @@ async fn open_conn_window(
         // 必须原样是 "index.html"：这条路径和主窗口走的是同一个分支（直接用根 URL）。
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title(&conn.name)
+    .title(&title)
     .maximized(source_maximized)
     .min_inner_size(820.0, 560.0)
     // Windows 上 Tauri 原生文件拖放会截走 WebView2 的 HTML5 drop；关闭后输入框可直接接收 File。

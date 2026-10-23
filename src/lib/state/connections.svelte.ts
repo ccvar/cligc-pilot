@@ -93,6 +93,10 @@ export async function saveConnRemark() {
   }
 }
 export async function openConnWindow(id: string) {
+  connections.connCtx = null;
+  // 「远程连接」整组：新窗口打开上次用过的那台，窗口里左栏照样列出全部机器
+  if (id === '__remotes__') id = lastRemoteId();
+  if (!id) return;
   try { await invoke('open_conn_window', { connId: id }); }
   catch (e) { say(String(e), 'err'); }
 }
@@ -104,13 +108,16 @@ const LAST_REMOTE_KEY = 'cligc.pilot.lastRemote';
 /** 所有远程连接（SSH），切换器里合并成一行「远程连接」。 */
 export const remoteConns = () => app.conns.filter((c) => c.kind === 'ssh');
 /** 进入远程连接：打开上次用过的那台，没有就第一台。 */
-export function openRemote() {
-  connections.switcherOpen = false;
+function lastRemoteId(): string {
   const list = remoteConns();
-  if (!list.length) return;
   let last = '';
   try { last = localStorage.getItem(LAST_REMOTE_KEY) || ''; } catch { /* */ }
-  void selectConn(list.find((c) => c.id === last)?.id ?? list[0].id);
+  return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? '';
+}
+export function openRemote() {
+  connections.switcherOpen = false;
+  const id = lastRemoteId();
+  if (id) void selectConn(id);
 }
 
 export async function selectConn(id: string) {
