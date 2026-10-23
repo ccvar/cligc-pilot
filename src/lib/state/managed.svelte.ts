@@ -21,6 +21,8 @@ class ManagedState {
   count = $derived(this.overview?.sites.length ?? 0);
   /** 正在新建 / 编辑的托管方案（弹窗）。 */
   editor = $state<ManagedGroup | null>(null);
+  /** 托管方案里展开了进度的站点（切走再回来保持展开）。 */
+  progress = $state<Set<string>>(new Set());
 }
 
 /** 托管方案允许的动作（和后端 managed::ACTIONS 一致）。 */

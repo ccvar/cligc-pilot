@@ -42,11 +42,11 @@
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
   const groups = $derived(o?.groups ?? []);
   // 立即执行的过程：作业步骤和日志（site-job 事件实时更新 sites.jobs），以及 AI 的那条会话
-  let progress = $state<Set<string>>(new Set());
+  const progress = $derived(managed.progress);
   function toggleProgress(id: string) {
-    const n = new Set(progress);
+    const n = new Set(managed.progress);
     if (n.has(id)) n.delete(id); else { n.add(id); if (!sites.jobs[id]) void loadSiteStatus(id); }
-    progress = n;
+    managed.progress = n;
   }
   const opsConvOf = (id: string, since: number) =>
     app.convos.filter((c) => c.conn_id === `site:${id}` && c.origin === 'ops' && c.updated_at >= since - 5).sort((a, b) => b.updated_at - a.updated_at)[0];
@@ -77,7 +77,7 @@
         : `现在为 ${name} 制定本周计划（只出建议，不改代码）。继续吗？`;
     if (!(await confirmDialog(what, { title: '立即执行', kind: g?.autonomy === 'auto' ? 'warning' : 'info', confirmText: g?.autonomy === 'auto' ? '执行并自动上线' : '执行' }))) return;
     await runTask(id, 'cycle');
-    progress = new Set([...progress, id]);
+    managed.progress = new Set([...managed.progress, id]);
     void loadManaged();
   }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
