@@ -26,7 +26,11 @@
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
     {:else if isDataConn(c)}
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
-      <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c)}>更新凭据…</button>
+      {#if c.kind === 'google' && c.key_kind === 'oauth'}
+        <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c, { manage: true })}>重新授权…</button>
+      {:else}
+        <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c)}>更新凭据…</button>
+      {/if}
     {/if}
     <div class="ctx-div"></div>
     <button

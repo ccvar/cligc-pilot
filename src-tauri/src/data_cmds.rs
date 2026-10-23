@@ -295,6 +295,11 @@ pub async fn google_oauth_login(
     let target = if update_id.is_empty() {
         state.conns.list().into_iter().find(|c| c.kind == "google" && !email.is_empty() && c.key_prefix == dedupe).map(|c| c.id)
     } else {
+        // 重新授权：浏览器里选错账号时不能把这条连接悄悄换成另一个账号
+        let cur = state.conns.get(&update_id)?;
+        if !cur.login.is_empty() && !email.is_empty() && !cur.login.eq_ignore_ascii_case(&email) {
+            return Err(format!("浏览器里选的是 {email}，不是 {}。要添加新账号请用「添加数据源 → Google 账号」；要重新授权这个账号，请在浏览器里选 {}", cur.login, cur.login));
+        }
         Some(update_id)
     };
     match target {

@@ -65,7 +65,7 @@
             <button class="link-btn" onclick={() => editOauthClient()}>更改</button>
           </div>
           {#if f.updateId}
-            <p class="hint">重新授权这个账号：授权过期了，或者要补授 / 收回管理权限时用。</p>
+            <p class="hint">重新授权这个账号：授权过期了，或者要补授 / 收回管理权限时用。浏览器里请选同一个 Google 账号。</p>
           {:else}
             <p class="hint">每次登录授权一个 Google 账号，可以添加多个；各站点分别选用其中的 GA4 / Search Console 资源。再次登录已授权的账号会直接更新它。</p>
             {#if accounts.length}

@@ -73,7 +73,7 @@
           <small>{d.conn.kind === 'google' ? (d.conn.key_kind === 'oauth' ? 'Google 账号' : '服务账号') : 'Bing Webmaster'}{d.conn.login ? ` · ${d.conn.login}` : ''}</small>
         </span>
         <span class="used" data-tip={d.sites.length ? d.sites.join('\n') : undefined}>{d.sites.length ? `${d.sites.length} 个站点` : '未使用'}</span>
-        <button class="bind" onclick={() => bind(d.conn.id, false)} disabled={!!busy} data-tip="给还没绑定的站点按域名自动匹配资源">{busy === d.conn.id ? '匹配中…' : '按域名绑定'}</button>
+        <button class="bind" onclick={() => bind(d.conn.id, false)} disabled={!!busy} data-tip={d.conn.kind === 'google' ? '按域名在这个账号里找 GA4 媒体资源和 Search Console 资源，自动填到还没绑定的站点上' : '按域名在这个账号里找 Bing 站点，自动填到还没绑定的站点上'}>{busy === d.conn.id ? '匹配中…' : '匹配站点'}</button>
         <button class="icon-btn sm" title="数据源设置" aria-label="数据源设置" onclick={(e) => toggleConnCtx(e, d.conn)}><SettingsIcon /></button>
       </div>
       {#if report && report.conn === d.conn.id}

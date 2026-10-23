@@ -50,10 +50,12 @@ export function openDataConnect(kind: 'google' | 'bing', mode: 'service_account'
   // oauth.svelte.ts 反过来依赖本文件，这里按需加载避免循环引用
   if (kind === 'google') void import('./oauth.svelte.js').then(async (m) => { await m.loadOauthClient(); m.editOauthClient(!!opts.editClient); });
 }
-export function openDataUpdate(c: Connection) {
+/** 更新数据源凭据；Google 账号（OAuth）就是在浏览器里重新授权，默认勾上管理权限。 */
+export function openDataUpdate(c: Connection, opts: { manage?: boolean } = {}) {
   connections.connCtx = null;
   connections.switcherOpen = false;
-  datasrc.form = { ...blank(), open: true, kind: c.kind as 'google' | 'bing', mode: c.key_kind === 'oauth' ? 'oauth' : 'service_account', updateId: c.id, name: c.name };
+  const oauthConn = c.key_kind === 'oauth';
+  datasrc.form = { ...blank(), open: true, kind: c.kind as 'google' | 'bing', mode: oauthConn ? 'oauth' : 'service_account', updateId: c.id, name: c.name, manage: opts.manage ?? oauthConn };
   if (c.key_kind === 'oauth') void import('./oauth.svelte.js').then((m) => { m.editOauthClient(false); return m.loadOauthClient(); });
 }
 export function closeDataConnect() {
