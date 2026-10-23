@@ -207,9 +207,6 @@ pub struct Budget {
     pub tokens_limit: u64,
 }
 
-/// 托管设置里的每站每周 token 上限（调度器每轮从托管设置刷新一次）。
-static MANAGED_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2_000_000);
-
 pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) -> Budget {
     let since = now().saturating_sub(7 * DAY);
     let q = site_ops::load_queue(site_dir);
@@ -221,7 +218,12 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
         .filter(|c| c.conn_id == conn_id && c.origin == "ops" && c.updated_at >= since)
         .map(|c| c.total_tokens)
         .sum();
-    let tokens_limit = if site.ops.level >= 5 { MANAGED_TOKENS.load(std::sync::atomic::Ordering::Relaxed) } else { site.ops.budget.tokens_per_week };
+    // 全托管站点用所在托管方案的上限；站点数据目录是 <数据目录>/sites/<id>
+    let tokens_limit = if site.ops.level >= 5 {
+        site_dir.parent().and_then(Path::parent).map(|root| crate::managed::load(root).rules_for(&site.id).tokens_per_week).unwrap_or(2_000_000)
+    } else {
+        site.ops.budget.tokens_per_week
+    };
     Budget { changes_used: changes, changes_limit: site.ops.budget.changes_per_week, tokens_used: tokens, tokens_limit }
 }
 
@@ -503,10 +505,10 @@ pub fn ops_model(site: &Site) -> Result<String, String> {
     Err("请在站点「运营」设置里为无人值守任务选择模型".into())
 }
 
-/// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用托管设置里运营人员选的那一对。
+/// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用所在托管方案里运营人员选的那一对。
 pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Option<(String, String)>), String> {
     if site.ops.level >= 5 {
-        let m = crate::managed::load(data_dir);
+        let m = crate::managed::load(data_dir).rules_for(&site.id);
         let pick = |b: &str, model: &str| -> Result<(String, String), String> {
             if !model.trim().is_empty() {
                 return Ok((b.to_string(), model.trim().to_string()));
@@ -514,7 +516,7 @@ pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Opt
             if b == "claude" {
                 return Ok((b.to_string(), "sonnet".into()));
             }
-            Err("请在「托管运营 → 设置」里为主模型 / 备用模型选择具体模型".into())
+            Err("请在「托管运营 → 托管方案」里为这个方案的主模型 / 备用模型选择具体模型".into())
         };
         let primary = pick(&m.brain, &m.model)?;
         let fallback = if m.fallback_brain.is_empty() { None } else { Some(pick(&m.fallback_brain, &m.fallback_model)?) };
@@ -711,7 +713,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     let checks_ok = built.is_ok();
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
-    let managed = crate::managed::load(&ctx.state().data_dir);
+    let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
     let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto") } else { cls.reasons.clone() };
     let mut verdict = if let Err(e) = &built {
         format!("检查没通过：{}", e.lines().next().unwrap_or(""))
@@ -1423,8 +1425,12 @@ pub fn start_scheduler(app: tauri::AppHandle) {
         loop {
             let ctx = Ctx { app: app.clone() };
             let st = ctx.state();
-            let mcfg = crate::managed::load(&st.data_dir);
-            MANAGED_TOKENS.store(mcfg.tokens_per_week, std::sync::atomic::Ordering::Relaxed);
+            let mut mcfg = crate::managed::load(&st.data_dir);
+            // 老数据：第 5 档但不在任何托管方案里的站点，收进「默认方案」
+            let managed_ids: Vec<String> = st.sites.list().into_iter().filter(|s| s.ops.level >= 5).map(|s| s.id).collect();
+            if crate::managed::adopt_orphans(&mut mcfg, &managed_ids) {
+                let _ = crate::managed::save(&st.data_dir, &mcfg);
+            }
             // 每日摘要：过了设定的时间、今天还没发过、有托管站点
             let hour: u8 = chrono::Local::now().format("%H").to_string().parse().unwrap_or(0);
             if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && st.sites.list().iter().any(|s| s.ops.level >= 5) {
@@ -1438,7 +1444,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     continue;
                 }
                 if site.ops.level >= 5 {
-                    if mcfg.paused {
+                    // 总暂停、所在方案暂停、或这个站点单独停止托管：都不自动运行
+                    if mcfg.paused || !mcfg.group_of(&site.id).is_some_and(|g| g.active_for(&site.id)) {
                         continue;
                     }
                     // 上线后检查优先：有到期的就先跑它

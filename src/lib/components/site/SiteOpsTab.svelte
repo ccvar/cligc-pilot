@@ -8,7 +8,7 @@
   import { brainLabel, launcherModelOpts } from '$lib/state/models';
   import { sites, editSite, saveSiteDraft } from '$lib/state/sites.svelte.js';
   import { ops, loadOverview, loadReports, openReport, runTask, WHITELIST, LEVEL_LABEL, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
-  import { openManaged, setManagedSites } from '$lib/state/managed.svelte.js';
+  import { managed, openManaged, setManagedSites, newGroup, editGroup, setSiteActive, loadManaged } from '$lib/state/managed.svelte.js';
   import { clock, num } from './fmt';
 
   let { site }: { site: Site } = $props();
@@ -29,6 +29,20 @@
     { key: 'review' as const, label: '效果复盘', sub: '上线满 4 周的改动前后对比，持续负面自动降档' },
   ];
   const when = clock;
+  // 全托管：站点属于哪个托管方案；还没加入时点第 5 档先选方案
+  $effect(() => { if (!managed.overview) void loadManaged(); });
+  const groups = $derived(managed.overview?.groups ?? []);
+  const myGroup = $derived(groups.find((g) => g.sites.includes(site.id)));
+  const myActive = $derived(!!myGroup && !myGroup.paused && !myGroup.stopped.includes(site.id));
+  let joining = $state(false);
+  let joinTo = $state('');
+  $effect(() => { if (joining && !joinTo) joinTo = groups[0]?.id ?? '__new'; });
+  async function join() {
+    if (joinTo === '__new') { joining = false; newGroup([site.id]); openManaged('groups'); return; }
+    await setManagedSites([site.id], true, joinTo);
+    joining = false;
+    const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s);
+  }
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
   function toggleWl(k: string, on: boolean) {
     if (!d) return;
@@ -42,14 +56,29 @@
       <h3><Icon name="gauge" />自动化档位</h3>
       <div class="levels">
         {#each [1, 2, 3, 4, 5] as lv (lv)}
-          <button class="lv" class:on={d.ops.level === lv} aria-pressed={d.ops.level === lv} onclick={() => (lv === 5 ? void setManagedSites([site.id], true).then(() => { const s = sites.list.find((x) => x.id === site.id); if (s) editSite(s); }) : (d.ops.level = lv))}>
+          <button class="lv" class:on={d.ops.level === lv} aria-pressed={d.ops.level === lv} onclick={() => (lv === 5 ? (site.ops.level === 5 ? undefined : (joining = true)) : (joining = false, d.ops.level = lv))}>
             <span class="lv-top"><span class="lv-n">{lv}</span><b>{(LEVEL_LABEL[lv] ?? '').replace(/^\d+\s*·\s*/, '')}</b>{#if d.ops.level === lv}<svg class="ok-ic" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}</span>
             <small>{lv === 1 ? '定期拉数据、出报告和机会列表，不动代码' : lv === 2 ? '对每个机会写改动建议，开成会话等你处理' : lv === 3 ? `直接改好、跑检查、${site.source === 'github' ? '提 PR' : '留在本地分支'}，你确认后合并上线` : lv === 4 ? '白名单内的改动自动合并并上线；其余按第 3 档' : 'AI 每周定计划、自动改动上线、上线后检查，变差自动回滚；只把例外交给你'}</small>
           </button>
         {/each}
       </div>
-      {#if site.ops.level === 5}
-        <p class="hint after">这个站点由「托管运营」统一管理：模型、新页面发布方式、每日上限都在那里设置。<button class="link-btn" onclick={() => openManaged('settings')}>打开托管运营</button></p>
+      {#if site.ops.level === 5 && myGroup}
+        <div class="mg">
+          <Icon name="sparkles" size={13} />
+          <span>由托管方案 <button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myGroup); }}>「{myGroup.name}」</button> 管理：模型、新页面发布方式、每日上限按这个方案。</span>
+          <span class="grow"></span>
+          <span class="mg-state" class:on={myActive}>{myGroup.paused ? '方案已暂停' : myActive ? '托管中' : '已停止'}</span>
+          {#if !myGroup.paused}<button class="btn tiny" onclick={() => setSiteActive(site.id, !myActive)}><Icon name={myActive ? 'pause' : 'play'} size={11} />{myActive ? '停止托管' : '恢复托管'}</button>{/if}
+        </div>
+      {:else if joining}
+        <div class="mg">
+          <Icon name="sparkles" size={13} />
+          <span>加入托管方案</span>
+          <div class="mg-dd"><Dropdown compact bind:value={joinTo} options={[...groups.map((g) => ({ value: g.id, label: g.name, sub: `${g.sites.length} 个站点` })), { value: '__new', label: '新建托管方案…' }]} /></div>
+          <span class="grow"></span>
+          <button class="btn small ghost" onclick={() => (joining = false)}>取消</button>
+          <button class="btn small primary" onclick={join}>{joinTo === '__new' ? '去新建' : '加入'}</button>
+        </div>
       {/if}
       {#if d.ops.level === 4}
         <div class="wl">
@@ -156,7 +185,12 @@
   .lv.on { border-color: var(--accent); box-shadow: inset 0 0 0 .5px var(--accent); background: #fcfbf8; }
   .lv.on .lv-n { background: var(--accent); color: #fff; }
   .ok-ic { color: var(--accent); flex: none; }
-  .after { margin-top: 12px; }
+  .mg { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); font-size: 12.5px; color: var(--dim); }
+  .mg :global(.ico) { color: var(--dim); flex: none; }
+  .mg .grow { flex: 1; }
+  .mg-state { font-size: 11.5px; color: var(--faint); }
+  .mg-state.on { color: var(--ok); }
+  .mg-dd { min-width: 160px; }
   .wl { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
   .wl .lbl { font-size: 12px; font-weight: 550; }
   .t { white-space: nowrap; color: var(--dim); }

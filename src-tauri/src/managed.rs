@@ -1,4 +1,7 @@
-//! 托管运营（第 5 档「全托管」）：全局设置、动态记录、每日摘要。
+//! 托管运营（第 5 档「全托管」）：托管方案、全局设置、动态记录、每日摘要。
+//!
+//! 一个「托管方案」管一个或多个站点，各自有一套规则（模型、新页面发布方式、每日上限、模型用量）；
+//! 一个站点最多属于一个方案，方案里的每个站点还能单独启用 / 停止。全局只剩总暂停和日报。
 //! 运行逻辑在 site_runner（计划 / 执行 / 上线后检查 / 自动回滚），这里只放共享的状态与判定。
 
 use serde::{Deserialize, Serialize};
@@ -36,6 +39,10 @@ pub struct ManagedConfig {
     pub digest_hour: u8,
     #[serde(default)]
     pub last_digest: String,
+    /// 托管方案。上面的 brain / model / new_content / daily_changes / tokens_per_week 是老版本的全局规则，
+    /// 只用于迁移和新建方案时的默认值。
+    #[serde(default)]
+    pub groups: Vec<ManagedGroup>,
 }
 
 fn default_brain() -> String {
@@ -55,6 +62,72 @@ fn yes() -> bool {
 }
 fn default_hour() -> u8 {
     9
+}
+
+/// 托管方案：一组站点 + 这组站点的托管规则。
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct ManagedGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub sites: Vec<String>,
+    /// 方案里单独停止托管的站点（还在方案里，规则保留，只是不自动运行）。
+    #[serde(default)]
+    pub stopped: Vec<String>,
+    /// 整个方案暂停。
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default = "default_brain")]
+    pub brain: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub fallback_brain: String,
+    #[serde(default)]
+    pub fallback_model: String,
+    #[serde(default = "default_review")]
+    pub new_content: String,
+    #[serde(default = "default_daily")]
+    pub daily_changes: u32,
+    #[serde(default = "default_tokens")]
+    pub tokens_per_week: u64,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+impl ManagedGroup {
+    /// 用全局设置里的旧规则做一个方案（迁移老数据 / 新建时的默认值）。
+    pub fn from_legacy(c: &ManagedConfig, name: &str) -> Self {
+        Self {
+            id: String::new(),
+            name: name.into(),
+            sites: Vec::new(),
+            stopped: Vec::new(),
+            paused: false,
+            brain: c.brain.clone(),
+            model: c.model.clone(),
+            fallback_brain: c.fallback_brain.clone(),
+            fallback_model: c.fallback_model.clone(),
+            new_content: c.new_content.clone(),
+            daily_changes: c.daily_changes,
+            tokens_per_week: c.tokens_per_week,
+            created_at: 0,
+        }
+    }
+    /// 这个站点现在该不该自动运行（方案暂停或站点单独停止都不跑）。
+    pub fn active_for(&self, site_id: &str) -> bool {
+        !self.paused && !self.stopped.iter().any(|x| x == site_id)
+    }
+}
+
+impl ManagedConfig {
+    pub fn group_of(&self, site_id: &str) -> Option<&ManagedGroup> {
+        self.groups.iter().find(|g| g.sites.iter().any(|x| x == site_id))
+    }
+    /// 站点用的托管规则：所在方案的；不在任何方案里（老数据还没迁移）就用全局旧规则。
+    pub fn rules_for(&self, site_id: &str) -> ManagedGroup {
+        self.group_of(site_id).cloned().unwrap_or_else(|| ManagedGroup::from_legacy(self, "默认方案"))
+    }
 }
 
 impl Default for ManagedConfig {
@@ -80,26 +153,48 @@ pub fn save(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {
     std::fs::rename(&tmp, d.join("config.json")).map_err(|e| e.to_string())
 }
 
-pub fn validate(c: &ManagedConfig) -> Result<(), String> {
-    for b in [&c.brain, &c.fallback_brain] {
+pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
+    if g.name.trim().is_empty() {
+        return Err("给这个托管方案起个名字".into());
+    }
+    if g.name.chars().count() > 40 {
+        return Err("方案名太长了".into());
+    }
+    for b in [&g.brain, &g.fallback_brain] {
         if b == "codex" {
             return Err("托管不能用 Codex（它没有逐条确认的钩子），请选 Claude、Grok 或 API 服务".into());
         }
     }
-    if c.brain.is_empty() {
+    if g.brain.is_empty() {
         return Err("请选择主模型".into());
     }
-    if !c.fallback_brain.is_empty() && c.fallback_brain == c.brain && c.fallback_model == c.model {
+    if !g.fallback_brain.is_empty() && g.fallback_brain == g.brain && g.fallback_model == g.model {
         return Err("备用模型和主模型一样，起不到备用的作用".into());
     }
-    if !matches!(c.new_content.as_str(), "auto" | "review") {
+    if !matches!(g.new_content.as_str(), "auto" | "review") {
         return Err("新内容发布方式只能是自动发布或审核后发布".into());
     }
-    if c.daily_changes > 50 || c.digest_hour > 23 {
-        return Err("设置超出范围".into());
+    if g.daily_changes > 50 {
+        return Err("每天最多自动上线的条数超出范围（0–50）".into());
     }
     Ok(())
 }
+
+/// 老数据迁移：已经是第 5 档、但不在任何方案里的站点，放进一个「默认方案」（沿用旧的全局规则）。
+/// 返回是否改动了配置。
+pub fn adopt_orphans(c: &mut ManagedConfig, managed_sites: &[String]) -> bool {
+    let orphans: Vec<String> = managed_sites.iter().filter(|id| c.group_of(id).is_none()).cloned().collect();
+    if orphans.is_empty() {
+        return false;
+    }
+    let mut g = ManagedGroup::from_legacy(c, "默认方案");
+    g.id = uuid::Uuid::new_v4().to_string();
+    g.created_at = crate::now_secs();
+    g.sites = orphans;
+    c.groups.push(g);
+    true
+}
+
 
 // ---------------------------------------------------------------------------
 // 动态（所有托管站点的时间线）
@@ -268,6 +363,35 @@ pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
 }
 
 #[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn orphaned_managed_sites_move_into_a_default_group_with_the_old_rules() {
+        let mut c = ManagedConfig { daily_changes: 7, ..Default::default() };
+        assert!(adopt_orphans(&mut c, &["a".into(), "b".into()]));
+        assert_eq!(c.groups.len(), 1);
+        assert_eq!(c.groups[0].sites, vec!["a", "b"]);
+        assert_eq!(c.groups[0].daily_changes, 7);
+        assert!(!adopt_orphans(&mut c, &["a".into()]), "已在方案里的不再迁移");
+        assert_eq!(c.rules_for("a").daily_changes, 7);
+    }
+
+    #[test]
+    fn a_stopped_site_or_paused_group_does_not_run() {
+        let mut g = ManagedGroup::from_legacy(&ManagedConfig::default(), "x");
+        g.sites = vec!["a".into(), "b".into()];
+        g.stopped = vec!["b".into()];
+        assert!(g.active_for("a"));
+        assert!(!g.active_for("b"));
+        g.paused = true;
+        assert!(!g.active_for("a"));
+        assert!(validate_group(&ManagedGroup { name: " ".into(), ..g.clone() }).is_err());
+        assert!(validate_group(&ManagedGroup { brain: "codex".into(), ..g }).is_err());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -278,9 +402,10 @@ mod tests {
         assert_eq!(c.new_content, "review");
         assert_eq!(c.daily_changes, 3);
         assert!(c.digest);
-        assert!(validate(&c).is_ok());
-        assert!(validate(&ManagedConfig { fallback_brain: "codex".into(), ..c.clone() }).is_err());
-        assert!(validate(&ManagedConfig { fallback_brain: "claude".into(), ..c }).is_err(), "备用和主模型一样");
+        assert!(validate_group(&ManagedGroup::from_legacy(&c, "x")).is_ok());
+        let g = ManagedGroup::from_legacy(&c, "x");
+        assert!(validate_group(&ManagedGroup { fallback_brain: "codex".into(), ..g.clone() }).is_err());
+        assert!(validate_group(&ManagedGroup { fallback_brain: "claude".into(), ..g }).is_err(), "备用和主模型一样");
     }
 
     #[test]

@@ -394,13 +394,31 @@ export interface ManagedConfig {
   digest: boolean;
   digest_hour: number;
   last_digest: string;
+  groups: ManagedGroup[];
+}
+/** 托管方案：一组站点 + 这组站点自己的托管规则。 */
+export interface ManagedGroup {
+  id: string;
+  name: string;
+  sites: string[];
+  /** 方案里单独停止托管的站点 */
+  stopped: string[];
+  paused: boolean;
+  brain: string;
+  model: string;
+  fallback_brain: string;
+  fallback_model: string;
+  new_content: 'auto' | 'review';
+  daily_changes: number;
+  tokens_per_week: number;
+  created_at: number;
 }
 export interface ManagedSite {
-  id: string; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
+  id: string; group_id: string; active: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
   plan_date: string; plan_count: number; job: string;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
 }
-export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; shipped_today: number; waiting: number }
+export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }
 export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string }
 export interface PlanTask { title: string; page: string; change: string; why: string; priority: number }
 export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; tasks: PlanTask[] } }
