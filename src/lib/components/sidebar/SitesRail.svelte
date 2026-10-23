@@ -13,6 +13,10 @@
   let { convRow }: { convRow: Snippet<[Conversation]> } = $props();
 
   const activeId = $derived(siteIdOf(app.activeConnId));
+  // 运营任务开出来的会话每次一条，只露最近几条（在跑的、正在看的总会露出），更早的折叠；完整记录在「托管运营 → 操作日志」
+  const OPS_SHOWN = 3;
+  let showOld = $state<Set<string>>(new Set());
+  function toggleOld(id: string) { const n = new Set(showOld); if (n.has(id)) n.delete(id); else n.add(id); showOld = n; }
   const lastConv = $derived.by(() => {
     const m = new Map<string, number>();
     for (const c of app.convos) {
@@ -51,7 +55,19 @@
     <div class="convs">
       {#each sidebar.grouped as g (g.slug)}
         {#if sidebar.grouped.length > 1}<div class="grp">{g.name}</div>{/if}
-        {#each g.subs.flatMap((x) => x.items) as c (c.id)}{@render convRow(c)}{/each}
+        {@const items = g.subs.flatMap((x) => x.items)}
+        {#if g.slug === '__site_ops__'}
+          {@const sorted = [...items].sort((a, b) => b.updated_at - a.updated_at)}
+          {@const shown = showOld.has(s.id) ? sorted : sorted.filter((c, i) => i < OPS_SHOWN || app.running[c.id] || c.id === app.activeConvId)}
+          {#each shown as c (c.id)}{@render convRow(c)}{/each}
+          {#if sorted.length > OPS_SHOWN}
+            <button class="more" onclick={() => toggleOld(s.id)}>
+              {showOld.has(s.id) ? '收起' : `更早 ${sorted.length - shown.length} 条`}
+            </button>
+          {/if}
+        {:else}
+          {#each items as c (c.id)}{@render convRow(c)}{/each}
+        {/if}
       {/each}
     </div>
   {/if}
@@ -74,6 +90,8 @@
   .convs { padding: 1px 0 6px 12px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
   @keyframes sr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
+  .more { display: block; margin: 1px 8px 2px 30px; padding: 3px 8px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--faint); cursor: pointer; text-align: left; }
+  .more:hover { color: var(--text); background: #f1efe9; }
   .grp { padding: 6px 8px 2px 30px; font-size: 11px; color: var(--faint); font-weight: 600; }
   @keyframes pulse { 50% { opacity: .35; } }
 </style>
