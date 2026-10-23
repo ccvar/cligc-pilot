@@ -43,7 +43,7 @@
 <div class="su page ov">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
-    <div>
+    <div class="ttl">
       <h1>全部站点</h1>
       <p class="hint">{totals.sites} 个站点 · 近 28 天 Google 点击 {n(totals.clicks)}{#if total.text} <span class:up={total.dir > 0} class:down={total.dir < 0}>{total.text}</span>{/if}</p>
     </div>

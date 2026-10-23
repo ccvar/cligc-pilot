@@ -61,7 +61,7 @@
 <div class="su page mc">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
-    <div>
+    <div class="ttl">
       <h1>托管运营 {#if paused}<span class="pill warn">已暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
