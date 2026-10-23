@@ -11,7 +11,7 @@
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
+  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
   import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
@@ -24,6 +24,7 @@
   import { importCfProject } from '$lib/state/launch.svelte.js';
   import { distroOf } from '$lib/state/connections.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
+  import WhyChips from '$lib/components/site/WhyChips.svelte';
 
   export { splitContent, convPane };
 </script>
@@ -36,7 +37,20 @@
   {@const bubbleConv=context}
   {@const bubbleId=context?.id??''}
   {@const bubbleBusy=!!app.running[bubbleId]}
-  {#if m.role === 'user'}
+  {#if m.role === 'user' && context?.origin === 'ops' && opsTask(m.text)}
+    {@const task = opsTask(m.text)!}
+    <div class="msg user ops-task"><div class="ops-card">
+      <div class="ot-head">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+        <b>托管运营 · {task.kind}</b>
+        {#if task.site}<span class="ot-chip">{task.site}</span>{/if}
+        {#if task.stage}<span class="ot-chip">{task.stage}</span>{/if}
+      </div>
+      {#if task.title}<div class="ot-title">{task.title}</div>{/if}
+      <div class="ot-sub">Pilot 交给 AI 的任务：读站点和数据{task.kind.includes('计划') ? '、制定本周计划，这一轮不改文件' : '、在独立分支里改好并提交，由 Pilot 检查后决定上线'}。</div>
+      <details class="ot-full"><summary>查看完整指令</summary><div class="ot-text">{m.text}</div></details>
+    </div></div>
+  {:else if m.role === 'user'}
     {@const ua = splitAttachments(m.text)}
     <div class="msg user"><div class="ubody">
       {#if ua.body.trim()}<span class="ub-text">{@render richText(ua.body)}</span>{/if}
@@ -91,8 +105,10 @@
           <div class="text is-err">{@render richText(m.text)}{#if isLast && !bubbleBusy}{#if bubbleConv?.session_ref && !turns.retryExhausted[bubbleId]}<button class="retry-btn" onclick={() => retry(bubbleId, true)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>重试</button>{/if}<button class="retry-btn" title="换一个全新会话原地续跑（自动带上历史摘要）——用于会话状态损坏、重试无效时" onclick={() => rebuildSession(bubbleId)}><svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2.6 8a5.4 5.4 0 0 1 9.3-3.7M13.4 8a5.4 5.4 0 0 1-9.3 3.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /><path d="M11.6 1.6v2.9h2.9M4.4 14.4v-2.9H1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>重建继续</button>{/if}</div>
         {:else}
           {@const ga = splitGenImages(m.text)}
+          {@const pj = context?.origin === 'ops' ? splitPlanJson(ga.body) : { body: ga.body, plan: null }}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-          <div class="text md" onclick={(e)=>mdClick(e,context)} onauxclick={(e)=>mdClick(e,context)}>{@html mdRender(ga.body)}</div>
+          <div class="text md" onclick={(e)=>mdClick(e,context)} onauxclick={(e)=>mdClick(e,context)}>{@html mdRender(pj.body)}</div>
+          {#if pj.plan}{@render planCard(pj.plan)}{/if}
           {#if ga.atts.length}
             <!-- codex 生图产物：缩略图（点击放大）；读不到的退回文件名卡（点击访达定位） -->
             <div class="ub-atts gen-imgs">
@@ -121,7 +137,29 @@
 {#snippet richText(text: string)}{#each text.split('\n') as line, i (i)}{#if i > 0}<br />{/if}{#each segs(line) as s, si (si)}{#if s.link}<button class="inlink" onclick={() => openUrl(s.t)}>{s.t}</button>{:else}{s.t}{/if}{/each}{/each}{/snippet}
 
 {#snippet toolChip(t: ToolCall & { count?: number })}
-  <div class="tool"><span class="tcode">{t.label}</span><span class="tdetail">{t.detail}</span>{#if (t.count ?? 0) > 1}<span class="tool-count">×{t.count}</span>{/if}</div>
+  {@const h = humanTool(t)}
+  <div class="tool"><span class="tcode">{h.verb}</span><span class="tdetail" title={h.full}>{h.target}</span>{#if (t.count ?? 0) > 1}<span class="tool-count">×{t.count}</span>{/if}</div>
+{/snippet}
+
+{#snippet planCard(plan: { notes: string; positioning: string; tasks: { title: string; page?: string; change: string; why?: string; source?: string; query?: string }[] })}
+  <div class="su plan-card">
+    <div class="pc-head"><b>本周计划 · {plan.tasks.length} 项</b><span>已放进这个站点的「待处理」</span></div>
+    {#if plan.notes}<div class="pc-notes"><b>给你的说明</b><div>{plan.notes}</div></div>{/if}
+    <ol class="pc-tasks">
+      {#each plan.tasks as t, i (i)}
+        <li>
+          <span class="pc-no">{i + 1}</span>
+          <div class="pc-body">
+            <b>{t.title}</b>
+            <div class="pc-why"><WhyChips change={t.change} source={t.source} target={t.query} /></div>
+            {#if t.why}<p>{t.why}</p>{/if}
+            {#if t.page}<small>{t.page}</small>{/if}
+          </div>
+        </li>
+      {/each}
+    </ol>
+    {#if plan.positioning}<details class="pc-pos"><summary>AI 归纳的站点定位</summary><p>{plan.positioning}</p></details>{/if}
+  </div>
 {/snippet}
 
 {#snippet cmds(tools: ToolCall[])}
@@ -131,7 +169,7 @@
         <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" stroke-width="1.3" />
         <path d="M4.5 6l2 2-2 2M8.5 10h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <span>{tools.length} 条执行记录</span>
+      <span>{toolSummary(tools)}</span>
       <svg class="cmd-chev" width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </summary>
     <div class="tools">{#each compactToolRows(tools) as t, i (i)}{@render toolChip(t)}{/each}</div>
@@ -272,9 +310,9 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <header class="thread-head conversation-thread-head" class:multi={leaves(panes.conversationLayout).length>1} onmousedown={(e)=>{if(!paneId)startDrag(e);}}>
         <div class="th-info" role="button" tabindex="0" aria-label={`拖动对话 ${context?.title} 以分屏`} onpointerdown={(e)=>{if(context)startConversationPointerDrag(e,context.id);}} onkeydown={(e)=>{if(e.key==='Escape')endConversationDrag();}}>
-          <b class="conversation-head-title" data-tip={activeConv?.title}>
+          <b class="conversation-head-title" data-tip={convTitle(activeConv?.title ?? '')}>
             <span class="conversation-head-model" data-tip={brainLabel(activeConv?.brain??'claude')}><BrainIcon brain={modelIcon(activeConv?.brain??'claude')} size={14} /></span>
-            <span>{activeConv?.title}</span>
+            <span>{convTitle(activeConv?.title ?? '')}</span>
           </b>
         </div>
         {#if activeSiteUrl}
@@ -646,11 +684,12 @@
   .cmds .cmd-ic { color: var(--accent); flex: none; }
   .cmds .cmd-chev { flex: none; transition: transform .15s; }
   .cmds[open] .cmd-chev { transform: rotate(180deg); }
-  .cmds .tools { margin: 7px 0 0; }
+  .cmds .tools { margin: 6px 0 0 6px; padding-left: 12px; border-left: 1px solid var(--border); gap: 1px; }
   .tools { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
-  .tool { display: flex; gap: 8px; align-items: baseline; background: #f6f5f1; border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 12px; }
-  .tcode { color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex: none; font-weight: 600; }
-  .tdetail { color: var(--dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool { display: flex; gap: 8px; align-items: baseline; min-width: 0; border-radius: 6px; padding: 3px 8px; font-size: 12.5px; line-height: 1.55; }
+  .tool:hover { background: var(--hover, rgba(0, 0, 0, .035)); }
+  .tcode { color: var(--text); flex: none; font-weight: 550; }
+  .tdetail { color: var(--dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-count { flex: none; margin-left: auto; color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .inlink { background: none; border: none; color: var(--accent); text-decoration: underline; cursor: pointer; padding: 0; font: inherit; word-break: break-all; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
@@ -732,4 +771,38 @@
   .x { background: none; border: none; color: var(--faint); font-size: 20px; cursor: pointer; line-height: 1; }
   .x:hover { color: var(--err); }
   .dim { color: var(--dim); }
+
+  /* 托管运营会话：任务卡 + 计划卡 */
+  .msg.user.ops-task { justify-content: stretch; }
+  .ops-card { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 12px; background: var(--rail); padding: 12px 14px; }
+  .ot-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text); }
+  .ot-head svg { color: var(--dim); flex: none; }
+  .ot-head b { font-size: 13.5px; font-weight: 600; }
+  .ot-chip { font-size: 11.5px; color: var(--dim); background: var(--bg); box-shadow: inset 0 0 0 1px var(--border); border-radius: 999px; padding: 1px 8px; }
+  .ot-title { margin-top: 6px; font-size: 13.5px; font-weight: 550; color: var(--text); }
+  .ot-sub { margin-top: 4px; font-size: 12px; color: var(--dim); line-height: 1.6; }
+  .ot-full { margin-top: 8px; }
+  .ot-full summary { font-size: 12px; color: var(--faint); cursor: pointer; list-style: none; }
+  .ot-full summary::-webkit-details-marker { display: none; }
+  .ot-full summary:hover { color: var(--text); }
+  .ot-full[open] summary { margin-bottom: 6px; }
+  .ot-text { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; color: var(--dim); background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+  .plan-card { margin-top: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--bg); }
+  .pc-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .pc-head b { font-size: 13.5px; font-weight: 600; }
+  .pc-head span { font-size: 12px; color: var(--faint); }
+  .pc-notes { margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: #fbf3dc; color: #8a5a08; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
+  .pc-notes b { display: block; font-weight: 600; margin-bottom: 2px; }
+  .pc-tasks { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+  .pc-tasks li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .pc-tasks li:first-child { border-top: none; }
+  .pc-no { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--dim); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .pc-body { min-width: 0; flex: 1; }
+  .pc-body b { font-size: 13px; font-weight: 550; line-height: 1.5; }
+  .pc-why { margin: 4px 0 2px; }
+  .pc-body p { margin: 3px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
+  .pc-body small { display: block; margin-top: 2px; font-size: 11px; color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .pc-pos { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .pc-pos summary { font-size: 12px; color: var(--faint); cursor: pointer; }
+  .pc-pos p { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
 </style>

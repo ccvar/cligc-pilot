@@ -1,5 +1,6 @@
 <script lang="ts">
   // 「为什么做这条」：动作类型 + 来源 + 目标查询词，一行小标签。
+  import './site.css';
   import Icon from './Icon.svelte';
   import { CHANGE_LABEL, KIND_LABEL, SOURCE_LABEL } from '$lib/state/ops.svelte.js';
 

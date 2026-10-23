@@ -3860,7 +3860,24 @@ async fn run_fresh_turn(
 }
 
 fn title_from(message: &str) -> String {
-    let t: String = message.trim().chars().take(30).collect();
+    let message = message.trim();
+    // 运营任务的指令以「【托管运营 · 本周计划】你是「站点」…」或「【运营 · 改动】页面标题」开头，取成短标题
+    if let Some(rest) = message.strip_prefix("【托管运营 · ") {
+        if let Some((kind, tail)) = rest.split_once('】') {
+            if let Some(name) = tail.strip_prefix("你是「").and_then(|x| x.split('」').next()) {
+                return format!("{kind} · {name}");
+            }
+        }
+    }
+    if let Some(rest) = message.strip_prefix("【运营 · ") {
+        if let Some((kind, tail)) = rest.split_once('】') {
+            let first: String = tail.lines().next().unwrap_or("").trim().chars().take(40).collect();
+            if !first.is_empty() {
+                return format!("{kind} · {first}");
+            }
+        }
+    }
+    let t: String = message.chars().take(30).collect();
     if t.is_empty() {
         "新对话".into()
     } else {
@@ -3871,6 +3888,16 @@ fn title_from(message: &str) -> String {
 #[cfg(any(target_os = "windows", test))]
 fn powershell_single_quote(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod title_from_tests {
+    #[test]
+    fn ops_titles_are_short() {
+        assert_eq!(super::title_from("【托管运营 · 本周计划】你是「iosur.com」（iosur.com）的运营负责人。"), "本周计划 · iosur.com");
+        assert_eq!(super::title_from("【运营 · 改动】/zh/fees/ 点击率偏低\n\n证据"), "改动 · /zh/fees/ 点击率偏低");
+        assert_eq!(super::title_from("  "), "新对话");
+    }
 }
 
 #[cfg(test)]

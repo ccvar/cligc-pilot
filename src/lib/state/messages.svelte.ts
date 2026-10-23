@@ -167,6 +167,97 @@ export function compactToolRows(tools: ToolCall[]): Array<ToolCall & { count: nu
   }
   return rows;
 }
+// ---------- 执行记录：把工具调用写成人看得懂的步骤（像 Claude 客户端那样「读取 README.md」） ----------
+const TOOL_VERB: Record<string, string> = {
+  read_file: '读取', Read: '读取', NotebookRead: '读取',
+  list_files: '查看目录', LS: '查看目录', Glob: '查找文件',
+  write_file: '写入', Write: '写入', Edit: '修改', MultiEdit: '修改', NotebookEdit: '修改',
+  run_command: '运行命令', Bash: '运行命令', ssh_command: '远程命令',
+  Grep: '搜索代码', WebFetch: '打开网页', WebSearch: '搜索网页', TodoWrite: '更新待办', Task: '子任务',
+  site_data: '查询数据',
+};
+const DATA_CMD: Record<string, string> = {
+  summary: '总览', queries: '查询词', pages: '页面', 'query-pages': '查询词 × 页面', events: '转化事件', daily: '按天趋势', opportunities: '运营机会', sitemaps: '站点地图',
+};
+const DATA_SRC: Record<string, string> = { gsc: 'Google', bing: 'Bing', ga4: 'GA4' };
+
+function dataTarget(a: Record<string, unknown>): string {
+  const o = (a.options ?? {}) as Record<string, unknown>;
+  const parts = [DATA_SRC[String(o.source ?? '')] ?? '', DATA_CMD[String(a.command ?? '')] ?? String(a.command ?? '')];
+  if (o.page) parts.push(`页面含「${o.page}」`);
+  if (o.query) parts.push(`查询词含「${o.query}」`);
+  if (o['min-position'] || o['max-position']) parts.push(`排名 ${o['min-position'] ?? '1'}–${o['max-position'] ?? ''}`);
+  if (o['min-impressions']) parts.push(`展现 ≥ ${o['min-impressions']}`);
+  if (o['max-ctr']) parts.push(`点击率 ≤ ${Math.round(Number(o['max-ctr']) * 1000) / 10}%`);
+  if (o.prev) parts.push('前 28 天');
+  return parts.filter(Boolean).join(' · ');
+}
+
+/** 一条工具调用 → { verb: 读取, target: README.md }。认不出的原样显示。 */
+export function humanTool(t: ToolCall): { verb: string; target: string; full: string } {
+  const verb = TOOL_VERB[t.label] ?? t.label;
+  let a: Record<string, unknown> | null = null;
+  try { const v = JSON.parse(t.detail); if (v && typeof v === 'object') a = v as Record<string, unknown>; } catch { /* 不是 JSON */ }
+  if (!a) return { verb, target: t.detail, full: t.detail };
+  if (t.label === 'site_data') return { verb, target: dataTarget(a), full: t.detail };
+  const path = String(a.path ?? a.file_path ?? a.notebook_path ?? '');
+  const range = a.offset ? `（从第 ${a.offset} 行起）` : '';
+  const target = path ? `${path === '.' ? '项目根目录' : path}${range}`
+    : String(a.command ?? a.pattern ?? a.url ?? a.query ?? a.description ?? t.detail);
+  return { verb, target, full: t.detail };
+}
+
+/** 执行记录的折叠摘要：「读取 16 个文件 · 查询数据 11 次 · 查看目录 7 次」。 */
+export function toolSummary(tools: ToolCall[]): string {
+  const n = new Map<string, number>();
+  for (const t of tools) { const v = humanTool(t).verb; n.set(v, (n.get(v) ?? 0) + 1); }
+  const top = [...n.entries()].sort((a, b) => b[1] - a[1]);
+  const fmt = ([v, c]: [string, number]) => (v === '读取' || v === '写入' || v === '修改' ? `${v} ${c} 个文件` : `${v} ${c} 次`);
+  const head = top.slice(0, 3).map(fmt).join(' · ');
+  return top.length > 3 ? `${head} 等 ${tools.length} 步` : head || `${tools.length} 步`;
+}
+
+// ---------- 托管运营会话：开头那条是 Pilot 交给 AI 的任务，结尾的 JSON 是给 Pilot 读的 ----------
+export interface OpsTask { kind: string; site: string; stage: string; title: string }
+/** 认出 Pilot 交给 AI 的任务指令（本周计划 / 改动），提取任务名、站点和阶段。 */
+export function opsTask(text: string): OpsTask | null {
+  const t = text.trim();
+  let m = /^【托管运营 · (.+?)】你是「(.+?)」/.exec(t);
+  if (m) {
+    const stage = /【站点阶段】(\S+?)[（(\s]/.exec(t)?.[1] ?? '';
+    return { kind: m[1], site: m[2], stage, title: '' };
+  }
+  m = /^【运营 · (.+?)】(.+)/.exec(t);
+  if (m) return { kind: m[1], site: '', stage: '', title: m[2].trim() };
+  return null;
+}
+export interface OpsPlanTask { title: string; page?: string; change: string; why?: string; source?: string; query?: string; priority?: number }
+export interface OpsPlan { notes: string; positioning: string; tasks: OpsPlanTask[] }
+/** 从回复里拆出计划 JSON（最后一个带 tasks 的 ```json 块），返回去掉它之后的正文和解析出的计划。 */
+export function splitPlanJson(text: string): { body: string; plan: OpsPlan | null } {
+  const re = /```json\s*([\s\S]*?)```/g;
+  let hit: { start: number; end: number; plan: OpsPlan } | null = null;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    try {
+      const v = JSON.parse(m[1]);
+      const tasks = Array.isArray(v) ? v : v?.tasks;
+      if (Array.isArray(tasks)) hit = { start: m.index, end: m.index + m[0].length, plan: { notes: String(v?.notes ?? ''), positioning: String(v?.positioning ?? ''), tasks } };
+    } catch { /* 不完整的 JSON（还在流式输出）就先原样显示 */ }
+  }
+  if (!hit) return { body: text, plan: null };
+  return { body: (text.slice(0, hit.start) + text.slice(hit.end)).trim(), plan: hit.plan };
+}
+
+// 运营任务的对话标题是指令的开头（「【托管运营 · 本周计划】你是「x」…」），显示成「本周计划 · x」这样的短标题
+export function convTitle(title: string): string {
+  const t = title || '';
+  const m = t.match(/^【托管运营 · (.+?)】你是「([^」（]+)/);
+  if (m) return `${m[1]} · ${m[2]}`;
+  const o = t.match(/^【运营 · (.+?)】\s*(.+)/);
+  if (o) return `${o[1]} · ${o[2]}`;
+  return t;
+}
+
 export function hostOf(u: string): string { try { return new URL(u).host; } catch { return u; } }
 
 // 从对话里认出这个项目已部署的线上地址（AI 部署完都会说「访问 https://xxx」）。

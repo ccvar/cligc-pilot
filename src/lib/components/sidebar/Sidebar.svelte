@@ -15,7 +15,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { openTemplates, openPrompts } from '$lib/state/library.svelte.js';
   import { sidebar, toggleSite, faviconOf, relTime } from '$lib/state/sidebar.svelte.js';
-  import { hostOf } from '$lib/state/messages.svelte.js';
+  import { hostOf, convTitle } from '$lib/state/messages.svelte.js';
   import { startConversationPointerDrag, startConversationDrag, endConversationDrag } from '$lib/state/panes.svelte.js';
   import { brainLabel, modelIcon } from '$lib/state/models';
   import { permits } from '$lib/state/permits.svelte.js';
@@ -33,7 +33,7 @@
   onclick={() => openConv(c.id)} onkeydown={(e) => e.key === 'Enter' && openConv(c.id)}>
   <div class="convo-body">
     <span class="convo-bi" title={brainLabel(c.brain)}><BrainIcon brain={modelIcon(c.brain)} size={11} /></span>
-    <span class="convo-title">{c.title}</span>
+    <span class="convo-title">{convTitle(c.title)}</span>
     {#if c.status === 'running' || app.running[c.id]}<span class="mini-run"></span>{/if}
     {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
     <span class="convo-when">{relTime(c.updated_at)}</span>
