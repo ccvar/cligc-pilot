@@ -1418,6 +1418,12 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             ..Default::default()
         })
         .collect();
+    // 同一周重新制定计划：上一份计划里还没动过的条目撤掉，换成这一份（已在处理、已上线的保留）
+    let prefix = format!("plan:{week}:");
+    let replaced = site_ops::drop_open_with_prefix(&site_dir, &prefix)?;
+    if replaced > 0 {
+        job.line(&format!("替换本周上一份计划里还没处理的 {replaced} 项"));
+    }
     let added = site_ops::enqueue(&site_dir, &opps, now(), COOLDOWN)?;
     let pdir = site_dir.join("plans");
     let _ = std::fs::create_dir_all(&pdir);
@@ -1717,24 +1723,7 @@ mod tests {
         let msg = "【运营 · 改动】/guide/ 排名靠前但点击率偏低\n\n页面：https://example.com/guide/\n依据：查询词「手冲咖啡 水温」排名 3、点击率很低。\n\
 当前目录是独立工作区（分支 pilot/ops-guide-i1）。请：\n1. 只改 guide/index.html 的 <title> 和 meta description，让它们回应「手冲咖啡 水温 粉水比」，描述 50–160 字；\n\
 2. 用 git add 和 git commit 提交（没配 git 身份导致提交失败就保留改动）；\n3. 最后运行一次 `wrangler pages deploy . --project-name demo` 试试能不能部署，并如实告诉我结果。".to_string();
-        // 把这一轮的实时事件转给前端（ops-turn），打开这条会话就能看到 AI 正在做什么；
-    // 第一条事件到达时刷新会话列表，会话一开始就出现在侧栏里，而不是跑完才出现。
-    let channel = {
-        let app = ctx.app.clone();
-        let id = conv_id.clone();
-        let announced = std::sync::atomic::AtomicBool::new(false);
-        tauri::ipc::Channel::<crate::agent::TurnEvent>::new(move |body| {
-            if !announced.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                let _ = app.emit("conversations-changed", ());
-            }
-            if let tauri::ipc::InvokeResponseBody::Json(raw) = body {
-                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    let _ = app.emit("ops-turn", serde_json::json!({ "conv_id": id, "event": ev }));
-                }
-            }
-            Ok(())
-        })
-    };
+        let channel = tauri::ipc::Channel::<crate::agent::TurnEvent>::new(|_| Ok(()));
         let res = crate::agent::run_turn(
             crate::agent::RunRegistry::default(),
             conn,

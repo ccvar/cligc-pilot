@@ -23,20 +23,24 @@ pub fn label(stage: &str) -> &'static str {
 
 /// 按数据自动判断的阶段和理由。
 pub fn auto_stage(site: &Site, site_dir: &Path) -> (&'static str, String) {
-    if site.data.gsc_site.is_empty() {
-        return ("new", "还没有接入 Search Console".into());
+    if site.data.gsc_site.is_empty() && site.data.bing_site.is_empty() {
+        return ("new", "还没有接入 Search Console 或 Bing".into());
     }
     let d = crate::site_data::dashboard(site_dir);
-    if d.meta.gsc.fetched_at == 0 {
-        return ("new", "Search Console 还没拉到数据".into());
+    if d.meta.gsc.fetched_at == 0 && d.meta.bing.fetched_at == 0 {
+        return ("new", "搜索数据还没拉到".into());
     }
-    let (clicks, impr) = (d.gsc_totals.clicks, d.gsc_totals.impressions);
+    // Google 和 Bing 合起来算：有的站流量主要来自 Bing
+    let (gc, gi) = (d.gsc_totals.clicks, d.gsc_totals.impressions);
+    let (bc, bi) = (d.bing_totals.clicks, d.bing_totals.impressions);
+    let (clicks, impr) = (gc + bc, gi + bi);
+    let detail = if bi > 0.0 { format!("（Google 展现 {gi:.0}、点击 {gc:.0}；Bing 展现 {bi:.0}、点击 {bc:.0}）") } else { String::new() };
     if impr < 200.0 {
-        ("new", format!("近 28 天展现 {impr:.0}，搜索数据还很少"))
+        ("new", format!("近 28 天搜索展现 {impr:.0}，搜索数据还很少{detail}"))
     } else if clicks < 200.0 {
-        ("growing", format!("近 28 天展现 {impr:.0}、点击 {clicks:.0}：有曝光，点击还少"))
+        ("growing", format!("近 28 天搜索展现 {impr:.0}、点击 {clicks:.0}：有曝光，点击还少{detail}"))
     } else {
-        ("established", format!("近 28 天点击 {clicks:.0}、展现 {impr:.0}：已有稳定流量"))
+        ("established", format!("近 28 天搜索点击 {clicks:.0}、展现 {impr:.0}：已有稳定流量{detail}"))
     }
 }
 

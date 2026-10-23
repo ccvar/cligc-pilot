@@ -351,6 +351,18 @@ pub fn with_queue<R>(site_dir: &Path, f: impl FnOnce(&mut Vec<QueueItem>) -> R) 
     Ok(r)
 }
 
+/// 撤掉 key 以 prefix 开头、还没处理（open）的条目，返回撤掉几条。
+pub fn drop_open_with_prefix(site_dir: &Path, prefix: &str) -> Result<usize, String> {
+    let q = load_queue(site_dir);
+    let before = q.len();
+    let kept: Vec<QueueItem> = q.into_iter().filter(|i| !(i.status == "open" && i.opp.key.starts_with(prefix))).collect();
+    let n = before - kept.len();
+    if n > 0 {
+        save_queue(site_dir, &kept)?;
+    }
+    Ok(n)
+}
+
 pub fn update_item(site_dir: &Path, id: &str, now: u64, f: impl FnOnce(&mut QueueItem)) -> Result<Option<QueueItem>, String> {
     with_queue(site_dir, |q| {
         q.iter_mut().find(|i| i.id == id).map(|i| {
