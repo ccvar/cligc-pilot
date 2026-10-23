@@ -10,6 +10,9 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
 pub struct BuildConfig {
+    /// 站点在仓库里的子目录（如 `site`）；空＝仓库根目录。安装、构建、检查、部署都在这个目录里执行。
+    #[serde(default)]
+    pub root: String,
     /// 安装依赖（如 `npm ci`）；空＝不需要。
     #[serde(default)]
     pub install: String,
@@ -54,6 +57,26 @@ impl DataBinding {
     pub fn gsc_conn(&self) -> &str {
         if self.gsc_conn_id.is_empty() { &self.google_conn_id } else { &self.gsc_conn_id }
     }
+}
+
+impl Site {
+    /// 站点自己的目录（代码目录下的 build.root 子目录；没有子目录就是代码目录本身）。
+    pub fn app_dir(&self, code: &Path) -> std::path::PathBuf {
+        let r = self.build.root.trim().trim_matches('/');
+        if r.is_empty() || r == "." { code.to_path_buf() } else { code.join(r) }
+    }
+}
+
+/// 子目录只能是仓库里的相对路径（不能跳出仓库）。
+pub fn check_root(root: &str) -> Result<(), String> {
+    let r = root.trim();
+    if r.is_empty() {
+        return Ok(());
+    }
+    if r.starts_with('/') || r.starts_with('\\') || r.contains("..") || r.contains(':') {
+        return Err("站点子目录只能填仓库里的相对路径，如 site".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
@@ -778,7 +801,27 @@ fn dotenv_keys(path: &Path) -> Vec<String> {
 }
 
 /// 识别项目：框架、构建命令、产物目录、检查命令、Pages 项目、域名、IndexNow 密钥、git 信息。
+/// 常见的「站点在子目录里」的仓库布局：根目录没有站点文件，而这些子目录之一有。
+const SITE_SUBDIRS: &[&str] = &["site", "web", "www", "app", "frontend", "website", "apps/web", "apps/site"];
+
+fn looks_like_site(dir: &Path) -> bool {
+    dir.join("package.json").is_file() || dir.join("wrangler.toml").is_file() || dir.join("wrangler.jsonc").is_file() || dir.join("wrangler.json").is_file() || dir.join("index.html").is_file()
+}
+
+/// 检测站点配置。根目录不像站点、而某个常见子目录像时，按那个子目录检测，并记下 build.root。
 pub fn detect(dir: &Path) -> Detected {
+    if !looks_like_site(dir) {
+        if let Some(sub) = SITE_SUBDIRS.iter().find(|s| looks_like_site(&dir.join(s))) {
+            let mut d = detect_at(&dir.join(sub));
+            d.build.root = (*sub).to_string();
+            d.notes.push(format!("站点在仓库的 {sub}/ 子目录里：安装、构建、检查和部署都在那里执行"));
+            return d;
+        }
+    }
+    detect_at(dir)
+}
+
+fn detect_at(dir: &Path) -> Detected {
     let mut d = Detected::default();
     let pkg = read_json(&dir.join("package.json"));
     let pilot = read_json(&dir.join("pilot.json"));
@@ -1090,6 +1133,21 @@ mod tests {
         assert_eq!(det.indexnow_key, "8c862b9da94589a467d61dad4f75a88f");
         assert_eq!(det.dotenv_example_keys, vec!["INVITE_CODE".to_string(), "OTHER".to_string()]);
         assert_eq!(default_name(&det, d), "gatesor.com");
+    }
+
+    #[test]
+    fn a_site_in_a_subfolder_of_the_repo_is_detected_with_its_root() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        fs::create_dir_all(d.join("site")).unwrap();
+        fs::write(d.join("README.md"), "x").unwrap();
+        fs::write(d.join("site/package.json"), r#"{"scripts":{"build":"astro build"},"dependencies":{"astro":"^7"}}"#).unwrap();
+        fs::write(d.join("site/wrangler.jsonc"), r#"{"name":"cexask","assets":{"directory":"./dist"}}"#).unwrap();
+        let det = detect(d);
+        assert_eq!(det.build.root, "site");
+        assert_eq!(det.framework, "astro");
+        assert_eq!(det.deploy_kind, "workers");
+        assert!(check_root("site").is_ok() && check_root("../x").is_err() && check_root("/abs").is_err());
     }
 
     #[test]

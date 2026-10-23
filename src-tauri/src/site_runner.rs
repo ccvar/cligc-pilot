@@ -749,14 +749,14 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
     let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.contains(w)).cloned().collect();
-    let out_dir = wt.join(&site.build.out_dir);
+    let out_dir = site.app_dir(&wt).join(&site.build.out_dir);
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
     let change_kind = if cls.kinds.is_empty() { "mixed".to_string() } else { cls.kinds.join(",") };
     let checks_ok = built.is_ok();
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto") } else { cls.reasons.clone() };
+    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize) } else { cls.reasons.clone() };
     let mut verdict = if let Err(e) = &built {
         format!("检查没通过：{}", e.lines().next().unwrap_or(""))
     } else if reasons.is_empty() {
@@ -1347,7 +1347,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let health = crate::site_stage::latest_health(&site_dir, if stage.stage == "new" { 2000 } else { 600 });
     let health = if health.is_empty() { String::new() } else { format!("【最近一次体检】\n{health}\n\n") };
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面（目录结构、导航、首页、各栏目、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排写不满 800 字的窄题。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1}}]}}\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面（目录结构、导航、首页、各栏目、流量最大的几个页面），然后制定本周最多 {n} 项具体工作。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排撑不起一个完整页面的窄题（页面厚度见上）。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要提改推荐链接、邀请码、价格、法律页面、依赖或部署配置。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1}}]}}\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),

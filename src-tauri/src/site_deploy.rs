@@ -245,7 +245,10 @@ pub struct BuildOutcome {
 }
 
 /// 安装 → 构建 → 检查。`stamp` 为 Pilot 自有目录的锁文件指纹位置（本地来源传 None：不替用户重装依赖）。
-pub async fn build_and_check(site: &Site, dir: &Path, stamp: Option<&Path>, job: &Job) -> Result<BuildOutcome, String> {
+pub async fn build_and_check(site: &Site, code: &Path, stamp: Option<&Path>, job: &Job) -> Result<BuildOutcome, String> {
+    // 站点在子目录里时，安装 / 构建 / 检查 / 上传都在子目录执行
+    let app = site.app_dir(code);
+    let dir = app.as_path();
     let env = build_env(site, job);
     // 安装
     if !site.build.install.trim().is_empty() && needs_install(dir, stamp) {
@@ -499,7 +502,7 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;
     let mut env = build_env(site, job);
     env.extend(crate::site_vps::deploy_env(&shim));
-    job.shell(&site.deploy.command, &dir, &env, STEP_TIMEOUT).await.map_err(|e| {
+    job.shell(&site.deploy.command, &site.app_dir(&dir), &env, STEP_TIMEOUT).await.map_err(|e| {
         job.step("upload", "failed", "");
         format!("发布失败：{e}")
     })?;

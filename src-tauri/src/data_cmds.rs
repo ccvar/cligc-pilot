@@ -148,6 +148,7 @@ pub async fn setup_indexnow(state: tauri::State<'_, AppState>, id: String) -> Re
     let site = state.sites.get(&id)?;
     let key = if site.data.indexnow_key.is_empty() { crate::bing::new_indexnow_key() } else { site.data.indexnow_key.clone() };
     let rel_dir = static_dir(&site.framework);
+    let rel_dir = [site.build.root.trim_matches('/'), rel_dir].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("/");
     let rel = if rel_dir.is_empty() { format!("{key}.txt") } else { format!("{rel_dir}/{key}.txt") };
     let mut out = IndexNowSetup { key: key.clone(), file: rel.clone(), pr_url: String::new(), note: String::new() };
     match site.source.as_str() {

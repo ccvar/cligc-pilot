@@ -106,6 +106,8 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
         site.build.out_dir = ".".into();
     }
     sites::check_out_dir(&site.build.out_dir)?;
+    site.build.root = site.build.root.trim().trim_matches('/').to_string();
+    sites::check_root(&site.build.root)?;
     match site.source.as_str() {
         "github" => {
             crate::github::parse_repo(&site.repo)?;
@@ -539,7 +541,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
     };
     format!(
         "你是站点「{name}」（{domain}）的运营与维护助手。{flow}\n\
-【站点信息】框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
+【站点信息】{root}框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
 【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
 你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\n\
 【干活的规矩】先读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\
@@ -549,6 +551,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         name = site.name,
         framework = if site.framework.is_empty() { "未知" } else { &site.framework },
         out = site.build.out_dir,
+        root = if site.build.root.is_empty() { String::new() } else { format!("站点代码在仓库的 `{}/` 子目录里（构建、检查命令都在那里执行，页面和静态文件也在那里）；", site.build.root) },
     )
 }
 
@@ -558,7 +561,7 @@ pub async fn site_icons(state: tauri::State<'_, AppState>) -> Result<std::collec
     let mut set = tokio::task::JoinSet::new();
     for site in state.sites.list() {
         let gh = state.conns.get(&site.gh_conn_id).ok();
-        let code = crate::site_git::code_dir(&site, gh.as_ref()).ok();
+        let code = crate::site_git::code_dir(&site, gh.as_ref()).ok().map(|c| site.app_dir(&c));
         let dir = state.sites.data_dir(&site.id);
         set.spawn(async move {
             let url = crate::site_icon::icon_for(&site, &dir, code).await;

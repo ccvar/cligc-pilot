@@ -433,6 +433,8 @@ export interface ManagedGroup {
   topics: string;
   /** 衡量标准：clicks / ctr / impressions / position / conversions / health */
   metric: string;
+  /** 新页面正文下限（字），低于它不自动上线；0＝不检查 */
+  min_page_chars: number;
   created_at: number;
 }
 export interface ManagedSite {

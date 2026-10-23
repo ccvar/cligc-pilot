@@ -103,6 +103,9 @@ pub struct ManagedGroup {
     /// 选题清单：一行一个关键词 / 主题，新内容优先从这里选；没有数据的新站主要靠它。
     #[serde(default)]
     pub topics: String,
+    /// 新页面正文下限（字，汉字按字、其它按词）：低于它不自动上线，转给运营人员判断。0＝不检查。
+    #[serde(default = "default_min_page")]
+    pub min_page_chars: u32,
     /// 衡量标准（效果复盘看什么）：clicks / ctr / impressions / position / conversions / health。
     #[serde(default = "default_metric")]
     pub metric: String,
@@ -110,6 +113,9 @@ pub struct ManagedGroup {
     pub created_at: u64,
 }
 
+fn default_min_page() -> u32 {
+    1500
+}
 fn default_metric() -> String {
     "clicks".into()
 }
@@ -161,6 +167,7 @@ impl ManagedGroup {
             guidelines: String::new(),
             topics: String::new(),
             metric: default_metric(),
+            min_page_chars: default_min_page(),
             created_at: 0,
         }
     }
@@ -179,6 +186,12 @@ impl ManagedGroup {
             out.push_str(&format!("【运营目标】\n{}\n\n", self.goal.trim()));
         }
         out.push_str(&format!("【衡量标准】主要看{}；效果复盘按它判断改动有没有用。\n\n", metric_label(&self.metric)));
+        if self.min_page_chars > 0 {
+            out.push_str(&format!(
+                "【页面厚度】新页面正文不少于 {} 字（不算标题、导航和代码）；不同类型参考：完整教程 / 指南 2000–4000 字并配真实截图，对比 / 评测 2500 字以上并有对比表，单个问题解答 1200–2000 字，术语 / 概念解释 800–1500 字。长度跟着把问题讲完整走，不为凑字数加内容；撑不起的选题换掉或并进已有页面。\n\n",
+                self.min_page_chars
+            ));
+        }
         let allowed: Vec<&str> = ACTIONS.iter().filter(|a| self.allows(a)).map(|a| action_label(a)).collect();
         let denied: Vec<&str> = ACTIONS.iter().filter(|a| !self.allows(a)).map(|a| action_label(a)).collect();
         out.push_str(&format!("【允许的动作】{}{}\n\n", allowed.join("、"), if denied.is_empty() { String::new() } else { format!("（不要做：{}）", denied.join("、")) }));
@@ -256,6 +269,9 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     }
     if !METRICS.contains(&g.metric.as_str()) {
         return Err(format!("未知的衡量标准：{}", g.metric));
+    }
+    if g.min_page_chars > 10000 {
+        return Err("新页面正文下限超出范围（0–10000 字）".into());
     }
     if g.actions.is_empty() {
         return Err("至少允许一种动作，否则托管什么也不会做".into());
@@ -376,8 +392,6 @@ pub fn text_units(s: &str) -> usize {
     cjk + words
 }
 
-/// 新页面至少要有这么多正文（约 800 字，去掉 frontmatter 和标签之后算）。
-pub const MIN_NEW_PAGE_UNITS: usize = 600;
 
 fn is_page_file(f: &str) -> bool {
     ["md", "mdx", "markdown", "html", "htm", "astro"].iter().any(|e| f.ends_with(&format!(".{e}")))
@@ -398,7 +412,8 @@ fn prose_of(line: &str) -> String {
     out
 }
 
-pub fn managed_verdict(diff: &str, allow_new_content: bool) -> Vec<String> {
+/// `min_page`：新页面正文下限（字，0＝不检查），见 ManagedGroup.min_page_chars。
+pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize) -> Vec<String> {
     let mut reasons = Vec::new();
     let mut file = String::new();
     let mut new_file = false;
@@ -465,8 +480,8 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool) -> Vec<String> {
         }
     }
     for (f, n) in &new_pages {
-        if *n < MIN_NEW_PAGE_UNITS {
-            reasons.push(format!("{f}：新页面正文只有约 {n} 字，内容偏薄，容易被搜索引擎当成低质页面，留给你确认"));
+        if min_page > 0 && *n < min_page {
+            reasons.push(format!("{f}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）"));
         }
     }
     if changed > 400 {
@@ -577,13 +592,14 @@ mod group_tests {
     #[test]
     fn thin_new_pages_and_leaked_internal_notes_are_not_auto_shipped() {
         let thin = "diff --git a/src/content/a.md b/src/content/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/a.md\n@@ -0,0 +1,4 @@\n+---\n+title: 很短的页面\n+---\n+只有一句话。\n";
-        let r = managed_verdict(thin, true);
-        assert!(r.iter().any(|x| x.contains("内容偏薄")), "{r:?}");
-        let body: String = "这是一段足够长的正文，讲清楚了具体步骤、注意事项和常见错误。".repeat(30);
+        let r = managed_verdict(thin, true, 1500);
+        assert!(r.iter().any(|x| x.contains("低于这个方案的下限")), "{r:?}");
+        assert!(managed_verdict(thin, true, 0).is_empty(), "下限 0＝不检查");
+        let body: String = "这是一段足够长的正文，讲清楚了具体步骤、注意事项和常见错误。".repeat(60);
         let full = format!("diff --git a/src/content/b.md b/src/content/b.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/b.md\n@@ -0,0 +1,4 @@\n+---\n+title: 完整的页面\n+---\n+{body}\n");
-        assert!(managed_verdict(&full, true).is_empty(), "{:?}", managed_verdict(&full, true));
+        assert!(managed_verdict(&full, true, 1500).is_empty(), "{:?}", managed_verdict(&full, true, 1500));
         let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
-        assert!(managed_verdict(leak, true).iter().any(|x| x.contains("待补图")));
+        assert!(managed_verdict(leak, true, 1500).iter().any(|x| x.contains("待补图")));
         assert_eq!(text_units("Gate KYC 认证"), 4);
     }
 
@@ -631,17 +647,17 @@ mod tests {
     #[test]
     fn verdict_blocks_code_config_money_and_optionally_new_pages() {
         let ok = "diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -3 +3,2 @@\n-旧段落\n+新段落，补充了水温的说明。\n+还加了一段。\n";
-        assert!(managed_verdict(ok, false).is_empty());
+        assert!(managed_verdict(ok, false, 1500).is_empty());
         let code = "diff --git a/worker/index.ts b/worker/index.ts\n--- a/worker/index.ts\n+++ b/worker/index.ts\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(code, true).is_empty());
+        assert!(!managed_verdict(code, true, 1500).is_empty());
         let cfg = "diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(cfg, true).is_empty());
+        assert!(!managed_verdict(cfg, true, 1500).is_empty());
         let money = "diff --git a/src/pages/a.astro b/src/pages/a.astro\n--- a/src/pages/a.astro\n+++ b/src/pages/a.astro\n@@ -9 +9 @@\n-<a href=\"/go/gate\">邀请码 ABC</a>\n+<a href=\"/go/gate\">邀请码 XYZ</a>\n";
-        assert!(managed_verdict(money, true).iter().any(|r| r.contains("推荐")));
+        assert!(managed_verdict(money, true, 1500).iter().any(|r| r.contains("推荐")));
         let newpage = "diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+# 新页面\n";
-        assert!(managed_verdict(newpage, false).iter().any(|r| r.contains("新内容")));
-        // 允许自动发布新页面时，只剩「内容偏薄」这一条（这个测试页只有一行）
-        assert!(managed_verdict(newpage, true).iter().all(|r| r.contains("内容偏薄")));
+        assert!(managed_verdict(newpage, false, 1500).iter().any(|r| r.contains("新内容")));
+        // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
+        assert!(managed_verdict(newpage, true, 1500).iter().all(|r| r.contains("低于这个方案的下限")));
     }
 
     #[test]

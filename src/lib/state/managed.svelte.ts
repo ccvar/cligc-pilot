@@ -81,13 +81,19 @@ export const GUIDELINE_TEMPLATE = `# 内容准则
 
 ## 结构
 - 每页一个明确主题，H1 和页面标题一致，正文用 H2 / H3 分段。
-- 新页面正文不少于 800 字，开头两三句直接回答读者的问题；适合时加对比表和常见问题（FAQ）。
+- 开头两三句直接回答读者的问题；适合时加对比表和常见问题（FAQ）。
+- 正文长度按页面类型（不算标题、导航和代码）：
+  - 完整教程 / 指南（注册、认证、提现步骤等）：2000–4000 字，配真实截图
+  - 对比 / 评测（费率、平台对比等）：2500 字以上，有对比表
+  - 单个问题解答（如「USDT 提现选哪个网络」）：1200–2000 字
+  - 术语 / 概念解释：800–1500 字
+- 长度跟着把问题讲完整走，不为凑字数加内容。
 - 标题不超过 32 个汉字，描述 70–120 字，包含主要关键词但读起来自然。
 
 ## 内容质量（SEO / GEO）
 - 每个页面都要有别处没有的价值：真实步骤、具体数字、对比、注意事项、常见错误。不要用同一个模板换关键词批量做相似页面——Google 会把它当成规模化的低质内容或门页，整站降权。
 - 写长尾选题前先看已有页面：能扩写已有页面就不新开页；意图相近的几个长尾词合并成一页，用小标题分别回答。
-- 写不到 800 字、讲不完整一个问题，说明选题太窄：换一个，或者并进已有页面。
+- 一个选题撑不起上面对应的长度、讲不完整一个问题，说明选题太窄：换一个，或者并进已有页面。
 - 让 AI 搜索（Google AI 概览、ChatGPT、Perplexity 等）容易引用：开头直接给结论；关键事实用短句、列表或表格写清楚；术语第一次出现时解释；FAQ 一问一答；写清更新时间；适合时加结构化数据（FAQPage、HowTo、Article）。
 - 体现亲身经验和可信度：写清操作时的版本、地区和时间，只写验证过的步骤。
 
@@ -109,7 +115,7 @@ function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false,
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
     new_content: 'auto', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
-    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', created_at: 0,
+    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, created_at: 0,
   };
 }
 
