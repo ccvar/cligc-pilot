@@ -97,6 +97,12 @@ export async function acceptItem(site: Site, item: OpsItem) {
   try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 已经合并、上线那一步失败的改动：不再合并，直接重新上线。 */
+export async function reshipItem(site: Site, item: OpsItem) {
+  if (!(await confirmDialog(`「${item.opp.title}」已经合并进 ${site.default_branch}，上次上线没完成。现在重新构建并上线到 ${site.domain || site.name}？`, { title: '重新上线', kind: 'warning', confirmText: '重新上线' }))) return;
+  try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
+  catch (e) { say(String(e), 'err'); }
+}
 export async function dismissItem(site: Site, item: OpsItem) {
   const extra = item.pr_number ? `，并关闭 PR #${item.pr_number}` : item.branch ? '，并删除本地分支' : '';
   if (!(await confirmDialog(`驳回「${item.opp.title}」${extra}？之后不会再提这个机会。`, { title: '驳回', kind: 'warning', confirmText: '驳回' }))) return;

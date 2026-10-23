@@ -1023,6 +1023,16 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, page: &str, commit: &str, trigg
 pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    // 已经合并、上线那一步失败了：不用再合并，直接重新上线
+    if item.status == "merged" && !item.merge_sha.is_empty() && site.deploy.mode != "none" {
+        job.step("merge", "ok", "已合并过");
+        let url = ship(ctx, site, job, &item.opp.page, &item.merge_sha, if auto { "ops" } else { "manual" }).await?;
+        site_ops::update_item(&site_dir, item_id, now(), |i| {
+            i.status = "deployed".into();
+            i.deployed_at = now();
+        })?;
+        return Ok(if url.is_empty() { "已上线".into() } else { format!("已上线 {url}") });
+    }
     if item.status != "proposed" {
         return Err("只有待确认的改动可以确认".into());
     }

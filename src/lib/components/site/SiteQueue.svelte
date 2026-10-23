@@ -8,7 +8,7 @@
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { ops, loadQueue, runTask, workItem, recheckItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
   let { site }: { site: Site } = $props();
@@ -105,6 +105,7 @@
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
               {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}
               {#if ['dismissed', 'failed'].includes(i.status)}<button class="btn tiny" onclick={() => restoreItem(site.id, i)}><Icon name="inbox" size={11} />放回待处理</button>{/if}
+              {#if i.status === 'merged' && !i.deployed_at && site.deploy.mode !== 'none'}<button class="btn tiny primary" onclick={() => reshipItem(site, i)} disabled={busy} data-tip="已经合并，上次上线没完成：重新构建并上线"><Icon name="rocket" size={11} />重新上线</button>{/if}
               {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
               {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
             </div>

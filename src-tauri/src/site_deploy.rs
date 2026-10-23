@@ -323,6 +323,25 @@ pub async fn ensure_pages_project(token: &str, account_id: &str, project: &str, 
     Ok(())
 }
 
+/// wrangler deploy 失败，但只是因为令牌没有路由权限：脚本已经上传（「Uploaded xxx」），失败的只是重新设置路由。
+fn routes_only_failure(log: &str) -> bool {
+    let uploaded = log.lines().any(|l| l.trim_start().starts_with("Uploaded "));
+    let routes = log.contains("was only partially updated") && log.contains("/routes) failed");
+    let other = log.lines().any(|l| l.contains("[ERROR]") && !l.contains("Trigger configuration"));
+    uploaded && routes && !other
+}
+
+#[cfg(test)]
+mod routes_failure_tests {
+    #[test]
+    fn upload_ok_but_routes_forbidden_counts_as_shipped() {
+        let log = "Uploaded iosur (6.92 sec)\nNo targets deployed for iosur (2.30 sec)\n✘ [ERROR] Trigger configuration for \"iosur\" was only partially updated:\n  Routes:\n    - A request to the Cloudflare API (/accounts/x/workers/scripts/iosur/routes) failed.\n      - No access to the specified resource.\n";
+        assert!(super::routes_only_failure(log));
+        assert!(!super::routes_only_failure("✘ [ERROR] Build failed\n"), "没上传就不算");
+        assert!(!super::routes_only_failure(&format!("{log}✘ [ERROR] A request to the Cloudflare API (/accounts/x/workers/scripts/iosur) failed.\n")));
+    }
+}
+
 /// 用 wrangler 上传构建产物。返回部署地址。
 pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str, message: &str, dirty: bool, job: &Job) -> Result<String, String> {
     let token = crate::keychain::get_key(&cf.id)?;
@@ -343,7 +362,13 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
             args.push(message.chars().take(100).collect());
         }
         job.line(&format!("$ wrangler deploy（Worker {}）", site.deploy.project));
-        job.exec(&prog, &args, &b.dir, &env, STEP_TIMEOUT).await.map_err(|e| format!("上传失败：{e}"))?;
+        if let Err(e) = job.exec(&prog, &args, &b.dir, &env, STEP_TIMEOUT).await {
+            if !routes_only_failure(&job.log_text()) {
+                return Err(format!("上传失败：{e}"));
+            }
+            // 代码已经上传生效，只是令牌没有路由权限、wrangler 没能重新确认路由。已有的路由不受影响。
+            job.line("新代码已经上传并生效。wrangler 随后想重新确认 Worker 的路由，但这个 Cloudflare 令牌没有「Workers 路由：编辑」权限，这一步没做成；已有的路由照常工作。以后要新增或修改路由，请在 Cloudflare 给令牌加上 区域 → Workers 路由 → 编辑。");
+        }
         return Ok(find_deploy_url(&job.log_text(), &site.domain));
     }
     let branch = if site.deploy.branch.is_empty() { "main".to_string() } else { site.deploy.branch.clone() };
