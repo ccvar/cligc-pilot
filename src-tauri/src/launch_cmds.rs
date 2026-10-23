@@ -98,7 +98,7 @@ static PROBED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<St
 /// 站点还没选 Google 连接时才在所有账号里找。
 async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
     let (mut bound, mut errs) = (Vec::new(), Vec::new());
-    if site.domain.is_empty() || (!site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty()) {
+    if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty()) {
         return (bound, errs);
     }
     {
@@ -109,6 +109,46 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
         }
         m.insert(site.id.clone(), now);
     }
+    if site.data.ga4_property.is_empty() {
+        // GA4：按媒体资源里网页数据流的网址匹配域名。站点已在用的账号先找；名字里带域名的媒体资源先查，命中即停。
+        let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
+        let first = site.data.google_conn_id.clone();
+        conns.sort_by_key(|c| c.id != first);
+        let label = site.domain.trim_start_matches("www.").split('.').next().unwrap_or_default().to_lowercase();
+        'acct: for c in conns {
+            let Ok(raw) = crate::keychain::get_key(&c.id) else { continue };
+            let Ok(cred) = crate::google::parse_credential(&c.key_kind, &raw) else { continue };
+            let token = match crate::google::access_token(&c.id, &cred, &crate::google::read_scopes()).await {
+                Ok(t) => t,
+                Err(e) => { errs.push(format!("GA4（{}）：{e}", if c.login.is_empty() { &c.name } else { &c.login })); continue }
+            };
+            let mut props = match crate::google::list_ga4_properties(&token).await {
+                Ok(p) => p,
+                Err(e) => { errs.push(format!("GA4（{}）：{e}", if c.login.is_empty() { &c.name } else { &c.login })); continue }
+            };
+            props.sort_by_key(|p| !p.name.to_lowercase().contains(&label));
+            for p in props {
+                let hosts = crate::google::ga4_stream_hosts(&token, &p.property).await.unwrap_or_default();
+                if !hosts.iter().any(|h| crate::google::same_host(h, &site.domain)) { continue }
+                let (cid, prop, name) = (c.id.clone(), p.property.clone(), p.name.clone());
+                if state.sites.update(&site.id, crate::now_secs(), |x| {
+                    // 换 GA4 账号时，原来跟着旧账号的 Search Console 改记成它自己的账号
+                    if x.data.gsc_conn_id.is_empty() && !x.data.gsc_site.is_empty() && !x.data.google_conn_id.is_empty() && x.data.google_conn_id != cid {
+                        x.data.gsc_conn_id = x.data.google_conn_id.clone();
+                    }
+                    x.data.google_conn_id = cid.clone();
+                    x.data.ga4_property = prop;
+                    x.data.ga4_property_name = name;
+                    Ok(())
+                }).is_ok() {
+                    bound.push(format!("GA4 {}（{}）", p.name, if c.login.is_empty() { &c.name } else { &c.login }));
+                }
+                break 'acct;
+            }
+        }
+    }
+    // Search Console 那段要基于最新的绑定（上面可能刚改了 GA4 的账号）
+    let site = &state.sites.get(&site.id).unwrap_or_else(|_| site.clone());
     if site.data.gsc_site.is_empty() {
         // 先找站点已经在用的账号，再找其它 Google 账号（Search Console 可以和 GA4 在不同账号下）
         let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
