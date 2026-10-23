@@ -4540,6 +4540,7 @@ pub fn run() {
             ops_cmds::run_ops_task,
             ops_cmds::queue_work,
             ops_cmds::queue_recheck,
+            ops_cmds::queue_work_many,
             ops_cmds::queue_accept,
             ops_cmds::queue_rollback,
             ops_cmds::queue_dismiss,

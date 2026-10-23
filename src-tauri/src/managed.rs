@@ -583,8 +583,8 @@ fn data_line(line: &str) -> bool {
         let names = rest.trim_start_matches("type ").trim();
         return from_local && names.starts_with('{') && names.split('}').next().is_some_and(|n| n.chars().all(|c| c.is_alphanumeric() || "_$, {".contains(c)));
     }
-    // export const xxx: Type[] = [ / export const xxx = {
-    if let Some(rest) = code.strip_prefix("export const ") {
+    // export const xxx: Type[] = [ / const xxx = {（模块内的数据常量）
+    if let Some(rest) = code.strip_prefix("export const ").or_else(|| code.strip_prefix("const ")) {
         let Some((lhs, rhs)) = rest.split_once('=') else { return false };
         let ok_lhs = lhs.trim().chars().all(|c| c.is_alphanumeric() || "_$:[]<> ".contains(c));
         return ok_lhs && matches!(rhs.trim(), "[" | "{" | "[];" | "{};");
@@ -886,6 +886,8 @@ mod tests {
         // 已有数据文件：加导入、加一段文字、加一个 slug、展开一个数组
         let edit = "diff --git a/src/data/articles.ts b/src/data/articles.ts\n--- a/src/data/articles.ts\n+++ b/src/data/articles.ts\n@@ -5 +5,2 @@\n+import { transitionArticles } from './articles-transitions';\n+    'ai-video-transition-prompts',\n+          '想把两个镜头接起来（遮挡、甩镜），可以看本页末尾的转场指南。',\n+  ...transitionArticles,\n";
         assert!(managed_verdict(edit, false, 1500).is_empty(), "{:?}", managed_verdict(edit, false, 1500));
+        assert!(data_line("const viduSources = [") && data_line("    sources: viduSources,"));
+        assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
         // 新的数据文件：按新内容规则和正文下限判断
         let body: String = (0..40).map(|_| "+      '遮挡转场要让前景物体把画面整个挡住，再在被挡住的那一帧切到下一段素材，两段的运动方向要一致。',\n").collect();
         let newfile = format!("diff --git a/src/data/articles-x.ts b/src/data/articles-x.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/data/articles-x.ts\n@@ -0,0 +1,50 @@\n+import type {{ ArticleSeed }} from './article-types';\n+export const xArticles: ArticleSeed[] = [\n+  {{\n+    slug: 'x',\n+    datePublished: '2026-10-22',\n+    body: [\n{body}+    ],\n+  }},\n+];\n");

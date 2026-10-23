@@ -8,7 +8,7 @@
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
   let { site }: { site: Site } = $props();
@@ -31,6 +31,24 @@
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
+  // 批量：只在「未处理的机会」里勾选
+  let picked = $state<Set<string>>(new Set());
+  const pickable = $derived(filter === 'open' ? shown : []);
+  const pickedItems = $derived(pickable.filter((i) => picked.has(i.id)));
+  const allPicked = $derived(pickable.length > 0 && pickedItems.length === pickable.length);
+  $effect(() => { void filter; picked = new Set(); });
+  function togglePick(id: string) { const n = new Set(picked); if (n.has(id)) n.delete(id); else n.add(id); picked = n; }
+  function pickAll() { picked = allPicked ? new Set() : new Set(pickable.map((i) => i.id)); }
+  async function batchWork() {
+    const ids = pickedItems.map((i) => i.id);
+    picked = new Set();
+    await workItems(site.id, ids);
+  }
+  async function batchDismiss() {
+    const items = pickedItems;
+    await dismissItems(site, items);
+    picked = new Set();
+  }
   function toggleWhy(id: string) { const n = new Set(openWhy); if (n.has(id)) n.delete(id); else n.add(id); openWhy = n; }
 </script>
 
@@ -61,11 +79,24 @@
       <p class="hint">{filter === 'open' ? '可以「立即扫描」，或在「数据」页把机会加进来。' : filter === 'todo' ? 'AI 改好的提案、失败的任务会出现在这里。' : ''}</p>
     </div>
   {:else}
+    {#if filter === 'open' && shown.length > 1}
+      <div class="batch" class:on={pickedItems.length > 0}>
+        <label class="ck"><input type="checkbox" checked={allPicked} indeterminate={pickedItems.length > 0 && !allPicked} onchange={pickAll} />{pickedItems.length ? `已选 ${pickedItems.length} 条` : '全选'}</label>
+        <span class="grow"></span>
+        {#if pickedItems.length}
+          <button class="btn tiny primary" onclick={batchWork} disabled={busy} data-tip="一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下"><Icon name="sparkles" size={11} />让 AI 改 {pickedItems.length} 条</button>
+          <button class="btn tiny quiet" onclick={batchDismiss} disabled={busy}><Icon name="x" size={11} />驳回 {pickedItems.length} 条</button>
+        {:else}
+          <span class="faint hint-sm">勾选几条，可以一起让 AI 改或驳回</span>
+        {/if}
+      </div>
+    {/if}
     <div class="card items">
       <div class="list">
         {#each shown as i (i.id)}
-          <div class="li item">
+          <div class="li item" class:picked={picked.has(i.id)}>
             <div class="row it-head">
+              {#if filter === 'open' && shown.length > 1}<input class="pick" type="checkbox" checked={picked.has(i.id)} onchange={() => togglePick(i.id)} aria-label="选中这一条" />{/if}
               <span class="pill {tone(i.status)}">{STATUS_LABEL[i.status] ?? i.status}</span>
               <b class="it-title" title={i.opp.title}>{i.opp.title}</b>
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
@@ -126,6 +157,13 @@
 {/if}
 
 <style>
+  .batch { display: flex; align-items: center; gap: 8px; padding: 6px 14px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; min-height: 40px; }
+  .batch.on { background: var(--su-run-soft); border-color: transparent; }
+  .batch .ck { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+  .batch .grow { flex: 1; }
+  .hint-sm { font-size: 12px; }
+  .pick { margin: 0 2px 0 0; flex: none; cursor: pointer; }
+  .item.picked { background: var(--su-hover); }
   .qnote { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--dim); padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
   .qnote :global(svg) { flex: none; margin-top: 4px; }
   .qnote span { flex: 1; }

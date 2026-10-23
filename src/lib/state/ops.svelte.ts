@@ -109,6 +109,23 @@ export async function dismissItem(site: Site, item: OpsItem) {
   try { await invoke('queue_dismiss', { id: site.id, itemId: item.id }); await loadQueue(site.id); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 批量：选中的未处理机会按顺序让 AI 改（一个作业里一条一条做）。 */
+export async function workItems(siteId: string, ids: string[]) {
+  if (!ids.length) return;
+  try { await invoke('queue_work_many', { id: siteId, itemIds: ids }); }
+  catch (e) { say(String(e), 'err'); }
+}
+/** 批量驳回：只问一次。 */
+export async function dismissItems(site: Site, items: OpsItem[]) {
+  if (!items.length) return;
+  if (!(await confirmDialog(`驳回选中的 ${items.length} 条机会？之后不会再提这些机会。`, { title: '批量驳回', kind: 'warning', confirmText: `驳回 ${items.length} 条` }))) return;
+  let failed = 0;
+  for (const i of items) {
+    try { await invoke('queue_dismiss', { id: site.id, itemId: i.id }); } catch { failed++; }
+  }
+  await loadQueue(site.id);
+  say(failed ? `驳回了 ${items.length - failed} 条，${failed} 条没成功` : `已驳回 ${items.length} 条`, failed ? 'err' : undefined);
+}
 export async function restoreItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_restore', { id: siteId, itemId: item.id }); await loadQueue(siteId); }
   catch (e) { say(String(e), 'err'); }

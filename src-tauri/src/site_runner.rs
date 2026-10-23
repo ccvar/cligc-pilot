@@ -168,6 +168,7 @@ pub fn task_label(task: &str) -> &'static str {
         "watch" => "上线后检查",
         "rollback" => "回滚",
         "recheck" => "重新检查",
+        "batch" => "批量让 AI 改",
         _ => "运营任务",
     }
 }
@@ -253,6 +254,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
+        "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
         "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
         "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认")],
@@ -278,6 +280,7 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
             "review" => review(&ctx, &site, &job).await,
             "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
             "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+            "batch" => work_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
             "plan" => plan(&ctx, &site, &job).await,
             "cycle" => cycle(&ctx, &site, &job).await,
             "watch" => watch(&ctx, &site, &job).await,
@@ -470,6 +473,45 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
         });
     }
     r
+}
+
+/// 批量让 AI 改：按顺序一条一条处理（每条都按站点档位：改、检查、上线或等你确认），额度用完就停下。
+/// `ids` 用逗号分隔。
+async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<String, String> {
+    let ids: Vec<&str> = ids.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+    if ids.is_empty() {
+        return Err("没有选中的条目".into());
+    }
+    let (mut ok, mut failed, mut notes) = (0, 0, Vec::new());
+    for (n, id) in ids.iter().enumerate() {
+        if job.canceled() {
+            notes.push("已取消".to_string());
+            break;
+        }
+        let b = budget(site, &ctx.site_dir(&site.id), &ctx.state().convos);
+        if let Some(why) = over_budget(&b) {
+            job.line(&format!("{why}，剩下的 {} 条没有处理", ids.len() - n));
+            notes.push(why);
+            break;
+        }
+        job.line(&format!("—— 第 {}/{} 条 ——", n + 1, ids.len()));
+        match work_one(ctx, site, job, id).await {
+            Ok(m) => {
+                ok += 1;
+                job.line(&m);
+            }
+            Err(e) => {
+                failed += 1;
+                job.line(&format!("这一条没成功：{e}"));
+            }
+        }
+        ctx.emit_queue(&site.id);
+    }
+    let summary = format!("处理 {ok} 条{}{}", if failed > 0 { format!("，{failed} 条没成功") } else { String::new() }, if notes.is_empty() { String::new() } else { format!("。{}", notes.join("；")) });
+    if ok == 0 && failed > 0 {
+        return Err(summary);
+    }
+    Ok(summary)
 }
 
 /// 重新检查一条失败的改动：AI 的提交还在分支上（比如只是构建环境出了问题），重新构建、检查并按规则上线，不再让 AI 改一遍。
@@ -848,7 +890,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     })?;
     // 收尾：没提交的改动由 Pilot 提交；完全没改动就算失败。
     if !crate::site_git::is_clean(&wt).await || crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
-        crate::site_git::git_ok(&wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads"], "").await?;
+        crate::site_git::git_ok(&wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads", ":(exclude).pilot-api-home"], "").await?;
         let msg = format!("ops: improve {}", path_of(&item.opp.page));
         let _ = crate::site_git::git_commit_ok(&wt, &["commit", "-qm", &msg]).await;
     }

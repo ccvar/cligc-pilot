@@ -45,6 +45,8 @@ pub(super) struct Tools<'a> {
     site_data_script: PathBuf,
     /// 见 ApiExecutionPolicy::safe_commands
     safe_commands: bool,
+    /// 命令的 HOME（npm、astro 等把日志和配置写在这里）。放在 Pilot 数据目录，不放进工作区，免得被一起提交。
+    home: PathBuf,
 }
 impl<'a> Tools<'a> {
     pub fn with_safe_commands(mut self, on: bool) -> Self {
@@ -86,6 +88,7 @@ impl<'a> Tools<'a> {
             sites_root: data.join("sites"),
             site_data_script: crate::tools::site_data_js_path(data),
             safe_commands: false,
+            home: data.join("api-home"),
         })
     }
     pub fn instructions(&self) -> String {
@@ -291,8 +294,8 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                 cmd.env(key, value);
             }
         }
-        let home = self.work.join(".pilot-api-home");
-        let _ = std::fs::create_dir_all(&home);
+        let home = &self.home;
+        let _ = std::fs::create_dir_all(home);
         cmd.env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("NO_COLOR", "1");
