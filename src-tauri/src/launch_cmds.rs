@@ -101,7 +101,11 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String) -> Res
         deployed: crate::site_deploy::load_history(&state.sites.data_dir(&id)).iter().any(|r| r.ok),
         ..Default::default()
     };
-    if let Ok(cf) = state.conns.get(&site.deploy.cf_conn_id) {
+    if site.deploy.mode == "workers" {
+        // Workers 的路由 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
+        st.pages = true;
+        st.domain_attached = true;
+    } else if let Ok(cf) = state.conns.get(&site.deploy.cf_conn_id) {
         if let Ok(token) = crate::keychain::get_key(&cf.id) {
             match crate::cf::get_pages_project(&token, &cf.account_id, &site.deploy.project).await {
                 Ok(Some(p)) => {

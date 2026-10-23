@@ -30,7 +30,8 @@
     if (await setSiteEnv(site.id, [[k, envVal]], [])) { envKey = ''; envVal = ''; }
   }
   const modeOpts = $derived([
-    { value: 'direct', label: 'Pilot 构建后直接上传' },
+    { value: 'direct', label: 'Pilot 构建后上传到 Pages' },
+    { value: 'workers', label: 'Pilot 构建后部署到 Workers（wrangler deploy）' },
     ...(site.source === 'github' ? [{ value: 'pages_git', label: 'Pages 绑定 GitHub（合并即上线）' }] : []),
     { value: 'none', label: '暂不部署' },
   ]);
@@ -95,8 +96,8 @@
         <div class="field"><span class="lbl">方式</span><Dropdown bind:value={d.deploy.mode} options={modeOpts} /></div>
         {#if d.deploy.mode !== 'none'}
           <div class="field"><span class="lbl">Cloudflare 连接</span><Dropdown bind:value={d.deploy.cf_conn_id} placeholder="选择连接" options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
-          <div class="field"><label for="ss-proj">Pages 项目</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" /></div>
-          <div class="field"><label for="ss-pbranch">生产分支</label><input id="ss-pbranch" class="tin mono" bind:value={d.deploy.branch} spellcheck="false" /></div>
+          <div class="field"><label for="ss-proj">{d.deploy.mode === 'workers' ? 'Worker 名称' : 'Pages 项目'}</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" />{#if d.deploy.mode === 'workers'}<small>路由、绑定、变量都按仓库里的 wrangler 配置部署。</small>{/if}</div>
+          {#if d.deploy.mode !== 'workers'}<div class="field"><label for="ss-pbranch">生产分支</label><input id="ss-pbranch" class="tin mono" bind:value={d.deploy.branch} spellcheck="false" /></div>{/if}
         {/if}
       </div>
     </div>

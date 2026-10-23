@@ -14,7 +14,8 @@
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
   const d = $derived(f.preview?.detected);
   const modeOpts = $derived([
-    { value: 'direct', label: 'Pilot 构建后直接上传', sub: '构建、检查、wrangler 上传都由 Pilot 执行' },
+    { value: 'direct', label: 'Pilot 构建后上传到 Pages', sub: '构建、检查、wrangler pages deploy 都由 Pilot 执行' },
+    { value: 'workers', label: 'Pilot 构建后部署到 Workers', sub: '按仓库里的 wrangler 配置执行 wrangler deploy（静态资源 + Worker）' },
     ...(f.source === 'github' ? [{ value: 'pages_git', label: 'Pages 绑定 GitHub', sub: '合并到生产分支后 Cloudflare 自动构建' }] : []),
     { value: 'none', label: '暂不部署', sub: '只管代码与数据，以后再配' },
   ]);
@@ -92,12 +93,19 @@
               <div class="field"><span class="lbl">Cloudflare 连接</span>
                 <Dropdown bind:value={f.cfConnId} options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} onchange={() => void loadImportProjects()} />
               </div>
-              <div class="field"><label for="si-proj">Pages 项目</label>
-                <input id="si-proj" class="tin mono" bind:value={f.project} list="si-projects" placeholder={f.projectsLoading ? '读取中…' : '项目名'} spellcheck="false" />
-                <datalist id="si-projects">{#each f.projects as p (p.name)}<option value={p.name}>{p.domains.join(', ')}</option>{/each}</datalist>
-                <small>{f.projects.find((p) => p.name === f.project) ? `已存在 · ${f.projects.find((p) => p.name === f.project)?.source_type === 'github' ? '绑定了 GitHub' : '直接上传'}` : f.project ? '不存在，首次上线时自动创建' : ''}</small>
-              </div>
-              <div class="field"><label for="si-branch">生产分支</label><input id="si-branch" class="tin mono" bind:value={f.branch} spellcheck="false" /></div>
+              {#if f.mode === 'workers'}
+                <div class="field"><label for="si-proj">Worker 名称</label>
+                  <input id="si-proj" class="tin mono" bind:value={f.project} spellcheck="false" />
+                  <small>来自 wrangler 配置；路由、绑定和变量也都按那份配置部署。</small>
+                </div>
+              {:else}
+                <div class="field"><label for="si-proj">Pages 项目</label>
+                  <input id="si-proj" class="tin mono" bind:value={f.project} list="si-projects" placeholder={f.projectsLoading ? '读取中…' : '项目名'} spellcheck="false" />
+                  <datalist id="si-projects">{#each f.projects as p (p.name)}<option value={p.name}>{p.domains.join(', ')}</option>{/each}</datalist>
+                  <small>{f.projects.find((p) => p.name === f.project) ? `已存在 · ${f.projects.find((p) => p.name === f.project)?.source_type === 'github' ? '绑定了 GitHub' : '直接上传'}` : f.project ? '不存在，首次上线时自动创建' : ''}</small>
+                </div>
+                <div class="field"><label for="si-branch">生产分支</label><input id="si-branch" class="tin mono" bind:value={f.branch} spellcheck="false" /></div>
+              {/if}
             </div>
           {/if}
         {/if}

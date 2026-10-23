@@ -178,6 +178,17 @@ pub fn find_pages_url(log: &str) -> String {
     String::new()
 }
 
+/// Workers 的部署输出里找地址：优先 workers.dev，其次站点自己的域名。
+pub fn find_deploy_url(log: &str, domain: &str) -> String {
+    for word in log.split_whitespace() {
+        let w = word.trim_matches(|c: char| !c.is_ascii_graphic() || matches!(c, '(' | ')' | ',' | '"' | '\''));
+        if w.starts_with("https://") && w.contains(".workers.dev") {
+            return w.to_string();
+        }
+    }
+    if domain.is_empty() { String::new() } else { format!("https://{domain}") }
+}
+
 /// 依赖要不要装：没有 node_modules，或锁文件变了（Pilot 自己的部署目录才比对锁文件）。
 fn needs_install(dir: &Path, stamp: Option<&Path>) -> bool {
     if !dir.join("package.json").exists() {
@@ -297,6 +308,22 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
     if cf.account_id.is_empty() {
         return Err("这个 Cloudflare 连接没有账号 id，请重新连接".into());
     }
+    let env = vec![
+        ("CLOUDFLARE_API_TOKEN".to_string(), token.clone()),
+        ("CLOUDFLARE_ACCOUNT_ID".to_string(), cf.account_id.clone()),
+    ];
+    if site.deploy.mode == "workers" {
+        // Workers：名称、路由、绑定都在仓库的 wrangler 配置里，Pilot 只负责在构建检查通过后执行一次。
+        let (prog, mut args) = wrangler_cmd(&b.dir)?;
+        args.push("deploy".into());
+        if !message.is_empty() {
+            args.push("--message".into());
+            args.push(message.chars().take(100).collect());
+        }
+        job.line(&format!("$ wrangler deploy（Worker {}）", site.deploy.project));
+        job.exec(&prog, &args, &b.dir, &env, STEP_TIMEOUT).await.map_err(|e| format!("上传失败：{e}"))?;
+        return Ok(find_deploy_url(&job.log_text(), &site.domain));
+    }
     let branch = if site.deploy.branch.is_empty() { "main".to_string() } else { site.deploy.branch.clone() };
     ensure_pages_project(&token, &cf.account_id, &site.deploy.project, &branch, job).await?;
     let (prog, mut args) = wrangler_cmd(&b.dir)?;
@@ -320,10 +347,6 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
     if dirty || commit.is_empty() {
         args.push("--commit-dirty=true".into());
     }
-    let env = vec![
-        ("CLOUDFLARE_API_TOKEN".to_string(), token.clone()),
-        ("CLOUDFLARE_ACCOUNT_ID".to_string(), cf.account_id.clone()),
-    ];
     job.line(&format!("$ wrangler pages deploy {} --project-name {}", site.build.out_dir, site.deploy.project));
     job.exec(&prog, &args, &b.dir, &env, STEP_TIMEOUT).await.map_err(|e| format!("上传失败：{e}"))?;
     Ok(find_pages_url(&job.log_text()))
@@ -383,11 +406,11 @@ pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job
 }
 
 async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
-    if site.deploy.mode != "direct" {
+    if !matches!(site.deploy.mode.as_str(), "direct" | "workers") {
         return Err("这个站点不是由 Pilot 直接上传部署的".into());
     }
     if site.deploy.project.trim().is_empty() {
-        return Err("请先在站点设置里填写 Cloudflare Pages 项目".into());
+        return Err(if site.deploy.mode == "workers" { "请先在站点设置里填写 Worker 名称".into() } else { "请先在站点设置里填写 Cloudflare Pages 项目".into() });
     }
     let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
     // 准备代码

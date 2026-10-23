@@ -5,7 +5,7 @@
   import SiteJobPanel from './SiteJobPanel.svelte';
   import SiteSummary from './SiteSummary.svelte';
   import SiteLaunch from './SiteLaunch.svelte';
-  import { sites, deploySite } from '$lib/state/sites.svelte.js';
+  import { sites, deploySite, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { ops, LEVEL_LABEL } from '$lib/state/ops.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
 
@@ -42,12 +42,12 @@
       </dl>
     </div>
     <div class="card">
-      <h3>部署 <span class="grow"></span>{#if site.deploy.mode === 'direct'}<button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button>{/if}</h3>
+      <h3>部署 <span class="grow"></span>{#if pilotDeploys(site.deploy.mode)}<button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button>{/if}</h3>
       <dl class="kv">
-        <dt>方式</dt><dd>{site.deploy.mode === 'direct' ? 'Pilot 构建后直接上传' : site.deploy.mode === 'pages_git' ? 'Pages 绑定 GitHub（合并即上线）' : '暂不部署'}</dd>
+        <dt>方式</dt><dd>{DEPLOY_LABEL[site.deploy.mode] ?? '暂不部署'}</dd>
         {#if site.deploy.mode !== 'none'}
-          <dt>Pages</dt><dd>{site.deploy.project || '—'} · {cf ? cf.remark?.trim() || cf.name : '未选择连接'}</dd>
-          <dt>生产分支</dt><dd class="mono">{site.deploy.branch}</dd>
+          <dt>{site.deploy.mode === 'workers' ? 'Worker' : 'Pages'}</dt><dd>{site.deploy.project || '—'} · {cf ? cf.remark?.trim() || cf.name : '未选择连接'}</dd>
+          {#if site.deploy.mode !== 'workers'}<dt>生产分支</dt><dd class="mono">{site.deploy.branch}</dd>{/if}
         {/if}
         {#if last}
           <dt>上次上线</dt>

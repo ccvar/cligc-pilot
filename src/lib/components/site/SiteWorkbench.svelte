@@ -9,7 +9,7 @@
   import SiteQueue from './SiteQueue.svelte';
   import SiteOpsTab from './SiteOpsTab.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { sites, loadSiteStatus, deploySite, type SiteTab } from '$lib/state/sites.svelte.js';
+  import { sites, loadSiteStatus, deploySite, pilotDeploys, type SiteTab } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
   import { newChat } from '$lib/state/conversations';
 
@@ -46,7 +46,7 @@
         {#if site.source === 'github'}<button class="btn small ghost" onclick={() => openUrl(`https://github.com/${site.repo}`)}>仓库 ↗</button>{/if}
         {#if st?.code_dir && st.exists}<button class="btn small ghost" onclick={() => revealItemInDir(st.code_dir)}>打开文件夹</button>{/if}
         <button class="btn small" onclick={newChat}>新对话</button>
-        {#if site.deploy.mode === 'direct'}
+        {#if pilotDeploys(site.deploy.mode)}
           <button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{job?.status === 'running' ? `${job.title}中…` : '构建并上线'}</button>
         {/if}
       </div>

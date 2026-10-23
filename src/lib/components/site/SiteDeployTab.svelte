@@ -18,12 +18,12 @@
   {#if site.deploy.mode === 'none'}
     <div class="card"><p class="hint">这个站点还没有配置部署。<button class="link-btn" onclick={() => (sites.tab = 'settings')}>去设置</button></p></div>
   {:else}
-    {#if site.deploy.mode === 'direct'}
+    {#if site.deploy.mode === 'direct' || site.deploy.mode === 'workers'}
       <div class="card">
         <h3>构建并上线 <span class="grow"></span><button class="btn small" onclick={() => checkSite(site.id)} disabled={job?.status === 'running'} data-tip="只安装、构建并跑检查，不上传">预检</button><button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{job?.status === 'running' ? '进行中…' : '构建并上线'}</button></h3>
         <p class="hint">
           Pilot 依次执行：{site.source === 'github' ? `拉取 ${site.deploy.branch} 最新代码 → ` : ''}安装依赖 → <code>{site.build.build || '（无构建）'}</code> →
-          {site.build.checks.length ? site.build.checks.map((c) => c).join(' → ') + ' →' : ''} 上传 <code>{site.build.out_dir}</code> 到 Pages 项目 <code>{site.deploy.project}</code>
+          {site.build.checks.length ? site.build.checks.map((c) => c).join(' → ') + ' →' : ''} {#if site.deploy.mode === 'workers'}<code>wrangler deploy</code> 到 Worker <code>{site.deploy.project}</code>（按仓库里的 wrangler 配置）{:else}上传 <code>{site.build.out_dir}</code> 到 Pages 项目 <code>{site.deploy.project}</code>{/if}
           {site.data.indexnow_key ? '→ 向 IndexNow 提交内容有变化的页面' : ''}。任何一步失败都会停下，不会上传。
         </p>
         {#if job}<SiteJobPanel {job} />{/if}
@@ -36,7 +36,7 @@
     {/if}
 
     <div class="card">
-      <h3>Cloudflare Pages 部署记录 <span class="grow"></span><button class="btn tiny" onclick={() => loadPagesDeploys(site.id)}>刷新</button></h3>
+      <h3>{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="btn tiny" onclick={() => loadPagesDeploys(site.id)}>刷新</button></h3>
       {#if sites.pagesErr[site.id]}<div class="err-note">{sites.pagesErr[site.id]}</div>
       {:else if !pages.length}<p class="hint">还没有部署记录（项目尚未创建，或首次上线前）。</p>
       {:else}
@@ -52,7 +52,7 @@
                 <td class="num">
                   {#if p.url}<button class="btn tiny" onclick={() => openUrl(p.url)}>打开</button>{/if}
                   {#if site.deploy.mode === 'pages_git'}<button class="btn tiny" onclick={() => retryPagesDeploy(site.id, p.id)}>重新构建</button>{/if}
-                  {#if p.environment === 'production' && p.status === 'success'}<button class="btn tiny" onclick={() => rollbackPagesDeploy(site.id, p.id)}>切回此版本</button>{/if}
+                  {#if site.deploy.mode !== 'workers' && p.environment === 'production' && p.status === 'success'}<button class="btn tiny" onclick={() => rollbackPagesDeploy(site.id, p.id)}>切回此版本</button>{/if}
                 </td>
               </tr>
             {/each}

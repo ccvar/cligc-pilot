@@ -166,7 +166,7 @@ export interface SiteBuild {
 }
 export interface SiteDeploy {
   /** direct = Pilot 构建后上传；pages_git = Pages 绑定 GitHub；none = 暂不部署 */
-  mode: 'direct' | 'pages_git' | 'none' | '';
+  mode: 'direct' | 'workers' | 'pages_git' | 'none' | '';
   cf_conn_id: string;
   project: string;
   branch: string;
@@ -217,6 +217,7 @@ export interface SiteDetected {
   build: SiteBuild;
   env: [string, string][];
   cf_project: string;
+  deploy_kind: string;
   branch: string;
   domain: string;
   indexnow_key: string;

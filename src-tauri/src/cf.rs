@@ -269,6 +269,31 @@ pub async fn list_deployments(token: &str, account_id: &str, project: &str) -> R
     Ok(body["result"].as_array().map(|a| a.iter().map(deployment_from).collect()).unwrap_or_default())
 }
 
+/// Workers 的部署记录（每次 `wrangler deploy` 一条），映射成和 Pages 部署记录同样的结构给界面用。
+pub async fn list_worker_deployments(token: &str, account_id: &str, script: &str) -> Result<Vec<PagesDeployment>, String> {
+    let body = match cf_get(token, &format!("/accounts/{account_id}/workers/scripts/{script}/deployments")).await {
+        Ok(b) => b,
+        Err(e) if e.contains("404") || e.to_lowercase().contains("not found") => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    let list = body["result"]["deployments"].as_array().cloned().unwrap_or_default();
+    Ok(list
+        .iter()
+        .take(10)
+        .map(|d| PagesDeployment {
+            id: d["id"].as_str().unwrap_or_default().into(),
+            url: String::new(),
+            environment: "production".into(),
+            branch: String::new(),
+            commit: String::new(),
+            message: d["annotations"]["workers/message"].as_str().unwrap_or(d["source"].as_str().unwrap_or_default()).into(),
+            status: "success".into(),
+            stage: "deploy".into(),
+            created_on: d["created_on"].as_str().unwrap_or_default().into(),
+        })
+        .collect())
+}
+
 /// 重新跑某次部署（Pages 绑定 GitHub 时＝按该提交重新构建）。
 pub async fn retry_deployment(token: &str, account_id: &str, project: &str, id: &str) -> Result<PagesDeployment, String> {
     let body = cf_send(

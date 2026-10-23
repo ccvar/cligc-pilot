@@ -6,6 +6,9 @@ import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
 import { connections, selectConn } from './connections.svelte.js';
 
 export const SITE_PREFIX = 'site:';
+/** 由 Pilot 构建、检查、上传的部署方式（Pages 直接上传 / Workers）。 */
+export const pilotDeploys = (mode: string) => mode === 'direct' || mode === 'workers';
+export const DEPLOY_LABEL: Record<string, string> = { direct: 'Pilot 构建后上传到 Pages', workers: 'Pilot 构建后部署到 Workers（wrangler deploy）', pages_git: 'Pages 绑定 GitHub（合并即上线）', none: '暂不部署' };
 export const isSiteConnId = (id: string) => id.startsWith(SITE_PREFIX);
 export const siteIdOf = (connId: string) => (isSiteConnId(connId) ? connId.slice(SITE_PREFIX.length) : '');
 
@@ -34,7 +37,7 @@ type ImportForm = {
   build: string;
   outDir: string;
   checks: string;
-  mode: 'direct' | 'pages_git' | 'none';
+  mode: 'direct' | 'workers' | 'pages_git' | 'none';
   cfConnId: string;
   project: string;
   branch: string;
@@ -209,6 +212,7 @@ function matchProject() {
   const f = sites.imp;
   if (!f.preview || !f.projects.length) return;
   const d = f.preview.detected;
+  if (f.mode === 'workers' || d.deploy_kind === 'workers') return; // Workers 不在 Pages 项目列表里
   const repo = f.source === 'github' ? f.repo : d.github_repo;
   const hit = f.projects.find((p) => p.name === (f.project || d.cf_project))
     ?? f.projects.find((p) => !!f.domain && p.domains.includes(f.domain))
@@ -230,7 +234,7 @@ export async function detectImport(arg: { path?: string }) {
     Object.assign(f, {
       preview, step: 'review', name: preview.name, domain: d.domain, install: d.build.install, build: d.build.build,
       outDir: d.build.out_dir, checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
-      indexnowKey: d.indexnow_key, mode: f.cfConnId ? 'direct' : 'none',
+      indexnowKey: d.indexnow_key, mode: f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
     });
     matchProject();
   } catch (e) { f.err = String(e); }

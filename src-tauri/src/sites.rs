@@ -29,12 +29,13 @@ pub struct BuildConfig {
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug)]
 pub struct DeployConfig {
-    /// direct（Pilot 构建后用 wrangler 上传）| pages_git（Pages 绑定 GitHub，合并即上线）| none（暂不部署）
+    /// direct（Pilot 构建后用 wrangler 上传到 Pages）| workers（Pilot 构建后 `wrangler deploy` 到 Workers，
+    /// 配置在仓库的 wrangler.toml / wrangler.jsonc 里）| pages_git（Pages 绑定 GitHub，合并即上线）| none（暂不部署）
     #[serde(default)]
     pub mode: String,
     #[serde(default)]
     pub cf_conn_id: String,
-    /// Cloudflare Pages 项目名。
+    /// Cloudflare Pages 项目名；Workers 部署时是 Worker 名（来自 wrangler 配置）。
     #[serde(default)]
     pub project: String,
     /// 生产分支（Pages 的 production branch）。
@@ -401,6 +402,8 @@ pub struct Detected {
     /// 从 deploy 脚本里解析出的构建时变量（如 `GA_MEASUREMENT_ID=G-XXXX npm run build`）。
     pub env: Vec<(String, String)>,
     pub cf_project: String,
+    /// pages | workers：deploy 脚本 / wrangler 配置显示的部署方式。
+    pub deploy_kind: String,
     pub branch: String,
     pub domain: String,
     pub indexnow_key: String,
@@ -509,6 +512,94 @@ pub fn parse_deploy_script(script: &str) -> (Vec<(String, String)>, String, Stri
         }
     }
     (env, out, project, branch)
+}
+
+/// 读 wrangler 配置（toml / json / jsonc）：返回（Worker 名，是不是 Workers 项目，自定义路由的主机名）。
+/// 有 `main` 或 `assets` 而没有 `pages_build_output_dir` 的就是 Workers。
+pub fn wrangler_config(dir: &Path) -> Option<(String, bool, Vec<String>)> {
+    if let Ok(t) = fs::read_to_string(dir.join("wrangler.toml")) {
+        let mut name = String::new();
+        let mut workers = false;
+        let mut pages = false;
+        let mut hosts = Vec::new();
+        let mut top = true;
+        for line in t.lines() {
+            let l = line.trim();
+            if l.starts_with('#') {
+                continue;
+            }
+            if l.starts_with('[') {
+                top = false;
+                if l.starts_with("[assets]") {
+                    workers = true;
+                }
+                continue;
+            }
+            let val = |k: &str| l.strip_prefix(k).map(|r| r.trim_start()).and_then(|r| r.strip_prefix('=')).map(|r| r.trim().trim_matches('"').to_string());
+            if top {
+                if let Some(v) = val("name") {
+                    name = v;
+                }
+                if val("main").is_some() {
+                    workers = true;
+                }
+                if val("pages_build_output_dir").is_some() {
+                    pages = true;
+                }
+            }
+            for part in l.split("pattern").skip(1) {
+                let v: String = part.trim_start_matches([' ', '=', '"']).chars().take_while(|c| *c != '"').collect();
+                if let Ok(h) = normalize_domain(v.trim_end_matches("/*")) {
+                    if !h.is_empty() {
+                        hosts.push(h);
+                    }
+                }
+            }
+        }
+        if !name.is_empty() {
+            return Some((name, workers && !pages, hosts));
+        }
+    }
+    for f in ["wrangler.jsonc", "wrangler.json"] {
+        let Ok(t) = fs::read_to_string(dir.join(f)) else { continue };
+        // 去掉 // 注释（不在字符串里的）和尾逗号，再按 JSON 解析
+        let mut clean = String::new();
+        for line in t.lines() {
+            let mut in_str = false;
+            let mut prev = ' ';
+            let mut cut = line.len();
+            for (i, c) in line.char_indices() {
+                if c == '"' && prev != '\\' {
+                    in_str = !in_str;
+                }
+                if !in_str && c == '/' && prev == '/' {
+                    cut = i - 1;
+                    break;
+                }
+                prev = c;
+            }
+            clean.push_str(&line[..cut]);
+            clean.push('\n');
+        }
+        let clean = clean.replace(",\n}", "\n}").replace(",\n]", "\n]");
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&clean) else { continue };
+        let name = v["name"].as_str().unwrap_or_default().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let workers = (v.get("main").is_some() || v.get("assets").is_some()) && v.get("pages_build_output_dir").is_none();
+        let mut hosts = Vec::new();
+        for r in v["routes"].as_array().cloned().unwrap_or_default() {
+            let p = r.as_str().map(str::to_string).or_else(|| r["pattern"].as_str().map(str::to_string)).unwrap_or_default();
+            if let Ok(h) = normalize_domain(p.trim_end_matches("/*")) {
+                if !h.is_empty() {
+                    hosts.push(h);
+                }
+            }
+        }
+        return Some((name, workers, hosts));
+    }
+    None
 }
 
 /// 从 astro/next 等配置里找 `site: 'https://example.com'` 这类声明的域名。
@@ -691,12 +782,23 @@ pub fn detect(dir: &Path) -> Detected {
     d.build.out_dir = default_out.into();
 
     // deploy 脚本里的 wrangler 写法最可信：产物目录、项目名、分支、构建变量都在里面。
+    let wrangler = wrangler_config(dir);
+    if let Some((name, true, _)) = &wrangler {
+        d.deploy_kind = "workers".into();
+        d.cf_project = name.clone();
+    }
     if let Some(dep) = script("deploy") {
+        if dep.contains("wrangler deploy") && !dep.contains("pages deploy") {
+            d.deploy_kind = "workers".into();
+        }
         let (env, out, project, branch) = parse_deploy_script(&dep);
         if !out.is_empty() && check_out_dir(&out).is_ok() {
             d.build.out_dir = out.trim_start_matches("./").to_string();
         }
-        d.cf_project = project;
+        if !project.is_empty() {
+            d.cf_project = project;
+            d.deploy_kind = "pages".into();
+        }
         d.branch = branch;
         if !env.is_empty() {
             d.notes.push(format!(
@@ -730,7 +832,11 @@ pub fn detect(dir: &Path) -> Detected {
     d.build.env_keys = d.env.iter().map(|(k, _)| k.clone()).collect();
     d.domain = domain_from_configs(dir)
         .or_else(|| domain_from_files(dir))
+        .or_else(|| wrangler.as_ref().and_then(|(_, _, hosts)| hosts.first().cloned()))
         .unwrap_or_default();
+    if d.deploy_kind.is_empty() && (pilot.is_some() || !d.cf_project.is_empty()) {
+        d.deploy_kind = "pages".into();
+    }
     d.indexnow_key = find_indexnow_key(dir, &d.build.out_dir).unwrap_or_default();
     d.has_dotenv = dir.join(".env").exists();
     d.dotenv_example_keys = dotenv_keys(&dir.join(".env.example"));
@@ -892,6 +998,39 @@ mod tests {
         assert_eq!(det.indexnow_key, "8c862b9da94589a467d61dad4f75a88f");
         assert_eq!(det.dotenv_example_keys, vec!["INVITE_CODE".to_string(), "OTHER".to_string()]);
         assert_eq!(default_name(&det, d), "gatesor.com");
+    }
+
+    #[test]
+    fn detects_workers_projects_from_wrangler_config() {
+        let t = tempfile::tempdir().unwrap();
+        let d = t.path();
+        fs::write(d.join("package.json"), r#"{"scripts":{"build":"astro build","deploy":"npm run build && wrangler deploy && node scripts/indexnow.mjs"},"dependencies":{"astro":"^7"}}"#).unwrap();
+        fs::write(
+            d.join("wrangler.jsonc"),
+            "{\n  // Worker + 静态资源\n  \"$schema\": \"node_modules/wrangler/config-schema.json\",\n  \"name\": \"gategas\",\n  \"main\": \"worker/index.ts\",\n  \"assets\": { \"directory\": \"./dist\", \"run_worker_first\": [\"/*\", \"!/_astro/*\"] },\n}\n",
+        )
+        .unwrap();
+        let det = detect(d);
+        assert_eq!(det.deploy_kind, "workers");
+        assert_eq!(det.cf_project, "gategas");
+        assert_eq!(det.build.out_dir, "dist");
+
+        let t2 = tempfile::tempdir().unwrap();
+        let d2 = t2.path();
+        fs::write(d2.join("index.html"), "x").unwrap();
+        fs::write(
+            d2.join("wrangler.toml"),
+            "# Worker\nname = \"gateraw\"\nmain = \"worker/index.js\"\nroutes = [{ pattern = \"gateraw.com/*\", zone_name = \"gateraw.com\" }]\n\n[assets]\ndirectory = \"./dist\"\n",
+        )
+        .unwrap();
+        let (name, workers, hosts) = wrangler_config(d2).unwrap();
+        assert_eq!((name.as_str(), workers), ("gateraw", true));
+        assert_eq!(hosts, vec!["gateraw.com".to_string()]);
+        assert_eq!(detect(d2).domain, "gateraw.com");
+
+        let t3 = tempfile::tempdir().unwrap();
+        fs::write(t3.path().join("wrangler.toml"), "name = \"site\"\npages_build_output_dir = \"dist\"\n").unwrap();
+        assert!(!wrangler_config(t3.path()).unwrap().1);
     }
 
     #[test]

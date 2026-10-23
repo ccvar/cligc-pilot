@@ -127,14 +127,15 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
     }
     match site.deploy.mode.as_str() {
         "none" => {}
-        "direct" | "pages_git" => {
+        "direct" | "pages_git" | "workers" => {
             let c = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "请选择 Cloudflare 连接".to_string())?;
             if c.kind != "cloudflare" {
                 return Err("部署用的连接不是 Cloudflare".into());
             }
             let p = site.deploy.project.trim().to_ascii_lowercase();
-            if p.is_empty() || !p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') || p.starts_with('-') || p.len() > 58 {
-                return Err("Pages 项目名只能用小写字母、数字和连字符".into());
+            let ok_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || (site.deploy.mode == "workers" && c == '_');
+            if p.is_empty() || !p.chars().all(ok_char) || p.starts_with('-') || p.len() > 63 {
+                return Err(if site.deploy.mode == "workers" { "Worker 名称只能用小写字母、数字、- 和 _".into() } else { "Pages 项目名只能用小写字母、数字和连字符".into() });
             }
             site.deploy.project = p;
             if site.deploy.mode == "pages_git" && site.source != "github" {
@@ -339,7 +340,7 @@ pub fn cancel_site_job(state: tauri::State<'_, AppState>, id: String) -> bool {
 #[tauri::command]
 pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
-    if site.deploy.mode != "direct" {
+    if !matches!(site.deploy.mode.as_str(), "direct" | "workers") {
         return Err(if site.deploy.mode == "pages_git" {
             "这个站点由 Cloudflare 在合并后自动构建，可以在下方「重新部署」".into()
         } else {
@@ -382,6 +383,9 @@ pub async fn site_pages_deployments(state: tauri::State<'_, AppState>, id: Strin
         return Ok(vec![]);
     }
     let (token, acct) = cf_for(&state, &site)?;
+    if site.deploy.mode == "workers" {
+        return crate::cf::list_worker_deployments(&token, &acct, &site.deploy.project).await;
+    }
     match crate::cf::list_deployments(&token, &acct, &site.deploy.project).await {
         Ok(v) => Ok(v),
         Err(e) if e.contains("404") || e.to_lowercase().contains("not found") => Ok(vec![]),

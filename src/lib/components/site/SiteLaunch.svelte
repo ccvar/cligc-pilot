@@ -4,7 +4,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Dropdown from '$lib/Dropdown.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { sites, deploySite } from '$lib/state/sites.svelte.js';
+  import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
   import { launch, loadLaunch, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4 } from '$lib/state/launch.svelte.js';
 
@@ -57,6 +57,7 @@
       </div>
     </div>
 
+    {#if site.deploy.mode !== 'workers'}
     <div class="lstep" class:done={st.pages && (st.domain_attached || !site.domain)}>
       <span class="n">{st.pages && (st.domain_attached || !site.domain) ? '✓' : 2}</span>
       <div class="lb">
@@ -66,13 +67,14 @@
         {#if notes.pages}<small class:err={notes.pages.startsWith('失败')}>{notes.pages}</small>{/if}
       </div>
     </div>
+    {/if}
 
     <div class="lstep" class:done={st.deployed}>
       <span class="n">{st.deployed ? '✓' : 3}</span>
       <div class="lb">
         <b>在 Pilot 里上线一次</b>
         <small>{st.deployed ? '已上线过' : 'Pilot 构建、检查后上传到 Pages。'}</small>
-        {#if !st.deployed && site.deploy.mode === 'direct'}<div class="row"><button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button></div>{/if}
+        {#if !st.deployed && pilotDeploys(site.deploy.mode)}<div class="row"><button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>构建并上线</button></div>{/if}
       </div>
     </div>
 

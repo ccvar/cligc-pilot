@@ -686,7 +686,7 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, page: &str, commit: &str, trigg
     let st = ctx.state();
     let site_dir = ctx.site_dir(&site.id);
     match site.deploy.mode.as_str() {
-        "direct" => {
+        "direct" | "workers" => {
             let rec = crate::site_deploy::deploy_with(site, &st.conns, &site_dir, job, trigger).await?;
             Ok(rec.url)
         }

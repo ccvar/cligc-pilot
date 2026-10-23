@@ -74,7 +74,7 @@ export async function acceptItem(site: Site, item: OpsItem) {
   const what = item.branch
     ? site.source === 'github' ? `合并 PR #${item.pr_number}` : `把本地分支 ${item.branch} 压缩合并进 ${site.default_branch}`
     : '标记为已处理';
-  const then = item.branch && site.deploy.mode !== 'none' ? (site.deploy.mode === 'direct' ? '，然后构建并上线' : '，Cloudflare 会自动构建上线') : '';
+  const then = item.branch && site.deploy.mode !== 'none' ? (site.deploy.mode === 'direct' || site.deploy.mode === 'workers' ? '，然后构建并上线' : '，Cloudflare 会自动构建上线') : '';
   if (!(await confirmDialog(`确认这条改动：${what}${then}？`, { title: '确认改动', kind: 'info', confirmText: '确认' }))) return;
   try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
