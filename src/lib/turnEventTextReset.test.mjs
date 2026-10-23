@@ -5,7 +5,7 @@ import ts from 'typescript';
 import { stateFunctions, withStores } from './testing/appSource.mjs';
 
 // Exercise the real event receiver; no model calls, real state or Tauri process.
-const code = ts.transpileModule(stateFunctions(['makeChannel']), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const code = ts.transpileModule(stateFunctions(['makeChannel', 'applyTurnEvent']), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function live() {
   return { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: 0, startedAt: 10, error: '', failed: false };

@@ -29,6 +29,7 @@
   import SitesOverview from '$lib/components/site/SitesOverview.svelte';
   import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
   import { initManaged } from '$lib/state/managed.svelte.js';
+  import { initOpsLive } from '$lib/state/turns.svelte.js';
   import DataConnectDialog from '$lib/components/site/DataConnectDialog.svelte';
   import TemplateSaveDialog from '$lib/components/library/TemplateSaveDialog.svelte';
   import TemplateUseDialog from '$lib/components/library/TemplateUseDialog.svelte';
@@ -75,6 +76,7 @@
   initOps();
   initFleet();
   initManaged();
+  initOpsLive();
 </script>
 
 <svelte:window

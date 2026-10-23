@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { TurnEvent, Message, Conversation, TaskType } from '$lib/types';
 import { savePrefs } from '$lib/defaults';
 import { app, say, refreshConvos } from './app.svelte.js';
@@ -30,7 +31,38 @@ export const turns = new TurnsState();
 // ---------- 运行一轮 ----------
 export function makeChannel(convId: string): Channel<TurnEvent> {
   const ch = new Channel<TurnEvent>();
-  ch.onmessage = (ev) => {
+  ch.onmessage = (ev) => applyTurnEvent(convId, ev);
+  return ch;
+}
+
+/** 无人值守的运营会话：后端把实时事件转成 ops-turn 广播；收到时建流式缓冲，打开会话就和普通会话一样实时显示。 */
+export function initOpsLive() {
+  $effect(() => {
+    let done: Record<string, ReturnType<typeof setTimeout>> = {};
+    const un = listen<{ conv_id: string; event: TurnEvent }>('ops-turn', (e) => {
+      const { conv_id: id, event: ev } = e.payload;
+      if (!app.lives[id]) {
+        const now = Date.now();
+        app.lives[id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: now, error: '', failed: false, startedAt: now };
+        app.running[id] = app.convos.find((c) => c.id === id)?.conn_id ?? 'ops';
+      }
+      applyTurnEvent(id, ev);
+      if (ev.type === 'done') {
+        clearTimeout(done[id]);
+        // 后端跑完才落库最终消息；稍等一下再刷新，然后撤掉流式缓冲
+        done[id] = setTimeout(async () => {
+          await refreshConvos();
+          if (app.activeConvId === id) app.activeConv = app.convos.find((c) => c.id === id) ?? app.activeConv;
+          delete app.lives[id]; delete app.running[id];
+        }, 1500);
+      }
+    });
+    return () => { void un.then((f) => f()); Object.values(done).forEach(clearTimeout); done = {}; };
+  });
+}
+
+function applyTurnEvent(convId: string, ev: TurnEvent) {
+  {
     const buf = app.lives[convId];
     if (!buf) return; // 该对话已结束/被清（切走后仍可能收到尾包）
     if (ev.type === 'delta' || ev.type === 'text_reset') {
@@ -79,8 +111,7 @@ export function makeChannel(convId: string): Channel<TurnEvent> {
       }
     }
     else if (ev.type === 'done') { if (!ev.ok) { buf.error = ev.error; buf.failed = true; } }
-  };
-  return ch;
+  }
 }
 export function optimisticUser(text: string): Message {
   return { role: 'user', text, tools: [], ts: Math.floor(Date.now() / 1000), hidden: false, error: false };

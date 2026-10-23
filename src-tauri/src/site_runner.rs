@@ -586,7 +586,24 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
     let (brain, model) = model.clone();
-    let channel = tauri::ipc::Channel::<crate::agent::TurnEvent>::new(|_| Ok(()));
+    // 把这一轮的实时事件转给前端（ops-turn），打开这条会话就能看到 AI 正在做什么；
+    // 第一条事件到达时刷新会话列表，会话一开始就出现在侧栏里，而不是跑完才出现。
+    let channel = {
+        let app = ctx.app.clone();
+        let id = conv_id.clone();
+        let announced = std::sync::atomic::AtomicBool::new(false);
+        tauri::ipc::Channel::<crate::agent::TurnEvent>::new(move |body| {
+            if !announced.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let _ = app.emit("conversations-changed", ());
+            }
+            if let tauri::ipc::InvokeResponseBody::Json(raw) = body {
+                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let _ = app.emit("ops-turn", serde_json::json!({ "conv_id": id, "event": ev }));
+                }
+            }
+            Ok(())
+        })
+    };
     let conv = crate::create_conversation(
         st.conns.clone(),
         st.sites.clone(),
@@ -1700,7 +1717,24 @@ mod tests {
         let msg = "【运营 · 改动】/guide/ 排名靠前但点击率偏低\n\n页面：https://example.com/guide/\n依据：查询词「手冲咖啡 水温」排名 3、点击率很低。\n\
 当前目录是独立工作区（分支 pilot/ops-guide-i1）。请：\n1. 只改 guide/index.html 的 <title> 和 meta description，让它们回应「手冲咖啡 水温 粉水比」，描述 50–160 字；\n\
 2. 用 git add 和 git commit 提交（没配 git 身份导致提交失败就保留改动）；\n3. 最后运行一次 `wrangler pages deploy . --project-name demo` 试试能不能部署，并如实告诉我结果。".to_string();
-        let channel = tauri::ipc::Channel::<crate::agent::TurnEvent>::new(|_| Ok(()));
+        // 把这一轮的实时事件转给前端（ops-turn），打开这条会话就能看到 AI 正在做什么；
+    // 第一条事件到达时刷新会话列表，会话一开始就出现在侧栏里，而不是跑完才出现。
+    let channel = {
+        let app = ctx.app.clone();
+        let id = conv_id.clone();
+        let announced = std::sync::atomic::AtomicBool::new(false);
+        tauri::ipc::Channel::<crate::agent::TurnEvent>::new(move |body| {
+            if !announced.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                let _ = app.emit("conversations-changed", ());
+            }
+            if let tauri::ipc::InvokeResponseBody::Json(raw) = body {
+                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let _ = app.emit("ops-turn", serde_json::json!({ "conv_id": id, "event": ev }));
+                }
+            }
+            Ok(())
+        })
+    };
         let res = crate::agent::run_turn(
             crate::agent::RunRegistry::default(),
             conn,
