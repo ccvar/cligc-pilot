@@ -124,9 +124,9 @@ pub struct ManagedGroup {
 }
 
 fn default_code() -> String {
-    "small".into()
+    "all".into()
 }
-pub const CODE_CHANGES: &[&str] = &["review", "small", "all"];
+pub const CODE_CHANGES: &[&str] = &["all", "small", "review"];
 /// 「小改动」的上限：代码文件改动的总行数和文件数。
 pub const SMALL_CODE_LINES: usize = 80;
 pub const SMALL_CODE_FILES: usize = 5;
@@ -237,7 +237,7 @@ impl ManagedGroup {
         out.push_str(&format!("【允许的动作】{}{}\n\n", allowed.join("、"), if denied.is_empty() { String::new() } else { format!("（不要做：{}）", denied.join("、")) }));
         out.push_str(&match self.code_changes.as_str() {
             "review" => "【代码改动】能用站点现有的数据字段和组件做到，就只改内容和数据；需要改模板、组件或其它代码时可以改，但这类改动要运营人员确认后才上线，改动越小越好。\n\n".to_string(),
-            "all" => "【代码改动】文章和页面写在代码里时，可以直接改模板、组件和站点代码来完成任务，改动要集中。不要加依赖、改构建 / 部署配置、改 Worker / 服务端代码，也不要读环境变量或调用外部服务——这些不会自动上线。\n\n".to_string(),
+            "all" | "" => "【代码改动】文章和页面写在代码里时，可以直接改模板、组件和站点代码来完成任务，改动要集中。不要加依赖、改构建 / 部署配置、改 Worker / 服务端代码，也不要读环境变量或调用外部服务——这些不会自动上线。\n\n".to_string(),
             _ => format!("【代码改动】文章和页面写在代码里时，可以改模板、组件和站点代码来完成任务，但要小而集中：代码文件合计不超过 {SMALL_CODE_LINES} 行、{SMALL_CODE_FILES} 个文件（文章正文这类数据不算），超过就留给运营人员确认。不要加依赖、改构建 / 部署配置、改 Worker / 服务端代码，也不要读环境变量或调用外部服务——这些不会自动上线。\n\n"),
         });
         let topics = self.topic_list();
