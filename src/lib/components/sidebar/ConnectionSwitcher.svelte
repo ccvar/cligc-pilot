@@ -10,6 +10,8 @@
   import { app } from '$lib/state/app.svelte.js';
   import { WORKSPACE_CONN_ID } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
+  import { gh, openGhConnect } from '$lib/state/github.svelte.js';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
@@ -33,6 +35,8 @@
                 <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
               {:else if c.kind === 'cloudflare'}
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
+              {:else if c.kind === 'github'}
+                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.login}</span> · GitHub</small>
               {/if}</span>
             {#if app.activeConnId === c.id}<span class="cs-check">✓</span>{/if}
           </button>
@@ -41,16 +45,17 @@
       <div class="cs-actions">
         <div class="cs-div"></div>
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
+        <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
         <button class="cs-act" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshConnect(); }}><SshMark size={15} />新建远程连接</button>
         <button type="button" class="cs-act" role="menuitem" onclick={openConnectionSetup}><GearIcon />连接与模型设置…</button>
       </div>
     </div>
   {/if}
 <button class="rail-foot" class:open={connections.switcherOpen} onclick={() => { connections.switcherOpen = !connections.switcherOpen; }}>
-  {#if app.isCfConn}<CfMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
+  {#if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
   <span class="foot-main">
     <b>{app.activeConn ? connectionDisplayName(app.activeConn) : '未连接'}</b>
-    {#if app.activeConn}<small>{#if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isSshConn}<!--
+    {#if app.activeConn}<small>{#if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
       远程连接：这里放远端系统版本（点一下重探，比如刚 do-release-upgrade 过）。
     --><span class="foot-os" role="button" tabindex="-1" title="远端系统 · 点击重新检测"
       onclick={(e) => { e.stopPropagation(); probeOs(app.activeConnId, true); }}

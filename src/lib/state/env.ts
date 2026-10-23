@@ -8,6 +8,7 @@ export const DIALOG_GEOMETRY = {
   connectionRemark: { id: 'connection-remark', minWidth: 320, minHeight: 160, draggable: true, resizable: false, rememberPosition: true },
   fileOperation: { id: 'file-operation', minWidth: 320, minHeight: 160, draggable: true, resizable: false, rememberPosition: true },
   fileEditor: { id: 'file-editor', storageVersion: 2, minWidth: 560, minHeight: 380, draggable: true, resizable: true, rememberPosition: true, rememberSize: true },
+  github: { id: 'github-connect', minWidth: 400, minHeight: 360, draggable: true, resizable: true, rememberPosition: true, rememberSize: true },
   cloudflare: { id: 'cloudflare-connect', minWidth: 380, minHeight: 360, draggable: true, resizable: true, rememberPosition: true, rememberSize: true },
   templateSave: { id: 'template-save', minWidth: 320, minHeight: 180, draggable: true, resizable: false, rememberPosition: true },
   templateUse: { id: 'template-use', minWidth: 320, minHeight: 180, draggable: true, resizable: false, rememberPosition: true },

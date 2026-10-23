@@ -16,6 +16,8 @@
   import { settings, refreshBrainsManual, authorize, rebind, upgradeCli, saveClaudeToken, closeClaudeToken, installClaude, installCodex, installGrok, copyCmd, removeCustom, addCustom } from '$lib/state/settings.svelte.js';
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
+  import { openGhConnect } from '$lib/state/github.svelte.js';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, connections, toggleConnCtx } from '$lib/state/connections.svelte.js';
@@ -47,6 +49,9 @@
               <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openCfConnect(); }}>
                 <CfMark size={15} /><span>连接 Cloudflare</span>
               </button>
+              <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openGhConnect(); }}>
+                <GhMark size={15} /><span>连接 GitHub</span>
+              </button>
               <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openSshConnect(); }}>
                 <SshMark size={15} /><span>新建远程连接</span>
               </button>
@@ -54,7 +59,7 @@
           {/if}
         </div>
       </div>
-      {#if app.conns.length === 0}<p class="hint">还没有连接。可以连接 Cloudflare 建站部署，或新建一个 SSH 远程连接。本地对话不需要连接。</p>{/if}
+      {#if app.conns.length === 0}<p class="hint">还没有连接。可以连接 Cloudflare 建站部署、连接 GitHub 改仓库代码，或新建一个 SSH 远程连接。本地对话不需要连接。</p>{/if}
       <div class="conn-list">
         {#each app.conns as c (c.id)}
           <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
@@ -67,6 +72,8 @@
                 <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
               {:else if c.kind === 'cloudflare'}
                 <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
+              {:else if c.kind === 'github'}
+                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.login}</span> · GitHub</small>
               {/if}</span>
             <button
               class="icon-btn sm"

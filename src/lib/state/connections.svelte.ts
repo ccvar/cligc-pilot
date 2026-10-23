@@ -7,6 +7,7 @@ import { app, say, confirmDialog, refreshConns, refreshConvos } from './app.svel
 import { switchConversationWorkspace } from './panes.svelte.js';
 import { launcher } from './launcher.svelte.js';
 import { disposeTerm } from './workbench.svelte.js';
+import { loadGhRepos } from './github.svelte.js';
 
 class ConnectionsState {
   switcherOpen = $state(false);
@@ -132,6 +133,15 @@ export async function selectConn(id: string) {
     catch (e) { if (seq === connections.selSeq) say(String(e), 'err'); }
     return;
   }
+  if (conn?.kind === 'github') {
+    // GitHub：选仓库再开会话。Codex / Claude 推送、提 PR 都走权限确认，默认「自动」而非「全自动」。
+    if (switching) {
+      launcher.lSite = '';
+      if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
+    }
+    void loadGhRepos(id);
+    return;
+  }
   // 本地对话：没有项目可选，进启动页即可。
   if (switching) { launcher.lSite = ''; app.view = 'launcher'; }
 }
@@ -154,7 +164,7 @@ export function distroOf(c: Connection | undefined | null): string {
 /** 远程连接的搜索索引：名称 / IP / user@host / 端口 / 系统都能命中。
  *  机器一多就记不住「哪台是哪个 IP」——所以 IP 必须能搜，这正是用户要它的原因。 */
 export const connHay = (c: Connection) =>
-  `${c.name} ${c.ssh_user ?? ''}@${c.ssh_host ?? ''} ${c.ssh_host ?? ''}:${c.ssh_port ?? ''} ${c.ssh_os ?? ''} ${c.ssh_os_id ?? ''}`.toLowerCase();
+  `${c.name} ${c.remark ?? ''} ${c.login ?? ''} ${c.ssh_user ?? ''}@${c.ssh_host ?? ''} ${c.ssh_host ?? ''}:${c.ssh_port ?? ''} ${c.ssh_os ?? ''} ${c.ssh_os_id ?? ''}`.toLowerCase();
 export function sshSub(c: Connection | undefined | null): string {
   if (!c) return '';
   return c.ssh_os || `${c.ssh_user}@${c.ssh_host}${c.ssh_port && c.ssh_port !== 22 ? ':' + c.ssh_port : ''}`;

@@ -7,6 +7,8 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openLocalWorkspace } from '$lib/state/connections.svelte.js';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
+  import { openGhConnect } from '$lib/state/github.svelte.js';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
 </script>
 
@@ -15,10 +17,11 @@
   <div class="hero-card">
     <div class="hero-mark"><AppIcon size={54} /></div>
     <h1>开始之前，先选一个工作方式</h1>
-    <p>直接和本地 Claude / Codex / Grok 或 API 模型对话；连接 Cloudflare 让它帮你建站并部署；或者连上一台远程服务器，让它帮你运维。</p>
+    <p>直接和本地 Claude / Codex / Grok 或 API 模型对话；连接 Cloudflare 让它帮你建站并部署；连接 GitHub 让它改仓库代码、提 PR；或者连上一台远程服务器，让它帮你运维。</p>
     <div class="hero-btns">
       <button class="btn soft hero-import" onclick={openLocalWorkspace}><WorkspaceMark size={15} />本地对话</button>
       <button class="btn soft hero-import" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
+      <button class="btn soft hero-import" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
       <button class="btn soft hero-import" onclick={openSshConnect}><SshMark size={15} />新建远程连接</button>
     </div>
     <CliGuide />

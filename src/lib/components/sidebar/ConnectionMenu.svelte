@@ -3,6 +3,7 @@
   import { openRemote } from '$lib/state/workbench.svelte.js';
   import { openSshEdit } from '$lib/state/ssh.svelte.js';
   import { openCfUpdate } from '$lib/state/cloudflare.svelte.js';
+  import { openGhUpdate } from '$lib/state/github.svelte.js';
 </script>
 
 {#if connections.connCtx}
@@ -18,6 +19,10 @@
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openCfUpdate(c)}>更新 Token…</button>
+    {:else if c.kind === 'github'}
+      <div class="ctx-div"></div>
+      <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
     {/if}
     <div class="ctx-div"></div>
     <button

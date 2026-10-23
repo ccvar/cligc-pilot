@@ -40,15 +40,19 @@ class AppState {
   // 并发对话：running = convId → connId（在跑的对话；带 connId 便于删连接时可靠判定）；lives = 每个对话的流式缓冲。
   running = $state<Record<string, string>>({});
   lives = $state<Record<string, LiveTurn>>({});
-  // 当前会话站点的公开地址：CF 从对话里探测部署地址；其它会话没有站点。
+  // 当前会话的外链：CF 从对话里探测部署地址；GitHub 指向仓库页面；其它会话没有。
   activeSiteUrl = $derived.by(() => {
     const c = this.activeConv;
-    if (!c || !this.activeConvIsCf) return '';
+    if (!c) return '';
+    if (this.activeConvIsGh) return c.site_slug ? `https://github.com/${c.site_slug}` : '';
+    if (!this.activeConvIsCf) return '';
     return detectSiteUrl([c]);
   });
   anyBrainUsable = $derived(this.ALL_BRAINS.some((b) => brainUsable(b)));
 
   isSshConn = $derived(this.activeConn?.kind === 'ssh');
+  isGhConn = $derived(this.activeConn?.kind === 'github');
+  activeConvIsGh = $derived(this.activeConvConn?.kind === 'github');
   isWorkspaceChat = $derived(this.activeConn?.kind === 'workspace');
 }
 

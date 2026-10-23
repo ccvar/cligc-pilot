@@ -55,7 +55,7 @@
                 {:else}
                   <!-- 与连接切换器同一个标 -->
                   <ConnectionMark kind={it.c.kind} size={15} />
-                  <span class="si-main"><b>{it.c.name}</b><small>{#if it.c.kind === 'ssh'}{it.c.ssh_user}@{it.c.ssh_host}{it.c.ssh_port && it.c.ssh_port !== 22 ? ':' + it.c.ssh_port : ''}{it.c.ssh_os ? ` · ${it.c.ssh_os}` : ''}{:else if it.c.kind === 'cloudflare'}Cloudflare · {it.c.remark?.trim() || it.c.key_prefix}{/if}</small></span>
+                  <span class="si-main"><b>{it.c.name}</b><small>{#if it.c.kind === 'ssh'}{it.c.ssh_user}@{it.c.ssh_host}{it.c.ssh_port && it.c.ssh_port !== 22 ? ':' + it.c.ssh_port : ''}{it.c.ssh_os ? ` · ${it.c.ssh_os}` : ''}{:else if it.c.kind === 'cloudflare'}Cloudflare · {it.c.remark?.trim() || it.c.key_prefix}{:else if it.c.kind === 'github'}GitHub · {it.c.login}{/if}</small></span>
                   {#if app.activeConnId === it.c.id}<span class="si-tag">当前</span>{/if}
                 {/if}
               </button>

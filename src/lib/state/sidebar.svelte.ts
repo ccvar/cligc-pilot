@@ -39,12 +39,12 @@ class SidebarState {
 export const sidebar = new SidebarState();
 
 function taskLabel(t: string): string {
-  return t === 'sitebuild' ? '建站' : t === 'remote' ? '远程运维' : '自由对话';
+  return t === 'sitebuild' ? '建站' : t === 'remote' ? '远程运维' : t === 'repo' ? '仓库' : '自由对话';
 }
 function conversationTaskLabel(c: Conversation | null | undefined): string {
   return taskLabel(c?.task_type ?? '');
 }
-// 侧栏分组键：CF 按项目；SSH 一台机器一组；本地对话按接入的文件夹（未接文件夹的归「自由对话」）。
+// 侧栏分组键：CF 按项目、GitHub 按仓库；SSH 一台机器一组；本地对话按接入的文件夹（未接文件夹的归「自由对话」）。
 export function conversationGroupKey(c: Conversation): string {
   if (c.task_type === 'workspace') return c.workspace_dir?.trim() || WORKSPACE_CONN_ID;
   if (c.task_type === 'remote') return '__remote__';
@@ -52,7 +52,7 @@ export function conversationGroupKey(c: Conversation): string {
 }
 
 // 会话按「分组 → 任务类型」两级分组：分组按最近活动倒序；任务类型固定顺序，只留有会话的。
-const TASK_ORDER = ['sitebuild', 'remote', 'workspace'];
+const TASK_ORDER = ['sitebuild', 'repo', 'remote', 'workspace'];
 export function faviconOf(u: string): string { try { return new URL(u).origin + '/favicon.ico'; } catch { return ''; } }
 function loadCollapsedSites(): Set<string> { try { return new Set<string>(JSON.parse(localStorage.getItem('cligc.pilot.collapsedSites') || '[]')); } catch { return new Set(); } }
 function persistCollapsedSites() { try { localStorage.setItem('cligc.pilot.collapsedSites', JSON.stringify([...sidebar.collapsedSites])); } catch { /* */ } }

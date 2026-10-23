@@ -69,6 +69,7 @@ export function conversationConnection(c:Conversation|null) {
 }
 export function conversationPresentation(c:Conversation|null) {
   const conn=conversationConnection(c);
+  if(conn?.kind==='github'&&c?.site_slug)return {conn,url:`https://github.com/${c.site_slug}`};
   return {conn,url:conn?.kind==='cloudflare'&&c ? detectSiteUrl([c]) : ''};
 }
 export async function loadPaneMetadata(c:Conversation) {

@@ -9,6 +9,7 @@
   import UsageRing from '$lib/UsageRing.svelte';
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import { app } from '$lib/state/app.svelte.js';
   import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
@@ -363,6 +364,8 @@
         <div class="cb-left">
           {#if activeConvIsCf}
             <span class="cb-ro" title="项目已固定"><span class="cb-ro-t">{activeConv?.site_slug}</span></span>
+          {:else if meta.conn?.kind==='github'}
+            <span class="cb-ro" title="仓库已固定"><GhMark size={14} /><span class="cb-ro-t">{activeConv?.site_slug}</span></span>
           {:else if activeConvIsSsh}
             <!-- 远程对话：这里放远端系统的图标 + 机器地址。 -->
             <span class="cb-ro" title={activeConvConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(activeConvConn)} size={15} /><span class="cb-ro-t">{activeConv?.site_name}</span></span>

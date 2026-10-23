@@ -161,7 +161,7 @@
     <div class="dd-menu" class:menu-compact={menuCompact} style={menuStyle} role="listbox" aria-label={ariaLabel || placeholder}>
       {#if showSearch}
         <div class="dd-search">
-          <input bind:this={searchEl} bind:value={query} placeholder="搜索站点…" spellcheck="false" autocapitalize="off" autocorrect="off" />
+          <input bind:this={searchEl} bind:value={query} placeholder="搜索…" spellcheck="false" autocapitalize="off" autocorrect="off" />
         </div>
       {/if}
       {#each filtered as o (o.value)}

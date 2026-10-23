@@ -186,7 +186,7 @@ export async function startChat() {
   const targetReady = app.isSshConn || workspace || !!launcher.lSite.trim();
   const textReady = !!launcher.lDraft.trim() || (app.isSshConn && composer.attachments.length > 0);
   if (!app.activeConn || !targetReady || !textReady || !brainUsable(launcher.lBrain)) return;
-  const taskType: TaskType = app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : 'workspace';
+  const taskType: TaskType = app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : app.isGhConn ? 'repo' : 'workspace';
   launcher.prefs.brain = launcher.lBrain; launcher.prefs.model = launcher.lModel; launcher.prefs.perm = launcher.lPerm; launcher.prefs.effort = launcher.lEffort; savePrefs(launcher.prefs);
   const model = launcher.lModel;
   // CF 建站：把所选视觉风格的 tokens 指令拼进首条消息（可见、可追溯）。

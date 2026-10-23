@@ -3,15 +3,17 @@ export interface Connection {
   name: string;
   /** 用户自定义备注；缺省/空串时继续显示脱敏 Key。 */
   remark?: string;
-  /** cloudflare（CF token 建站）| ssh（远程机器）| workspace（前端合成的本地对话，不落盘）。 */
+  /** cloudflare（CF token 建站）| ssh（远程机器）| github（仓库）| workspace（前端合成的本地对话，不落盘）。 */
   kind: string;
   /** 连接工作区目录（CF 项目放在其下的 projects/）。 */
   skill_dir: string;
   /** SSH 连接此项恒为空：它的秘密是密码/口令，显示前缀等于把密码印在 UI 上。 */
   key_prefix: string;
   key_kind: string;
-  /** Cloudflare 账号 id（仅 kind=cloudflare）。 */
+  /** Cloudflare 账号 id；GitHub 为数字用户 id。 */
   account_id: string;
+  /** GitHub 登录名（仅 kind=github）。 */
+  login?: string;
   /** 以下仅 kind=ssh。 */
   ssh_host?: string;
   ssh_port?: number;
@@ -71,8 +73,17 @@ export interface CliUpdateInfo {
 
 // ---- 对话 ----
 
-/** sitebuild = Cloudflare 项目；remote = SSH 机器；workspace = 本地对话（可接入一个文件夹）。 */
-export type TaskType = 'sitebuild' | 'remote' | 'workspace';
+/** sitebuild = Cloudflare 项目；remote = SSH 机器；repo = GitHub 仓库；workspace = 本地对话（可接入一个文件夹）。 */
+export type TaskType = 'sitebuild' | 'remote' | 'repo' | 'workspace';
+
+/** fine-grained Token 能访问的 GitHub 仓库。 */
+export interface GhRepo {
+  full_name: string;
+  private: boolean;
+  default_branch: string;
+  /** Token 对它是否有写权限（推分支、提 PR）。 */
+  can_push: boolean;
+}
 
 export interface ToolCall {
   label: string;

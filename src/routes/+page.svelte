@@ -20,6 +20,7 @@
   import SftpFileDialog from '$lib/components/remote/SftpFileDialog.svelte';
   import RemoteFileEditor from '$lib/components/remote/RemoteFileEditor.svelte';
   import CloudflareConnectDialog from '$lib/components/cloudflare/CloudflareConnectDialog.svelte';
+  import GithubConnectDialog from '$lib/components/github/GithubConnectDialog.svelte';
   import TemplateSaveDialog from '$lib/components/library/TemplateSaveDialog.svelte';
   import TemplateUseDialog from '$lib/components/library/TemplateUseDialog.svelte';
   import PromptEditDialog from '$lib/components/library/PromptEditDialog.svelte';
@@ -180,6 +181,7 @@
 <SftpFileDialog />
 <RemoteFileEditor />
 <CloudflareConnectDialog />
+<GithubConnectDialog />
 <TemplateSaveDialog />
 <TemplateUseDialog />
 <PromptEditDialog />

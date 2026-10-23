@@ -4,6 +4,7 @@
   import TemplateIcon from '$lib/components/icons/TemplateIcon.svelte';
   import PromptIcon from '$lib/components/icons/PromptIcon.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import ConnectionSwitcher from '$lib/components/sidebar/ConnectionSwitcher.svelte';
   import { ui, startResize } from '$lib/state/ui.svelte.js';
@@ -43,13 +44,15 @@
 
   <div class="convos" class:scrolled={ui.convosScrolled} onscroll={(e) => (ui.convosScrolled = (e.currentTarget as HTMLElement).scrollTop > 2)}>
     {#if sidebar.grouped.length === 0}
-      <p class="rail-empty">还没有对话。<br />{app.isSshConn ? '在下方面板里直接说你想让这台机器做什么。' : app.isCfConn ? '给项目起个名，直接说你想要什么样的网站。' : '选好模型，直接说你想做什么。'}</p>
+      <p class="rail-empty">还没有对话。<br />{app.isSshConn ? '在下方面板里直接说你想让这台机器做什么。' : app.isCfConn ? '给项目起个名，直接说你想要什么样的网站。' : app.isGhConn ? '选一个仓库，直接说你想改什么。' : '选好模型，直接说你想做什么。'}</p>
     {/if}
     {#each sidebar.grouped as g (JSON.stringify([app.activeConnId, g.slug]))}
       <button class="site-grp" onclick={() => toggleSite(g.slug)} title={g.name}>
         <svg class="site-grp-chev" class:collapsed={sidebar.collapsedSites.has(g.slug)} width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
         {#if app.isSshConn}
           <SshMark size={13} />
+        {:else if app.isGhConn}
+          <GhMark size={13} />
         {:else if app.isCfConn}
           {#if g.url}<img class="site-grp-fav" src={faviconOf(g.url)} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
         {:else}

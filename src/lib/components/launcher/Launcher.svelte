@@ -3,6 +3,7 @@
   import ModelFx from '$lib/ModelFx.svelte';
   import UsageRing from '$lib/UsageRing.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
+  import { gh, loadGhRepos } from '$lib/state/github.svelte.js';
   import CliGuide from '$lib/components/launcher/CliGuide.svelte';
   import WranglerNote from '$lib/components/launcher/WranglerNote.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
@@ -19,6 +20,9 @@
     {#if app.isCfConn}
       <h1>让 AI 帮你建个站</h1>
       <p class="sub">给项目起个名，描述你想要的网站——边聊边建，随时本地预览，满意了再部署到 Cloudflare。</p>
+    {:else if app.isGhConn}
+      <h1>想让它在仓库里做点什么？</h1>
+      <p class="sub">选一个仓库，说清要改什么——它会克隆仓库、新建分支改代码并跑测试，推送和提 PR 前都会先问你。</p>
     {:else if app.isSshConn}
       <h1>想让它在这台机器上做点什么？</h1>
       <p class="sub">它通过 Pilot 在 {app.activeConn?.ssh_user}@{app.activeConn?.ssh_host} 上执行命令；每条命令按你选的权限档位确认，凭据始终不交给模型。</p>
@@ -29,7 +33,7 @@
 
       <div class="composer big">
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
-            placeholder={app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
+            placeholder={app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
             oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
             onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
         <div class="composer-bar">
@@ -37,6 +41,10 @@
             {#if app.isSshConn}
               <!-- 远程连接没有站点/项目可选：对象就是那台机器 -->
               <span class="ssh-target"><SshMark size={13} />{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port}</span>
+            {:else if app.isGhConn}
+              <Dropdown compact searchable bind:value={launcher.lSite}
+                options={gh.repos.map((r) => ({ value: r.full_name, label: r.full_name, sub: `${r.private ? '私有' : '公开'}${r.can_push ? '' : ' · 只读'}${gh.checkouts.includes(r.full_name) ? ' · 已克隆' : ''}` }))}
+                placeholder={gh.reposLoading ? '正在读取仓库…' : gh.repos.length ? '选择仓库' : '没有可用仓库'} />
             {:else if app.isCfConn}
               <input class="cf-proj-in" bind:value={launcher.lSite} placeholder="项目名，如 coffee-landing" spellcheck="false" autocapitalize="off" autocorrect="off" />
               <Dropdown compact bind:value={launcher.lStyle} options={STYLE_OPTS} />
@@ -54,13 +62,15 @@
             <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, app.isSshConn)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, app.isSshConn)} />
             <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
             <UsageRing />
-            <button class="send" onclick={startChat} disabled={(app.isCfConn && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
+            <button class="send" onclick={startChat} disabled={((app.isCfConn || app.isGhConn) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
           </div>
         </div>
       </div>
     {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
     {#if app.isWorkspaceChat && app.brains && !app.anyBrainUsable}<CliGuide />{/if}
     {#if app.isCfConn && app.brains?.wrangler && !app.brains.wrangler.found}<WranglerNote />{/if}
+    {#if app.isGhConn && gh.reposErr}<p class="hint warn-text">读取仓库失败：{gh.reposErr} <button class="link-btn" type="button" onclick={() => app.activeConnId && loadGhRepos(app.activeConnId, true)}>重试</button></p>{/if}
+    {#if app.isGhConn && launcher.lSite && gh.repos.find((r) => r.full_name === launcher.lSite)?.can_push === false}<p class="hint">这枚 Token 对该仓库只有读权限：可以读代码、在本地改，但推不了分支、提不了 PR。</p>{/if}
   </div>
 </div>
 
@@ -119,4 +129,5 @@
   @media (max-width: 760px) {
     .center.launch-center { padding: 20px 18px; }
   }
+  .link-btn { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 </style>
