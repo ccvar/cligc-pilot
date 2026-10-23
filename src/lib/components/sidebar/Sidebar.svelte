@@ -62,7 +62,7 @@
       {#if fleet.pendingCount}<span class="nav-cnt" title="{fleet.pendingCount} 条改动等你确认">{fleet.pendingCount}</span>{/if}
     </button>
     <button class="railnav {app.view === 'managed' ? 'on' : ''}" onclick={() => openManaged()}>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.8 9.5 5l3.5.4-2.6 2.4.7 3.5L8 9.6l-3.1 1.7.7-3.5L3 5.4 6.5 5 8 1.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M3.5 14h9" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.2v2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /><circle cx="8" cy="1.9" r=".9" fill="currentColor" /><rect x="2.3" y="4.5" width="11.4" height="9.2" rx="2.6" stroke="currentColor" stroke-width="1.2" /><path d="M6 7.8v1.6M10 7.8v1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
       托管运营
       {#if managed.overview?.config.paused}<span class="nav-dim">已暂停</span>{:else if managed.overview?.waiting}<span class="nav-cnt" title="{managed.overview.waiting} 项需要你">{managed.overview.waiting}</span>{:else if managed.count}<span class="nav-dim">{managed.count}</span>{/if}
     </button>
