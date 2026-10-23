@@ -4,6 +4,7 @@
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import SiteSwitcher from './SiteSwitcher.svelte';
   import SiteOverview from './SiteOverview.svelte';
   import SiteDeployTab from './SiteDeployTab.svelte';
   import SiteSettings from './SiteSettings.svelte';
@@ -37,7 +38,7 @@
       <div class="wb-title">
         <span class="wb-ic"><SiteMark size={16} /></span>
         <div class="wb-name">
-          <b>{site.name}</b>
+          <SiteSwitcher />
           <small>
             {#if site.domain}<button class="link-btn plain" onclick={() => openUrl(`https://${site.domain}`)}>{site.domain} ↗</button> · {/if}
             {site.source === 'github' ? site.repo : '本地文件夹'}{site.framework ? ` · ${site.framework}` : ''}
@@ -80,7 +81,6 @@
   .wb-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 160px; }
   .wb-ic { width: 30px; height: 30px; border-radius: 8px; background: var(--rail); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--dim); flex: none; }
   .wb-name { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .wb-name b { display: block; font-size: 15px; font-weight: 600; line-height: 1.3; letter-spacing: -.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wb-name small { display: block; color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .link-btn.plain { text-decoration: none; color: var(--dim); font-size: 12px; transition: color .12s; }
   .link-btn.plain:hover { color: var(--text); }
