@@ -69,6 +69,8 @@
 
     <div class="card">
       <h3><Icon name="hammer" />构建</h3>
+      <div class="field" style="margin-bottom:10px"><label for="ss-root">站点子目录</label><input id="ss-root" class="tin mono" bind:value={d.build.root} placeholder="（仓库根目录）" spellcheck="false" />
+        <small>站点不在仓库根目录时填，如 <code>site</code>。安装、构建、检查和部署都在这个目录里执行。</small></div>
       <div class="grid3">
         <div class="field"><label for="ss-install">安装依赖</label><input id="ss-install" class="tin mono" bind:value={d.build.install} placeholder="（不需要）" spellcheck="false" /></div>
         <div class="field"><label for="ss-build">构建命令</label><input id="ss-build" class="tin mono" bind:value={d.build.build} placeholder="（纯静态）" spellcheck="false" /></div>

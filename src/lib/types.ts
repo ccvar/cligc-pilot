@@ -157,6 +157,8 @@ export type TurnEvent =
 // ---- 站点 ----
 
 export interface SiteBuild {
+  /** 站点在仓库里的子目录（空＝仓库根目录） */
+  root?: string;
   install: string;
   build: string;
   out_dir: string;

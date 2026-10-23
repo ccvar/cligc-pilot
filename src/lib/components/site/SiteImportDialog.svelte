@@ -68,6 +68,7 @@
           <div class="field"><label for="si-name">站点名称</label><input id="si-name" class="tin" bind:value={f.name} /></div>
           <div class="field"><label for="si-domain">主域名</label><input id="si-domain" class="tin" bind:value={f.domain} placeholder="example.com" spellcheck="false" /></div>
         </div>
+        {#if f.root}<p class="hint">站点在仓库的 <code>{f.root}/</code> 子目录里：安装、构建、检查和部署都在那里执行。</p>{/if}
         <div class="grid3">
           <div class="field"><label for="si-install">安装依赖</label><input id="si-install" class="tin mono" bind:value={f.install} placeholder="（不需要）" spellcheck="false" /></div>
           <div class="field"><label for="si-build">构建命令</label><input id="si-build" class="tin mono" bind:value={f.build} placeholder="（纯静态）" spellcheck="false" /></div>

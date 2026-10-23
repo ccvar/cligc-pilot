@@ -36,6 +36,8 @@ type ImportForm = {
   install: string;
   build: string;
   outDir: string;
+  /** 站点在仓库里的子目录 */
+  root: string;
   checks: string;
   mode: 'direct' | 'workers' | 'vps' | 'pages_git' | 'none';
   sshConnId: string;
@@ -52,7 +54,7 @@ type ImportForm = {
 function blankImport(): ImportForm {
   return {
     open: false, step: 'source', source: 'local', ghConnId: '', repo: '', repos: [], reposLoading: false, busy: false, err: '', preview: null,
-    name: '', domain: '', install: '', build: '', outDir: '', checks: '', mode: 'direct', cfConnId: '', project: '', branch: 'main',
+    name: '', domain: '', install: '', build: '', outDir: '', root: '', checks: '', mode: 'direct', cfConnId: '', project: '', branch: 'main',
     projects: [], projectsLoading: false, indexnowKey: '', keepEnv: true, sshConnId: '', command: '',
   };
 }
@@ -255,7 +257,7 @@ export async function detectImport(arg: { path?: string }) {
     const d = preview.detected;
     Object.assign(f, {
       preview, step: 'review', name: preview.name, domain: d.domain, install: d.build.install, build: d.build.build,
-      outDir: d.build.out_dir, checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
+      outDir: d.build.out_dir, root: d.build.root ?? '', checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
       indexnowKey: d.indexnow_key, mode: d.deploy_kind === 'vps' ? 'vps' : f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
       command: d.deploy_command,
       sshConnId: pickSshConn(d.deploy_target),
@@ -282,7 +284,7 @@ export async function confirmImport() {
         domain: f.domain,
         framework: d.framework,
         default_branch: f.source === 'github' ? (f.repos.find((r) => r.full_name === f.repo)?.default_branch ?? d.git_default_branch) : (d.git_default_branch || d.git_branch),
-        build: { install: f.install.trim(), build: f.build.trim(), out_dir: f.outDir.trim(), checks: f.checks.split('\n').map((c) => c.trim()).filter(Boolean), env_keys: [] },
+        build: { root: f.root.trim(), install: f.install.trim(), build: f.build.trim(), out_dir: f.outDir.trim(), checks: f.checks.split('\n').map((c) => c.trim()).filter(Boolean), env_keys: [] },
         deploy: { mode: f.mode, cf_conn_id: f.mode === 'none' || f.mode === 'vps' ? '' : f.cfConnId, project: f.mode === 'none' || f.mode === 'vps' ? '' : f.project.trim(), branch: f.branch.trim(), ssh_conn_id: f.mode === 'vps' ? f.sshConnId : '', command: f.mode === 'vps' ? f.command.trim() : '' },
         env: f.keepEnv ? d.env : [],
         indexnow_key: f.indexnowKey.trim(),
