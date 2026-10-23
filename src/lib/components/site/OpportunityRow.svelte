@@ -50,7 +50,7 @@
   .opp.open .chev { transform: rotate(90deg); }
   .chg { flex: none; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
   .acts { display: inline-flex; gap: 4px; flex: none; }
-  .opp-body { margin: 8px 0 2px 16px; font-size: 12.5px; color: var(--dim); animation: su-in .18s var(--su-ease) both; }
+  .opp-body { margin: 8px 0 2px 16px; font-size: 12.5px; color: var(--dim); animation: su-in .18s var(--su-ease) backwards; }
   .opp-body p { margin: 0 0 6px; line-height: 1.65; max-width: 72ch; }
   @media (max-width: 760px) { .chg { display: none; } }
 </style>

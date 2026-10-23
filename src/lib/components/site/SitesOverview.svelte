@@ -96,7 +96,7 @@
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td><button class="pin" class:on={r.pinned} title={r.pinned ? '取消置顶' : '置顶'} onclick={(e) => { e.stopPropagation(); void setPinned(r.id, !r.pinned); }}>★</button></td>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}"><Icon name="external" size={11} /></button>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
@@ -172,7 +172,7 @@
   .site-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .site-cell b { display: flex !important; align-items: center; gap: 8px; min-width: 0; }
   .site-cell .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ext { flex: none; width: 20px; height: 20px; margin-left: -3px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 5px; color: var(--faint); cursor: pointer; opacity: .55; transition: opacity .12s, background-color .12s, color .12s; }
+  .ext { flex: none; width: 20px; height: 20px; margin-left: -4px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 5px; font: inherit; font-size: 12px; font-weight: 400; line-height: 1; color: var(--dim); cursor: pointer; opacity: .55; transition: opacity .12s, background-color .12s, color .12s; }
   tr:hover .ext { opacity: 1; }
   .ext:hover { background: var(--su-press); color: var(--text); }
   .site-cell small { padding-left: 23px; display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }

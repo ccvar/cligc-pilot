@@ -92,7 +92,7 @@
   .sw-trigger .chev { flex: none; color: var(--faint); transition: transform .16s cubic-bezier(.2, .7, .2, 1), color .12s; }
   .sw-trigger:hover .chev, .sw-trigger.open .chev { color: var(--text); }
   .sw-trigger.open .chev { transform: rotate(180deg); }
-  .sw-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 320px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sw-in .16s cubic-bezier(.2, .7, .2, 1) both; }
+  .sw-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 320px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sw-in .16s cubic-bezier(.2, .7, .2, 1) backwards; }
   @keyframes sw-in { from { opacity: 0; transform: translateY(-4px); } }
   .sw-search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .sw-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }

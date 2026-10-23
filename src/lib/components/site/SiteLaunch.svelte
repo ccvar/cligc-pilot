@@ -158,7 +158,7 @@
 {/if}
 
 <style>
-  .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) both; }
+  .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) backwards; }
   .lhead { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: -2px -6px; padding: 2px 6px; border-radius: 8px; cursor: pointer; user-select: none; transition: background-color .12s; }
   .lhead:not(.static):hover { background: var(--su-hover); }
   .lhead .grow { flex: 1; }
@@ -172,7 +172,7 @@
   .meter { width: 56px; height: 4px; border-radius: 4px; background: var(--accent-soft); overflow: hidden; }
   .meter i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s var(--su-ease); }
   .next { font-size: 12px; color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lbody { margin-top: 8px; animation: su-in .18s var(--su-ease) both; }
+  .lbody { margin-top: 8px; animation: su-in .18s var(--su-ease) backwards; }
   .launch > .ok-note { margin-top: 8px; }
   .skel .bars { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 4px 26px; }
   .skel .bars i { display: block; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft) 25%, #f6f5f1 50%, var(--accent-soft) 75%); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }

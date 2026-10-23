@@ -71,7 +71,7 @@
   .bad { width: 15px; height: 15px; border-radius: 50%; background: var(--err-soft); color: var(--err); font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
   .down { color: var(--err); font-size: 12px; font-weight: 700; }
   .run { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
-  .convs { padding: 1px 0 6px 12px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) both; }
+  .convs { padding: 1px 0 6px 12px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
   @keyframes sr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
   .grp { padding: 6px 8px 2px 30px; font-size: 11px; color: var(--faint); font-weight: 600; }
