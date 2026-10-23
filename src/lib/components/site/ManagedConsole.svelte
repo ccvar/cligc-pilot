@@ -16,7 +16,7 @@
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -61,6 +61,12 @@
     jobsFor = key;
     for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
   });
+  async function moveSite(id: string, from: string, to: string) {
+    if (to === from) return;
+    if (to === '__new') { newGroup([id]); return; }
+    if (to === '__out') { await setManagedSites([id], false); return; }
+    await setManagedSites([id], true, to);
+  }
   async function runNow(id: string) {
     await runTask(id, 'plan');
     progress = new Set([...progress, id]);
@@ -264,6 +270,13 @@
                     <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在就让 AI 读数据和站点、制定本周计划；结果在「计划」里，各项进入站点的「待处理」"><Icon name="play" size={10} />立即执行</button>
                   {/if}
                   <span class="grow"></span>
+                  <div class="gs-move" data-tip="把这个站点移到别的方案，或退出托管">
+                    <Dropdown compact value={g.id} onchange={(v) => moveSite(id, g.id, v)} options={[
+                      ...groups.map((x) => ({ value: x.id, label: x.name, sub: AUTONOMY_LABEL[x.autonomy] ?? '' })),
+                      { value: '__new', label: '新建方案…', sub: '用这个站点新建一个方案' },
+                      { value: '__out', label: '退出托管', sub: '改为自己运营' },
+                    ]} />
+                  </div>
                   <span class="gs-state" class:on={on && !g.paused}>{g.paused ? '方案已暂停' : on ? '托管中' : '已停止'}</span>
                   <button class="switch" class:on class:dim={g.paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
@@ -332,6 +345,8 @@
   .gs-prog { padding-top: 4px; padding-bottom: 14px; background: #fcfbf9; }
   .gs-prog :global(pre.log) { max-height: 200px; }
   .gp-acts { margin-top: 10px; gap: 6px; }
+  .gs-move { flex: none; }
+  .gs-move :global(.dd-trigger) { max-width: 180px; font-size: 12px; color: var(--dim); }
   .gs-meta { font-size: 11.5px; white-space: nowrap; }
   .gs .grow { flex: 1; }
   .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
