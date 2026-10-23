@@ -1,6 +1,7 @@
 <script lang="ts">
   import './site.css';
   import Icon from './Icon.svelte';
+  import CfMark from '$lib/components/icons/CfMark.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
@@ -92,7 +93,7 @@
                   <td><button class="pin" class:on={r.pinned} title={r.pinned ? '取消置顶' : '置顶'} onclick={(e) => { e.stopPropagation(); void setPinned(r.id, !r.pinned); }}>★</button></td>
                   <td class="site-cell">
                     <b>{r.name}</b>
-                    <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span>{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
+                    <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
                     <td class="num">{r.summary.fetched_at ? n(r.summary.gsc_clicks) : '—'}</td>
@@ -168,6 +169,9 @@
   .site-cell small { display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
   .site-cell small span + span:not(.tag)::before { content: '·'; margin-right: 8px; color: var(--border2); }
   .tag { color: var(--dim); }
+  .dm { display: inline-flex; align-items: center; gap: 5px; }
+  .dm :global(svg) { flex: none; }
+  .dm :global(.ico) { color: var(--dim); }
   .nodata { color: var(--faint); font-size: 12px; }
   .lvl { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--dim); white-space: nowrap; }
   .bars { display: inline-flex; gap: 2px; align-items: flex-end; }
