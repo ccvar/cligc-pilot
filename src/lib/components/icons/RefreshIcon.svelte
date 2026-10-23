@@ -1,0 +1,14 @@
+<script lang="ts">
+  let { spinning }: { spinning: boolean } = $props();
+</script>
+
+<svg class="rfz {spinning ? 'spin' : ''}" width="15" height="15" viewBox="0 0 24 24" fill="none">
+  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M21 3v5h-5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
+
+<style>
+  .rfz { display: block; }
+  .rfz.spin { animation: rspin .8s linear infinite; }
+  @keyframes rspin { to { transform: rotate(360deg); } }
+</style>
