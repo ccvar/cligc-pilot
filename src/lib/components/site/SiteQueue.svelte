@@ -8,7 +8,7 @@
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
   let { site }: { site: Site } = $props();
@@ -21,8 +21,12 @@
     live: ['merged', 'deployed', 'done'],
     closed: ['dismissed', 'rolled_back'],
   } as const;
-  const shown = $derived(all.filter((i) => (groups[filter] as readonly string[]).includes(i.status)));
-  const counts = $derived(Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, all.filter((i) => (v as readonly string[]).includes(i.status)).length])) as Record<string, number>);
+  // 上线了但验收有待核对问题的，也放进「需要你处理」
+  const inGroup = (i: OpsItem, k: keyof typeof groups) => (groups[k] as readonly string[]).includes(i.status) || (k === 'todo' && i.status === 'deployed' && !!i.attention);
+  const shown = $derived(all.filter((i) => inGroup(i, filter)));
+  const counts = $derived(Object.fromEntries((Object.keys(groups) as (keyof typeof groups)[]).map((k) => [k, all.filter((i) => inGroup(i, k)).length])) as Record<string, number>);
+  let openChecks = $state<Set<string>>(new Set());
+  function toggleChecks(id: string) { const n = new Set(openChecks); if (n.has(id)) n.delete(id); else n.add(id); openChecks = n; }
   const job = $derived(sites.jobs[site.id]);
   const busy = $derived(job?.status === 'running');
   const when = clock;
@@ -95,7 +99,7 @@
           <div class="li item" class:picked={picked.has(i.id)}>
             <div class="row it-head">
               {#if filter === 'open' && shown.length > 1}<input class="pick" type="checkbox" checked={picked.has(i.id)} onchange={() => togglePick(i.id)} aria-label="选中这一条" />{/if}
-              <span class="pill {tone(i.status)}">{STATUS_LABEL[i.status] ?? i.status}</span>
+              {#if i.status === 'deployed' && i.attention}<span class="pill warn">已上线 · 待核对</span>{:else}<span class="pill {tone(i.status)}">{STATUS_LABEL[i.status] ?? i.status}</span>{/if}
               <b class="it-title" title={i.opp.title}>{i.opp.title}</b>
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
             </div>
@@ -125,6 +129,19 @@
               <p class="verdict" class:ok={i.verdict === 'auto'}>{i.verdict === 'auto' ? '整份改动都在白名单内，检查已通过。' : `不能自动上线：${i.verdict}`}</p>
             {/if}
             {#if i.note}<p class="verdict">{i.note}</p>{/if}
+            {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
+            {#if i.checks?.length}
+              {@const bad = i.checks.filter((c) => !c.ok).length}
+              <button class="how-t" class:open={openChecks.has(i.id)} onclick={() => toggleChecks(i.id)} aria-expanded={openChecks.has(i.id)}>
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                线上验收<span class="faint"> · {i.checks.length - bad} 项通过</span>{#if bad}<span class="warn-text"> · {bad} 项没过</span>{/if}{#if (i.watch_stage ?? 0) === 1}<span class="faint"> · 24 小时后再复查一次</span>{/if}
+              </button>
+              {#if openChecks.has(i.id)}
+                <ul class="checks">
+                  {#each i.checks as c, k (k)}<li class:bad={!c.ok}><span class="ck-i">{c.ok ? '✓' : '✗'}</span>{c.label}{#if c.detail}<span class="faint">：{c.detail}</span>{/if}</li>{/each}
+                </ul>
+              {/if}
+            {/if}
             {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
             <div class="row wrap acts">
               {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
@@ -134,6 +151,7 @@
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
               {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}
               {#if ['dismissed', 'failed'].includes(i.status)}<button class="btn tiny" onclick={() => restoreItem(site.id, i)}><Icon name="inbox" size={11} />放回待处理</button>{/if}
+              {#if i.status === 'deployed' && i.attention}<button class="btn tiny" onclick={() => ackItem(site.id, i)}><Icon name="check" size={11} />已核对</button>{/if}
               {#if i.status === 'merged' && !i.deployed_at && site.deploy.mode !== 'none'}<button class="btn tiny primary" onclick={() => reshipItem(site, i)} disabled={busy} data-tip="已经合并，上次上线没完成：重新构建并上线"><Icon name="rocket" size={11} />重新上线</button>{/if}
               {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
               {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
@@ -155,6 +173,10 @@
 {/if}
 
 <style>
+  .checks { list-style: none; margin: 2px 0 4px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+  .checks li { line-height: 1.55; }
+  .checks .ck-i { display: inline-block; width: 16px; color: var(--ok); }
+  .checks li.bad .ck-i { color: var(--warn); }
   .list-head { display: flex; align-items: center; gap: 12px; margin: 0 -18px; padding: 9px 18px; min-height: 42px; border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; font-size: 12.5px; }
   .list-head.on { background: var(--su-run-soft); }
   .list-head .ck { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex: none; font-weight: 500; }

@@ -319,6 +319,32 @@ pub struct QueueItem {
     /// 处理这条用的模型（备用模型顶上时会写明）。
     #[serde(default)]
     pub model_used: String,
+    /// AI 报告的这次改到的已有页面、新增的页面（完整网址），上线后逐个验收。
+    #[serde(default)]
+    pub pages: Vec<String>,
+    #[serde(default)]
+    pub new_pages: Vec<String>,
+    /// 这次加的几段文字，用来确认线上已经是新内容。
+    #[serde(default)]
+    pub snippets: Vec<String>,
+    /// 最近一次线上验收的结果。
+    #[serde(default)]
+    pub checks: Vec<crate::site_verify::Check>,
+    /// 上线了，但验收有一般问题（不回滚），等你核对；空＝没有。
+    #[serde(default)]
+    pub attention: String,
+    /// 验收严重失败、回滚后 AI 自动重做过几次（最多 1 次）。
+    #[serde(default)]
+    pub retries: u32,
+    /// 上次失败的原因，重做时交给 AI。
+    #[serde(default)]
+    pub retry_note: String,
+    /// 上线后复查到第几次：0＝1 小时后，1＝24 小时后，2＝查完了。
+    #[serde(default)]
+    pub watch_stage: u8,
+    /// 因为线上验收严重失败被回滚的次数（同类改动累计 2 次就不再自动上线）。
+    #[serde(default)]
+    pub verify_rollbacks: u32,
 }
 
 pub fn queue_path(site_dir: &Path) -> PathBuf {

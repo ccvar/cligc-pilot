@@ -33,6 +33,11 @@ pub struct DeployRecord {
     pub duration: u64,
     #[serde(default)]
     pub dirty: bool,
+    /// 线上验收的结果；attention＝不回滚、但要核对的问题。
+    #[serde(default)]
+    pub checks: Vec<crate::site_verify::Check>,
+    #[serde(default)]
+    pub attention: Vec<String>,
 }
 
 pub const DEPLOY_STEPS: &[(&str, &str)] = &[
@@ -41,6 +46,7 @@ pub const DEPLOY_STEPS: &[(&str, &str)] = &[
     ("build", "构建"),
     ("check", "检查"),
     ("upload", "上传"),
+    ("verify", "线上验收"),
     ("indexnow", "提交 IndexNow"),
 ];
 
@@ -407,16 +413,17 @@ pub async fn run_deploy(
     job: Job,
     trigger: &str,
 ) -> Result<DeployRecord, String> {
-    let r = deploy_with(&site, &conns, &site_dir, &job, trigger).await;
+    let r = deploy_with(&site, &conns, &site_dir, &job, trigger, None).await;
     job.finish(&r.as_ref().map(|_| ()).map_err(|e| e.clone()));
     r
 }
 
 /// 在一个已有作业里构建并上线（运营任务、回滚复用它）；不结束作业。记录写进部署历史。
-pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, trigger: &str) -> Result<DeployRecord, String> {
+/// `spec`：这次要验收的页面（运营改动由调用方给出）；没给就只验收首页和构建产物里有变化的页面。
+pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, trigger: &str, spec: Option<crate::site_verify::Spec>) -> Result<DeployRecord, String> {
     let started = now();
     let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: trigger.into(), ..Default::default() };
-    let result = deploy_inner(site, conns, site_dir, job, &mut rec).await;
+    let result = deploy_inner(site, conns, site_dir, job, &mut rec, spec.unwrap_or_default()).await;
     rec.duration = now().saturating_sub(started);
     rec.ok = result.is_ok();
     if let Err(e) = &result {
@@ -452,12 +459,15 @@ pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job
     result
 }
 
-async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
+async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord, mut spec: crate::site_verify::Spec) -> Result<(), String> {
     if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err("这个站点不是由 Pilot 直接上传部署的".into());
     }
     if site.deploy.mode == "vps" {
-        return deploy_vps(site, conns, site_dir, job, rec).await;
+        deploy_vps(site, conns, site_dir, job, rec).await?;
+        spec.domain = site.domain.clone();
+        let rep = crate::site_verify::run(&spec, job, true).await;
+        return finish_verify(job, rec, &rep);
     }
     if site.deploy.project.trim().is_empty() {
         return Err(if site.deploy.mode == "workers" { "请先在站点设置里填写 Worker 名称".into() } else { "请先在站点设置里填写 Cloudflare Pages 项目".into() });
@@ -498,9 +508,42 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
     job.step("upload", "ok", &url);
     job.set_url(&url);
     rec.url = url;
-    // IndexNow：只提交内容有变化的页面
+    // 线上验收：这次改到的页面（调用方给的 + 构建产物里有变化的）逐个打开
     let old = load_manifest(site_dir);
-    let changed = if site.domain.is_empty() { Vec::new() } else { changed_urls(&old, &manifest, &site.domain) };
+    let changed_all = if site.domain.is_empty() { Vec::new() } else { changed_urls(&old, &manifest, &site.domain) };
+    let first_deploy = old.is_empty();
+    spec.domain = site.domain.clone();
+    if !site.domain.is_empty() {
+        spec.built = manifest.keys().filter_map(|k| html_to_path(k)).map(|p| format!("https://{}{p}", site.domain)).collect();
+        if !first_deploy {
+            let old_urls: std::collections::HashSet<String> = old.keys().filter_map(|k| html_to_path(k)).map(|p| format!("https://{}{p}", site.domain)).collect();
+            for u in changed_all.iter().take(8) {
+                let is_new = !old_urls.contains(u);
+                let list = if is_new { &mut spec.new_pages } else { &mut spec.pages };
+                if !list.contains(u) {
+                    list.push(u.clone());
+                }
+            }
+        }
+    }
+    let mut rep = crate::site_verify::run(&spec, job, true).await;
+    if !rep.hard.is_empty() && rep.deploy_issue && !job.canceled() {
+        // 构建产物里有这个页面，线上却打不开：多半是部署没到位，重新上传一次再验收
+        job.line(&format!("构建产物里有这些页面，线上却打不开（{}），像是部署没到位，重新上传一次", rep.hard.join("；")));
+        job.step("upload", "running", "重新上传");
+        let url = upload(site, &cf, &built, &rec.commit, &rec.message, rec.dirty, job).await.inspect_err(|_| job.step("upload", "failed", ""))?;
+        job.step("upload", "ok", &url);
+        rep = crate::site_verify::run(&spec, job, true).await;
+    }
+    finish_verify(job, rec, &rep)?;
+    // IndexNow：只提交内容有变化、并且验收通过的页面（有页面级问题的先不提交）
+    let held: Vec<&String> = spec.pages.iter().chain(&spec.new_pages).filter(|u| !rep.passed.contains(u)).collect();
+    let mut changed: Vec<String> = changed_all.into_iter().filter(|u| !held.contains(&u)).collect();
+    for u in &rep.passed {
+        if !changed.contains(u) {
+            changed.push(u.clone());
+        }
+    }
     rec.changed = changed.len();
     save_manifest(site_dir, &manifest);
     if site.data.indexnow_key.is_empty() || site.domain.is_empty() {
@@ -524,6 +567,31 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
                 rec.indexnow = format!("failed: {e}");
             }
         }
+    }
+    Ok(())
+}
+
+/// 把验收结果写进作业步骤和部署记录：严重问题返回错误（以 HARD_PREFIX 开头，调用方据此回滚）。
+fn finish_verify(job: &Job, rec: &mut DeployRecord, rep: &crate::site_verify::Report) -> Result<(), String> {
+    rec.checks = rep.checks.clone();
+    rec.attention = rep.soft.clone();
+    if rep.checks.is_empty() {
+        job.step("verify", "skipped", "站点没有填域名");
+        return Ok(());
+    }
+    for c in rep.checks.iter().filter(|c| !c.ok) {
+        job.line(&format!("线上验收 ✗ {}{}", c.label, if c.detail.is_empty() { String::new() } else { format!("：{}", c.detail) }));
+    }
+    if !rep.hard.is_empty() {
+        job.step("verify", "failed", &rep.hard.join("；"));
+        return Err(format!("{}{}", crate::site_verify::HARD_PREFIX, rep.hard.join("；")));
+    }
+    let ok = rep.checks.iter().filter(|c| c.ok).count();
+    if rep.soft.is_empty() {
+        job.step("verify", "ok", &format!("{ok} 项都通过"));
+    } else {
+        job.step("verify", "ok", &format!("网站正常，{} 项待核对", rep.soft.len()));
+        job.line(&format!("线上验收：网站正常，但有 {} 项待核对：{}", rep.soft.len(), rep.soft.join("；")));
     }
     Ok(())
 }

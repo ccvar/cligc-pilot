@@ -463,6 +463,12 @@ pub fn touches_money(line: &str) -> bool {
 /// 公开内容里不该出现的内部痕迹（开发注释、占位、内部说明）。只认很明确的标记，避免误伤正文。
 const LEAK_MARKERS: &[&str] = &["TODO", "FIXME", "TBD", "lorem ipsum", "placeholder", "待补图", "待补充", "占位图", "占位文字", "上线前替换", "此处插入", "本文由 AI 生成", "按提示词", "via.placeholder.com", "dummyimage.com", "placehold.co"];
 
+/// 文字里有没有内部痕迹（开发注释、占位、内部说明），有就返回是哪个标记。
+pub fn leak_marker(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    LEAK_MARKERS.iter().copied().find(|m| lower.contains(&m.to_lowercase()))
+}
+
 /// 文字量：汉字按字、其它按词（粗算，只用于判断「新页面是不是太薄」）。
 pub fn text_units(s: &str) -> usize {
     let cjk = s.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c) || ('\u{3040}'..='\u{30ff}').contains(c) || ('\u{ac00}'..='\u{d7af}').contains(c)).count();

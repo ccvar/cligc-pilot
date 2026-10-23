@@ -376,6 +376,17 @@ export interface OpsItem {
   review_note: string;
   note: string;
   auto: boolean;
+  /** AI 报告的改动页面 / 新页面，上线后逐个验收 */
+  pages?: string[];
+  new_pages?: string[];
+  /** 最近一次线上验收 */
+  checks?: { label: string; ok: boolean; detail?: string; hard?: boolean }[];
+  /** 上线了但有一般问题，等你核对（空＝没有） */
+  attention?: string;
+  retries?: number;
+  retry_note?: string;
+  watch_stage?: number;
+  watched?: string;
 }
 
 // ---- 多站点 ----

@@ -43,6 +43,7 @@ mod site_github;
 mod site_jobs;
 mod site_ops;
 mod site_runner;
+mod site_verify;
 mod site_vps;
 mod sites;
 mod tools;
@@ -4541,6 +4542,7 @@ pub fn run() {
             ops_cmds::queue_work,
             ops_cmds::queue_recheck,
             ops_cmds::queue_work_many,
+            ops_cmds::queue_ack,
             ops_cmds::queue_accept,
             ops_cmds::queue_rollback,
             ops_cmds::queue_dismiss,

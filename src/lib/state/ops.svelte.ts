@@ -126,6 +126,11 @@ export async function dismissItems(site: Site, items: OpsItem[]) {
   await loadQueue(site.id);
   say(failed ? `驳回了 ${items.length - failed} 条，${failed} 条没成功` : `已驳回 ${items.length} 条`, failed ? 'err' : undefined);
 }
+/** 上线后验收的待核对问题看过了。 */
+export async function ackItem(siteId: string, item: OpsItem) {
+  try { await invoke('queue_ack', { id: siteId, itemId: item.id }); await loadQueue(siteId); }
+  catch (e) { say(String(e), 'err'); }
+}
 export async function restoreItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_restore', { id: siteId, itemId: item.id }); await loadQueue(siteId); }
   catch (e) { say(String(e), 'err'); }

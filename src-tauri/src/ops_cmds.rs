@@ -99,6 +99,14 @@ pub fn queue_mark_done(state: tauri::State<'_, AppState>, id: String, item_id: S
     Ok(())
 }
 
+/// 上线后验收的待核对问题：你看过了，清掉。
+#[tauri::command]
+pub fn queue_ack(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
+    let dir = state.sites.data_dir(&id);
+    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| i.attention.clear())?;
+    Ok(())
+}
+
 /// 改动的差异（给人看）。
 #[tauri::command]
 pub async fn queue_diff(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<String, String> {

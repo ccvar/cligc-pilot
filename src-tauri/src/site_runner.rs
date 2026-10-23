@@ -251,13 +251,13 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "health" => &[("data", "拉取数据"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("report", "体检报告")],
         "report" => &[("data", "拉取数据"), ("report", "生成周报")],
         "review" => &[("data", "拉取数据"), ("review", "对比上线前后")],
-        "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
-        "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("indexnow", "提交 IndexNow")],
-        "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
-        "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
-        "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认")],
+        "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
+        "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
+        "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
-        "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认")],
+        "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "watch" => &[("watch", "上线后检查")],
         _ => &[],
     }
@@ -864,7 +864,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         i.base_sha = base_sha.clone();
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
-    let plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
+    let mut plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
+    if !item.retry_note.is_empty() {
+        plan_brief.push_str(&format!("【上次的问题】这条改动上次上线后，线上验收没通过，已经回滚：{}。这次先找到原因再改；改完确认构建结果里有对应页面、网址和你写的一致。\n", item.retry_note));
+    }
     let msg = format!(
         "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
 读站点要省：只看这次要改的页面、它的模板，以及准备互相链接的两三篇，不要逐篇通读；需要查询词等数据用站点数据工具查。\n\
@@ -873,7 +876,9 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
 不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；需要确认的操作在这里会被自动拒绝。\n\
-完成后用两三句话说明改了哪些文件、为什么这样改。",
+完成后用两三句话说明改了哪些文件、为什么这样改。然后在最后两行按这个格式写出这次涉及的公开页面（Pilot 上线后会逐个打开验收）：\n\
+新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
+改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
         title = item.opp.title,
         ev = evidence_block(&item.opp),
         base = site.default_branch,
@@ -883,10 +888,14 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     job.line(&format!("交给 AI：{}", item.opp.title));
     let (conv_id, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
     let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(800).collect()).unwrap_or_default();
+    let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
+    let (new_pages, pages) = crate::site_verify::reported_pages(&reply, &site.domain);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.conv_id = conv_id.clone();
         i.model_used = format!("{} · {}", conv.brain, conv.model);
         i.ai_summary = summary.clone();
+        i.pages = pages.clone();
+        i.new_pages = new_pages.clone();
     })?;
     // 收尾：没提交的改动由 Pilot 提交；完全没改动就算失败。
     if !crate::site_git::is_clean(&wt).await || crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
@@ -917,6 +926,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 检查：构建 + 站点自带的检查命令
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
+    let snippets = crate::site_verify::snippets_from_diff(&diff);
+    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.snippets = snippets.clone());
+    // 上线时用最新的条目（带上 AI 报告的页面和这次的文字）
+    let item = &site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).unwrap_or_else(|| item.clone());
     let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.contains(w)).cloned().collect();
     let out_dir = site.app_dir(&wt).join(&site.build.out_dir);
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
@@ -988,10 +1001,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                 return Ok(m);
             }
             Err(e) => {
+                // 线上验收没通过的已经回滚并写好状态了；已经合并的留在「已合并」，可以「重新上线」
                 verdict = format!("自动上线失败：{e}");
                 site_ops::update_item(&site_dir, &item.id, now(), |i| {
-                    i.status = "proposed".into();
-                    i.verdict = verdict.clone();
+                    if i.status == "proposed" || i.status == "working" {
+                        i.status = "proposed".into();
+                        i.verdict = verdict.clone();
+                    }
                 })?;
                 return Err(verdict);
             }
@@ -1011,13 +1027,42 @@ fn page_snapshot(site_dir: &Path, page: &str) -> Option<crate::site_data::Row> {
 }
 
 /// 合并后让改动上线：直接上传模式由 Pilot 构建上传；Pages 绑定 GitHub 时等 Cloudflare 构建完成。
-async fn ship(ctx: &Ctx, site: &Site, job: &Job, page: &str, commit: &str, trigger: &str) -> Result<String, String> {
+/// 上线的结果：地址、线上验收的结果、要核对的问题。
+#[derive(Default)]
+struct Shipped {
+    url: String,
+    checks: Vec<crate::site_verify::Check>,
+    attention: Vec<String>,
+}
+
+/// 一条改动上线后要验收什么。回滚时只看首页和原来就有的页面（新页面回滚后本来就不该在了）。
+fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify::Spec {
+    let mut spec = crate::site_verify::Spec { domain: site.domain.clone(), ..Default::default() };
+    let page = item.opp.page.trim();
+    if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) {
+        spec.pages.push(page.to_string());
+    }
+    if !rollback {
+        for p in &item.pages {
+            if !spec.pages.contains(p) {
+                spec.pages.push(p.clone());
+            }
+        }
+        spec.new_pages = item.new_pages.clone();
+        spec.snippets = item.snippets.clone();
+    }
+    spec
+}
+
+/// 合并后让改动上线并做线上验收：直接上传模式由 Pilot 构建上传；Pages 绑定 GitHub 时等 Cloudflare 构建完成。
+/// 验收严重失败返回以 `site_verify::HARD_PREFIX` 开头的错误。
+async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec, commit: &str, trigger: &str) -> Result<Shipped, String> {
     let st = ctx.state();
     let site_dir = ctx.site_dir(&site.id);
     match site.deploy.mode.as_str() {
         "direct" | "workers" | "vps" => {
-            let rec = crate::site_deploy::deploy_with(site, &st.conns, &site_dir, job, trigger).await?;
-            Ok(rec.url)
+            let rec = crate::site_deploy::deploy_with(site, &st.conns, &site_dir, job, trigger, Some(spec)).await?;
+            Ok(Shipped { url: rec.url, checks: rec.checks, attention: rec.attention })
         }
         "pages_git" => {
             job.step("upload", "running", "等待 Cloudflare 构建");
@@ -1048,16 +1093,156 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, page: &str, commit: &str, trigg
                 }
                 tokio::time::sleep(Duration::from_secs(20)).await;
             }
-            if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !page.is_empty() {
-                job.step("indexnow", "running", page);
-                match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &[page.to_string()]).await {
-                    Ok(_) => job.step("indexnow", "ok", page),
+            let rep = crate::site_verify::run(&spec, job, true).await;
+            let shipped = Shipped { url: String::new(), checks: rep.checks.clone(), attention: rep.soft.clone() };
+            if !rep.hard.is_empty() {
+                job.step("verify", "failed", &rep.hard.join("；"));
+                return Err(format!("{}{}", crate::site_verify::HARD_PREFIX, rep.hard.join("；")));
+            }
+            job.step("verify", if rep.checks.is_empty() { "skipped" } else { "ok" }, &if rep.soft.is_empty() { String::new() } else { format!("网站正常，{} 项待核对", rep.soft.len()) });
+            if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !rep.passed.is_empty() {
+                job.step("indexnow", "running", &format!("{} 个网址", rep.passed.len()));
+                match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &rep.passed).await {
+                    Ok(_) => job.step("indexnow", "ok", &format!("已提交 {} 个网址", rep.passed.len())),
                     Err(e) => job.step("indexnow", "failed", &e),
                 }
+            } else {
+                job.step("indexnow", "skipped", "");
             }
-            Ok(String::new())
+            Ok(shipped)
         }
-        _ => Ok(String::new()),
+        _ => Ok(Shipped::default()),
+    }
+}
+
+/// 上线成功后记下验收结果，安排 1 小时后复查；有一般问题就标成待核对（全自动方案顺手开一条后续任务）。
+fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result<(), String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let attention = sh.attention.join("；");
+    let item = site_ops::update_item(&site_dir, item_id, now(), |i| {
+        i.status = "deployed".into();
+        i.deployed_at = now();
+        i.checks = sh.checks.clone();
+        i.attention = attention.clone();
+        i.watch_due = now() + 3600;
+        i.watch_stage = 0;
+        i.watched.clear();
+    })?
+    .ok_or("这条改动不存在")?;
+    if !attention.is_empty() {
+        log_item(ctx, site, "attention", &item, &format!("上线了，网站正常；有 {} 项待核对：{attention}", sh.attention.len()));
+        follow_up(ctx, site, &item, &attention);
+    }
+    ctx.emit_queue(&site.id);
+    Ok(())
+}
+
+/// 全自动方案：验收发现一般问题时开一条「修技术问题」的后续任务（每个站点每天最多一条，防止来回改）。
+fn follow_up(ctx: &Ctx, site: &Site, item: &QueueItem, attention: &str) {
+    let Some(g) = group_rules(ctx, site) else { return };
+    if g.autonomy != "auto" || !g.allows("technical") {
+        return;
+    }
+    let site_dir = ctx.site_dir(&site.id);
+    let day = today();
+    if site_ops::load_queue(&site_dir).iter().any(|i| i.opp.kind == "followup" && i.opp.key.ends_with(&day)) {
+        return;
+    }
+    let opp = Opportunity {
+        key: format!("followup:{}:{day}", item.id),
+        kind: "followup".into(),
+        title: format!("修复上线验收发现的问题：{}", item.opp.title),
+        page: item.new_pages.first().or(item.pages.first()).cloned().unwrap_or_else(|| item.opp.page.clone()),
+        evidence: format!("「{}」上线后线上验收发现：{attention}", item.opp.title),
+        change: "technical".into(),
+        source: "health".into(),
+        score: 2000.0,
+        ..Default::default()
+    };
+    if site_ops::enqueue(&site_dir, &[opp], now(), COOLDOWN).map(|a| !a.is_empty()).unwrap_or(false) {
+        log_item(ctx, site, "planned", item, "验收发现的问题已经排进待处理，下一轮由 AI 修");
+    }
+}
+
+/// 线上验收严重失败：自动回滚（回滚也验收），回滚失败就暂停这个站点的托管；
+/// 全自动方案里每条改动给 AI 一次按失败原因重做的机会，再失败就留给你。
+/// 装箱返回，打断 accept → AI 重做 → accept 的递归类型。
+fn on_verify_failed<'a>(ctx: &'a Ctx, site: &'a Site, job: &'a Job, item_id: &'a str, reason: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>> {
+    Box::pin(verify_failed(ctx, site, job, item_id, reason))
+}
+
+async fn verify_failed(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, reason: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    let why = reason.trim_start_matches(crate::site_verify::HARD_PREFIX).to_string();
+    log_item(ctx, site, "watch_failed", &item, &format!("上线后验收没通过：{why}，自动回滚"));
+    job.line(&format!("线上验收没通过（{why}），自动回滚"));
+    if let Err(e) = rollback(ctx, site, job, item_id).await {
+        pause_site(ctx, site, &format!("自动回滚失败：{e}"));
+        ctx.notify(&format!("{} · 回滚失败，已暂停托管", site.name), &item.opp.title);
+        let _ = site_ops::update_item(&site_dir, item_id, now(), |i| {
+            i.status = "failed".into();
+            i.note = format!("上线后验收没通过（{why}），自动回滚也失败了（{e}）。已暂停这个站点的托管，请尽快检查线上。");
+        });
+        ctx.emit_queue(&site.id);
+        return Err(format!("{reason}；自动回滚也失败了：{e}。已暂停这个站点的托管，请尽快检查线上"));
+    }
+    downgrade_if_repeated(ctx, site, &item.opp.change);
+    let item = site_ops::update_item(&site_dir, item_id, now(), |i| i.verify_rollbacks += 1)?.ok_or("这条改动不存在")?;
+    let auto = group_rules(ctx, site).is_some_and(|g| g.autonomy == "auto") && crate::managed::load(&ctx.state().data_dir).rules_for(&site.id).autonomy == "auto";
+    let can_retry = auto && item.retries == 0 && over_budget(&budget(site, &site_dir, &ctx.state().convos)).is_none();
+    if can_retry {
+        site_ops::update_item(&site_dir, item_id, now(), |i| {
+            i.status = "failed".into();
+            i.retries += 1;
+            i.retry_note = why.clone();
+            i.note = format!("上线后验收没通过（{why}），已自动回滚；AI 正在按失败原因重做一次。");
+        })?;
+        ctx.emit_queue(&site.id);
+        job.line("已回滚。全自动方案：让 AI 按失败原因重做一次");
+        // 重做会再走一遍改动 → 检查 → 上线 → 验收
+        return work_one(ctx, site, job, item_id).await.map(|m| format!("第一次上线后验收没通过，已回滚；AI 重做：{m}"));
+    }
+    site_ops::update_item(&site_dir, item_id, now(), |i| {
+        i.status = "failed".into();
+        i.note = format!("上线后验收没通过（{why}），已自动回滚{}。可以「让 AI 重新改」，AI 会拿到失败原因。", if i.retries > 0 { "（AI 已经重做过一次）" } else { "" });
+        i.retry_note = why.clone();
+    })?;
+    ctx.emit_queue(&site.id);
+    ctx.notify(&format!("{} · 上线后验收没通过，已回滚", site.name), &item.opp.title);
+    Err(format!("{reason}。已自动回滚"))
+}
+
+/// 暂停一个站点的托管（回滚都失败了，网站可能处在坏的状态，需要人来看）。
+fn pause_site(ctx: &Ctx, site: &Site, why: &str) {
+    let data_dir = ctx.state().data_dir.clone();
+    let mut c = crate::managed::load(&data_dir);
+    if let Some(g) = c.groups.iter_mut().find(|g| g.sites.contains(&site.id)) {
+        if !g.stopped.contains(&site.id) {
+            g.stopped.push(site.id.clone());
+        }
+        let _ = crate::managed::save(&data_dir, &c);
+    }
+    log(ctx, site, "paused", "暂停托管", why, "");
+}
+
+/// 同一类改动最近 30 天因为线上验收失败被回滚了 2 次：这类改动不再自动上线，改成留给你确认。
+fn downgrade_if_repeated(ctx: &Ctx, site: &Site, change: &str) {
+    if change.is_empty() || site.ops.downgraded.iter().any(|d| d == change) {
+        return;
+    }
+    let since = now().saturating_sub(30 * DAY);
+    let n = site_ops::load_queue(&ctx.site_dir(&site.id)).iter().filter(|i| i.opp.change == change && i.verify_rollbacks > 0 && i.updated_at >= since).count();
+    // 这一次还没记进 verify_rollbacks，所以已有 1 条就够 2 次了
+    if n + 1 >= 2 {
+        let change = change.to_string();
+        let _ = ctx.state().sites.update(&site.id, now(), |s| {
+            if !s.ops.downgraded.contains(&change) {
+                s.ops.downgraded.push(change.clone());
+            }
+            Ok(())
+        });
+        log(ctx, site, "downgraded", &format!("「{}」类改动不再自动上线", crate::managed::action_label(&change)), "最近 30 天有 2 次上线后验收没通过、被回滚，之后这类改动留给你确认", "");
     }
 }
 
@@ -1068,12 +1253,13 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     // 已经合并、上线那一步失败了：不用再合并，直接重新上线
     if item.status == "merged" && !item.merge_sha.is_empty() && site.deploy.mode != "none" {
         job.step("merge", "ok", "已合并过");
-        let url = ship(ctx, site, job, &item.opp.page, &item.merge_sha, if auto { "ops" } else { "manual" }).await?;
-        site_ops::update_item(&site_dir, item_id, now(), |i| {
-            i.status = "deployed".into();
-            i.deployed_at = now();
-        })?;
-        return Ok(if url.is_empty() { "已上线".into() } else { format!("已上线 {url}") });
+        let sh = match ship(ctx, site, job, spec_for(site, &item, false), &item.merge_sha, if auto { "ops" } else { "manual" }).await {
+            Ok(sh) => sh,
+            Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
+            Err(e) => return Err(e),
+        };
+        record_shipped(ctx, site, item_id, &sh)?;
+        return Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) });
     }
     if item.status != "proposed" {
         return Err("只有待确认的改动可以确认".into());
@@ -1128,15 +1314,16 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     if site.deploy.mode == "none" {
         return Ok("已合并（站点没有配置部署）".into());
     }
-    let url = ship(ctx, site, job, &item.opp.page, &merge_sha, if auto { "ops" } else { "manual" }).await?;
-    site_ops::update_item(&site_dir, item_id, now(), |i| {
-        i.status = "deployed".into();
-        i.deployed_at = now();
-    })?;
+    let sh = match ship(ctx, site, job, spec_for(site, &item, false), &merge_sha, if auto { "ops" } else { "manual" }).await {
+        Ok(sh) => sh,
+        Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
+        Err(e) => return Err(e),
+    };
+    record_shipped(ctx, site, item_id, &sh)?;
     if auto {
         ctx.notify(&format!("{} · 已自动上线", site.name), &item.opp.title);
     }
-    Ok(if url.is_empty() { "已上线".into() } else { format!("已上线 {url}") })
+    Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) })
 }
 
 /// 驳回：关掉 PR / 删掉本地分支，并记住这个机会不再提。
@@ -1212,7 +1399,7 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
     })?;
     ctx.emit_queue(&site.id);
     if site.deploy.mode != "none" {
-        ship(ctx, site, job, &item.opp.page, &revert_sha, "rollback").await?;
+        ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await?;
     }
     Ok("已回滚并重新上线".into())
 }
@@ -1608,52 +1795,55 @@ pub fn latest_plan(site_dir: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&raw).ok()
 }
 
-async fn page_ok(url: &str) -> Result<(), String> {
-    let mut last = String::new();
-    for _ in 0..2 {
-        match reqwest::Client::new().get(url).timeout(Duration::from_secs(20)).send().await {
-            Ok(r) if r.status().is_success() || r.status().is_redirection() => return Ok(()),
-            Ok(r) => last = format!("返回 {}", r.status()),
-            Err(e) => last = format!("打不开：{e}"),
-        }
-        tokio::time::sleep(Duration::from_secs(20)).await;
-    }
-    Err(last)
+
+/// 这条改动到了上线后复查的时间没有：1 小时后一次、24 小时后再一次。
+fn watch_is_due(i: &QueueItem) -> bool {
+    i.status == "deployed" && i.watch_due > 0 && now() >= i.watch_due && (i.watched.is_empty() || i.watch_stage == 1)
 }
 
-/// 上线 1 小时后检查：改动的页面和首页都要能正常打开，打不开就自动回滚。
+/// 上线后复查（1 小时后、24 小时后）：再做一遍线上验收。页面打不开就自动回滚；
+/// 之前待核对的问题好了就清掉，24 小时后还在，全自动方案就开一条后续任务。
 async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
-    let due: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "deployed" && i.watch_due > 0 && i.watched.is_empty() && now() >= i.watch_due).collect();
+    let due: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(watch_is_due).collect();
     job.step("watch", "running", &format!("{} 条", due.len()));
     let mut out = Vec::new();
     for i in due {
-        let mut urls = vec![format!("https://{}/", site.domain)];
-        if !i.opp.page.is_empty() && i.opp.page.starts_with("https://") {
-            urls.insert(0, i.opp.page.clone());
+        let rep = crate::site_verify::run(&spec_for(site, &i, false), job, false).await;
+        let stage = i.watch_stage;
+        let when = if stage == 0 { "上线 1 小时后" } else { "上线 24 小时后" };
+        if !rep.hard.is_empty() {
+            let failure = rep.hard.join("；");
+            site_ops::update_item(&site_dir, &i.id, now(), |x| {
+                x.watched = failure.clone();
+                x.checks = rep.checks.clone();
+            })?;
+            // 复查时坏了：同样自动回滚（回滚也验收），回滚失败就暂停托管
+            let r = on_verify_failed(ctx, site, job, &i.id, &format!("{}{when}复查：{failure}", crate::site_verify::HARD_PREFIX)).await;
+            out.push(format!("{} {}", i.opp.title, if r.is_ok() { "复查失败，已回滚并让 AI 重做" } else { "复查失败，已回滚" }));
+            continue;
         }
-        let mut failure = String::new();
-        for u in &urls {
-            if let Err(e) = page_ok(u).await {
-                failure = format!("{u} {e}");
-                break;
-            }
-        }
-        if failure.is_empty() {
-            site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = "ok".into())?;
-            log_item(ctx, site, "watch_ok", &i, "上线后页面正常");
+        let attention = rep.soft.join("；");
+        let next_stage = stage + 1;
+        site_ops::update_item(&site_dir, &i.id, now(), |x| {
+            x.watched = if attention.is_empty() { "ok".into() } else { attention.clone() };
+            x.checks = rep.checks.clone();
+            x.attention = attention.clone();
+            x.watch_stage = next_stage;
+            x.watch_due = if next_stage == 1 { x.deployed_at.max(now().saturating_sub(DAY)) + DAY } else { 0 };
+        })?;
+        if attention.is_empty() {
+            log_item(ctx, site, "watch_ok", &i, &format!("{when}复查：页面正常"));
             out.push(format!("{} 正常", i.opp.title));
         } else {
-            site_ops::update_item(&site_dir, &i.id, now(), |x| x.watched = failure.clone())?;
-            log_item(ctx, site, "watch_failed", &i, &failure);
-            match rollback(ctx, site, job, &i.id).await {
-                Ok(_) => log_item(ctx, site, "rolled_back", &i, &format!("上线后检查失败（{failure}），已自动回滚")),
-                Err(e) => log_item(ctx, site, "failed", &i, &format!("自动回滚失败：{e}")),
+            log_item(ctx, site, "attention", &i, &format!("{when}复查：网站正常，{} 项待核对：{attention}", rep.soft.len()));
+            if stage >= 1 {
+                follow_up(ctx, site, &i, &attention);
             }
-            ctx.notify(&format!("{} · 已自动回滚", site.name), &i.opp.title);
-            out.push(format!("{} 已回滚", i.opp.title));
+            out.push(format!("{} 有 {} 项待核对", i.opp.title, rep.soft.len()));
         }
     }
+    ctx.emit_queue(&site.id);
     job.step("watch", "ok", "");
     Ok(out.join("；"))
 }
@@ -1740,7 +1930,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     }
                     // 上线后检查优先：有到期的就先跑它
                     let site_dir = st.sites.data_dir(&site.id);
-                    if site_ops::load_queue(&site_dir).iter().any(|i| i.status == "deployed" && i.watch_due > 0 && i.watched.is_empty() && now() >= i.watch_due) {
+                    if site_ops::load_queue(&site_dir).iter().any(watch_is_due) {
                         let _ = start(ctx.clone(), &site.id, "watch", "schedule", None);
                         continue;
                     }
