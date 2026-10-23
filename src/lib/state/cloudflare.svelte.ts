@@ -76,6 +76,8 @@ const CF_TOKEN_PERMISSIONS = [
   { key: 'd1', type: 'edit' },
   { key: 'dns', type: 'edit' },
   { key: 'zone', type: 'read' },
+  // 可选：Workers 部署时 wrangler 会重新设置路由，没有它代码照样上线，只是路由那一步报 No access
+  { key: 'workers_routes', type: 'edit' },
 ] as const;
 const CF_DASH_URL = 'https://dash.cloudflare.com/';
 export function cfUpdateConnection(): Connection | null {

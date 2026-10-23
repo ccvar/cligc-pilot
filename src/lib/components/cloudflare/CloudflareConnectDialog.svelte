@@ -27,7 +27,7 @@
         <p class="cf-step-t">① {updatingCf ? '为这条连接新建一枚 API Token' : '在 Cloudflare 建一个 API Token'}（下列权限已预选）</p>
         <button class="cf-perms-toggle" type="button" onclick={() => (cf.cfPermsOpen = !cf.cfPermsOpen)}>
           <svg class="cf-chev" class:open={cf.cfPermsOpen} width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-          所需权限（5 项）
+          所需权限（5 项 + 1 项可选）
         </button>
         {#if cf.cfPermsOpen}
           <ul class="cf-perms">
@@ -36,6 +36,7 @@
             <li>Account · D1 · <b>Edit</b></li>
             <li>Zone · DNS · <b>Edit</b>（绑定自定义域名用）</li>
             <li>Zone · Zone · <b>Read</b></li>
+            <li>Zone · Workers Routes · <b>Edit</b><span class="cf-opt">可选 · 用 Workers 部署、配置了路由的站点需要，没有它代码照样上线，只是更新路由那一步会报错</span></li>
           </ul>
         {/if}
         <button class="btn soft" onclick={() => openUrl(cfTokenTemplateUrl())}>{updatingCf ? '为此连接新建' : '打开'} <CfMark size={14} /> Cloudflare Token ↗</button>
@@ -73,6 +74,7 @@
 {/if}
 
 <style>
+  .cf-opt { display: block; color: var(--faint); font-size: 11.5px; line-height: 1.5; margin-top: 1px; }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */
   .tin { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; }
