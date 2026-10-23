@@ -169,7 +169,7 @@
     {:else if app.activeConn.kind === 'sites' && app.view === 'managed'}
       <ManagedConsole />
 
-    {:else if app.activeConn.kind === 'sites'}
+    {:else if app.activeConn.kind === 'sites' && app.view !== 'launcher'}
       <SitesOverview />
 
     {:else if app.view === 'site' && app.isSiteConn}

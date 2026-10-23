@@ -4,7 +4,7 @@
   import UsageRing from '$lib/UsageRing.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
-  import { sites, openSiteBoard } from '$lib/state/sites.svelte.js';
+  import { sites, openSiteBoard, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { gh, loadGhRepos } from '$lib/state/github.svelte.js';
   import CliGuide from '$lib/components/launcher/CliGuide.svelte';
   import WranglerNote from '$lib/components/launcher/WranglerNote.svelte';
@@ -14,12 +14,24 @@
   import { autogrow, composer, onComposerKey } from '$lib/state/composer.svelte.js';
   import { startChat } from '$lib/state/turns.svelte.js';
   import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint, CODEX_GITHUB_NOTE } from '$lib/state/models';
+
+  // 全部站点里开新对话：最近用过的站点排前面
+  const siteOpts = $derived.by(() => {
+    const rank = new Map(sites.recent.map((id, i) => [id, i]));
+    return [...sites.list]
+      .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name, 'zh'))
+      .map((s) => ({ value: s.id, label: s.name, sub: s.domain && s.domain !== s.name ? s.domain : (DEPLOY_LABEL[s.deploy.mode] ?? '').split('（')[0] }));
+  });
+  const hubSite = $derived(sites.list.find((s) => s.id === launcher.lSite));
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="center launch-center" data-tauri-drag-region onmousedown={startDrag}>
   <div class="launcher">
-    {#if app.isSiteConn}
+    {#if app.isSitesHub}
+      <h1>想让它在{hubSite ? `「${hubSite.name}」` : '哪个站点'}里做点什么？</h1>
+      <p class="sub">在左下角选站点。它能改这个站点的代码、查 GA4 / Search Console / Bing 数据；上线由 Pilot 在站点页执行，模型拿不到 Cloudflare 凭据。</p>
+    {:else if app.isSiteConn}
       <h1>想让它在「{sites.active?.name}」里做点什么？</h1>
       <p class="sub">{sites.active?.source === 'github' ? '它在仓库检出里改代码、走分支和 PR；' : '改动直接落在站点的本地文件夹；'}能查这个站点的 GA4 / Search Console / Bing 数据。上线由 Pilot 在站点页执行，模型拿不到 Cloudflare 凭据。</p>
     {:else if app.isCfConn}
@@ -43,7 +55,9 @@
             onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
-            {#if app.isSiteConn}
+            {#if app.isSitesHub}
+              <Dropdown compact searchable bind:value={launcher.lSite} options={siteOpts} placeholder={sites.list.length ? '选择站点' : '还没有站点'} />
+            {:else if app.isSiteConn}
               <button type="button" class="ssh-target site-target" onclick={() => openSiteBoard()} data-tip="打开站点看板"><SiteMark size={13} />{sites.active?.name}</button>
             {:else if app.isSshConn}
               <!-- 远程连接没有站点/项目可选：对象就是那台机器 -->
@@ -69,7 +83,7 @@
             <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, app.isSshConn)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, app.isSshConn)} />
             <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
             <UsageRing />
-            <button class="send" onclick={startChat} disabled={((app.isCfConn || app.isGhConn) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
+            <button class="send" onclick={startChat} disabled={((app.isCfConn || app.isGhConn || app.isSitesHub) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
           </div>
         </div>
       </div>

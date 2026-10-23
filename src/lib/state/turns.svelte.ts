@@ -11,7 +11,8 @@ import { launcher, STYLE_DIRECTIVES, workspaceFolderName } from './launcher.svel
 import { mdRender, ATT_MARKER } from './messages.svelte.js';
 import { cf, checkCfReady } from './cloudflare.svelte.js';
 import { workbench, setWbFlags } from './workbench.svelte.js';
-import { sites } from './sites.svelte.js';
+import { sites, SITE_PREFIX } from './sites.svelte.js';
+import { selectConn } from './connections.svelte.js';
 
 class TurnsState {
   autoRetried = $state<Record<string, boolean>>({}); // convId → 本轮已自动重试过（每个用户轮只自动重试一次）
@@ -183,6 +184,13 @@ export async function failTurn(e: unknown, convId: string) {
 }
 
 export async function startChat() {
+  // 全部站点 / 托管运营里开的新对话：先进入所选站点，再按站点会话开始
+  if (app.isSitesHub) {
+    const sid = launcher.lSite;
+    if (!sid || !sites.list.some((s) => s.id === sid) || !launcher.lDraft.trim()) return;
+    await selectConn(SITE_PREFIX + sid);
+    if (!app.isSiteConn) return;
+  }
   const workspace = app.isWorkspaceChat;
   const site = app.isSiteConn ? sites.active : null;
   const targetReady = app.isSshConn || workspace || !!site || !!launcher.lSite.trim();

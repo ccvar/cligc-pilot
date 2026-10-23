@@ -47,7 +47,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="rail-resize" title="拖动调整宽度" onmousedown={startResize} role="separator" aria-orientation="vertical"></div>
   <div class="rail-head">
-    <button class="newchat" onclick={newChat} disabled={!app.activeConn || app.activeConn.kind === 'sites'} title={app.activeConn?.kind === 'sites' ? '先在下面选一个站点' : '新对话'}>
+    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话">
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10l7.5-7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
         <path d="M2.5 13.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />

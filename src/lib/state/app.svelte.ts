@@ -69,6 +69,8 @@ class AppState {
   activeConvIsSite = $derived(this.activeConv?.task_type === 'site');
   /** 站点工作区：全部站点总览（__sites__）或其中某个站点（site:<id>）。左栏都显示站点列表。 */
   isSitesMode = $derived(this.activeConnId === SITES_CONN_ID || this.activeConn?.kind === 'site');
+  /** 全部站点 / 托管运营这一层（还没进具体站点）：新对话要先在启动页左下角选站点。 */
+  isSitesHub = $derived(this.activeConnId === SITES_CONN_ID);
 }
 
 export const app = new AppState();

@@ -11,6 +11,7 @@ import { launcher } from './launcher.svelte.js';
 import { checkCfReady } from './cloudflare.svelte.js';
 import { workbench, setWbFlags } from './workbench.svelte.js';
 import { expandSite, conversationGroupKey } from './sidebar.svelte.js';
+import { sites } from './sites.svelte.js';
 
 // ---------- 对话导航 ----------
 export function newChat() {
@@ -18,6 +19,12 @@ export function newChat() {
   app.activeConvId = ''; app.activeConv = null; launcher.lDraft = '';
   composer.draft='';composer.attachments=[];
   if (app.isWorkspaceChat) launcher.lPerm = 'full';
+  if (app.isSitesHub) {
+    // 还没进具体站点：默认选最近用过的站点（其次置顶的、第一个），左下角可换
+    const ids = new Set(sites.list.map((s) => s.id));
+    if (!ids.has(launcher.lSite)) launcher.lSite = sites.recent.find((id) => ids.has(id)) ?? sites.list.find((s) => s.pinned)?.id ?? sites.list[0]?.id ?? '';
+    if (launcher.lPerm === 'full') launcher.lPerm = 'auto';
+  }
   // 远程连接没有启动页：新对话＝把底部对话面板腾空（工作台留在原地，终端不断）。
   // 它不换「页面」，所以必须给点看得见的反馈：把面板打开并把光标放进输入框。
   viewAfterConvGone();
