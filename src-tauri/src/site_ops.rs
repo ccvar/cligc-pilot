@@ -347,6 +347,11 @@ pub struct QueueItem {
     pub verify_rollbacks: u32,
 }
 
+/// 这一条要不要人来处理：待确认、失败，或者上线了但线上验收有待核对的问题。
+pub fn needs_you(i: &QueueItem) -> bool {
+    matches!(i.status.as_str(), "proposed" | "failed") || (i.status == "deployed" && !i.attention.is_empty())
+}
+
 pub fn queue_path(site_dir: &Path) -> PathBuf {
     site_dir.join("queue.json")
 }

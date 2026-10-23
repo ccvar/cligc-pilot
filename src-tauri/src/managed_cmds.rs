@@ -205,8 +205,11 @@ pub struct ManagedSite {
     pub name: String,
     pub domain: String,
     pub shipped_week: usize,
+    /// 需要你处理的条数：待确认、失败、上线了但待核对（和「需要你」列表同一口径）。
     pub waiting: usize,
     pub failed: usize,
+    /// 排着等 AI 处理的条数（托管暂停、额度满了时会一直排着）。
+    pub queued: usize,
     pub plan_date: String,
     pub plan_count: usize,
     pub budget: crate::site_runner::Budget,
@@ -239,7 +242,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             let q = crate::site_ops::load_queue(&dir);
             let shipped_week = q.iter().filter(|i| i.auto && i.deployed_at >= since_week).count();
             shipped_today += q.iter().filter(|i| i.auto && i.deployed_at >= since_day).count();
-            let waiting = q.iter().filter(|i| i.status == "proposed").count();
+            let waiting = q.iter().filter(|i| crate::site_ops::needs_you(i)).count();
             waiting_total += waiting;
             let plan = crate::site_runner::latest_plan(&dir);
             let group = cfg.group_of(&s.id);
@@ -250,6 +253,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
                 active: group.is_some_and(|g| g.active_for(&s.id)),
                 failed: q.iter().filter(|i| i.status == "failed").count(),
+                queued: q.iter().filter(|i| i.status == "open").count(),
                 plan_date: plan.as_ref().and_then(|p| p["date"].as_str().map(str::to_string)).unwrap_or_default(),
                 plan_count: plan.as_ref().and_then(|p| p["tasks"].as_array().map(|a| a.len())).unwrap_or(0),
                 budget: crate::site_runner::budget(&s, &dir, &state.convos),

@@ -92,13 +92,13 @@ pub struct PendingItem {
     pub item: QueueItem,
 }
 
-/// 所有站点里等你处理的条目（待确认、失败），按时间倒序。
+/// 所有站点里等你处理的条目（待确认、失败、上线后待核对），按时间倒序。
 #[tauri::command]
 pub fn pending_across_sites(state: tauri::State<'_, AppState>) -> Vec<PendingItem> {
     let mut out: Vec<PendingItem> = Vec::new();
     for s in state.sites.list() {
         for item in crate::site_ops::load_queue(&state.sites.data_dir(&s.id)) {
-            if matches!(item.status.as_str(), "proposed" | "failed") {
+            if crate::site_ops::needs_you(&item) {
                 out.push(PendingItem { site_id: s.id.clone(), site_name: s.name.clone(), item });
             }
         }

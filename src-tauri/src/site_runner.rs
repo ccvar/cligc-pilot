@@ -1861,7 +1861,7 @@ pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     for s in &managed {
         let dir = st.sites.data_dir(&s.id);
         let q = site_ops::load_queue(&dir);
-        let waiting: Vec<&QueueItem> = q.iter().filter(|i| matches!(i.status.as_str(), "proposed" | "failed")).collect();
+        let waiting: Vec<&QueueItem> = q.iter().filter(|i| site_ops::needs_you(i)).collect();
         needs += waiting.len();
         let sum = crate::site_data::summary(&dir);
         md.push_str(&format!("## {}\n\n", s.name));

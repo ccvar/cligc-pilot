@@ -151,6 +151,7 @@
 .su .tabs > button:hover:not(.on)::after { transform: scaleX(1); opacity: .15; }
 .su .tabs > button.on { color: var(--text); font-weight: 600; }
 .su .tabs > button.on::after { transform: scaleX(1); opacity: 1; }
+.su .tabs .cnt.soft { background: var(--su-press, rgba(0,0,0,.08)); color: var(--dim); }
 .su .tabs .cnt { margin-left: 0; display: inline-flex; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; align-items: center; justify-content: center; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .su .page-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 28px 48px; scrollbar-gutter: stable; }
 .su .page-body > .pane { max-width: 1080px; display: flex; flex-direction: column; gap: 14px; }

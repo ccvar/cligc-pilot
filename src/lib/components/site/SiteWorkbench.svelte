@@ -13,12 +13,18 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { sites, loadSiteStatus, deploySite, pilotDeploys, type SiteTab } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
+  import { managed, loadManaged } from '$lib/state/managed.svelte.js';
   import { newChat } from '$lib/state/conversations';
 
   const site = $derived(sites.active);
   const st = $derived(site ? sites.status[site.id] : undefined);
   const job = $derived(site ? sites.jobs[site.id] : undefined);
-  const openCount = $derived(site ? (ops.queue[site.id] ?? []).filter((q) => q.status === 'open' || q.status === 'proposed').length : 0);
+  // 「待处理」的数字：只算要你处理的（待确认、失败、上线后待核对）；托管站点排着等 AI 的另外淡色显示，
+  // 自己运营的站点没人替你处理，未处理的机会也算进去
+  const queue = $derived(site ? ops.queue[site.id] ?? [] : []);
+  const inPlan = $derived(!!site && !!managed.overview?.groups.some((g) => g.sites.includes(site.id)));
+  const needCount = $derived(queue.filter((q) => ['proposed', 'failed'].includes(q.status) || (q.status === 'deployed' && !!q.attention)).length + (inPlan ? 0 : queue.filter((q) => q.status === 'open').length));
+  const queuedCount = $derived(inPlan ? queue.filter((q) => q.status === 'open').length : 0);
   const TABS: { key: SiteTab; label: string; icon: string }[] = [
     { key: 'overview', label: '概览', icon: 'grid' },
     { key: 'data', label: '数据', icon: 'chart' },
@@ -27,6 +33,7 @@
     { key: 'settings', label: '设置', icon: 'sliders' },
   ];
   $effect(() => { if (site) { void loadSiteStatus(site.id); void loadQueue(site.id); } });
+  $effect(() => { if (!managed.overview) void loadManaged(); });
 </script>
 
 {#if site}
@@ -54,7 +61,7 @@
     </header>
     <nav class="tabs">
       {#each TABS as t (t.key)}
-        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && openCount}<span class="cnt">{openCount}</span>{/if}</button>
+        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && needCount}<span class="cnt" data-tip="{needCount} 条要你处理">{needCount}</span>{:else if t.key === 'queue' && queuedCount}<span class="cnt soft" data-tip="{queuedCount} 条排着等 AI 处理，不用你动手">{queuedCount}</span>{/if}</button>
       {/each}
     </nav>
     <div class="page-body">

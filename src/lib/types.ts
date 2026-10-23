@@ -457,7 +457,7 @@ export interface ManagedGroup {
   created_at: number;
 }
 export interface ManagedSite {
-  id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number;
+  id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number; queued: number;
   plan_date: string; plan_count: number; job: string;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
 }
