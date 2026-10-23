@@ -3257,6 +3257,7 @@ fn apply_usage(c: &mut Conversation, res: &agent::TurnResult, data_dir: &std::pa
         let ctx = u.input + u.cache_read + u.cache_create;
         c.ctx_tokens = if c.brain == "codex" || c.brain.starts_with("api:") { 0 } else { ctx };
         c.total_tokens += ctx + u.output; // 累计（每轮全量计入，反映实际处理量）
+        c.billed_tokens += billed_tokens(u);
         usage::append(
             data_dir,
             &usage::UsageEntry {
@@ -3419,6 +3420,7 @@ async fn create_conversation(
         updated_at: now,
         ctx_tokens: 0,
         total_tokens: 0,
+        billed_tokens: 0,
         origin,
     };
     convos.upsert(conv)?;
@@ -3857,6 +3859,11 @@ async fn run_fresh_turn(
         apply_usage(c, &res, &state.data_dir);
     })?;
     updated.ok_or_else(|| "会话丢失".into())
+}
+
+/// 按计费折算的 token：缓存读取约为输入价的 1/10，缓存写入约 1.25 倍。
+fn billed_tokens(u: &agent::TurnUsage) -> u64 {
+    u.input + u.output + u.cache_create + u.cache_create / 4 + u.cache_read / 10
 }
 
 fn title_from(message: &str) -> String {

@@ -83,6 +83,9 @@ pub struct Conversation {
     /// 本会话累计处理的 token（每轮 input+cache+output 相加）。
     #[serde(default)]
     pub total_tokens: u64,
+    /// 按计费折算的累计 token：缓存读取按 1/10、缓存写入按 1.25 倍计。运营预算按它算；0＝旧会话没记，退回 total_tokens。
+    #[serde(default)]
+    pub billed_tokens: u64,
     /// 会话由谁发起：空＝用户；ops＝站点运营任务（无人值守开出来的会话，侧栏单独分组）。
     #[serde(default)]
     pub origin: String,
@@ -390,6 +393,7 @@ mod tests {
             updated_at: 0,
             ctx_tokens: 0,
             total_tokens: 0,
+            billed_tokens: 0,
             origin: String::new(),
         }
     }

@@ -156,8 +156,11 @@ async fn output_recovery_retains_checkpoint_without_replaying_completed_write() 
         .unwrap()
         .contains("discarded"));
     assert_eq!(run.requests.len(), 3);
-    let before = run.requests[1].1["messages"].as_array().unwrap();
-    let after = run.requests[2].1["messages"].as_array().unwrap();
+    // 缓存断点会随最后一条移动，比较前缀时去掉它
+    let mut bodies = [run.requests[1].1["messages"].clone(), run.requests[2].1["messages"].clone()];
+    bodies.iter_mut().for_each(crate::api_agent::binding_tests::strip_cache_control);
+    let before = bodies[0].as_array().unwrap();
+    let after = bodies[1].as_array().unwrap();
     assert_eq!(before, &after[..before.len()]);
     assert_eq!(after.len(), before.len() + 1);
     assert_eq!(run.requests[1].1["system"], run.requests[2].1["system"]);

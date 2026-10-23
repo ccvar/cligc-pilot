@@ -16,7 +16,7 @@
   import { ago, clock } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, METRIC_LABEL, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -70,10 +70,15 @@
   async function runNow(id: string) {
     const g = groups.find((x) => x.sites.includes(id));
     const name = siteName(id);
+    const full = budgetFull(sitesById.get(id)?.budget);
+    if (full) {
+      if (g && (await confirmDialog(`${name} ${full}，这一轮开始不了，计划里的任务会一直排在「待处理」。调高方案里的「每站每周 token」后再执行，或等用量滚出最近 7 天。`, { title: '本周额度已满', kind: 'warning', confirmText: '调整方案' }))) editGroup(g);
+      return;
+    }
     const what = g?.autonomy === 'auto'
-      ? `现在为 ${name} 执行一整轮：AI 制定本周计划，然后按方案改排在前面的几条（每次最多 3 条）、跑构建和检查，符合发布规则的改动会直接上线到 ${name}；新页面${g.new_content === 'auto' ? '也会自动发布' : '会留给你确认'}，其余的放进「需要你」。继续吗？`
+      ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后按方案改排在前面的几条（每次最多 3 条）、跑构建和检查，符合发布规则的改动会直接上线到 ${name}；新页面${g.new_content === 'auto' ? '也会自动发布' : '会留给你确认'}，其余的放进「需要你」。继续吗？`
       : g?.autonomy === 'review'
-        ? `现在为 ${name} 执行一整轮：AI 制定本周计划，然后改排在前面的几条（每次最多 3 条）、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
+        ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后改排在前面的几条（每次最多 3 条）、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
         : `现在为 ${name} 制定本周计划（只出建议，不改代码）。继续吗？`;
     if (!(await confirmDialog(what, { title: '立即执行', kind: g?.autonomy === 'auto' ? 'warning' : 'info', confirmText: g?.autonomy === 'auto' ? '执行并自动上线' : '执行' }))) return;
     await runTask(id, 'cycle');
@@ -91,7 +96,6 @@
   };
   const when = ago;
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
-  const kTok = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}K` : String(v));
   const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };
 </script>
 
@@ -220,13 +224,13 @@
                 <div class="li gs">
                   <button class="gs-name" onclick={() => openSite(id)}><SiteIcon {id} size={15} /><span>{siteName(id)}</span></button>
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
-                  {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting} · <span class="warn-text">需要你 {s.waiting}</span>{/if}</span>{/if}
+                  {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting}{' · '}<span class="warn-text">需要你 {s.waiting}</span>{/if}{#if budgetFull(s.budget)}{' · '}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}</span>{/if}
                   {#if s?.job || sites.jobs[id]?.status === 'running'}
                     <button class="pill run gs-job" onclick={() => toggleProgress(id)} aria-expanded={progress.has(id)} data-tip="看进度"><span class="spin"></span>{s?.job || sites.jobs[id]?.title}中<Icon name={progress.has(id) ? 'x' : 'arrow'} size={10} /></button>
                   {:else if progress.has(id) && sites.jobs[id]}
                     <button class="btn tiny gs-run" onclick={() => toggleProgress(id)}>收起结果</button>
                   {:else}
-                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在执行一整轮：制定本周计划，再按方案改排在前面的几条（全自动的会自动上线）"><Icon name="play" size={10} />立即执行</button>
+                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在执行一整轮：沿用或制定本周计划，再按方案改排在前面的几条（全自动的会自动上线）"><Icon name="play" size={10} />立即执行</button>
                   {/if}
                   <span class="grow"></span>
                   <div class="gs-move" data-tip="把这个站点移到别的方案，或退出托管">

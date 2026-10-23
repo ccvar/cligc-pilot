@@ -140,6 +140,15 @@ export function newGroup(sites: string[] = []) {
   const o = managed.overview;
   managed.editor = { ...blankGroup(o?.config, o?.groups.length ?? 0), sites: [...sites] };
 }
+export const kTok = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}K` : String(v));
+/** 这个站点本周的托管额度满了没有：满了返回一句说明（和后端 over_budget 同口径），没满返回空。 */
+export function budgetFull(b?: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number }): string {
+  if (!b) return '';
+  if (b.changes_limit > 0 && b.changes_used >= b.changes_limit) return `本周改动已满（${b.changes_used} / ${b.changes_limit} 条）`;
+  if (b.tokens_limit > 0 && b.tokens_used >= b.tokens_limit) return `本周 AI 用量已满（${kTok(b.tokens_used)} / ${kTok(b.tokens_limit)} token）`;
+  return '';
+}
+
 export function editGroup(g: ManagedGroup) { managed.editor = JSON.parse(JSON.stringify(g)); }
 export async function saveGroup(): Promise<boolean> {
   const g = managed.editor;

@@ -791,7 +791,7 @@
   .pc-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .pc-head b { font-size: 13.5px; font-weight: 600; }
   .pc-head span { font-size: 12px; color: var(--faint); }
-  .pc-notes { margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: #fbf3dc; color: #8a5a08; font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
+  .pc-notes { margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; }
   .pc-notes b { display: block; font-weight: 600; margin-bottom: 2px; }
   .pc-tasks { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
   .pc-tasks li { display: flex; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border); }

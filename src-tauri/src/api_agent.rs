@@ -616,7 +616,9 @@ fn request_body(
             "stream":true,"store":false,"include":["reasoning.encrypted_content"],"max_output_tokens":profile.max_output_tokens})
         }
         "anthropic_messages" => {
-            json!({"model":model,"system":system,"messages":items,"tools":tools,
+            // 提示缓存：在对话最后一条打一个断点，工具定义、system 和之前的历史都作为前缀缓存。
+            // 工具循环里每一步都会重发整段历史，不加缓存每一步都按全价计入（一轮计划能到上百万输入 token）。
+            json!({"model":model,"system":system,"messages":with_cache_breakpoint(items),"tools":tools,
             "stream":true,"max_tokens":profile.max_output_tokens})
         }
         "openai_chat" => {
@@ -639,6 +641,19 @@ fn request_body(
     };
     crate::api_reasoning::apply(&profile.protocol, model, effort, &mut body)?;
     Ok(body)
+}
+
+/// 给最后一条消息的最后一个内容块打缓存断点。只动数组内容（工具循环里最后一条总是 tool_result），
+/// 字符串内容原样发，不改写历史的形状；思考块不能打，跳过。
+fn with_cache_breakpoint(items: &[Value]) -> Vec<Value> {
+    let mut items = items.to_vec();
+    let Some(last) = items.last_mut() else { return items };
+    if let Some(block) = last["content"].as_array_mut().and_then(|a| a.last_mut()) {
+        if !matches!(block["type"].as_str(), Some("thinking" | "redacted_thinking")) && block.is_object() {
+            block["cache_control"] = json!({"type":"ephemeral"});
+        }
+    }
+    items
 }
 
 fn append_tool_outputs(
@@ -1232,6 +1247,21 @@ mod tests {
                 assert_eq!(body["model"], model);
             }
         }
+    }
+    #[test]
+    fn anthropic_request_marks_cache_breakpoints() {
+        let p = profile("anthropic_messages", "https://example.test/v1");
+        let items = vec![
+            json!({"role":"user","content":"读一下站点"}),
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"read_file","input":{}}]}),
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x","is_error":false}]}),
+        ];
+        let body = request_body(&p, "claude-sonnet-5-5", "", "system", &items, &[]).unwrap();
+        assert_eq!(body["system"], "system");
+        assert_eq!(body["messages"][2]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert!(body["messages"][0]["content"].is_string(), "只给最后一条打断点");
+        let body = request_body(&p, "claude-sonnet-5-5", "", "", &items[..1], &[]).unwrap();
+        assert_eq!(body["messages"][0]["content"], "读一下站点", "字符串内容原样发");
     }
     #[test]
     fn api_request_rejects_invalid_effort_without_falling_back() {

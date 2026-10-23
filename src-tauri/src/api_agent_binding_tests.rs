@@ -13,10 +13,24 @@ enum Response {
 
 fn signature(system: &Value, tools: &Value, messages: &[Value]) -> String {
     // Deliberately binds the entire prior transcript, not just system/tools.
+    // cache_control 只是缓存断点，不属于内容（真实 API 移动断点不会让签名失效）。
+    let mut messages = json!(messages);
+    strip_cache_control(&mut messages);
     format!(
         "fixture:{:x}",
         Sha256::digest(json!([system, tools, messages]).to_string().as_bytes())
     )
+}
+
+pub(crate) fn strip_cache_control(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.remove("cache_control");
+            m.values_mut().for_each(strip_cache_control);
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_cache_control),
+        _ => {}
+    }
 }
 
 fn check_bindings(body: &Value) -> Result<(), String> {
@@ -306,7 +320,9 @@ async fn signed_output_recovery_retains_prefix_and_never_reexecutes_completed_wr
     let resumed = run_loop(dir.path(), &c, &p, &mut h).await;
     assert!(resumed.ok, "{}", resumed.error);
     assert!(resumed.tools.is_empty());
-    let requests = requests(server).await;
+    let mut requests = requests(server).await;
+    // 缓存断点随最后一条移动，比较前缀时去掉
+    requests.iter_mut().for_each(strip_cache_control);
     assert_eq!(requests.len(), 4);
     for request in &requests[1..] {
         assert_eq!(request["system"], requests[0]["system"]);

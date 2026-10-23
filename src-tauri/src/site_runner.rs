@@ -218,7 +218,7 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
         .list()
         .into_iter()
         .filter(|c| c.conn_id == conn_id && c.origin == "ops" && c.updated_at >= since)
-        .map(|c| c.total_tokens)
+        .map(|c| if c.billed_tokens > 0 { c.billed_tokens } else { c.total_tokens })
         .sum();
     // 托管站点用所在方案的上限；站点数据目录是 <数据目录>/sites/<id>
     let tokens_limit = site_dir
@@ -341,8 +341,11 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         job.step("ship", "skipped", "");
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
-    let (done, notes) = work_queue(ctx, site, job, trigger).await;
-    job.step("work", "ok", &format!("处理了 {done} 个"));
+    let (done, notes, stopped) = work_queue(ctx, site, job, trigger).await;
+    match &stopped {
+        Some(why) if done == 0 => job.step("work", "failed", why),
+        _ => job.step("work", "ok", &format!("处理了 {done} 个")),
+    }
     let proposed = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "proposed").count();
     if trigger == "schedule" && done > 0 {
         ctx.notify(&format!("{} · 机会扫描完成", site.name), &format!("处理了 {done} 个机会，{proposed} 条等你确认"));
@@ -350,8 +353,8 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     Ok(format!("新入队 {} 个，处理 {done} 个。{}", added.len(), notes.join("；")))
 }
 
-/// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明）。
-async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>) {
+/// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明，因预算停下的原因）。
+async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>, Option<String>) {
     let site_dir = ctx.site_dir(&site.id);
     // 全托管：只挑方案允许的动作
     let rules = group_rules(ctx, site);
@@ -360,6 +363,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     picked.truncate(site.ops.budget.items_per_run.max(1) as usize);
     let mut done = 0;
     let mut notes = Vec::new();
+    let mut stopped = None;
     for item in picked {
         if job.canceled() {
             break;
@@ -371,6 +375,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             if trigger == "schedule" {
                 ctx.notify(&format!("{} · 运营预算已用完", site.name), &why);
             }
+            stopped = Some(why);
             break;
         }
         job.step("work", "running", &item.opp.title);
@@ -390,22 +395,45 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
         }
         ctx.emit_queue(&site.id);
     }
-    (done, notes)
+    (done, notes, stopped)
 }
 
 /// 立即执行一整轮（托管方案里「立即执行」）：制定本周计划 → 按方案处理排在前面的几条
 /// （全自动按发布规则自动上线，改好等你确认停在等你确认，只出建议只出计划）。
+/// 本周已经有计划、里面还有没做的就沿用，不再花一轮重新制定；本周用量已满就不开始。
 async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let t0 = now();
-    let planned = plan(ctx, site, job).await?;
+    let site_dir = ctx.site_dir(&site.id);
+    if let Some(why) = over_budget(&budget(site, &site_dir, &ctx.state().convos)) {
+        job.step("data", "skipped", "");
+        job.step("plan", "skipped", &why);
+        job.step("work", "skipped", "");
+        job.step("ship", "skipped", "");
+        return Err(format!("{why}，这一轮没有开始。{BUDGET_HINT}"));
+    }
+    let prefix = format!("plan:{}:", chrono::Local::now().format("%G-W%V"));
+    let left = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)).count();
+    let planned = if left > 0 && site.ops.level >= 2 {
+        refresh_data(ctx, site, job).await;
+        job.step("plan", "ok", &format!("沿用本周计划，还有 {left} 项没做"));
+        job.line(&format!("本周计划里还有 {left} 项没做，直接按计划处理，不重新制定"));
+        format!("沿用本周计划（还有 {left} 项）")
+    } else {
+        plan(ctx, site, job).await?
+    };
     if site.ops.level < 2 {
         job.step("work", "skipped", "只出建议：只出计划，不改代码");
         job.step("ship", "skipped", "");
         return Ok(planned);
     }
-    let (done, notes) = work_queue(ctx, site, job, "manual").await;
+    let (done, notes, stopped) = work_queue(ctx, site, job, "manual").await;
+    if let (Some(why), 0) = (&stopped, done) {
+        job.step("work", "failed", why);
+        job.step("ship", "skipped", "");
+        return Err(format!("{planned}，但{why}，没有开始改动。{BUDGET_HINT}"));
+    }
     job.step("work", "ok", &format!("处理了 {done} 个"));
-    let q = site_ops::load_queue(&ctx.site_dir(&site.id));
+    let q = site_ops::load_queue(&site_dir);
     let shipped = q.iter().filter(|i| i.status == "deployed" && i.deployed_at >= t0).count();
     let waiting = q.iter().filter(|i| i.status == "proposed").count();
     if shipped == 0 {
@@ -413,6 +441,8 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     }
     Ok(format!("{planned}；处理 {done} 个，上线 {shipped} 个，{waiting} 条等你确认。{}", notes.join("；")))
 }
+
+const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周 token」，或等用量滚出最近 7 天。";
 
 /// 手动对某一条机会立即按站点档位处理。
 async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {

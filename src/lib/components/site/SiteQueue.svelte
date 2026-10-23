@@ -5,7 +5,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { clock } from './fmt';
-  import { managed, AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue, runTask, workItem, acceptItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
@@ -28,6 +28,7 @@
   const when = clock;
   const tone = (s: string) => (s === 'proposed' ? 'warn' : s === 'deployed' || s === 'done' ? 'ok' : s === 'failed' ? 'err' : s === 'working' ? 'run' : '');
   const myPlan = $derived(managed.overview?.groups.find((g) => g.sites.includes(site.id)));
+  const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
   function toggleWhy(id: string) { const n = new Set(openWhy); if (n.has(id)) n.delete(id); else n.add(id); openWhy = n; }
@@ -47,6 +48,12 @@
   </div>
 
   {#if job && job.kind.startsWith('ops:') && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 300)}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
+
+  {#if full && counts.open && (filter === 'open' || filter === 'todo')}
+    <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>
+  {:else if myPlan && myPlan.autonomy !== 'suggest' && filter === 'open' && counts.open}
+    <div class="qnote"><Icon name="sparkles" size={13} /><span>托管每轮按优先级处理排在前面的几条（{AUTONOMY_LABEL[myPlan.autonomy]}），其余的排着等下一轮；想现在做哪一条，点「让 AI 改」。</span></div>
+  {/if}
 
   {#if !shown.length}
     <div class="card empty">
@@ -117,6 +124,11 @@
 {/if}
 
 <style>
+  .qnote { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--dim); padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
+  .qnote :global(svg) { flex: none; margin-top: 4px; }
+  .qnote span { flex: 1; }
+  .qnote.warn { color: var(--su-warn-ink); background: var(--su-warn-soft); border-color: transparent; }
+  .qnote .link-btn { flex: none; font-size: 12.5px; }
   .qq { display: flex; flex-direction: column; gap: 12px; }
   .qbar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
   .qbar .grow, .acts .grow { flex: 1; }
