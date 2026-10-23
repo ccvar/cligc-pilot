@@ -10,7 +10,7 @@
   import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
-  import { ago, num, delta } from './fmt';
+  import { ago, num } from './fmt';
 
   const filtered = $derived(sortRows(applyFilter(fleet.rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
@@ -29,7 +29,6 @@
   });
   const n = num;
   const when = ago;
-  const total = $derived(delta(totals.clicks, totals.prev));
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
@@ -49,7 +48,7 @@
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
       <h1>全部站点</h1>
-      <p class="hint">{totals.sites} 个站点 · 近 28 天 Google 点击 {n(totals.clicks)}{#if total.text} <span class:up={total.dir > 0} class:down={total.dir < 0}>{total.text}</span>{/if}</p>
+      <p class="hint">{totals.sites} 个站点</p>
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
