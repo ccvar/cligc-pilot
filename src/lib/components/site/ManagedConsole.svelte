@@ -172,6 +172,9 @@
             {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
             <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}><Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}</button>
           </h3>
+          {#if p?.plan.notes}
+            <div class="pnote"><Icon name="info" size={12} /><span><b>AI 给你的说明</b>{p.plan.notes}</span></div>
+          {/if}
           {#if p?.positioning.text}
             <div class="pos">
               <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="link-btn" onclick={() => openSite(s.id, 'overview')}>修改</button></div>
@@ -314,6 +317,9 @@
   .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
   .stg.growing { background: var(--su-run-soft); color: var(--su-run); }
   .stg.established { background: var(--su-ok-soft); color: var(--ok); }
+  .pnote { display: flex; gap: 8px; margin: -2px 0 12px; padding: 9px 12px; border-radius: 10px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.6; }
+  .pnote :global(.ico) { flex: none; margin-top: 3px; }
+  .pnote b { display: block; font-weight: 600; }
   .pos { margin: -2px 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); }
   .pos-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
   .pos-t .faint { font-weight: 400; font-size: 11.5px; }

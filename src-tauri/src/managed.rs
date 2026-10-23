@@ -607,6 +607,15 @@ pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
     Ok((positioning, tasks))
 }
 
+/// 计划回复里给运营人员的说明（notes 字段，没有就是空串）。
+pub fn parse_plan_notes(reply: &str) -> String {
+    let body = match reply.find("```json") {
+        Some(i) => reply[i + 7..].split("```").next().unwrap_or("").to_string(),
+        None => return String::new(),
+    };
+    serde_json::from_str::<serde_json::Value>(body.trim()).ok().and_then(|v| v["notes"].as_str().map(|s| s.trim().chars().take(1000).collect())).unwrap_or_default()
+}
+
 pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
     let body = if let Some(i) = reply.find("```json") {
         let rest = &reply[i + 7..];
@@ -687,6 +696,9 @@ mod group_tests {
         let (p, t) = parse_plan_full(r).unwrap();
         assert_eq!(p, "面向中文用户的交易所教程站");
         assert_eq!(t[0].change, "new_content");
+        assert!(parse_plan_notes(r).is_empty());
+        let withn = "```json\n{\"notes\":\"目标写了不写新页面，本周按目标来\",\"tasks\":[]}\n```";
+        assert_eq!(parse_plan_notes(withn), "目标写了不写新页面，本周按目标来");
         let (p, t) = parse_plan_full("[{\"title\":\"x\",\"change\":\"meta\"}]").unwrap();
         assert!(p.is_empty() && t.len() == 1);
     }

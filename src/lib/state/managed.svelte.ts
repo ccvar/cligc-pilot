@@ -58,10 +58,10 @@ export const GOAL_PRESETS: { key: string; name: string; icon: string; goal: stri
     goal: '围绕核心主题建内容体系：支柱页加子话题集群，理顺站内链接，让每个主题都有完整的覆盖。',
     actions: ['content', 'internal_links', 'new_content'], metric: 'position' },
   { key: 'fresh', name: '保鲜存量内容', icon: 'refresh', fits: '内容较旧的站',
-    goal: '更新过时的内容（费率、步骤、版本、截图说明），修复死链和跳转；不写新页面。',
+    goal: '优先更新过时的内容（费率、步骤、版本、截图说明），修复死链和跳转。',
     actions: ['meta', 'content', 'technical'], metric: 'clicks' },
   { key: 'safe', name: '稳健维护', icon: 'shield', fits: '不想多动的站',
-    goal: '最低风险：只修技术问题、优化标题和描述，不改正文、不写新页面。',
+    goal: '最低风险：以修技术问题、优化标题和描述为主。',
     actions: ['meta', 'technical'], metric: 'health' },
 ];
 
