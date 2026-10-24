@@ -1059,6 +1059,7 @@ fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify
     let page = item.opp.page.trim();
     if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) {
         spec.pages.push(page.to_string());
+        spec.primary.push(page.to_string());
     }
     if !rollback {
         for p in &item.pages {

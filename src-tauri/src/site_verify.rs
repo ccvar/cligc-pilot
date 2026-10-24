@@ -37,6 +37,9 @@ pub struct Spec {
     pub snippets: Vec<String>,
     /// 构建产物里有对应 HTML 的网址（静态站）：线上 404 说明是部署没到位，不是改动的问题
     pub built: HashSet<String>,
+    /// 这条任务本身要改的页面：和新页面一起查 noindex / canonical。其它只是顺带改到的页面（比如旧文存档）
+    /// 可能本来就设了 noindex、canonical 指向新版，那是站点有意的，不查这两项。
+    pub primary: Vec<String>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -56,6 +59,8 @@ const MAX_LINKS: usize = 15;
 struct Fetched {
     status: u16,
     body: String,
+    /// 跟完跳转之后的地址（去掉防缓存参数）
+    final_url: String,
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
@@ -64,8 +69,9 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
     let busted = format!("{url}{sep}_pv={}", crate::now_secs());
     let r = client.get(&busted).send().await.map_err(|e| if e.is_timeout() { "超时".to_string() } else { "打不开".to_string() })?;
     let status = r.status().as_u16();
+    let final_url = r.url().as_str().split(['?', '#']).next().unwrap_or("").to_string();
     let body = if r.status().is_success() { r.text().await.unwrap_or_default() } else { String::new() };
-    Ok(Fetched { status, body: body.chars().take(2_000_000).collect() })
+    Ok(Fetched { status, body: body.chars().take(2_000_000).collect(), final_url })
 }
 
 fn client() -> reqwest::Client {
@@ -176,17 +182,20 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         if meta_content(&f.body, "description").is_empty() {
             issues.push("没有描述（meta description）".to_string());
         }
-        if meta_content(&f.body, "robots").to_lowercase().contains("noindex") {
+        let main = spec.new_pages.iter().chain(&spec.primary).any(|x| same_page(x, u));
+        if main && meta_content(&f.body, "robots").to_lowercase().contains("noindex") {
             issues.push("设置了 noindex，搜索引擎不会收录".to_string());
         }
         let canon = canonical(&f.body);
-        if !canon.is_empty() && !same_page(&canon, u) {
+        // 和跟完跳转后的地址比（旧地址 301 到新地址时，canonical 指向新地址是对的）
+        let landed = if f.final_url.is_empty() { u.clone() } else { f.final_url.clone() };
+        if main && !canon.is_empty() && !same_page(&canon, &landed) {
             issues.push(format!("canonical 指向了 {canon}"));
         }
         if let Some(m) = crate::managed::leak_marker(&visible_text(&f.body)) {
             issues.push(format!("页面里有内部痕迹「{m}」"));
         }
-        rep.checks.push(Check { label: format!("{p} 标题、描述、canonical"), ok: issues.is_empty(), detail: issues.join("；"), hard: false });
+        rep.checks.push(Check { label: if main { format!("{p} 标题、描述、canonical") } else { format!("{p} 标题和描述") }, ok: issues.is_empty(), detail: issues.join("；"), hard: false });
         if !issues.is_empty() {
             page_bad.insert(i);
             rep.soft.push(format!("{p}：{}", issues.join("；")));
@@ -509,9 +518,10 @@ mod live {
         let job = jobs.start(None, "t", "ops:watch", "t", &[("verify", "线上验收")]).unwrap();
         let spec = super::Spec {
             domain: "iosur.com".into(),
-            pages: vec!["https://iosur.com/zh/posts/ai-video-prompts/".into()],
-            new_pages: if std::env::var("BAD").is_ok() { vec!["https://iosur.com/zh/posts/pilot-verify-missing-page/".into()] } else { vec!["https://iosur.com/zh/posts/ai-video-transition-prompts/".into(), "https://iosur.com/en/posts/ai-video-transition-prompts/".into()] },
-            snippets: vec!["遮挡转场".into()],
+            pages: if std::env::var("KLING").is_ok() { vec!["https://iosur.com/zh/posts/kling-3-character-consistency/".into(), "https://iosur.com/zh/archive/ai-video-troubleshooting/".into(), "https://iosur.com/zh/archive/how-to-use-kling/".into(), "https://iosur.com/zh/archive/vidu-reference-tutorial/".into(), "https://iosur.com/zh/archive/kling-3-character-consistency/".into()] } else { vec!["https://iosur.com/zh/posts/ai-video-prompts/".into()] },
+            primary: if std::env::var("KLING").is_ok() { vec!["https://iosur.com/zh/posts/kling-3-character-consistency/".into()] } else { vec![] },
+            new_pages: if std::env::var("KLING").is_ok() { vec![] } else if std::env::var("BAD").is_ok() { vec!["https://iosur.com/zh/posts/pilot-verify-missing-page/".into()] } else { vec!["https://iosur.com/zh/posts/ai-video-transition-prompts/".into(), "https://iosur.com/en/posts/ai-video-transition-prompts/".into()] },
+            snippets: if std::env::var("KLING").is_ok() { vec!["主体绑定".into()] } else { vec!["遮挡转场".into()] },
             ..Default::default()
         };
         let t = std::time::Instant::now();

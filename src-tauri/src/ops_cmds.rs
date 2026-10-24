@@ -104,6 +104,15 @@ pub fn queue_mark_done(state: tauri::State<'_, AppState>, id: String, item_id: S
 pub fn queue_ack(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
     site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| i.attention.clear())?;
+    // 你核对过、认为没问题：因为这些问题开出来、还没动的修复任务一起撤掉
+    let prefix = format!("followup:{item_id}:");
+    let followups: Vec<String> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)).map(|i| i.id).collect();
+    for f in followups {
+        site_ops::update_item(&dir, &f, crate::now_secs(), |i| {
+            i.status = "dismissed".into();
+            i.note = "上线后验收的问题你已核对过，不用修".into();
+        })?;
+    }
     Ok(())
 }
 
