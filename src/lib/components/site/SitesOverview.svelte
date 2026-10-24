@@ -7,7 +7,7 @@
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
-  import { fleet, applyFilter, sortRows, needsAttention, trafficDown, clicksChange, loadPending, PAGE_SIZE, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, applyFilter, sortRows, clicksChange, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, num } from './fmt';
@@ -20,25 +20,19 @@
 
   const totals = $derived({
     sites: fleet.rows.length,
-    clicks: fleet.rows.reduce((n, r) => n + r.summary.gsc_clicks, 0),
-    prev: fleet.rows.reduce((n, r) => n + r.summary.gsc_clicks_prev, 0),
     proposed: fleet.pendingCount,
-    failed: fleet.rows.filter((r) => r.last_deploy_ok === false || r.failed > 0).length,
-    down: fleet.rows.filter(trafficDown).length,
-    nodata: fleet.rows.filter((r) => !r.has_data).length,
   });
   const n = num;
   const when = ago;
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
-  const FILTERS = $derived([
-    { v: 'all' as const, l: `全部 ${totals.sites}` },
-    { v: 'attention' as const, l: `需关注 ${fleet.attentionCount}` },
-    { v: 'failed' as const, l: `失败 ${totals.failed}` },
-    { v: 'down' as const, l: `流量下滑 ${totals.down}` },
-    { v: 'nodata' as const, l: `未接数据 ${totals.nodata}` },
-  ]);
+  // 右上角的提醒：有问题才出现，点开按问题分组，点一组就只看这组站点
+  const issues = $derived(ISSUE_GROUPS.map((g) => ({ ...g, rows: issueRows(fleet.rows, g.k) })).filter((g) => g.rows.length));
+  const problemSites = $derived(new Set(issues.filter((g) => !g.soft).flatMap((g) => g.rows.map((r) => r.id))).size);
+  const onlyLabel = $derived(ISSUE_GROUPS.find((g) => g.k === fleet.filter)?.l ?? '');
+  let issuesOpen = $state(false);
+  function pickIssue(k: typeof fleet.filter) { fleet.filter = k; fleet.tab = 'sites'; issuesOpen = false; }
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
 
@@ -51,6 +45,29 @@
       <p class="hint">{totals.sites} 个站点</p>
     </div>
     <div class="row">
+      {#if issues.length}
+        <div class="iss-wrap">
+          <button class="iss" class:soft={!problemSites} onclick={() => (issuesOpen = !issuesOpen)} aria-expanded={issuesOpen}>
+            {#if problemSites}<Icon name="bell" size={13} />{problemSites} 个站点要看看{:else}<Icon name="database" size={13} />{issues[0].rows.length} 个站点没接数据{/if}
+            <svg class="chev" class:open={issuesOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+          {#if issuesOpen}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <div class="iss-mask" onclick={() => (issuesOpen = false)}></div>
+            <div class="iss-pop">
+              {#each issues as g (g.k)}
+                <button class="iss-g" class:soft={g.soft} onclick={() => pickIssue(g.k)}>
+                  <span class="iss-t"><b>{g.l}</b><span class="iss-n">{g.rows.length}</span></span>
+                  <span class="iss-sites">{g.rows.slice(0, 3).map((r) => r.name).join('、')}{g.rows.length > 3 ? ` 等 ${g.rows.length} 个` : ''}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+      {#if fleet.tags.length}
+        <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
+      {/if}
       <button class="btn small primary" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
     </div>
   </header>
@@ -64,12 +81,9 @@
    {#key fleet.tab}
    <div class="pane">
     {#if fleet.tab === 'sites'}
-      <div class="ov-tools">
-        <div class="chips">{#each FILTERS as f (f.v)}<button class:on={fleet.filter === f.v} onclick={() => (fleet.filter = f.v)}>{f.l}</button>{/each}</div>
-        {#if fleet.tags.length}
-          <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
-        {/if}
-      </div>
+      {#if fleet.filter !== 'all' || fleet.tag}
+        <div class="only">只看：{onlyLabel}{onlyLabel && fleet.tag ? ' · ' : ''}{fleet.tag ? `#${fleet.tag}` : ''}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; }}>看全部</button></div>
+      {/if}
       {#if !fleet.loaded && !fleet.rows.length}
         <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>
       {:else if !fleet.rows.length}
@@ -119,9 +133,6 @@
             <button class="btn tiny" onclick={() => (fleet.page = Math.min(pages - 1, fleet.page + 1))} disabled={fleet.page >= pages - 1}>下一页</button>
           </div>
         {/if}
-        {#if fleet.rows.some(needsAttention) && fleet.filter === 'all'}
-          <p class="hint">「需关注」= 有待确认或失败的运营条目、上次上线失败、点击比前 28 天跌了 20% 以上，或数据源出错。</p>
-        {/if}
       {/if}
     {:else}
       {#if !fleet.pending.length}
@@ -150,13 +161,24 @@
 </div>
 
 <style>
+  .iss-wrap { position: relative; }
+  .iss { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: none; border-radius: 999px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; font-weight: 550; cursor: pointer; }
+  .iss .chev { transition: transform .15s; }
+  .iss .chev.open { transform: rotate(180deg); }
+  .iss.soft { background: var(--su-hover); color: var(--dim); font-weight: 500; }
+  .iss-mask { position: fixed; inset: 0; z-index: 30; }
+  .iss-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: 300px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
+  .iss-g { display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: left; padding: 8px 10px; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--text); }
+  .iss-g:hover { background: var(--su-hover); }
+  .iss-t { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .iss-t b { font-weight: 550; flex: 1; }
+  .iss-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .iss-g.soft .iss-n { background: var(--su-hover); color: var(--dim); }
+  .iss-sites { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
+  .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
-  .ov-tools { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
   .tagsel { width: auto; height: var(--ctl-h); padding: 0 8px; }
-  .chips { display: flex; gap: 2px; flex-wrap: wrap; }
-  .chips button { border: none; background: none; height: 26px; padding: 0 9px; border-radius: 7px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; font-variant-numeric: tabular-nums; transition: background-color .12s, color .12s; }
-  .chips button:hover:not(.on) { background: var(--su-hover); color: var(--text); }
-  .chips button.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
   .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; transition: color .12s; }

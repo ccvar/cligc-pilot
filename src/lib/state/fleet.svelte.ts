@@ -4,7 +4,7 @@ import type { SiteRow, PendingItem, Site } from '$lib/types';
 import { say } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
-export type SiteFilter = 'all' | 'attention' | 'failed' | 'down' | 'nodata';
+export type SiteFilter = 'all' | 'attention' | 'failed' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
@@ -53,9 +53,23 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
     && (f === 'all'
       || (f === 'attention' && needsAttention(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
+      || (f === 'dataerr' && r.summary.errors.length > 0)
       || (f === 'down' && trafficDown(r))
+      || (f === 'proposed' && r.proposed > 0)
       || (f === 'nodata' && !r.has_data)));
 }
+/** 右上角提醒里的问题分组（按要紧程度排）；soft＝不算问题，只是提示。 */
+export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
+  { k: 'failed', l: '上线或运营任务失败' },
+  { k: 'dataerr', l: '数据源出错' },
+  { k: 'down', l: '流量明显下滑' },
+  { k: 'proposed', l: '有改动等你确认' },
+  { k: 'nodata', l: '数据源没接上', soft: true },
+];
+export function issueRows(rows: SiteRow[], k: SiteFilter): SiteRow[] {
+  return applyFilter(rows, '', k, '');
+}
+
 export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRow[] {
   const key = (r: SiteRow): number | string =>
     sort === 'name' ? r.name.toLowerCase()
