@@ -19,6 +19,15 @@
 
   let { site }: { site: Site } = $props();
   let gaBusy = $state(false);
+  // 构建并上线是后台任务：跑完（成功或失败）重新读一遍向导状态，不然「上线一次」一直是灰的
+  let lastJob = '';
+  $effect(() => {
+    const k = job ? `${job.id}:${job.status}` : '';
+    if (k === lastJob) return;
+    const was = lastJob;
+    lastJob = k;
+    if (was && job && job.status !== 'running') void loadLaunch(site.id, true);
+  });
   // Pages 一步就地配部署：没配部署 / 没填项目时在这里选账号、填项目名
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
   const needDeploy = $derived(site.deploy.mode === 'none' || site.deploy.mode === '' || !site.deploy.project || !site.deploy.cf_conn_id);
