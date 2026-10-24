@@ -314,7 +314,7 @@
       <header class="thread-head conversation-thread-head" class:multi={leaves(panes.conversationLayout).length>1} onmousedown={(e)=>{if(!paneId)startDrag(e);}}>
         <div class="th-info" role="button" tabindex="0" aria-label={`拖动对话 ${context?.title} 以分屏`} onpointerdown={(e)=>{if(context)startConversationPointerDrag(e,context.id);}} onkeydown={(e)=>{if(e.key==='Escape')endConversationDrag();}}>
           <b class="conversation-head-title" data-tip={convTitle(activeConv?.title ?? '')}>
-            <span class="conversation-head-model" data-tip={brainLabel(activeConv?.brain??'claude')}><BrainIcon brain={modelIcon(activeConv?.brain??'claude')} size={14} /></span>
+            <span class="conversation-head-model" data-tip={brainLabel(activeConv?.brain??'claude')}><BrainIcon brain={modelIcon(activeConv?.brain??'claude')} size={13} /></span>
             <span>{convTitle(activeConv?.title ?? '')}</span>
           </b>
         </div>
@@ -442,7 +442,8 @@
   .thread-head.conversation-thread-head{align-items:center}
   .thread-head.multi{padding:7px 16px;min-height:38px;align-items:center}
   .thread-head.multi .th-info{display:block;min-width:0}
-  .conversation-head-title{display:flex!important;align-items:center;gap:7px;width:100%;min-width:0}
+  /* 会话标题：对齐 Claude 客户端，小一号、中等字重（原来 15px 粗体压在 30px 的标题栏里太抢） */
+  .conversation-head-title{display:flex!important;align-items:center;gap:6px;width:100%;min-width:0;font-size:13.5px!important;font-weight:500;color:var(--text)}
   .conversation-head-title>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .conversation-head-model{display:inline-flex;align-items:center;flex:none;line-height:0}
   .conversation-head-model :global(.bi){display:block}
