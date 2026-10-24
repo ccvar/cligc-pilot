@@ -55,8 +55,11 @@ async fn call(key: &str, method: &str, query: &[(&str, &str)]) -> Result<Value, 
         .map_err(|e| redact(&format!("请求 Bing 失败：{e}"), key))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
-    if status.as_u16() == 401 || text.contains("InvalidApiKey") || text.contains("NotAuthorized") {
-        return Err("Bing API Key 无效，或没有这个站点的权限".into());
+    if text.contains("InvalidApiKey") {
+        return Err("Bing API Key 无效（在 Bing Webmaster 的设置里重新生成一个，再到数据源里更新）".into());
+    }
+    if status.as_u16() == 401 || text.contains("NotAuthorized") {
+        return Err("Bing 不给这个站点的数据：站点在 Bing 里还没验证通过，或不在这个 Bing 账号下".into());
     }
     if !status.is_success() {
         let msg: String = redact(&text, key).chars().take(200).collect();
@@ -80,8 +83,11 @@ async fn post(key: &str, method: &str, body: Value) -> Result<Value, String> {
         .map_err(|e| redact(&format!("请求 Bing 失败：{e}"), key))?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
-    if status.as_u16() == 401 || text.contains("InvalidApiKey") || text.contains("NotAuthorized") {
-        return Err("Bing API Key 无效，或没有这个站点的权限".into());
+    if text.contains("InvalidApiKey") {
+        return Err("Bing API Key 无效（在 Bing Webmaster 的设置里重新生成一个，再到数据源里更新）".into());
+    }
+    if status.as_u16() == 401 || text.contains("NotAuthorized") {
+        return Err("Bing 不给这个站点的数据：站点在 Bing 里还没验证通过，或不在这个 Bing 账号下".into());
     }
     if !status.is_success() {
         let msg: String = redact(&text, key).chars().take(200).collect();

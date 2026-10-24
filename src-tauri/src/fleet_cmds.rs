@@ -241,7 +241,7 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                     report.kept += 1;
                     continue;
                 }
-                let hit = list.iter().find(|b| crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &s.domain)));
+                let hit = list.iter().find(|b| b.verified && crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &s.domain)));
                 let Some(b) = hit else {
                     report.unmatched.push(s.name.clone());
                     continue;

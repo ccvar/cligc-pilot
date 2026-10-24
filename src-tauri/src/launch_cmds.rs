@@ -147,7 +147,8 @@ fn update_cache(state: &AppState, id: &str, f: impl FnOnce(&mut LaunchCache)) {
 /// 站点还没选 Google 连接时才在所有账号里找。
 async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
     let (mut bound, mut errs) = (Vec::new(), Vec::new());
-    if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty()) {
+    // Pilot 自己加到 Bing 的站点（有 bing_auth）每次都核对一下验证状态
+    if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty() && site.data.bing_auth.is_empty()) {
         return (bound, errs);
     }
     let now = crate::now_secs();
@@ -226,6 +227,26 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
             }
         }
     }
+    // 绑着但 Bing 里其实没验证（以前的自动绑定不看验证状态）：先解绑，下面接着自动验证
+    let mut site = site.clone();
+    if !site.data.bing_site.is_empty() {
+        if let Ok(c) = state.conns.get(&site.data.bing_conn_id) {
+            if let Ok(key) = crate::keychain::get_key(&c.id) {
+                if let Ok(list) = crate::bing::list_sites(&key).await {
+                    if list.iter().any(|b| b.url == site.data.bing_site && !b.verified) {
+                        if let Ok(s2) = state.sites.update(&site.id, crate::now_secs(), |x| {
+                            x.data.bing_site.clear();
+                            x.data.bing_conn_id.clear();
+                            Ok(())
+                        }) {
+                            site = s2;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let site = &site;
     if site.data.bing_site.is_empty() {
         let bings: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "bing").collect();
         let mut found = false;

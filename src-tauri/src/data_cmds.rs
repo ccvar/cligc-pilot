@@ -176,7 +176,8 @@ pub async fn auto_bind_data(state: &AppState) -> Vec<(String, String)> {
             }
         }
         if d.bing_site.is_empty() {
-            if let Some((id, url)) = bing.iter().find_map(|(id, list)| list.iter().find(|s| gsc_matches(&s.url, &bare)).map(|s| (id.clone(), s.url.clone()))) {
+            if let Some((id, url)) = bing.iter().find_map(|(id, list)| list.iter().find(|s| s.verified && gsc_matches(&s.url, &bare)).map(|s| (id.clone(), s.url.clone()))) {
+                // 只绑验证过的：没验证的站点 Bing 不给数据（会报没权限），交给上线向导去自动验证
                 d.bing_conn_id = id;
                 d.bing_site = url.clone();
                 what.push(format!("Bing {url}"));
