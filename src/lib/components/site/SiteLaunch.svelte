@@ -10,14 +10,42 @@
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
-  import { app } from '$lib/state/app.svelte.js';
-  import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
+  import { app, say } from '$lib/state/app.svelte.js';
+  import { invoke } from '@tauri-apps/api/core';
+  import { sites, deploySite, pilotDeploys, refreshSites } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
   import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig } from '$lib/state/launch.svelte.js';
   import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
   let gaBusy = $state(false);
+  // Pages 一步就地配部署：没配部署 / 没填项目时在这里选账号、填项目名
+  const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
+  const needDeploy = $derived(site.deploy.mode === 'none' || site.deploy.mode === '' || !site.deploy.project || !site.deploy.cf_conn_id);
+  let cfConn = $state('');
+  let projName = $state('');
+  let projFor = '';
+  $effect(() => {
+    const id = site.id;
+    if (projFor === id) return;
+    projFor = id;
+    untrack(() => {
+      cfConn = cfConns.find((c) => c.id === site.deploy.cf_conn_id)?.id || cfConns[0]?.id || '';
+      projName = (site.deploy.project || site.domain.split('.')[0] || site.name).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+    });
+  });
+  // 连接列表晚到、或记着的连接已经删了：落到第一个现有的
+  $effect(() => { if (cfConns.length && !cfConns.some((c) => c.id === cfConn)) cfConn = cfConns[0].id; });
+  async function createPages() {
+    let s2 = site;
+    if (needDeploy) {
+      try {
+        s2 = await invoke<Site>('save_site', { site: { ...site, deploy: { ...site.deploy, mode: 'direct', cf_conn_id: cfConn, project: projName.trim(), branch: site.deploy.branch || 'main' } } });
+        await refreshSites();
+      } catch (e) { say(String(e), 'err'); return; }
+    }
+    await setupPages(s2);
+  }
   // GA4 是否已接进配置变量要看 .env.example（轻量读一次）
   $effect(() => { void loadMake(site.id, false); });
   $effect(() => { void loadLaunch(site.id); });
@@ -103,8 +131,22 @@
       <span class="n">{st.pages && (st.domain_attached || !site.domain) ? '✓' : 2}</span>
       <div class="lb">
         <b><span class="si"><CfMark size={14} /></span>Cloudflare Pages 项目与域名</b>
-        <small>{st.pages ? `项目 ${site.deploy.project}${st.pages_domains.length ? ` · ${st.pages_domains.join('、')}` : ''}` : `将创建项目 ${site.deploy.project || '（先在设置里填写）'}`}{site.domain && !st.domain_attached ? `，并绑定 ${site.domain}（同账号的域名会自动加 CNAME）` : ''}</small>
-        {#if !(st.pages && (st.domain_attached || !site.domain))}<div class="row"><button class="btn tiny" onclick={() => setupPages(site)} disabled={!!busy || !site.deploy.project || site.deploy.mode === 'none'}><Icon name="plus" size={11} />{busy === 'pages' ? '处理中…' : '创建并绑定'}</button>{#if !site.domain}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>先填写域名</button>{/if}</div>{/if}
+        <small>{st.pages ? `项目 ${site.deploy.project}${st.pages_domains.length ? ` · ${st.pages_domains.join('、')}` : ''}` : needDeploy ? '选好 Cloudflare 账号和项目名，创建 Pages 项目' : `将创建项目 ${site.deploy.project}`}{site.domain && !st.domain_attached ? `，并绑定 ${site.domain}（同账号的域名会自动加 CNAME）` : ''}</small>
+        {#if !(st.pages && (st.domain_attached || !site.domain))}
+          {#if needDeploy}
+            <!-- 还没配部署：就在这里选 Cloudflare 账号、填项目名，点一下就配好部署（Pilot 构建后上传到 Pages）并建项目、绑域名 -->
+            {#if !cfConns.length}
+              <small>还没有 Cloudflare 连接：先在左下角的切换器里「连接 Cloudflare」。要部署到 Workers 或 VPS，到<button class="link-btn" onclick={() => (sites.tab = 'settings')}>站点设置</button>里选。</small>
+            {:else}
+              <div class="grid2 pg">
+                <div class="field"><span class="lbl">Cloudflare 账号</span><Dropdown bind:value={cfConn} options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
+                <div class="field"><label for="ln-proj">Pages 项目名</label><input id="ln-proj" class="tin mono" bind:value={projName} spellcheck="false" autocapitalize="off" /></div>
+              </div>
+              <small>部署方式设为「Pilot 构建后上传到 Pages」；要用 Workers、VPS 或 Pages 绑定 GitHub，到<button class="link-btn" onclick={() => (sites.tab = 'settings')}>站点设置</button>里选。</small>
+            {/if}
+          {/if}
+          <div class="row"><button class="btn tiny" onclick={createPages} disabled={!!busy || (needDeploy ? !cfConn || !projName.trim() : !site.deploy.project)}><Icon name="plus" size={11} />{busy === 'pages' ? '处理中…' : '创建并绑定'}</button>{#if !site.domain}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>先填写域名</button>{/if}</div>
+        {/if}
         {#if notes.pages}<small class:err={notes.pages.startsWith('失败')}>{notes.pages}</small>{/if}
       </div>
     </div>
@@ -116,7 +158,7 @@
       <span class="n">{cfgDone ? '✓' : '·'}</span>
       <div class="lb">
         <b><span class="si"><Icon name="key" size={14} /></span>配置变量</b>
-        <small>{#if st.config_missing?.length}还没填：<span class="mono">{st.config_missing.join('、')}</span>（到站点设置的「配置变量」里填，或在「需要你处理」里填）{:else if st.config_needs_sync}值改过，还没同步到{st.config_target}。上线时会自动同步，也可以现在同步。{:else}{st.config_vars} 个变量都填好了，已同步到{st.config_target}。{/if}</small>
+        <small>{#if st.config_missing?.length}还没填：<span class="mono">{st.config_missing.join('、')}</span>（到站点设置的「配置变量」里填，或在「需要你处理」里填）{:else if st.config_needs_sync}值改过，还没同步到{st.config_target}。上线时会自动同步，也可以现在同步。{:else if site.deploy.mode === 'none' || !site.deploy.mode}{st.config_vars} 个变量都好了；还没配置部署，暂时只在 Pilot 构建时使用。{:else}{st.config_vars} 个变量都好了，已同步到{st.config_target}。{/if}</small>
         {#if st.config_missing?.length}
           <div class="row"><button class="btn tiny" onclick={() => (sites.tab = 'settings')}><Icon name="sliders" size={11} />去填写</button></div>
         {:else if st.config_needs_sync && site.deploy.mode !== 'none'}
@@ -188,6 +230,7 @@
 {/if}
 
 <style>
+  .pg { margin: 6px 0 2px; max-width: 560px; }
   .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) backwards; }
   .lhead { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: -2px -6px; padding: 2px 6px; border-radius: 8px; cursor: pointer; user-select: none; transition: background-color .12s; }
   .lhead:not(.static):hover { background: var(--su-hover); }
