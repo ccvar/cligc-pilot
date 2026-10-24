@@ -76,7 +76,7 @@ function applyTurnEvent(convId: string, ev: TurnEvent) {
       if (app.activeConvId === convId) scrollSoon();
     }
     else if (ev.type === 'tool') {
-      buf.tools = [...buf.tools, { label: ev.label, detail: ev.detail }];
+      buf.tools = [...buf.tools, { label: ev.label, detail: ev.detail, at: buf.text.length }];
       buf.lastActivityAt = Date.now();
       if (app.activeConvId === convId) scrollSoon();
     }

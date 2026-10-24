@@ -535,10 +535,8 @@ async fn execute_model_loop_inner(
         let mut outputs = Vec::new();
         for call in calls {
             let detail = tool_runtime::redact(&call.arguments.to_string(), &[api_key, site_key]);
-            result.tools.push(ToolCall {
-                label: call.name.clone(),
-                detail: detail.clone(),
-            });
+            let at = crate::convo::utf16_len(&result.text);
+            result.tools.push(ToolCall { label: call.name.clone(), detail: detail.clone(), at });
             let _ = channel.send(TurnEvent::Tool {
                 label: call.name.clone(),
                 detail: detail.clone(),

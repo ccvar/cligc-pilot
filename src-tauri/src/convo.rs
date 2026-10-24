@@ -12,6 +12,14 @@ use std::sync::{Arc, Mutex};
 pub struct ToolCall {
     pub label: String,
     pub detail: String,
+    /// 这一步发生时正文已经写到哪（UTF-16 长度，前端按它把步骤插在正文中间，像 Claude 客户端那样）。
+    #[serde(default)]
+    pub at: u32,
+}
+
+/// 文本的 UTF-16 长度（和前端 JS 字符串下标一致）。
+pub fn utf16_len(s: &str) -> u32 {
+    s.encode_utf16().count() as u32
 }
 
 /// begin_turn 的结果。

@@ -146,6 +146,8 @@ export function executionProgress(live: LiveTurn, now: number) {
     failedActivities,
     activities: [...activities].reverse().slice(0, 10),
     trueProgress,
+    /** 正在跑的那一步（没有就是 null）：对话里那一行显示转圈和用时 */
+    running: runningActivities.at(-1) ?? null,
   };
 }
 export function activityFailureReason(activity: ExecutionActivity): string {
@@ -180,6 +182,59 @@ export function compactToolRows(tools: ToolCall[]): Array<ToolCall & { count: nu
   }
   return rows;
 }
+// ---------- 正文和步骤按发生顺序排（像 Claude 客户端：说一句、做几步、再说一句） ----------
+export type TurnPart = { kind: 'text'; text: string } | { kind: 'steps'; tools: ToolCall[] };
+/** 落点挪到行尾，并且不切进代码块里（切开会让两段 Markdown 都渲染错）。 */
+function snapCut(text: string, at: number): number {
+  let a = Math.min(Math.max(at, 0), text.length);
+  if (a > 0 && a < text.length && text[a - 1] !== '\n') {
+    const nl = text.indexOf('\n', a);
+    a = nl === -1 ? text.length : nl + 1;
+  }
+  const fences = (text.slice(0, a).match(/^\s*```/gm) ?? []).length;
+  if (fences % 2 === 1) {
+    const close = text.slice(a).search(/^\s*```/m);
+    if (close === -1) return text.length;
+    const nl = text.indexOf('\n', a + close + 1);
+    a = nl === -1 ? text.length : nl + 1;
+  }
+  return a;
+}
+/** 把工具步骤按发生时正文写到的位置插进正文。旧消息没有位置信息：步骤放在最前面（和以前一样）。 */
+export function interleave(text: string, tools: ToolCall[]): TurnPart[] {
+  if (!tools.length) return text.trim() ? [{ kind: 'text', text }] : [];
+  if (!tools.some((t) => (t.at ?? 0) > 0)) return [{ kind: 'steps', tools }, ...(text.trim() ? [{ kind: 'text' as const, text }] : [])];
+  const parts: TurnPart[] = [];
+  let pos = 0;
+  let group: ToolCall[] = [];
+  for (const t of tools) {
+    const a = Math.max(pos, snapCut(text, t.at ?? 0));
+    if (a > pos) {
+      const chunk = text.slice(pos, a);
+      if (chunk.trim()) {
+        if (group.length) { parts.push({ kind: 'steps', tools: group }); group = []; }
+        parts.push({ kind: 'text', text: chunk });
+      }
+      pos = a;
+    }
+    group.push(t);
+  }
+  if (group.length) parts.push({ kind: 'steps', tools: group });
+  const rest = text.slice(pos);
+  if (rest.trim()) parts.push({ kind: 'text', text: rest });
+  return parts;
+}
+// 分段渲染 Markdown 时按文字缓存（流式输出时同一段反复渲染，结果不变）
+const mdCache = new Map<string, string>();
+export function mdRenderCached(text: string): string {
+  const hit = mdCache.get(text);
+  if (hit !== undefined) return hit;
+  const html = mdRender(text);
+  mdCache.set(text, html);
+  if (mdCache.size > 300) mdCache.delete(mdCache.keys().next().value as string);
+  return html;
+}
+
 // ---------- 执行记录：把工具调用写成人看得懂的步骤（像 Claude 客户端那样「读取 README.md」） ----------
 const TOOL_VERB: Record<string, string> = {
   read_file: '读取', Read: '读取', NotebookRead: '读取',

@@ -922,10 +922,11 @@ fn handle_codex_app_notification(method: &str, params: &serde_json::Value, sink:
                         .chars()
                         .take(200)
                         .collect::<String>();
-                    sink.collect.lock().unwrap().tools.push(ToolCall {
-                        label: "exec".into(),
-                        detail: detail.clone(),
-                    });
+                    {
+                        let mut g = sink.collect.lock().unwrap();
+                        let at = crate::convo::utf16_len(&g.text);
+                        g.tools.push(ToolCall { label: "exec".into(), detail: detail.clone(), at });
+                    }
                     let _ = sink.channel.send(TurnEvent::Tool {
                         label: "exec".into(),
                         detail,
@@ -937,10 +938,11 @@ fn handle_codex_app_notification(method: &str, params: &serde_json::Value, sink:
                         .and_then(|value| value.as_str())
                         .unwrap_or("tool")
                         .to_string();
-                    sink.collect.lock().unwrap().tools.push(ToolCall {
-                        label: label.clone(),
-                        detail: String::new(),
-                    });
+                    {
+                        let mut g = sink.collect.lock().unwrap();
+                        let at = crate::convo::utf16_len(&g.text);
+                        g.tools.push(ToolCall { label: label.clone(), detail: String::new(), at });
+                    }
                     let _ = sink.channel.send(TurnEvent::Tool {
                         label,
                         detail: String::new(),
@@ -2662,10 +2664,11 @@ fn parse_claude(ev: &serde_json::Value, ch: &Channel<TurnEvent>, collect: &Arc<M
                                 total: None,
                             });
                         }
-                        collect.lock().unwrap().tools.push(ToolCall {
-                            label: name.into(),
-                            detail: detail.clone(),
-                        });
+                        {
+                            let mut g = collect.lock().unwrap();
+                            let at = crate::convo::utf16_len(&g.text);
+                            g.tools.push(ToolCall { label: name.into(), detail: detail.clone(), at });
+                        }
                         let _ = ch.send(TurnEvent::Tool {
                             label: name.into(),
                             detail,
@@ -2828,10 +2831,11 @@ fn parse_codex(ev: &serde_json::Value, ch: &Channel<TurnEvent>, collect: &Arc<Mu
                         .chars()
                         .take(200)
                         .collect::<String>();
-                    collect.lock().unwrap().tools.push(ToolCall {
-                        label: "exec".into(),
-                        detail: d.clone(),
-                    });
+                    {
+                        let mut g = collect.lock().unwrap();
+                        let at = crate::convo::utf16_len(&g.text);
+                        g.tools.push(ToolCall { label: "exec".into(), detail: d.clone(), at });
+                    }
                     let _ = ch.send(TurnEvent::Tool {
                         label: "exec".into(),
                         detail: d,

@@ -88,6 +88,8 @@ export interface GhRepo {
 export interface ToolCall {
   label: string;
   detail: string;
+  /** 这一步发生时正文已经写到哪（字符位置）；用来把步骤插在正文中间。旧消息没有。 */
+  at?: number;
 }
 
 export interface Message {

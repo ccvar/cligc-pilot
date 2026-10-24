@@ -11,7 +11,7 @@
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
+  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mdRenderCached, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
   import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
@@ -80,7 +80,7 @@
   {:else}
     <div class="msg assistant">
       <div class="body">
-        {#if m.tools.length}{@render cmds(m.tools)}{/if}
+        {#if m.tools.length && m.error}{@render cmds(m.tools)}{/if}
         {#if m.error && m.limit_reset != null}
           <div class="limit-card">
             <div class="limit-head">⏳ {brainTitle(bubbleConv?.brain)} 额度已用完</div>
@@ -107,7 +107,10 @@
           {@const ga = splitGenImages(m.text)}
           {@const pj = context?.origin === 'ops' ? splitPlanJson(ga.body) : { body: ga.body, plan: null }}
           <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-          <div class="text md" onclick={(e)=>mdClick(e,context)} onauxclick={(e)=>mdClick(e,context)}>{@html mdRender(pj.body)}</div>
+          {#each interleave(pj.body, m.tools) as part, pi (pi)}
+            {#if part.kind === 'steps'}{@render steps(part.tools)}
+            {:else}<div class="text md" onclick={(e)=>mdClick(e,context)} onauxclick={(e)=>mdClick(e,context)}>{@html mdRenderCached(part.text)}</div>{/if}
+          {/each}
           {#if pj.plan}{@render planCard(pj.plan)}{/if}
           {#if ga.atts.length}
             <!-- codex 生图产物：缩略图（点击放大）；读不到的退回文件名卡（点击访达定位） -->
@@ -163,6 +166,34 @@
   </div>
 {/snippet}
 
+<!-- 一步一行（像 Claude 客户端）：动作 + 对象，点开看完整参数；连着 4 步以上收成一行摘要。
+     running：这一组最后一步还在跑，显示转圈和用时。 -->
+{#snippet steps(tools: ToolCall[], running: { ms: number } | null = null)}
+  {#if tools.length >= 4}
+    <details class="steps-sum">
+      <summary><span class="st-t">{toolSummary(tools)}</span><svg class="st-chev" width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></summary>
+      <div class="st-list">{#each compactToolRows(tools) as t, i (i)}{@render stepRow(t, null)}{/each}</div>
+    </details>
+    {#if running}{@render stepRow(tools[tools.length - 1], running)}{/if}
+  {:else}
+    {#each tools as t, i (i)}{@render stepRow(t, running && i === tools.length - 1 ? running : null)}{/each}
+  {/if}
+{/snippet}
+
+{#snippet stepRow(t: ToolCall & { count?: number }, running: { ms: number } | null)}
+  {@const h = humanTool(t)}
+  <details class="step" class:running={!!running}>
+    <summary>
+      {#if running}<span class="st-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></span>{/if}
+      <span class="st-t"><b>{h.verb}</b> {h.target}</span>
+      {#if (t.count ?? 0) > 1}<span class="st-n">×{t.count}</span>{/if}
+      {#if running}<span class="st-ms">{elapsedLabel(running.ms)}</span>{/if}
+      <svg class="st-chev" width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </summary>
+    {#if h.full}<pre class="st-full">{h.full}</pre>{/if}
+  </details>
+{/snippet}
+
 {#snippet cmds(tools: ToolCall[])}
   <details class="cmds">
     <summary>
@@ -186,9 +217,10 @@
   {@const activePermits=permits.pendingPermits.filter(p=>p.conv===context.id)}
       {#if viewBusy && liveView}
         {@const progress = executionProgress(liveView, thread.nowMs)}
+        {@const parts = interleave(liveView.text, liveView.tools)}
+        {@const lastSteps = parts.length > 0 && parts[parts.length - 1].kind === 'steps'}
         <div class="msg assistant">
           <div class="body">
-            {#if liveView.tools.length}{@render cmds(liveView.tools)}{/if}
             {#if liveView.compactedAt}
               <div class="context-compact-note">
                 <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 5.2h10M5 2.8l-2 2.4 2 2.4M13 10.8H3M11 8.4l2 2.4-2 2.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -196,70 +228,21 @@
                 <small>同一会话继续，聊天记录保持不变</small>
               </div>
             {/if}
-            <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-            {#if liveView.renderedText}<div class="text md live-text" onclick={(e)=>mdClick(e,activeConv)} onauxclick={(e)=>mdClick(e,activeConv)}>{@html liveView.renderedText}</div>{/if}
+            {#each parts as part, pi (pi)}
+              {#if part.kind === 'steps'}{@render steps(part.tools, pi === parts.length - 1 && progress.running ? { ms: thread.nowMs - progress.running.startedAt } : null)}
+              {:else}<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
+<div class="text md live-text" onclick={(e)=>mdClick(e,activeConv)} onauxclick={(e)=>mdClick(e,activeConv)}>{@html mdRenderCached(part.text)}</div>{/if}
+            {/each}
+            <!-- 正在跑的步骤不是工具（比如生图、思考）或还没出现在步骤里：单独一行 -->
+            {#if progress.running && !lastSteps}
+              <div class="step running solo"><span class="st-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="st-t">{activityLabel(progress.running)}</span><span class="st-ms">{elapsedLabel(thread.nowMs - progress.running.startedAt)}</span></div>
+            {/if}
+            {#if progress.failed && !progress.continuedAfterFailure}
+              <div class="step failed solo"><span class="st-t">{progress.failedActivities.length} 步没成功：{activityFailureReason(progress.failedActivities[progress.failedActivities.length - 1])}</span></div>
+            {/if}
             {#if progress.thinking}
               <div class="codex-thinking" role="status" aria-live="polite">
                 <span>正在思考</span>
-              </div>
-            {:else if progress.hasActivity}
-              <div class="execution-progress-stack">
-                <details
-                  class="execution-progress execution-progress-details is-running"
-                  class:quiet={progress.quiet}
-                  class:has-failure={progress.failed}
-                  class:recovered-failure={progress.continuedAfterFailure}
-                >
-                  <summary>
-                    <span class="execution-progress-mark" aria-hidden="true">
-                      <span></span>
-                    </span>
-                    <span class="execution-progress-copy">
-                      <b>{progress.title}</b>
-                      <small>{progress.meta}</small>
-                    </span>
-                    <span class="execution-failure-summary">
-                      {#if progress.failedActivities.length && !progress.continuedAfterFailure}
-                        <b>{progress.failedActivities.length} 项异常</b>
-                      {/if}
-                      <small>查看详情</small>
-                      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                    </span>
-                  </summary>
-                  <div class="execution-activity-list">
-                    {#if progress.trueProgress}
-                      <div class="execution-real-progress">
-                        <div>
-                          <b>{progress.trueProgress.current} / {progress.trueProgress.total}</b>
-                          <span>{activityLabel(progress.trueProgress)}</span>
-                        </div>
-                        <span><i style={`width:${Math.round(((progress.trueProgress.current ?? 0) / (progress.trueProgress.total ?? 1)) * 100)}%`}></i></span>
-                      </div>
-                    {/if}
-                    {#each progress.activities as activity (activity.id)}
-                      {@const detail = activityDetail(activity)}
-                      <div class="execution-activity-item" class:is-failed={activity.status === 'failed'}>
-                        <span class={`execution-activity-state ${activity.status}`}></span>
-                        <div>
-                          <b>{activityLabel(activity)}</b>
-                          {#if activity.status === 'failed'}
-                            <p>{activityFailureReason(activity)}</p>
-                          {:else if detail}
-                            <p>{detail}</p>
-                          {/if}
-                        </div>
-                        <small>{activityStatusLabel(activity)}</small>
-                      </div>
-                    {/each}
-                    {#if progress.failedActivities.length}
-                      <p class="execution-failure-impact">
-                        {progress.continuedAfterFailure
-                          ? '后续步骤已继续执行；最终答复会说明该异常是否影响结果。'
-                          : '本轮仍在继续；最终答复会说明该异常是否影响结果。'}
-                      </p>
-                    {/if}
-                  </div>
-                </details>
               </div>
             {/if}
             {#if liveView.error}<div class="err-note">{liveView.error}</div>
@@ -602,70 +585,7 @@
     0%, 100% { background-position: 100% 50%; opacity: .62; }
     50% { background-position: 0 50%; opacity: 1; }
   }
-  .execution-progress-stack { width: min(620px, 100%); margin: 7px 0 5px; }
-  .execution-progress {
-    width: 100%; box-sizing: border-box; margin: 0; border: 1px solid var(--border); border-radius: 9px;
-    background: #faf9f6;
-  }
-  .execution-progress-mark { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border-radius: 5px; background: #eeeae3; }
-  .execution-progress-mark > span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-  .execution-progress-copy { min-width: 0; display: grid; gap: 0; }
-  .execution-progress-copy b, .execution-progress-copy small { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
-  .execution-progress-copy b { font-size: 11.5px; line-height: 1.42; font-weight: 600; color: var(--text); }
-  .execution-progress-copy small { margin-top: 1px; font-size: 10px; line-height: 1.4; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .execution-progress.quiet { border-color: #ead8b7; background: #fcf8ef; }
-  .execution-progress.quiet .execution-progress-mark { background: #f4ead6; }
-  .execution-progress.quiet .execution-progress-mark > span { background: #b87920; }
-  .execution-progress.has-failure:not(.quiet) { border-color: #ead8b7; background: #fcf8ef; }
-  .execution-progress.has-failure:not(.quiet) .execution-progress-mark { background: #f4ead6; }
-  .execution-progress.has-failure:not(.quiet) .execution-progress-mark > span { background: #b87920; }
-  .execution-progress.recovered-failure:not(.quiet) { border-color: var(--border); background: #faf9f6; }
-  .execution-progress.recovered-failure:not(.quiet) .execution-progress-mark { background: #eeeae3; }
-  .execution-progress.recovered-failure:not(.quiet) .execution-progress-mark > span { background: var(--accent); }
-  .execution-progress-details {
-    display: block; padding: 0; overflow: hidden;
-  }
-  .execution-progress-details > summary {
-    display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 7px; min-width: 0; padding: 6px 8px;
-    cursor: pointer; list-style: none; user-select: none;
-  }
-  .execution-progress-details > summary::-webkit-details-marker { display: none; }
-  .execution-progress-details .execution-progress-copy { flex: 1 1 auto; }
-  .execution-failure-summary {
-    display: flex; align-items: center; gap: 4px; flex: none; margin: 1px 0 0 auto;
-    color: #8a5d1b; white-space: nowrap;
-  }
-  .execution-failure-summary b { font-size: 10px; font-weight: 650; }
-  .execution-failure-summary small { color: var(--faint); font-size: 10px; font-weight: 500; }
-  .execution-failure-summary svg { flex: none; transition: transform .15s ease; }
-  .execution-progress-details[open] .execution-failure-summary svg { transform: rotate(180deg); }
-  .execution-activity-list { max-height: min(300px, 42vh); overflow: auto; padding: 5px 8px 7px; border-top: 1px solid rgba(128,122,110,.16); }
-  .execution-activity-item { display: grid; grid-template-columns: 7px minmax(0,1fr) auto; gap: 7px; align-items: start; padding: 6px 0; border-bottom: 1px solid rgba(128,122,110,.12); }
-  .execution-activity-item > div { min-width: 0; }
-  .execution-activity-item b { display: block; font-size: 11.5px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
-  .execution-activity-item p { margin: 2px 0 0; color: var(--dim); font-size: 10.5px; line-height: 1.45; overflow-wrap: anywhere; }
-  .execution-activity-item > small { color: var(--faint); font-size: 10px; white-space: nowrap; }
-  .execution-activity-item.is-failed > small { color: #9a6420; }
-  .execution-activity-state { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: #aaa59a; }
-  .execution-activity-state.running { background: var(--accent); box-shadow: 0 0 0 3px rgba(160,60,43,.09); }
-  .execution-activity-state.completed { background: #4e9861; }
-  .execution-activity-state.failed { background: #b87920; }
-  .execution-real-progress { padding: 5px 0 8px; }
-  .execution-real-progress > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 10.5px; color: var(--dim); }
-  .execution-real-progress > div b { color: var(--text); font-size: 11px; }
-  .execution-real-progress > span { display: block; height: 3px; margin-top: 5px; overflow: hidden; border-radius: 9px; background: #e8e4dc; }
-  .execution-real-progress > span i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
-  .execution-progress.is-running .execution-progress-mark > span { animation: executionPulse 1.6s ease-in-out infinite; }
-  @keyframes executionPulse {
-    0%, 100% { transform: scale(.82); opacity: .72; box-shadow: 0 0 0 0 rgba(160,60,43,0); }
-    50% { transform: scale(1.08); opacity: 1; box-shadow: 0 0 0 4px rgba(160,60,43,.11); }
-  }
-  .execution-failure-impact { margin: 8px 0 0; color: #8a6d43; font-size: 10.5px; line-height: 1.55; }
   @media (max-width: 620px) {
-    .execution-progress-stack { width: 100%; }
-    .execution-progress-details > summary { padding: 6px 8px; }
-    .execution-failure-summary small { display: none; }
-    .execution-failure-summary b { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
   }
   @media (prefers-reduced-motion: reduce) {
     .codex-thinking > span {
@@ -674,7 +594,6 @@
       animation: none;
       opacity: 1;
     }
-    .execution-progress.is-running .execution-progress-mark > span { animation: none; }
   }
   /* 命令列表：默认收起，点击展开 */
   .cmds { margin-bottom: 9px; }
@@ -807,4 +726,30 @@
   .pc-pos { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 8px; }
   .pc-pos summary { font-size: 12px; color: var(--faint); cursor: pointer; }
   .pc-pos p { margin: 6px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
+
+  /* 步骤行：一步一行，灰字，悬停有框，点开看完整参数（像 Claude 客户端） */
+  .step, .steps-sum { margin: 2px 0; max-width: 100%; }
+  .step > summary, .steps-sum > summary, .step.solo { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; box-sizing: border-box; padding: 4px 10px; border: 1px solid transparent; border-radius: 9px; font-size: 13px; line-height: 1.5; color: var(--dim); cursor: pointer; list-style: none; user-select: none; transition: background-color .12s, border-color .12s; }
+  .step > summary::-webkit-details-marker, .steps-sum > summary::-webkit-details-marker { display: none; }
+  .step > summary:hover, .steps-sum > summary:hover, .step[open] > summary, .steps-sum[open] > summary { border-color: var(--border); background: var(--card, #fff); }
+  .step.solo { cursor: default; }
+  .st-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-t b { font-weight: 550; color: var(--dim); margin-right: 2px; }
+  .st-n, .st-ms { flex: none; font-size: 12px; color: var(--faint, #9a958c); font-variant-numeric: tabular-nums; }
+  .st-chev { flex: none; color: var(--faint, #9a958c); transition: transform .15s; }
+  details[open] > summary > .st-chev { transform: rotate(90deg); }
+  .st-full { margin: 4px 0 6px 10px; padding: 8px 10px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--code-bg, #f6f5f1); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dim); }
+  .st-list { margin: 2px 0 4px 12px; padding-left: 8px; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .step.running > summary { color: var(--text); }
+  .step.failed { color: #b42318; }
+  /* 正在跑：四个小点轮流亮 */
+  .st-dots { flex: none; display: inline-grid; grid-template-columns: 4px 4px; gap: 3px; }
+  .st-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent, #d97757); animation: stDot 1.2s ease-in-out infinite; }
+  .st-dots i:nth-child(2) { animation-delay: .3s; }
+  .st-dots i:nth-child(4) { animation-delay: .6s; }
+  .st-dots i:nth-child(3) { animation-delay: .9s; }
+  @keyframes stDot { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .st-dots i { animation: none; opacity: .7; } }
+  .msg.assistant .body > .text + .step, .msg.assistant .body > .text + .steps-sum { margin-top: 8px; }
+  .msg.assistant .body > .step + .text, .msg.assistant .body > .steps-sum + .text { margin-top: 8px; }
 </style>

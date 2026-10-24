@@ -497,10 +497,11 @@ async fn pump(
                         st.lock().unwrap().text.push_str(&text);
                         let _ = ch.send(TurnEvent::Delta { text });
                     } else {
-                        st.lock().unwrap().tools.push(ToolCall {
-                            label: label.clone(),
-                            detail: detail.clone(),
-                        });
+                        {
+                            let mut g = st.lock().unwrap();
+                            let at = crate::convo::utf16_len(&g.text);
+                            g.tools.push(ToolCall { label: label.clone(), detail: detail.clone(), at });
+                        }
                         let _ = ch.send(TurnEvent::Tool { label, detail });
                     }
                 }
