@@ -28,17 +28,20 @@
   const bad = $derived(ms?.checks.filter((c) => c.level !== 'ok' && c.key !== 'todo') ?? []);
   const fails = $derived(bad.filter((c) => c.level === 'fail').length);
   const pending = $derived(ms?.steps.filter((s) => !s.done).map((s) => s.label) ?? []);
+  // 还有 AI 要做的进度（不只是差构建）
+  const makingLeft = $derived(pending.length > 0 && !(ms?.steps.filter((s) => !s.done).every((s) => s.key === 'build') ?? false));
   const onlyBuild = $derived(!!ms && ms.steps.filter((s) => !s.done).every((s) => s.key === 'build') && pending.length > 0);
   // GA4 由 Pilot 自己处理：衡量 ID 还没进配置变量就显示一条（构建过以后才出现，免得刚开始做就打扰）
   const ga = $derived(siteMake.ga[site.id] ?? {});
   // 老站点读到了 ID 但代码还没接这个变量：这一条也留着（等交给 AI 接上）
-  const gaPending = $derived(!!ms && ms.built_at > 0 && !gaReady(site) && !ga.wired);
+  const allDone = $derived(!!ms && ms.steps.length > 0 && pending.length === 0);
+  // GA4 等第一版做完再提（没做完、没域名时提它只是打扰）
+  const gaPending = $derived(!!ms && ms.built_at > 0 && allDone && !gaReady(site) && !ga.wired);
   // 自动接好了：一行完成提示，下次构建生效
   const gaDone = $derived(!!ga.mid && !!ga.declared && !ga.rebuilt);
   const goalTodos = $derived(ms?.todos?.filter((t) => t.affects_goal).length ?? 0);
   const ready = $derived(!!ms && ms.built_at > 0 && fails === 0);
   // 全部完成后：进度和全部通过的检查默认收成一行，要你处理的始终展开、挪到最上面
-  const allDone = $derived(!!ms && ms.steps.length > 0 && pending.length === 0);
   const checks = $derived(ms?.checks.filter((c) => c.key !== 'todo') ?? []); // 待办在上面单独列，不在检查里重复
   const checksOk = $derived(!!ms && ms.built_at > 0 && checks.every((c) => c.level === 'ok'));
   const ex = $derived(siteMake.expanded[site.id] ?? {});
@@ -92,7 +95,7 @@
     {:else if !aiRunning && pending.length}
       <div class="resume">
         <span>第一版还没做完，还差：{pending.join('、')}。AI 停下了（可能是中断、出错或额度用完）。</span>
-        <button class="btn small primary" onclick={() => continueMaking(site)}><Icon name="play" size={12} />继续制作</button>
+        <button class="btn small primary" onclick={() => continueMaking(site, ms?.built_at ? bad : [])}><Icon name="play" size={12} />继续制作</button>
       </div>
     {/if}
     {#if stepsOpen}
@@ -153,7 +156,10 @@
       {:else if ms.built_at && fails}
         <p class="hint">有 {fails} 项必须修的问题，修好之前不建议上线。</p>
       {/if}
-      {#if bad.length && ms.built_at}<button class="btn small primary" onclick={() => fixWithAi(site, ms.checks)} disabled={aiRunning}><Icon name="wand" size={12} />让 AI 修复这 {bad.length} 项</button>{/if}
+      {#if bad.length && ms.built_at && makingLeft}
+        <!-- 第一版还没做完：问题交给「继续制作」一起处理（补上缺的页面，断链多半就没了），不另起一轮 -->
+        <p class="hint">第一版还没做完，点上面的「继续制作」时会把这 {bad.length} 项一起交给 AI。</p>
+      {:else if bad.length && ms.built_at}<button class="btn small primary" onclick={() => fixWithAi(site, ms.checks)} disabled={aiRunning}><Icon name="wand" size={12} />让 AI 修复这 {bad.length} 项</button>{/if}
     </div>
   {:else}
     <div class="bars"><i style="width:58%"></i><i style="width:34%"></i></div>

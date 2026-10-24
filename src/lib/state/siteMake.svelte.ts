@@ -48,8 +48,17 @@ export function makingConv(siteId: string): Conversation | undefined {
 
 /** 第一版没做完 AI 就停了：带上最新标准，让它先看现状再接着做。
  *  接在原来那条制作对话里（同一个站点的制作是一条线，前面做到哪也在上面）；找不到才开新的。 */
-export async function continueMaking(site: Site) {
-  try { await sendToMaking(site, await invoke<string>('site_continue_message', { id: site.id })); }
+export async function continueMaking(site: Site, issues: MakeCheck[] = []) {
+  try {
+    let text = await invoke<string>('site_continue_message', { id: site.id });
+    // 上次构建检查出的问题一起带上（第一版没做完时不另起一轮「修复」）
+    const bad = issues.filter((c) => c.level !== 'ok' && c.key !== 'todo');
+    if (bad.length) {
+      const lines = bad.map((c) => `- ${c.label}：${c.detail}${c.items.length ? '\n' + c.items.slice(0, 10).map((i) => `  - ${i}`).join('\n') + (c.items.length > 10 ? `\n  - ……还有 ${c.items.length - 10} 处` : '') : ''}`);
+      text += `\n\n【上次构建的检查结果】下面这些问题要在这一轮里一起处理（缺的页面补上后，指向它们的断链自然就好了）：\n${lines.join('\n')}`;
+    }
+    await sendToMaking(site, text);
+  }
   catch (e) { say(String(e), 'err'); }
 }
 
