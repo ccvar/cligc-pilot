@@ -27,6 +27,9 @@
   import WhyChips from '$lib/components/site/WhyChips.svelte';
 
   export { splitContent, convPane };
+  // 很长的用户消息（比如 Pilot 发给 AI 的整段指令）默认只露前几行，像 Claude 客户端那样
+  let openUser = $state<Set<string>>(new Set());
+  function toggleUser(k: string) { const n = new Set(openUser); if (n.has(k)) n.delete(k); else n.add(k); openUser = n; }
 </script>
 
 {@render conversationHeader(app.activeConv)}
@@ -53,7 +56,12 @@
   {:else if m.role === 'user'}
     {@const ua = splitAttachments(m.text)}
     <div class="msg user"><div class="ubody">
-      {#if ua.body.trim()}<span class="ub-text">{@render richText(ua.body)}</span>{/if}
+      {#if ua.body.trim()}
+        {@const ukey = `${bubbleId}:${m.ts}:${ua.body.length}`}
+        {@const long = ua.body.length > 400 || ua.body.split('\n').length > 8}
+        <span class="ub-text" class:clamp={long && !openUser.has(ukey)}>{@render richText(ua.body)}</span>
+        {#if long}<button class="ub-more" onclick={() => toggleUser(ukey)}>{openUser.has(ukey) ? '收起' : `展开全部（${ua.body.length} 字）`}</button>{/if}
+      {/if}
       {#if ua.atts.length}
         <div class="ub-atts" class:only={!ua.body.trim()}>
           {#each ua.atts as p (p)}
@@ -524,8 +532,11 @@
   .thread-inner { max-width: 760px; margin: 0 auto; padding: 22px 24px 8px; display: flex; flex-direction: column; gap: 20px; }
   .msg { display: flex; gap: 12px; }
   .msg.user { justify-content: flex-end; }
-  .ubody { background: var(--user-bg); border-radius: 16px 16px 5px 16px; padding: 10px 14px; max-width: 78%; word-break: break-word; }
-  .ub-text { white-space: pre-wrap; }
+  .ubody { background: var(--user-bg); border-radius: 14px; padding: 9px 14px; max-width: 80%; word-break: break-word; font-size: 14.5px; line-height: 1.6; }
+  .ub-text { white-space: pre-wrap; display: block; }
+  .ub-text.clamp { max-height: 8em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 55%, transparent); mask-image: linear-gradient(#000 55%, transparent); }
+  .ub-more { display: block; margin-top: 4px; padding: 0; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; }
+  .ub-more:hover { color: var(--text); }
   .msg.assistant .body { flex: 1; min-width: 0; }
   .text { white-space: pre-wrap; word-break: break-word; }
   /* 助手消息的 Markdown 阅读版式（渲染出的 HTML 不在 Svelte 作用域内，须 :global） */
