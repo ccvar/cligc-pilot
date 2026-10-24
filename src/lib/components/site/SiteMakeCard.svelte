@@ -64,7 +64,7 @@
     <Icon name="hammer" />第一版制作
     {#if ms && allDone}
       <span class="done-tag"><Icon name="check" size={11} />已完成</span>{#if summary}<span class="sum">{summary}</span>{/if}
-      <button class="link-btn fold" onclick={() => expand('steps', !ex.steps)}>{ex.steps ? '收起明细' : '明细'}</button>
+      <button class="fold" aria-expanded={!!ex.steps} onclick={() => expand('steps', !ex.steps)}>{ex.steps ? '收起明细' : '明细'}<svg class="chev" class:up={!!ex.steps} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
     {:else if ms}<span class="prog"><span class="meter"><i style="width:{(doneN / Math.max(ms.steps.length, 1)) * 100}%"></i></span>{doneN}/{ms.steps.length}</span>{/if}
     <span class="grow"></span>
     {#if aiRunning}<span class="live"><span class="spin"></span>AI 正在制作…</span>{/if}
@@ -99,7 +99,7 @@
       <b>上线前检查</b>
       {#if checksOk && !checksOpen}<span class="pass"><Icon name="check" size={11} />{checks.length} 项全部通过</span>{/if}
       <small>{ms.built_at ? `构建于 ${ago(ms.built_at)}` : '还没有构建产物'}</small>
-      {#if checksOk}<button class="link-btn fold" onclick={() => expand('checks', !checksOpen)}>{checksOpen ? '收起' : '展开'}</button>{/if}
+      {#if checksOk}<button class="fold" aria-expanded={checksOpen} onclick={() => expand('checks', !checksOpen)}>{checksOpen ? '收起' : '展开'}<svg class="chev" class:up={checksOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
       <span class="grow"></span>
       <button class="btn tiny" onclick={() => checkSite(site.id)} disabled={building || job?.status === 'running'}><Icon name="play" size={11} />{building ? '构建中…' : ms.built_at ? '重新构建并检查' : '构建并检查'}</button>
     </div>
@@ -125,13 +125,11 @@
     {/if}
     <div class="foot">
       {#if ready}
-        {#if goalTodos}
-          <p class="hint warn-text">没有必须修的问题，但还有 {goalTodos} 项会影响站点目标（见上面「需要你处理」），最好先处理再上线。</p>
-          <button class="btn small" onclick={toLaunch}><Icon name="rocket" size={12} />去配置上线</button>
-        {:else}
-          <p class="ok-note">{bad.length ? `没有必须修的问题（还有 ${bad.length} 项建议）。` : '检查都通过了。'}下一步：配置部署和域名。</p>
-          <button class="btn small primary" onclick={toLaunch}><Icon name="rocket" size={12} />去配置上线</button>
-        {/if}
+        <!-- 提示和按钮放在同一条里，高度一致 -->
+        <div class="next" class:warn={!!goalTodos}>
+          <span>{#if goalTodos}没有必须修的问题，但还有 {goalTodos} 项会影响站点目标（见上面「需要你处理」），最好先处理再上线。{:else}{bad.length ? `没有必须修的问题（还有 ${bad.length} 项建议）。` : '检查都通过了。'}下一步：配置部署和域名。{/if}</span>
+          <button class="btn small" class:primary={!goalTodos} onclick={toLaunch}><Icon name="rocket" size={12} />去配置上线</button>
+        </div>
       {:else if ms.built_at && fails}
         <p class="hint">有 {fails} 项必须修的问题，修好之前不建议上线。</p>
       {/if}
@@ -156,8 +154,14 @@
   .resume .btn { flex: none; }
   .done-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--ok); }
   .sum { font-size: 11.5px; font-weight: 400; color: var(--faint); }
-  .fold { font-size: 12px; font-weight: 400; color: var(--faint); }
-  .fold:hover { color: var(--text); }
+  .fold { display: inline-flex; align-items: center; gap: 3px; border: none; background: none; padding: 2px 4px; margin: 0 -4px; border-radius: 6px; font: inherit; font-size: 12px; font-weight: 400; color: var(--faint); cursor: pointer; transition: color .12s, background-color .12s; }
+  .fold:hover { color: var(--text); background: #f1efe9; }
+  .fold .chev { transition: transform .16s cubic-bezier(.2, .7, .2, 1); }
+  .fold .chev.up { transform: rotate(180deg); }
+  .next { flex: 1; display: flex; align-items: center; gap: 12px; padding: 7px 7px 7px 14px; border-radius: 10px; background: var(--su-ok-soft, #e9f5ee); border: 1px solid #cfe8d9; font-size: 12.5px; color: var(--ok); }
+  .next span { flex: 1; min-width: 0; line-height: 1.5; }
+  .next .btn { flex: none; }
+  .next.warn { background: #fdf8ec; border-color: #f0e4c4; color: #8a5a08; }
   .pass { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ok); }
   .mk-checks .folded small { color: var(--faint); }
   .sec.first { margin-top: 4px; padding-top: 0; border-top: none; }
