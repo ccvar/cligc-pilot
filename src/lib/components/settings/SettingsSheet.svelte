@@ -20,6 +20,7 @@
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
   import PhoneSection from '$lib/components/settings/PhoneSection.svelte';
+  import InfoTip from '$lib/components/common/InfoTip.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
@@ -140,7 +141,7 @@
 
 
 
-      <div class="sec-head mt"><span>模型服务 · 本地客户端</span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
+      <div class="sec-head mt"><span class="sec-title">模型服务 · 本地客户端<InfoTip text={`自定义模型 ID 会作为该厂商模型下拉里的附加档位（可加多个）。\n仅限本人订阅账户驱动本地官方 CLI，密钥存 ${keystoreName}。`} /></span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
       {#if app.brains}
         <div class="brains-list">
         {#each [{ b: 'claude' as Brain, st: app.brains.claude, name: 'Claude Code', cmd: CLAUDE_INSTALL_CMD }, { b: 'codex' as Brain, st: app.brains.codex, name: 'Codex', cmd: 'npm i -g @openai/codex' }, { b: 'grok' as Brain, st: app.brains.grok, name: 'Grok', cmd: GROK_INSTALL_CMD }] as r (r.b)}
@@ -287,7 +288,6 @@
         {/each}
         </div>
       {/if}
-      <p class="hint tos">自定义模型 ID 会作为该厂商模型下拉里的附加档位（可加多个）；仅限本人订阅账户驱动本地官方 CLI，密钥存 {keystoreName}。</p>
       <ApiServices profiles={app.apiProfiles} onchange={(profiles: ApiProfile[]) => { app.apiProfiles = profiles; }} />
 
       <div class="sec-head mt"><span>关于</span></div>
@@ -370,6 +370,7 @@
   .conn-remark { cursor: help; }
   .sec-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 1px; }
   .sec-head.mt { margin-top: 12px; }
+  .sec-title { display: inline-flex; align-items: center; }
   .conn-groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   .cg { border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
   .cg-head { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 4px; }
@@ -450,6 +451,5 @@
   .cust-add .tin { flex: 1; min-width: 0; width: auto; }
   .cust-add .btn { flex: none; }
   .hint { color: var(--dim); font-size: 12px; margin: 2px 0; line-height: 1.6; }
-  .hint.tos { color: var(--faint); margin-top: 12px; }
   .tin { width: 100%; }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import BrainIcon from './BrainIcon.svelte';
@@ -173,7 +174,7 @@
 </script>
 
 <section class="api-services" aria-label="API 服务">
-  <div class="section-head"><span>API 服务</span><button type="button" class="add" disabled={!!busy} onclick={() => edit()}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button></div>
+  <div class="section-head"><span class="section-title">API 服务<InfoTip text={'API 独立计费；密钥只存入系统凭据库，不随配置导出。测试连接只读取模型列表，不会调用模型生成内容。\n能做：文本对话、本地文件、SSH、看图（Claude / OpenAI Responses 接口），GitHub 推送和开 PR、站点上线（都先请你确认）。\nPDF 识别和 Cloudflare 授权操作请暂用本地客户端。'} label="API 服务说明" /></span><button type="button" class="add" disabled={!!busy} onclick={() => edit()}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button></div>
   {#if error}<p class="message error" role="alert">{error}</p>{/if}
   {#if !profiles.length && editorId === null}<p class="empty">使用自己的 API Key 接入 OpenAI、Claude 或兼容服务。</p>{/if}
   <div class="service-list">
@@ -192,8 +193,6 @@
     {/each}
   </div>
   {#if editorId === ''}{@render editor()}{/if}
-  <p class="section-note">API 独立计费；密钥只存入系统凭据库。API 连接及密钥暂不随配置导出。测试连接只读取模型列表，不会调用模型生成内容。</p>
-  <p class="section-note">支持文本对话、本地文件与 SSH 工具。图片 / PDF 识别和 Cloudflare 授权操作请暂用本地客户端。</p>
 </section>
 
 {#snippet providerIcon(value: ApiProtocol)}
@@ -253,8 +252,7 @@
   .connection-state i { display:block; width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
   .connection-state.verified { color:var(--ok,#24965c); }
   .connection-state.failed { color:var(--err); }
-  .empty,.section-note { margin:0; color:var(--faint); font-size:11px; line-height:1.5; }
-  .section-note { margin-top:10px; font-size:10.5px; }
+  .empty { margin:0; color:var(--faint); font-size:11px; line-height:1.5; }
   .test-result { margin:5px 0 0 33px; color:var(--dim); font-size:10.5px; line-height:1.4; overflow-wrap:anywhere; }
   .editor { padding:11px 0 0 33px; margin-top:5px; min-width:0; }
   .fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px 11px; }
@@ -293,4 +291,5 @@
   .button.primary { color:#fff; background:var(--accent); border-color:var(--accent); }
   .button.primary:hover:not(:disabled) { background:var(--accent-h); }
   @media (max-width:560px) { .connection-state > span { display:none; } .fields { grid-template-columns:minmax(0,1fr); } .editor { padding-left:0; } }
+  .section-title { display: inline-flex; align-items: center; }
 </style>
