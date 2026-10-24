@@ -62,46 +62,50 @@ async function sendToMaking(site: Site, text: string) {
 
 // ───────── 需要我处理的事（AI 写在 .pilot/todo.json 里） ─────────
 
-const doneLine = (t: SiteTodo) => `做完重新构建确认通过并提交，然后把 \`.pilot/todo.json\` 里 id 为 \`${t.id}\` 的条目删掉。`;
 
-/** 我填好了值：交给 AI 按站点约定写进去。正式域名同时存进 Pilot 的站点设置。 */
-export async function submitTodo(site: Site, t: SiteTodo, values: Record<string, string>) {
-  const filled = t.inputs.filter((i) => values[i.key]?.trim());
-  if (!filled.length) return;
+/** 一起交给 AI：看板上填好的值、勾选要 AI 做的事，合成一条消息，AI 一轮处理完。
+ *  对应 .env.example 里变量名的值直接存成配置变量（不用 AI）；正式域名同时存进站点设置。 */
+export async function submitTodos(site: Site, batch: { todo: SiteTodo; values: Record<string, string> }[]) {
+  if (!batch.length) return;
   try {
-    if (t.id === 'domain') {
-      const raw = (values.domain ?? values[filled[0].key] ?? '').trim();
-      const domain = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-      if (domain) { await invoke('save_site', { site: { ...site, domain } }); await refreshSites(); }
-    }
-    // 对应 .env.example 里变量名的：直接存成配置变量（值进钥匙串），不用 AI 改代码；存完重新构建
     const declared = new Set((siteMake.state[site.id]?.config ?? []).filter((v) => v.declared).map((v) => v.key));
-    const env = filled.filter((i) => declared.has(i.key));
-    const rest = filled.filter((i) => !declared.has(i.key));
-    if (env.length) {
-      await invoke('set_site_env', { id: site.id, set: env.map((i) => [i.key, values[i.key].trim()]), remove: [] });
-      await refreshSites();
-      if (!rest.length) {
-        await invoke('site_todo_handled', { id: site.id, todoId: t.id });
-        await loadMake(site.id, isFull(site.id));
-        say(`已存成配置变量：${env.map((i) => i.key).join('、')}。正在重新构建，构建好刷新预览就能看到`);
-        await checkSite(site.id);
-        return;
+    const envSet: [string, string][] = [];
+    const handled: string[] = [];
+    const filled: { t: SiteTodo; lines: string[] }[] = [];
+    const tasks: SiteTodo[] = [];
+    const confirms: SiteTodo[] = [];
+    for (const { todo: t, values } of batch) {
+      const given = t.inputs.filter((i) => values[i.key]?.trim());
+      if (t.id === 'domain' && given.length) {
+        const domain = (values.domain ?? values[given[0].key]).trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+        if (domain) { await invoke('save_site', { site: { ...site, domain } }); }
       }
+      if (!given.length) { (t.kind === 'confirm' ? confirms : tasks).push(t); continue; }
+      const env = given.filter((i) => declared.has(i.key));
+      env.forEach((i) => envSet.push([i.key, values[i.key].trim()]));
+      const rest = given.filter((i) => !declared.has(i.key));
+      if (rest.length) filled.push({ t, lines: rest.map((i) => `- ${i.label || i.key}：${values[i.key].trim()}`) });
+      else handled.push(t.id);
     }
-    const lines = rest.map((i) => `- ${i.label || i.key}：${values[i.key].trim()}`).join('\n');
-    const where = t.where ? `（${t.where}）` : '';
-    const extra = t.id === 'domain' ? '站点代码里用到站点地址的地方（canonical、sitemap、OG 之类）都改成这个域名。' : '';
-    await sendToMaking(site, `我补充了「${t.title}」：\n${lines}\n\n请按站点约定写进站点${where}。${extra}${doneLine(t)}`);
+    if (envSet.length) await invoke('set_site_env', { id: site.id, set: envSet, remove: [] });
+    for (const id of handled) await invoke('site_todo_handled', { id: site.id, todoId: id });
+    await refreshSites();
+    await loadMake(site.id, isFull(site.id));
+    const forAi = [...filled.map((f) => f.t), ...tasks, ...confirms];
+    if (!forAi.length) {
+      say(`已存成配置变量：${envSet.map(([k]) => k).join('、')}。正在重新构建，构建好刷新预览就能看到`);
+      await checkSite(site.id);
+      return;
+    }
+    let n = 0;
+    const parts: string[] = [];
+    if (filled.length) parts.push('【我补充的信息】\n' + filled.map((f) => `${++n}. ${f.t.title}${f.t.where ? `（${f.t.where}）` : ''}\n${f.lines.map((l) => '   ' + l).join('\n')}${f.t.id === 'domain' ? '\n   站点代码里用到站点地址的地方（canonical、sitemap、OG 之类）都改成这个域名。' : ''}`).join('\n'));
+    if (tasks.length) parts.push('【请你处理】\n' + tasks.map((t) => `${++n}. ${t.title}${t.why ? `（${t.why}）` : ''}${t.where ? ` 涉及：${t.where}` : ''}`).join('\n'));
+    if (confirms.length) parts.push('【我确认，按你的建议来】\n' + confirms.map((t) => `${++n}. ${t.title}`).join('\n'));
+    const env = envSet.length ? `\n\n（${envSet.map(([k]) => k).join('、')} 我已经在 Pilot 里存成配置变量了，代码从环境变量读就行，不用写进代码。）` : '';
+    const ids = forAi.map((t) => `\`${t.id}\``).join('、');
+    await sendToMaking(site, `看板上「需要你处理」的几件事，我一起交给你（按站点约定来）：\n\n${parts.join('\n\n')}${env}\n\n全部做完后重新构建确认通过、提交一次，然后把 \`.pilot/todo.json\` 里这些条目删掉：${ids}。`);
   } catch (e) { say(String(e), 'err'); }
-}
-
-/** 交给 AI 做（ai / confirm / suggest）。 */
-export async function delegateTodo(site: Site, t: SiteTodo) {
-  const head = t.kind === 'confirm' ? `我确认：${t.title}，按你的建议来。` : `请处理这件事：${t.title}。`;
-  const why = t.why ? `（${t.why}）` : '';
-  const where = t.where ? `涉及：${t.where}。` : '';
-  await sendToMaking(site, `${head}${why}${where}${doneLine(t)}`);
 }
 
 /** 我自己处理了 / 不需要：只记在 Pilot 里，不改仓库。 */
