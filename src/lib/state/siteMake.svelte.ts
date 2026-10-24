@@ -20,6 +20,8 @@ export const siteMake = $state({
   hidden: loadHidden(),
   /** 制作卡里手动展开过的部分（全部完成后默认收起；展开了这次打开期间保持展开） */
   expanded: {} as Record<string, { steps?: boolean; checks?: boolean }>,
+  /** GA4 接入的结果（这次打开期间）：读到 / 建好的衡量 ID、存进哪个变量、代码里接了没有、出错原因、自动读取试过没有 */
+  ga: {} as Record<string, { mid?: string; key?: string; declared?: boolean; error?: string; tried?: boolean; working?: boolean; wired?: boolean; rebuilt?: boolean }>,
 });
 
 /** full=false 只问站点约定写了没有（站点看板每次打开都会问，便宜）。 */
@@ -125,21 +127,38 @@ export function gaReady(site: Site): boolean {
   return k ? !!siteMake.state[site.id]?.config.find((v) => v.key === k)?.set : site.build.env_keys.includes('PUBLIC_GA_ID');
 }
 
-/** 接入 GA4：建（或读出已绑定的、或用我填的）衡量 ID，存进配置变量；老站点代码还没接这个变量的，让 AI 接上。 */
-export async function ga4ToConfig(site: Site, connId = '', measurementId = '') {
+/** 接入 GA4：建（或读出已绑定的、或用我填的）衡量 ID，存进配置变量。
+ *  auto：打开看板时自动读已绑定的——只读不写，不自动重新构建、也不自动叫 AI，结果留在 siteMake.ga 里给界面提示。 */
+export async function ga4ToConfig(site: Site, connId = '', measurementId = '', auto = false) {
+  const g = (siteMake.ga[site.id] = { ...(siteMake.ga[site.id] ?? {}), tried: true, working: true, error: '' });
   try {
     const r = await invoke<{ measurement_id: string; key: string; declared: boolean; created: boolean }>('ga4_to_config', { id: site.id, connId: connId || null, measurementId: measurementId || null });
+    siteMake.ga[site.id] = { ...g, working: false, mid: r.measurement_id, key: r.key, declared: r.declared };
     await refreshSites();
     await loadMake(site.id, isFull(site.id));
-    const what = r.created ? `已建好 GA4 媒体资源，衡量 ID ${r.measurement_id}` : `衡量 ID ${r.measurement_id}`;
+    if (auto) return;
     if (r.declared) {
-      say(`${what}，已存进配置变量 ${r.key}。正在重新构建`);
-      await checkSite(site.id);
+      say(`${r.created ? '已建好 GA4 媒体资源，' : ''}衡量 ID ${r.measurement_id} 已存进配置变量 ${r.key}，正在重新构建`);
+      await rebuildForGa(site);
     } else {
-      say(`${what}，已存进配置变量 ${r.key}；站点代码还没接这个变量，交给 AI 接上`);
-      await sendToMaking(site, `我已经在 Pilot 里把 GA4 衡量 ID 存成了配置变量 \`${r.key}\`（构建时注入，值不用写进代码）。请按【配置变量】的规矩接上：在 \`.env.example\` 里声明 \`${r.key}\`（[public]，GA4 衡量 ID），有值时在所有页面共用的 \`<head>\` 里用官方 gtag.js 加载，没值就不加载；站点里如果已经写死了别的统计代码，先告诉我。改完重新构建确认产物里的页面都带上了，提交一次。`);
+      await wireGa(site);
     }
-  } catch (e) { say(String(e), 'err'); }
+  } catch (e) {
+    siteMake.ga[site.id] = { ...g, working: false, error: String(e) };
+    if (!auto) say(String(e), 'err');
+  }
+}
+
+/** 老站点：代码还没接 GA 变量，交给 AI 按配置变量的规矩接上。 */
+export async function wireGa(site: Site) {
+  const key = siteMake.ga[site.id]?.key || 'PUBLIC_GA_ID';
+  siteMake.ga[site.id] = { ...(siteMake.ga[site.id] ?? {}), wired: true };
+  await sendToMaking(site, `我已经在 Pilot 里把 GA4 衡量 ID 存成了配置变量 \`${key}\`（构建时注入，值不用写进代码）。请按【配置变量】的规矩接上：在 \`.env.example\` 里声明 \`${key}\`（[public]，GA4 衡量 ID），有值时在所有页面共用的 \`<head>\` 里用官方 gtag.js 加载，没值就不加载；站点里如果已经写死了别的统计代码，先告诉我。改完重新构建确认产物里的页面都带上了，提交一次。`);
+}
+
+export async function rebuildForGa(site: Site) {
+  siteMake.ga[site.id] = { ...(siteMake.ga[site.id] ?? {}), rebuilt: true };
+  await checkSite(site.id);
 }
 
 /** 我自己处理了 / 不需要：只记在 Pilot 里，不改仓库。 */

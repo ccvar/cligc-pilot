@@ -12,7 +12,7 @@
   import { siteMake, loadMake, makingConv, fixWithAi, continueMaking, previewSite, askTodos } from '$lib/state/siteMake.svelte.js';
   import SiteTodos from './SiteTodos.svelte';
   import SiteGa4Todo from './SiteGa4Todo.svelte';
-  import { gaReady } from '$lib/state/siteMake.svelte.js';
+  import { gaReady, rebuildForGa } from '$lib/state/siteMake.svelte.js';
   import { tick } from 'svelte';
   import { launch, toggleLaunchOpen } from '$lib/state/launch.svelte.js';
 
@@ -29,7 +29,11 @@
   const fails = $derived(bad.filter((c) => c.level === 'fail').length);
   const pending = $derived(ms?.steps.filter((s) => !s.done).map((s) => s.label) ?? []);
   // GA4 由 Pilot 自己处理：衡量 ID 还没进配置变量就显示一条（构建过以后才出现，免得刚开始做就打扰）
-  const gaPending = $derived(!!ms && ms.built_at > 0 && !gaReady(site));
+  const ga = $derived(siteMake.ga[site.id] ?? {});
+  // 老站点读到了 ID 但代码还没接这个变量：这一条也留着（等交给 AI 接上）
+  const gaPending = $derived(!!ms && ms.built_at > 0 && (!gaReady(site) || (!!ga.mid && !ga.declared && !ga.wired)));
+  // 自动接好了：一行完成提示，下次构建生效
+  const gaDone = $derived(!!ga.mid && !!ga.declared && !ga.rebuilt);
   const goalTodos = $derived(ms?.todos?.filter((t) => t.affects_goal).length ?? 0);
   const ready = $derived(!!ms && ms.built_at > 0 && fails === 0);
   // 全部完成后：进度和全部通过的检查默认收成一行，要你处理的始终展开、挪到最上面
@@ -96,6 +100,9 @@
       <div class="sec" class:first={allDone && !stepsOpen}><b>需要你处理</b><small>{(ms.todos?.length ?? 0) + (gaPending ? 1 : 0)} 项{goalTodos ? ` · ${goalTodos} 项影响站点目标` : ''}</small></div>
       {#if gaPending}<ul class="ga-list"><SiteGa4Todo {site} /></ul>{/if}
       {#if ms.todos?.length}<SiteTodos {site} todos={ms.todos} />{/if}
+    {/if}
+    {#if gaDone}
+      <p class="ga-ok"><Icon name="check" size={12} /><span>已接入 GA4（<code>{ga.mid}</code>），存进了配置变量 <code>{ga.key}</code>，下次构建生效。</span><button class="btn tiny" onclick={() => rebuildForGa(site)} disabled={building || job?.status === 'running'}><Icon name="play" size={11} />现在重新构建</button></p>
     {/if}
     {#if ms.todos === null && !pending.length && !aiRunning}
       <div class="sec ask" class:first={allDone && !stepsOpen && !gaPending}><b>{gaPending ? 'AI 的待办' : '需要你处理'}</b><small>AI 还没把要你补的信息、要你做的决定整理到这里（可能只写在对话里）。</small><span class="grow"></span><button class="btn tiny" onclick={() => askTodos(site)}><Icon name="wand" size={11} />让 AI 整理</button></div>
@@ -184,6 +191,9 @@
   .sec small { font-size: 11.5px; color: var(--faint); }
   .sec.ask small { flex: 1; min-width: 0; }
   .ga-list { margin: 0 0 8px; padding: 0; }
+  .ga-ok { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; padding: 7px 8px 7px 12px; border-radius: 10px; background: var(--su-ok-soft, #e9f5ee); border: 1px solid #cfe8d9; font-size: 12.5px; color: var(--ok); }
+  .ga-ok span { flex: 1; min-width: 0; }
+  .ga-ok code { font-size: 11.5px; }
   .mk-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .mk-checks > li { display: flex; align-items: flex-start; gap: 9px; font-size: 12.5px; }
   .lv { flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
