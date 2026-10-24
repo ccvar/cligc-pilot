@@ -253,7 +253,15 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
     let force = force.unwrap_or(false);
     let quick = !force && !probe.unwrap_or(true);
     let (auto_bound, probe_errs) = if force || probe.unwrap_or(true) { probe_bindings(&state, &site, force).await } else { (Vec::new(), Vec::new()) };
-    let site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
+    let mut site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
+    // IndexNow 不用点：Pilot 构建上传的站点没有密钥就直接生成（只是一串随机字符），验证文件随下次上线放进构建产物
+    if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+        let key = crate::bing::new_indexnow_key();
+        site = state.sites.update(&id, now(), |s| {
+            s.data.indexnow_key = key.clone();
+            Ok(())
+        })?;
+    }
     let mut st = LaunchStatus {
         github: site.source == "github" || !site.repo.is_empty(),
         repo: site.repo.clone(),

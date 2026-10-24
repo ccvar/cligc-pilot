@@ -19,6 +19,7 @@
 
   let { site }: { site: Site } = $props();
   let gaBusy = $state(false);
+  const hasBing = $derived(app.conns.some((c) => c.kind === 'bing'));
   // Pilot 自己构建、上传的方式：IndexNow 验证文件上线时放进构建产物，不用改代码
   const pilotBuilds = $derived(site.deploy.mode === 'direct' || site.deploy.mode === 'workers');
   // 构建并上线是后台任务：跑完（成功或失败）重新读一遍向导状态，不然「上线一次」一直是灰的
@@ -223,7 +224,7 @@
       <span class="n">{st.indexnow ? '✓' : 6}</span>
       <div class="lb">
         <b><span class="si"><Icon name="zap" size={14} /></span>IndexNow</b>
-        <small>{st.indexnow ? '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。' : pilotBuilds ? '下次「构建并上线」时自动配好：Pilot 生成密钥、把验证文件放进构建产物，不用改代码。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
+        <small>{st.indexnow ? (pilotBuilds ? '已自动配好：验证文件随每次上线放进构建产物（不改代码），上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。' : '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。') : pilotBuilds ? '下次「构建并上线」时自动配好：Pilot 生成密钥、把验证文件放进构建产物，不用改代码。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
         {#if !st.indexnow}<div class="row"><button class="btn tiny" onclick={() => setupIndexNow(site)} disabled={!!busy || !site.domain}><Icon name="key" size={11} />{busy === 'indexnow' ? '处理中…' : pilotBuilds ? '现在生成密钥' : '生成并写入'}</button></div>{/if}
         {#if notes.indexnow}<small class:err={notes.indexnow.startsWith('失败')}>{notes.indexnow}</small>{/if}
       </div>
@@ -233,8 +234,15 @@
       <span class="n">{st.bing ? '✓' : 7}</span>
       <div class="lb">
         <b><span class="si"><BingMark size={13} /></span>Bing Webmaster<span class="opt">可选</span></b>
-        <small>{st.bing ? `已绑定 ${site.data.bing_site}` : '在 Bing Webmaster 里「从 Google Search Console 导入」最省事；导入后点右上角刷新，会按域名自动绑上（需要先连接 Bing）。'}</small>
-        {#if !st.bing}<div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>去绑定</button></div>{/if}
+        {#if st.bing}
+          <small>已绑定 {site.data.bing_site}</small>
+        {:else if hasBing}
+          <small>Bing 里还没有 {site.domain || '这个站点'}：在 Bing Webmaster 里再「从 Google Search Console 导入」一次（新站点要重新导入），回来点右上角刷新，Pilot 会按域名自动绑上。</small>
+          <div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button></div>
+        {:else}
+          <small>只用看 Bing 的搜索数据才需要（收录不受影响：IndexNow 已经会直接通知 Bing）。一次性设置，之后所有站点自动绑定：① 在 Bing Webmaster 里「从 Google Search Console 导入」，GSC 里的站点会一起导进去；② 在 Bing 的设置里生成 API 密钥，连接到 Pilot。</small>
+          <div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button><button class="btn tiny" onclick={() => openDataConnect('bing')}><BingMark size={11} />连接 Bing</button></div>
+        {/if}
       </div>
     </div>
     </div>
