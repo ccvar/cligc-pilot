@@ -24,6 +24,7 @@ mod node_boot;
 mod ops_cmds;
 mod path_env;
 mod permit;
+mod phone;
 mod ssh;
 mod sftp_transfer;
 mod sftp_drop;
@@ -2934,6 +2935,18 @@ async fn install_grok(app: AppHandle) -> Result<String, String> {
 
 /// 一键安装 wrangler（npm i -g wrangler）。npm 走已修复的 PATH（Windows 上 .cmd 必须
 /// 完整路径才能 spawn）；同样注入系统代理。可能耗时半分钟到一两分钟。
+/// 安卓手机：adb 在不在、连了哪些手机。
+#[tauri::command]
+async fn phone_status(state: tauri::State<'_, AppState>) -> Result<phone::PhoneStatus, String> {
+    Ok(phone::status(&state.data_dir).await)
+}
+
+/// 从 Google 下载官方 platform-tools（adb）到 Pilot 数据目录。
+#[tauri::command]
+async fn install_adb(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    phone::install(&state.data_dir).await
+}
+
 #[tauri::command]
 async fn install_wrangler() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -3342,7 +3355,7 @@ fn conversation_system_prompt(
     data_dir: &std::path::Path,
 ) -> String {
     if is_workspace {
-        return agent::workspace_system_prompt(!workspace_dir.trim().is_empty());
+        return format!("{}\n\n{}", agent::workspace_system_prompt(!workspace_dir.trim().is_empty()), phone::phone_prompt(&tools::phone_js_path(data_dir).to_string_lossy()));
     }
     if conn.kind == "github" {
         return agent::github_system_prompt(site_slug, &conn.login);
@@ -3532,7 +3545,8 @@ fn site_prompt(
 ) -> String {
     let tool = site_data::tool_prompt(data_dir, &sites.data_dir(&site.id));
     let shot = data_dir.join("tools").join("shot.js");
-    format!("{}\n\n{}", site_cmds::site_system_prompt(site, &conn.login, &tool), agent::site_shot_prompt(&shot.to_string_lossy()))
+    let phone = tools::phone_js_path(data_dir);
+    format!("{}\n\n{}\n\n{}", site_cmds::site_system_prompt(site, &conn.login, &tool), agent::site_shot_prompt(&shot.to_string_lossy()), phone::phone_prompt(&phone.to_string_lossy()))
 }
 
 fn fresh_session_seed(brain: &str) -> String {
@@ -4403,6 +4417,7 @@ pub fn run() {
             let _ = tools::ensure_shot(&data_dir); // 随附截图工具，覆写以随版本刷新
             let _ = tools::ensure_ssh(&data_dir); // 随附远程执行工具（AI 桥的 AI 侧）
             let _ = tools::ensure_site_data(&data_dir); // 随附站点数据查询工具（只读本地缓存）
+            let _ = tools::ensure_phone(&data_dir); // 随附安卓手机工具（adb）
             let _ = tools::ensure_design_plugin(&data_dir); // 随附建站设计技能（claude/grok 走 --plugin-dir）
             let _ = cf_templates::ensure_builtin(&data_dir); // 随附起始模板，覆写以随版本刷新
             app.manage(AppState {
@@ -4473,6 +4488,8 @@ pub fn run() {
             delete_api_billing_key,
             query_api_billing,
             install_wrangler,
+            phone_status,
+            install_adb,
             install_claude,
             verify_cf_token,
             connect_cloudflare,

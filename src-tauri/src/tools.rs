@@ -509,6 +509,21 @@ pub fn ensure_site_data(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
+/// 安卓手机工具（adb）：截图、读屏幕元素、点击、滑动、输入、打开 app。见 phone::phone_prompt。
+pub const PHONE_JS: &str = include_str!("builtin/phone.js");
+
+pub fn phone_js_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("tools").join("phone.cjs")
+}
+
+pub fn ensure_phone(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("tools");
+    fs::create_dir_all(&dir)?;
+    let p = phone_js_path(data_dir);
+    fs::write(&p, PHONE_JS)?;
+    Ok(p)
+}
+
 // ---- 建站设计规范（随附技能包） ----
 //
 // 为什么做成技能而不是继续堆在系统提示词里：**系统提示词只在首轮下发**（claude 之后走

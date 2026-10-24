@@ -19,6 +19,7 @@
   import { openGhConnect } from '$lib/state/github.svelte.js';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
+  import PhoneSection from '$lib/components/settings/PhoneSection.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
@@ -95,6 +96,9 @@
       </div>
 
       <DataSourcesSection />
+      <PhoneSection />
+
+
 
       <div class="sec-head mt"><span>模型服务 · 本地客户端</span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
       {#if app.brains}
