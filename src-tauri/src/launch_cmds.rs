@@ -316,23 +316,44 @@ async fn bing_verify(state: &AppState, site: &Site, conn_id: &str, key: &str, b:
             Ok(())
         });
     }
-    // Bing 的 DNS 验证：CNAME 名字是验证码（接口有时不给 DnsVerificationCode，就用和验证文件同一个码）
-    let mut codes: Vec<String> = [b.dns_code.as_str(), b.auth_code.as_str()].iter().filter(|c| !c.is_empty()).map(|c| c.to_ascii_lowercase()).collect();
-    codes.dedup();
+    // Bing 的 DNS 验证：接口给的 DnsVerificationCode 已经是完整主机名（`<码>.<域名>`），没给时才用验证文件那个码拼。
+    let domain = site.domain.to_ascii_lowercase();
+    let dns_name = |code: &str| {
+        let c = code.trim().trim_end_matches('.').to_ascii_lowercase();
+        if c.ends_with(&format!(".{domain}")) { c } else { format!("{c}.{domain}") }
+    };
+    let want = if !b.dns_code.is_empty() { Some(dns_name(&b.dns_code)) } else if !b.auth_code.is_empty() { Some(dns_name(&b.auth_code)) } else { None };
+    // 以前拼错的名字（码后面又拼了一遍域名、或用错了码）：指向 verify.bing.com 的就删掉
+    let mut wrong: Vec<String> = Vec::new();
+    for code in [b.dns_code.as_str(), b.auth_code.as_str()].iter().filter(|c| !c.is_empty()) {
+        let raw = format!("{}.{domain}", code.trim().trim_end_matches('.').to_ascii_lowercase());
+        if Some(&raw) != want.as_ref() {
+            wrong.push(raw);
+        }
+        let fixed = dns_name(code);
+        if Some(&fixed) != want.as_ref() && !wrong.contains(&fixed) {
+            wrong.push(fixed);
+        }
+    }
     let mut dns_added = false;
-    if codes.is_empty() {
-        note.push("Bing 没给验证码".to_string());
-    } else {
-        let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
-        conns.sort_by_key(|c| c.id != site.deploy.cf_conn_id);
-        let mut zone_found = false;
-        for c in conns {
-            let Ok(token) = crate::keychain::get_key(&c.id) else { continue };
-            if let Ok(Some(zone)) = crate::cf::zone_for(&token, &site.domain).await {
-                zone_found = true;
-                for code in &codes {
-                    let name = format!("{code}.{}", site.domain);
-                    match crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &name, "verify.bing.com", false).await {
+    match &want {
+        None => note.push("Bing 没给验证码".to_string()),
+        Some(name) => {
+            let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
+            conns.sort_by_key(|c| c.id != site.deploy.cf_conn_id);
+            let mut zone_found = false;
+            for c in conns {
+                let Ok(token) = crate::keychain::get_key(&c.id) else { continue };
+                if let Ok(Some(zone)) = crate::cf::zone_for(&token, &site.domain).await {
+                    zone_found = true;
+                    for w in &wrong {
+                        for r in crate::cf::dns_records(&token, &zone.id, w).await.unwrap_or_default() {
+                            if r.kind == "CNAME" && r.content.trim_end_matches('.').eq_ignore_ascii_case("verify.bing.com") && crate::cf::delete_dns_record(&token, &zone.id, &r.id).await.is_ok() {
+                                note.push(format!("删掉了写错的验证记录 {w}"));
+                            }
+                        }
+                    }
+                    match crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", name, "verify.bing.com", false).await {
                         Ok(true) => {
                             dns_added = true;
                             note.push(format!("已加 DNS 验证记录 {name} → verify.bing.com"));
@@ -340,12 +361,12 @@ async fn bing_verify(state: &AppState, site: &Site, conn_id: &str, key: &str, b:
                         Ok(false) => note.push(format!("DNS 验证记录 {name} 已经在了")),
                         Err(e) => note.push(format!("加 DNS 验证记录失败（{e}）")),
                     }
+                    break;
                 }
-                break;
             }
-        }
-        if !zone_found {
-            note.push("域名不在已连接的 Cloudflare 里，没法加 DNS 验证记录：靠上线时放进去的验证文件".to_string());
+            if !zone_found {
+                note.push("域名不在已连接的 Cloudflare 里，没法加 DNS 验证记录：靠上线时放进去的验证文件".to_string());
+            }
         }
     }
     // 刚加的 DNS 记录 Bing 不一定马上查得到：隔几秒多试两次
