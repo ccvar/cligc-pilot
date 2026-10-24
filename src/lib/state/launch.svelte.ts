@@ -21,6 +21,11 @@ export interface LaunchStatus {
   /** 这次检查按域名自动绑定上的资源。 */
   auto_bound: string[];
   errors: string[];
+  /** 配置变量：声明了几个、哪些还没填、有没有改动没同步、同步到哪 */
+  config_vars?: number;
+  config_missing?: string[];
+  config_needs_sync?: boolean;
+  config_target?: string;
 }
 
 const DONE_KEY = 'cligc.pilot.launchDone';
@@ -36,6 +41,7 @@ export function launchSteps(site: Site, st: LaunchStatus) {
   return [
     { key: 'github', label: '代码放到 GitHub', done: st.github },
     ...(pagesStep ? [{ key: 'pages', label: 'Cloudflare Pages 项目与域名', done: st.pages && (st.domain_attached || !site.domain) }] : []),
+    ...((st.config_vars ?? 0) > 0 ? [{ key: 'config', label: '配置变量', done: !(st.config_missing?.length) && !st.config_needs_sync }] : []),
     { key: 'deploy', label: '在 Pilot 里上线一次', done: st.deployed },
     { key: 'ga4', label: 'GA4', done: st.ga4 },
     { key: 'gsc', label: 'Search Console', done: st.gsc },
@@ -105,6 +111,11 @@ async function step<T>(id: string, key: string, fn: () => Promise<T>, done: (r: 
     await loadLaunch(id);
   } catch (e) { note(id, key, `失败：${String(e)}`); }
   finally { launch.busy = { ...launch.busy, [id]: '' }; }
+}
+
+/** 把配置变量同步到部署目标（Pages 环境变量 / Worker 密钥 / 服务器 env 文件）。 */
+export async function syncConfig(site: Site) {
+  await step(site.id, 'config', () => invoke<string>('site_config_sync', { id: site.id }), (r) => r);
 }
 
 /** CF 建站项目 → 站点（本地来源，Pilot 直接上传），然后打开站点页的上线向导。 */

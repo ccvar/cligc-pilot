@@ -159,6 +159,13 @@ const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby Awards、F
 - 响应式：375、768、1280、1920 宽度都要精心适配，不只是挤得下。\n\
 - 性能与可访问性：不引入大体积动画库；图片用现代格式并标明宽高；首屏快、不跳动；语义化标签、焦点可见、键盘可用。";
 
+/// 配置变量：运营配置不写死在代码里，Pilot 管值、按部署方式同步（见 site_config）。
+pub const CONFIG_SPEC: &str = "【配置变量】邀请链接 / 邀请码、统计 ID、联系邮箱、站点地址、品牌名、第三方接口密钥这类运营配置，一律从环境变量读，不写死在代码里：\n\
+- 集中在一个配置模块里读，给合理的默认值（比如站点地址默认用部署平台的默认域名）。Pilot 构建时把值作为进程环境变量注入，不会生成 `.env` 文件——确保 `npm run build` 时读得到进程环境变量（公开变量按框架要求加前缀，比如 Astro 的 `PUBLIC_`）。\n\
+- 写 `.env.example` 列出每个变量：上一行注释写清用途，并标 `[public]`（会出现在页面里）或 `[secret]`（只能在构建时或服务端用，绝不能进前端代码）；值留空或写示例。`.env` 不提交。\n\
+- 本地开发可以读 `.env`；值由 Pilot 保管，部署时同步到 Cloudflare 的环境变量或服务器上的 env 文件。\n\
+- 需要我填的配置值写进 `.pilot/todo.json` 时，inputs 的 key 就用变量名（和 `.env.example` 一致），我在看板上填好会直接存成配置变量，不用你改代码。";
+
 /// 待我处理的事：写成 Pilot 能读的清单，显示在站点看板上逐条处理（不只写在汇报里——汇报会被埋在对话里）。
 pub const TODO_SPEC: &str = "【待我处理的事】凡是需要我提供信息、做决定或点头的事（邀请链接、联系方式、正式域名、品牌名、需要登录才能截的图……），都写进 `.pilot/todo.json`，Pilot 会显示在站点看板上让我逐条处理；处理完的条目由你删掉，没有待办时写 `{\"items\":[]}`。格式：\n\
 {\"items\":[{\"id\":\"短英文标识\",\"title\":\"一句话说清要我做什么\",\"why\":\"为什么重要、不处理会怎样\",\"kind\":\"input|ai|confirm|suggest\",\"affects_goal\":true,\"where\":\"会改在哪个文件的哪个字段\",\"inputs\":[{\"key\":\"字段标识\",\"label\":\"给我看的名称\",\"placeholder\":\"示例\",\"value\":\"现在的值（可选）\"}]}]}\n\
@@ -202,12 +209,13 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
    - 改完重新截图复查，重复直到找不出明显可提升之处；\n\
    - 再按【内容标准】通读一遍页面上的文字：有没有内部表达、标题是否是自然的长尾问法、有没有薄页或重复页。\n\
 8. 把需要我处理的事写进 `.pilot/todo.json`，然后 `git add -A && git commit -m \"搭建第一版\"`，简要汇报：做了哪些页面、设计方向是什么、最后一轮自评的结论、怎么本地预览、有几件事要我处理。\n\n\
-{content}\n\n{visual}\n\n{todo}\n\n\
+{content}\n\n{visual}\n\n{config}\n\n{todo}\n\n\
 不要部署——上线由 Pilot 负责。",
         guide = stack_guide(&req.stack),
         n = pages_of(req),
         content = CONTENT_STANDARD,
         visual = VISUAL_STANDARD,
+        config = CONFIG_SPEC,
         todo = TODO_SPEC,
     )
 }
@@ -225,10 +233,11 @@ pub fn continue_message(pending: &[&str], stack: &str) -> String {
 4. 视觉按下面的【视觉标准】：设计方向还没写进 `.pilot/site.md` 的先定下来；在 375、768、1280 宽度截图首页和两个内容页，逐项评估、改完复查，直到找不出明显可提升之处。\n\
 5. `.pilot/site.md` 里补上「内容与视觉标准」一节（如果还没有）。\n\
 6. 需要我处理的事写进 `.pilot/todo.json`；跑构建确认通过，`git add -A && git commit -m \"搭建第一版\"`，然后简要汇报：做了哪些页面、设计方向、最后一轮自评、有几件事要我处理。\n\n\
-{content}\n\n{visual}\n\n{todo}\n\n\
+{content}\n\n{visual}\n\n{config}\n\n{todo}\n\n\
 不要部署——上线由 Pilot 负责。",
         content = CONTENT_STANDARD,
         visual = VISUAL_STANDARD,
+        config = CONFIG_SPEC,
         todo = TODO_SPEC,
     )
 }
@@ -703,5 +712,6 @@ mod tests {
         assert_eq!(load_handled(t.path()), vec!["brand".to_string()]);
         let m = first_message(&req());
         assert!(m.contains(".pilot/todo.json") && m.contains("【待我处理的事】") && !m.contains("在汇报里列出来"));
+        assert!(m.contains("【配置变量】") && m.contains(".env.example") && continue_message(&[], "astro").contains("【配置变量】"));
     }
 }

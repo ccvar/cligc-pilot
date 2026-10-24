@@ -12,7 +12,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4 } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4, syncConfig } from '$lib/state/launch.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { void loadLaunch(site.id); });
@@ -94,6 +94,23 @@
         <small>{st.pages ? `项目 ${site.deploy.project}${st.pages_domains.length ? ` · ${st.pages_domains.join('、')}` : ''}` : `将创建项目 ${site.deploy.project || '（先在设置里填写）'}`}{site.domain && !st.domain_attached ? `，并绑定 ${site.domain}（同账号的域名会自动加 CNAME）` : ''}</small>
         {#if !(st.pages && (st.domain_attached || !site.domain))}<div class="row"><button class="btn tiny" onclick={() => setupPages(site)} disabled={!!busy || !site.deploy.project || site.deploy.mode === 'none'}><Icon name="plus" size={11} />{busy === 'pages' ? '处理中…' : '创建并绑定'}</button>{#if !site.domain}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>先填写域名</button>{/if}</div>{/if}
         {#if notes.pages}<small class:err={notes.pages.startsWith('失败')}>{notes.pages}</small>{/if}
+      </div>
+    </div>
+    {/if}
+
+    {#if (st.config_vars ?? 0) > 0}
+    {@const cfgDone = !(st.config_missing?.length) && !st.config_needs_sync}
+    <div class="lstep" class:done={cfgDone}>
+      <span class="n">{cfgDone ? '✓' : '·'}</span>
+      <div class="lb">
+        <b><span class="si"><Icon name="key" size={14} /></span>配置变量</b>
+        <small>{#if st.config_missing?.length}还没填：<span class="mono">{st.config_missing.join('、')}</span>（到站点设置的「配置变量」里填，或在「需要你处理」里填）{:else if st.config_needs_sync}值改过，还没同步到{st.config_target}。上线时会自动同步，也可以现在同步。{:else}{st.config_vars} 个变量都填好了，已同步到{st.config_target}。{/if}</small>
+        {#if st.config_missing?.length}
+          <div class="row"><button class="btn tiny" onclick={() => (sites.tab = 'settings')}><Icon name="sliders" size={11} />去填写</button></div>
+        {:else if st.config_needs_sync && site.deploy.mode !== 'none'}
+          <div class="row"><button class="btn tiny" onclick={() => syncConfig(site)} disabled={!!busy}><Icon name="refresh" size={11} />{busy === 'config' ? '同步中…' : '现在同步'}</button></div>
+        {/if}
+        {#if notes.config}<small class:err={notes.config.startsWith('失败')}>{notes.config}</small>{/if}
       </div>
     </div>
     {/if}

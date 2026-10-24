@@ -363,6 +363,14 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
         // Workers：名称、路由、绑定都在仓库的 wrangler 配置里，Pilot 只负责在构建检查通过后执行一次。
         let (prog, mut args) = wrangler_cmd(&b.dir)?;
         args.push("deploy".into());
+        // 公开的配置变量随部署带上（密钥另外写进 Worker 的密钥，不放进命令行）
+        let secret_of: std::collections::HashMap<String, bool> = crate::site_config::vars(site, &b.dir).into_iter().map(|v| (v.key, v.secret)).collect();
+        for (k, v) in crate::sites::load_env(&site.id) {
+            if !secret_of.get(&k).copied().unwrap_or(false) {
+                args.push("--var".into());
+                args.push(format!("{k}:{v}"));
+            }
+        }
         if !message.is_empty() {
             args.push("--message".into());
             args.push(message.chars().take(100).collect());
@@ -502,12 +510,20 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
     let manifest = build_manifest(&built.out);
     // 上传
     job.step("upload", "running", &site.deploy.project);
+    // Pages：配置变量先写进项目的环境变量（Functions 运行时读得到，后台也看得见）；构建时已经注入过了，这一步失败不挡上线
+    if site.deploy.mode == "direct" {
+        sync_config(site, conns, &dir, site_dir, job, true).await;
+    }
     let url = upload(site, &cf, &built, &rec.commit, &rec.message, rec.dirty, job)
         .await
         .inspect_err(|_| job.step("upload", "failed", ""))?;
     job.step("upload", "ok", &url);
     job.set_url(&url);
     rec.url = url;
+    // Workers：密钥要 Worker 已经存在才写得进去，所以放在部署之后（公开变量已经随 --var 带上）
+    if site.deploy.mode == "workers" {
+        sync_config(site, conns, &dir, site_dir, job, false).await;
+    }
     // 线上验收：这次改到的页面（调用方给的 + 构建产物里有变化的）逐个打开
     let old = load_manifest(site_dir);
     let changed_all = if site.domain.is_empty() { Vec::new() } else { changed_urls(&old, &manifest, &site.domain) };
@@ -596,10 +612,32 @@ fn finish_verify(job: &Job, rec: &mut DeployRecord, rep: &crate::site_verify::Re
     Ok(())
 }
 
+/// 上线时顺手把配置变量同步到部署目标：有改动才同步，失败只记一行，不挡上线（构建时已经注入）。
+/// `ensure_pages`：Pages 第一次上线时项目可能还没建，先建好再写变量。
+async fn sync_config(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path, job: &Job, ensure_pages: bool) {
+    if !crate::site_config::state(site, code, site_dir).needs_sync {
+        return;
+    }
+    if ensure_pages {
+        if let Ok(cf) = conns.get(&site.deploy.cf_conn_id) {
+            if let Ok(token) = crate::keychain::get_key(&cf.id) {
+                let branch = if site.deploy.branch.is_empty() { "main" } else { &site.deploy.branch };
+                let _ = ensure_pages_project(&token, &cf.account_id, &site.deploy.project, branch, job).await;
+            }
+        }
+    }
+    for (_, v) in crate::sites::load_env(&site.id) {
+        job.add_secret(&v);
+    }
+    match crate::site_config::sync(site, conns, code, site_dir).await {
+        Ok(note) => job.line(&format!("配置变量：{note}")),
+        Err(e) => job.line(&format!("配置变量没同步上：{e}（这次构建已经用上了最新的值）")),
+    }
+}
+
 /// VPS：准备代码 → 安装 → 构建 → 检查 → 执行项目自带的发布命令（带 Pilot 部署密钥的 ssh / scp 包装）。
 /// 发布脚本自己负责上传、备份、健康检查与失败恢复；IndexNow 通常由服务器上的程序自己推，这里不重复。
 async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
-    let _ = site_dir;
     let ssh = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接".to_string())?;
     job.step("prepare", "running", "");
     let dir = crate::site_git::code_dir(site, conns.get(&site.gh_conn_id).ok().as_ref()).inspect_err(|_| job.step("prepare", "failed", ""))?;
@@ -611,6 +649,8 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     job.step("prepare", "ok", rec.commit.get(..7).unwrap_or("非 git 目录"));
     build_and_check(site, &dir, None, job).await?;
     job.step("upload", "running", &format!("{}@{}", ssh.ssh_user, ssh.ssh_host));
+    // 配置变量合并写进服务器上的 env 文件（发布脚本 / 服务从那里读）
+    sync_config(site, conns, &dir, site_dir, job, false).await;
     let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;
     let mut env = build_env(site, job);
     env.extend(crate::site_vps::deploy_env(&shim));

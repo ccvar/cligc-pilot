@@ -50,6 +50,9 @@ pub struct DeployConfig {
     /// VPS 部署：项目自带的发布命令（在站点根目录执行），如 `./scripts/publish-production.sh publish`。
     #[serde(default)]
     pub command: String,
+    /// VPS 部署：服务器上的配置变量文件（Pilot 部署时把站点配置变量合并写进去）。空＝/opt/<站点>/config/<站点>.env。
+    #[serde(default)]
+    pub env_file: String,
 }
 
 impl DataBinding {

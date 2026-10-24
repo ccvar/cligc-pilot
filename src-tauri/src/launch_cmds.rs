@@ -74,6 +74,11 @@ pub(crate) async fn init_repo(dir: &Path) -> Result<(), String> {
 
 #[derive(Serialize, Default)]
 pub struct LaunchStatus {
+    /// 配置变量：声明了几个、哪些还没填、有没有改动没同步到部署目标
+    pub config_vars: usize,
+    pub config_missing: Vec<String>,
+    pub config_needs_sync: bool,
+    pub config_target: String,
     pub github: bool,
     pub repo: String,
     pub pages: bool,
@@ -290,6 +295,13 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
                 }
             }
         }
+    }
+    if let Ok(code) = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref()) {
+        let cs = crate::site_config::state(&site, &code, &state.sites.data_dir(&id));
+        st.config_vars = cs.vars.len();
+        st.config_missing = cs.missing;
+        st.config_needs_sync = cs.needs_sync;
+        st.config_target = cs.target_label;
     }
     Ok(st)
 }

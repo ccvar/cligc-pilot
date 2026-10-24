@@ -5,9 +5,10 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import SiteDataSettings from './SiteDataSettings.svelte';
   import VpsAuth from './VpsAuth.svelte';
+  import SiteConfigCard from './SiteConfigCard.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
-  import { sites, editSite, saveSiteDraft, setSiteEnv, removeSite } from '$lib/state/sites.svelte.js';
+  import { sites, editSite, saveSiteDraft, removeSite } from '$lib/state/sites.svelte.js';
   import { setTags, fleet } from '$lib/state/fleet.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -24,13 +25,6 @@
     const t = tagIn.trim();
     if (!t) return;
     if (await setTags(site.id, [...site.tags, t])) tagIn = '';
-  }
-  let envKey = $state('');
-  let envVal = $state('');
-  async function addEnv() {
-    const k = envKey.trim();
-    if (!k) return;
-    if (await setSiteEnv(site.id, [[k, envVal]], [])) { envKey = ''; envVal = ''; }
   }
   // 从 Cloudflare 识别：按域名 / 仓库找这个站点的 Pages 项目，填进下面（保存后生效）
   let detecting = $state(false);
@@ -93,20 +87,9 @@
         <textarea id="ss-checks" class="tin" rows="2" bind:value={checksText} oninput={syncChecks} spellcheck="false"></textarea>
         <small>在构建之后执行；任何一条失败都不会上传，运营任务提交的改动也必须先通过它们。</small>
       </div>
-      <div class="field" style="margin-top:10px"><span class="lbl">构建变量</span>
-        <small>只在 Pilot 执行的构建中注入（值存钥匙串，不显示、不进仓库）。GitHub 来源的 .env 不在仓库里时在这里补齐。</small>
-        {#if sites.envKeys.length}
-          <div class="row wrap" style="margin:4px 0">
-            {#each sites.envKeys as k (k)}<span class="pill mono">{k}<button class="x mini" title="删除" onclick={() => setSiteEnv(site.id, [], [k])}>×</button></span>{/each}
-          </div>
-        {/if}
-        <div class="row">
-          <input class="tin mono" style="max-width:200px" bind:value={envKey} placeholder="变量名" spellcheck="false" />
-          <input class="tin mono" type="password" bind:value={envVal} placeholder="值（已有同名变量会被覆盖）" autocomplete="off" />
-          <button class="btn small" onclick={addEnv} disabled={!envKey.trim()}>保存变量</button>
-        </div>
-      </div>
     </div>
+
+    <SiteConfigCard {site} />
 
     <div class="card">
       <h3><Icon name="rocket" />部署<span class="grow"></span><button class="btn tiny" onclick={detectDeploy} disabled={detecting} data-tip="按域名和 GitHub 仓库，在已连接的 Cloudflare 账号里找这个站点的 Pages 项目"><Icon name="search" size={11} />{detecting ? '识别中…' : '从 Cloudflare 识别'}</button></h3>
@@ -115,6 +98,7 @@
         {#if d.deploy.mode === 'vps'}
           <div class="field"><span class="lbl">服务器（SSH 连接）</span><Dropdown bind:value={d.deploy.ssh_conn_id} placeholder="选择远程连接" options={app.conns.filter((c) => c.kind === 'ssh').map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} /></div>
           <div class="field" style="grid-column:1/-1"><label for="ss-cmd">发布命令</label><input id="ss-cmd" class="tin mono" bind:value={d.deploy.command} spellcheck="false" /><small>在站点根目录执行。发布脚本自己负责上传、备份、健康检查和失败恢复；Pilot 只在构建和检查通过后才执行它。</small></div>
+          <div class="field" style="grid-column:1/-1"><label for="ss-envf">服务器上的配置文件</label><input id="ss-envf" class="tin mono" bind:value={d.deploy.env_file} placeholder={`/opt/${(site.domain.split('.')[0] || 'site')}/config/${(site.domain.split('.')[0] || 'site')}.env`} spellcheck="false" /><small>上线时 Pilot 把「配置变量」合并写进这个文件（权限 600，文件里 Pilot 没管的行原样保留），服务或发布脚本从这里读。留空用默认路径。</small></div>
         {:else if d.deploy.mode !== 'none'}
           <div class="field"><span class="lbl">Cloudflare 连接</span><Dropdown bind:value={d.deploy.cf_conn_id} placeholder="选择连接" options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
           <div class="field"><label for="ss-proj">{d.deploy.mode === 'workers' ? 'Worker 名称' : 'Pages 项目'}</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" />{#if d.deploy.mode === 'workers'}<small>路由、绑定、变量都按仓库里的 wrangler 配置部署。</small>{/if}</div>

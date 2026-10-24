@@ -33,6 +33,7 @@ mod static_server;
 mod google;
 mod google_oauth;
 mod site_cmds;
+mod site_config;
 mod site_data;
 mod site_deploy;
 mod site_git;
@@ -4550,6 +4551,8 @@ pub fn run() {
             site_cmds::discard_made_site,
             site_cmds::site_todo_handled,
             site_cmds::site_todo_request_message,
+            site_cmds::site_config_state,
+            site_cmds::site_config_sync,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_env_keys,

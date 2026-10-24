@@ -4,7 +4,7 @@ import { untrack } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import type { Conversation, MakeCheck, MakeState, Site, SiteTodo } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
-import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
+import { SITE_PREFIX, refreshSites, checkSite } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
 import { openConv } from './conversations.js';
 import { persistThreadPerm } from './thread.svelte.js';
@@ -69,11 +69,27 @@ export async function submitTodo(site: Site, t: SiteTodo, values: Record<string,
   const filled = t.inputs.filter((i) => values[i.key]?.trim());
   if (!filled.length) return;
   try {
-    if (t.id === 'domain' && values.domain?.trim()) {
-      await invoke('save_site', { site: { ...site, domain: values.domain.trim() } });
-      await refreshSites();
+    if (t.id === 'domain') {
+      const raw = (values.domain ?? values[filled[0].key] ?? '').trim();
+      const domain = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      if (domain) { await invoke('save_site', { site: { ...site, domain } }); await refreshSites(); }
     }
-    const lines = filled.map((i) => `- ${i.label || i.key}：${values[i.key].trim()}`).join('\n');
+    // 对应 .env.example 里变量名的：直接存成配置变量（值进钥匙串），不用 AI 改代码；存完重新构建
+    const declared = new Set((siteMake.state[site.id]?.config ?? []).filter((v) => v.declared).map((v) => v.key));
+    const env = filled.filter((i) => declared.has(i.key));
+    const rest = filled.filter((i) => !declared.has(i.key));
+    if (env.length) {
+      await invoke('set_site_env', { id: site.id, set: env.map((i) => [i.key, values[i.key].trim()]), remove: [] });
+      await refreshSites();
+      if (!rest.length) {
+        await invoke('site_todo_handled', { id: site.id, todoId: t.id });
+        await loadMake(site.id, isFull(site.id));
+        say(`已存成配置变量：${env.map((i) => i.key).join('、')}。正在重新构建，构建好刷新预览就能看到`);
+        await checkSite(site.id);
+        return;
+      }
+    }
+    const lines = rest.map((i) => `- ${i.label || i.key}：${values[i.key].trim()}`).join('\n');
     const where = t.where ? `（${t.where}）` : '';
     const extra = t.id === 'domain' ? '站点代码里用到站点地址的地方（canonical、sitemap、OG 之类）都改成这个域名。' : '';
     await sendToMaking(site, `我补充了「${t.title}」：\n${lines}\n\n请按站点约定写进站点${where}。${extra}${doneLine(t)}`);

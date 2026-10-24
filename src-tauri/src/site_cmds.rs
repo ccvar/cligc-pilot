@@ -226,6 +226,11 @@ fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
     if site.default_branch.trim().is_empty() {
         site.default_branch = "main".into();
     }
+    site.deploy.env_file = site.deploy.env_file.trim().to_string();
+    let f = &site.deploy.env_file;
+    if !f.is_empty() && (!f.starts_with('/') || f.contains("..") || f.ends_with('/') || f.chars().any(|c| c.is_control() || c == '\'')) {
+        return Err("服务器上的配置文件要写绝对路径，如 /opt/mysite/config/mysite.env".into());
+    }
     match site.deploy.mode.as_str() {
         "none" => {}
         "vps" => {
@@ -403,6 +408,8 @@ pub struct MakeState {
     pub conventions: bool,
     /// AI 写在 .pilot/todo.json 里、我还没处理的事；None＝AI 还没写这个文件
     pub todos: Option<Vec<crate::site_make::Todo>>,
+    /// .env.example 里声明的配置变量（「需要你处理」里对应变量名的输入直接存成配置变量）
+    pub config: Vec<crate::site_config::ConfigVar>,
     pub steps: Vec<crate::site_make::MakeStep>,
     pub checks: Vec<crate::site_make::Check>,
     /// 构建产物的时间（index.html 的修改时间，秒）；0＝还没构建
@@ -429,9 +436,10 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let todos = mk::load_todos(&code, &mk::load_handled(&state.sites.data_dir(&id)));
+    let config = crate::site_config::vars(&site, &code);
     // 不要 full：只看站点约定和待办（站点看板每次打开都会问，别去扫整个构建产物）
     if !full.unwrap_or(true) {
-        return Ok(MakeState { conventions: mk::has_conventions(&code), todos, steps: vec![], checks: vec![], built_at });
+        return Ok(MakeState { conventions: mk::has_conventions(&code), todos, config, steps: vec![], checks: vec![], built_at });
     }
     let (steps, mut checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &site.build.out_dir, commits), mk::readiness(&out)))
         .await
@@ -441,7 +449,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
             checks.push(mk::todo_check(t));
         }
     }
-    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), todos, steps, checks, built_at })
+    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), todos, config, steps, checks, built_at })
 }
 
 /// 「继续制作」的消息：按当前进度列出还没完成的项，带上最新标准。
@@ -518,6 +526,22 @@ pub fn site_todo_handled(state: tauri::State<'_, AppState>, id: String, todo_id:
         ids.push(todo_id);
     }
     crate::site_make::save_handled(&dir, &ids)
+}
+
+/// 站点配置变量：.env.example 里声明的 + Pilot 里手动加的、哪些还没填、同步到哪、有没有改动没同步。不返回值。
+#[tauri::command]
+pub fn site_config_state(state: tauri::State<'_, AppState>, id: String) -> Result<crate::site_config::ConfigState, String> {
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    Ok(crate::site_config::state(&site, &code, &state.sites.data_dir(&id)))
+}
+
+/// 把配置变量同步到部署目标（Pages 环境变量 / Worker 密钥 / 服务器 env 文件）。
+#[tauri::command]
+pub async fn site_config_sync(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    crate::site_config::sync(&site, &state.conns, &code, &state.sites.data_dir(&id)).await
 }
 
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。

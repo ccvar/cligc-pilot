@@ -165,6 +165,36 @@ async fn cf_send(token: &str, method: reqwest::Method, path: &str, body: Option<
     Ok(body)
 }
 
+/// 写 Pages 项目的环境变量（生产和预览都写）：只动给出的键，`remove` 里的删掉，其它变量不碰。
+/// `vars`：(名, 值, 是否密钥)。
+pub async fn set_pages_env(token: &str, account_id: &str, project: &str, vars: &[(String, String, bool)], remove: &[String]) -> Result<(), String> {
+    let mut env = serde_json::Map::new();
+    for (k, v, secret) in vars {
+        env.insert(k.clone(), serde_json::json!({"type": if *secret { "secret_text" } else { "plain_text" }, "value": v}));
+    }
+    for k in remove {
+        env.insert(k.clone(), Value::Null);
+    }
+    if env.is_empty() {
+        return Ok(());
+    }
+    let body = serde_json::json!({"deployment_configs": {"production": {"env_vars": env.clone()}, "preview": {"env_vars": env}}});
+    cf_send(token, reqwest::Method::PATCH, &format!("/accounts/{account_id}/pages/projects/{project}"), Some(body)).await.map(|_| ())
+}
+
+/// 写一个 Worker 密钥（只动这一个，不影响 Worker 的其它绑定）。Worker 还没部署过会失败。
+pub async fn put_worker_secret(token: &str, account_id: &str, script: &str, name: &str, value: &str) -> Result<(), String> {
+    let body = serde_json::json!({"name": name, "text": value, "type": "secret_text"});
+    cf_send(token, reqwest::Method::PUT, &format!("/accounts/{account_id}/workers/scripts/{script}/secrets"), Some(body)).await.map(|_| ())
+}
+
+pub async fn delete_worker_secret(token: &str, account_id: &str, script: &str, name: &str) -> Result<(), String> {
+    match cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/workers/scripts/{script}/secrets/{name}"), None).await {
+        Err(e) if e.contains("404") || e.to_lowercase().contains("not found") => Ok(()),
+        r => r.map(|_| ()),
+    }
+}
+
 /// Pages 项目（站点导入 / 部署用到的字段）。
 #[derive(Serialize, Default, Clone, Debug)]
 pub struct PagesProject {

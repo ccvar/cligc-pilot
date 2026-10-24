@@ -177,6 +177,8 @@ export interface SiteDeploy {
   /** VPS：授权用的 SSH 连接与项目自带的发布命令 */
   ssh_conn_id: string;
   command: string;
+  /** VPS：服务器上的配置变量文件；空＝/opt/<站点>/config/<站点>.env */
+  env_file?: string;
 }
 export interface SiteData {
   google_conn_id: string;
@@ -232,8 +234,11 @@ export interface MakeCheck { key: string; label: string; level: 'ok' | 'warn' | 
 /** AI 写在 .pilot/todo.json 里、需要我处理的一件事 */
 export interface TodoInput { key: string; label: string; placeholder: string; value: string }
 export interface SiteTodo { id: string; title: string; why: string; kind: 'input' | 'ai' | 'confirm' | 'suggest' | string; affects_goal: boolean; where: string; inputs: TodoInput[] }
+/** 站点配置变量（值存在 Pilot，不返回给界面） */
+export interface ConfigVar { key: string; desc: string; secret: boolean; declared: boolean; set: boolean }
+export interface ConfigState { vars: ConfigVar[]; missing: string[]; target: string; target_label: string; needs_sync: boolean; synced_at: number; env_file: string }
 /** todos：null＝AI 还没写 .pilot/todo.json */
-export interface MakeState { conventions: boolean; todos: SiteTodo[] | null; steps: MakeStep[]; checks: MakeCheck[]; built_at: number }
+export interface MakeState { conventions: boolean; todos: SiteTodo[] | null; config: ConfigVar[]; steps: MakeStep[]; checks: MakeCheck[]; built_at: number }
 export interface SiteDetected {
   framework: string;
   build: SiteBuild;
