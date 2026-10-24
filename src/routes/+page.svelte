@@ -25,6 +25,7 @@
   import GithubConnectDialog from '$lib/components/github/GithubConnectDialog.svelte';
   import SiteImportDialog from '$lib/components/site/SiteImportDialog.svelte';
   import SiteCreateDialog from '$lib/components/site/SiteCreateDialog.svelte';
+  import SiteMakingList from '$lib/components/site/SiteMakingList.svelte';
   import SiteWorkbench from '$lib/components/site/SiteWorkbench.svelte';
   import { initSites } from '$lib/state/sites.svelte.js';
   import { initOps } from '$lib/state/ops.svelte.js';
@@ -188,6 +189,9 @@
         onfocus={focusSplit} ondrop={(target,edge)=>{const id=panes.splitDragId;endConversationDrag();void addSplit(id,edge,target);}} onresize={(layout)=>panes.conversationLayout=layout}/>
     {:else if !app.activeConn}
       <Welcome />
+
+    {:else if app.activeConn.kind === 'sites' && app.view === 'making'}
+      <SiteMakingList />
 
     {:else if app.activeConn.kind === 'sites' && app.view === 'managed'}
       <ManagedConsole />

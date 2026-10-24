@@ -18,10 +18,13 @@
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
-  import { openSiteCreate } from '$lib/state/siteCreate.svelte.js';
+  import { openSiteCreate, makingSites } from '$lib/state/siteCreate.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN, GITHUBS_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
+  // 制作中的站点单独计数，不算进「N 个站点」（和全部站点页一致）
+  const makingN = $derived(makingSites().length);
+  const siteCount = $derived(sites.list.length - makingN);
 </script>
 
 <div class="foot-wrap" bind:this={connections.footerEl}>
@@ -36,7 +39,7 @@
         <!-- 站点再多也只占一行：进去之后左栏就是可搜索的站点列表。 -->
         <button class="cs-item {app.isSitesMode ? 'on' : ''}" role="menuitemradio" aria-checked={app.isSitesMode} onclick={() => { connections.switcherOpen = false; void selectConn(SITES_CONN_ID); }} oncontextmenu={(e) => openConnCtx(e, SITES_CONN)}>
           <SiteMark size={18} />
-          <span class="cs-main"><b>站点</b><small>{sites.list.length ? `${sites.list.length} 个站点${fleet.pendingCount ? ` · ${fleet.pendingCount} 条待确认` : ''}` : '导入用代码管理的静态站，接数据、做运营'}</small></span>
+          <span class="cs-main"><b>站点</b><small>{sites.list.length ? `${siteCount} 个站点${makingN ? ` · ${makingN} 个制作中` : ''}${fleet.pendingCount ? ` · ${fleet.pendingCount} 条待确认` : ''}` : '导入已有的站点，或让 AI 从零做一个'}</small></span>
           {#if app.isSitesMode}<span class="cs-check">✓</span>{/if}
         </button>
         <!-- 远程连接同样合并成一行：进去之后左栏列出全部机器。一台都没有就不显示。 -->
@@ -87,7 +90,7 @@
   {#if app.isSiteConn && sites.active}<SiteIcon id={sites.active.id} size={18} />{:else if app.isSitesMode}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
   <span class="foot-main">
     <b>{app.activeConn ? connectionDisplayName(app.activeConn) : '未连接'}</b>
-    {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{sites.list.length} 个站点{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {sites.list.length} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
+    {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{siteCount} 个站点{makingN ? ` · ${makingN} 个制作中` : ''}{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {siteCount} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
       远程连接：这里放远端系统版本（点一下重探，比如刚 do-release-upgrade 过）。
     --><span class="foot-os" role="button" tabindex="-1" title="远端系统 · 点击重新检测"
       onclick={(e) => { e.stopPropagation(); probeOs(app.activeConnId, true); }}

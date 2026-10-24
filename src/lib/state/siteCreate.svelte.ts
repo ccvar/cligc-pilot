@@ -7,6 +7,7 @@ import type { Site } from '$lib/types';
 import { app, say } from './app.svelte.js';
 import { connections, selectConn } from './connections.svelte.js';
 import { sites, refreshSites, SITE_PREFIX } from './sites.svelte.js';
+import { SITES_CONN_ID } from './env';
 import { launcher, STYLE_DIRECTIVES } from './launcher.svelte.js';
 import { composer } from './composer.svelte.js';
 import { brainUsable } from './models';
@@ -77,6 +78,24 @@ export function guessKind(about: string): string {
   if (/落地页|官网|产品介绍|单页|landing|预约|报名/.test(t)) return 'landing';
   return 'content';
 }
+/** 制作中的站点（不出现在「全部站点」里，放在「站点制作」）。 */
+export function makingSites(): Site[] { return sites.list.filter((s) => isMaking(s.id)); }
+
+/** 打开「站点制作」：制作中的站点 + 制作新站点。 */
+export function openMaking() {
+  connections.switcherOpen = false;
+  void selectConn(SITES_CONN_ID).then(() => { app.view = 'making'; });
+}
+
+/** 手动标记做完：不等配置部署，直接移到「全部站点」。 */
+export async function finishMaking(site: Site) {
+  try {
+    await invoke('save_site', { site: { ...site, origin: 'made' } });
+    await refreshSites();
+    say(`「${site.name}」已移到全部站点`);
+  } catch (e) { say(String(e), 'err'); }
+}
+
 export function recommendedStack(kind: string, about = ''): string {
   const k = kind || guessKind(about);
   return SITE_KINDS.find((x) => x.value === k)?.stack || 'astro';

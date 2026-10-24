@@ -13,14 +13,16 @@
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, num } from './fmt';
 
-  const filtered = $derived(sortRows(applyFilter(fleet.rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
+  // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
+  const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
+  const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const pageRows = $derived(filtered.slice(fleet.page * PAGE_SIZE, (fleet.page + 1) * PAGE_SIZE));
   $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
   const totals = $derived({
-    sites: fleet.rows.length,
+    sites: rows.length,
     proposed: fleet.pendingCount,
   });
   const n = num;
@@ -29,7 +31,7 @@
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
   // 右上角的提醒：有问题才出现，点开按问题分组，点一组就只看这组站点
-  const issues = $derived(ISSUE_GROUPS.map((g) => ({ ...g, rows: issueRows(fleet.rows, g.k) })).filter((g) => g.rows.length));
+  const issues = $derived(ISSUE_GROUPS.map((g) => ({ ...g, rows: issueRows(rows, g.k) })).filter((g) => g.rows.length));
   const problemSites = $derived(new Set(issues.filter((g) => !g.soft).flatMap((g) => g.rows.map((r) => r.id))).size);
   const onlyLabel = $derived(ISSUE_GROUPS.find((g) => g.k === fleet.filter)?.l ?? '');
   let issuesOpen = $state(false);
@@ -86,10 +88,10 @@
       {#if fleet.filter !== 'all' || fleet.tag}
         <div class="only">只看：{onlyLabel}{onlyLabel && fleet.tag ? ' · ' : ''}{fleet.tag ? `#${fleet.tag}` : ''}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; }}>看全部</button></div>
       {/if}
-      {#if !fleet.loaded && !fleet.rows.length}
+      {#if !fleet.loaded && !rows.length}
         <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>
-      {:else if !fleet.rows.length}
-        <div class="card"><p class="hint">还没有站点。导入一个用代码管理的静态站，或在 Cloudflare 建站会话里点「转为站点」。</p></div>
+      {:else if !rows.length}
+        <div class="card"><p class="hint">还没有站点。导入一个已有的站点，或到「站点制作」让 AI 从零做一个；做好并配置上线后会出现在这里。</p></div>
       {:else}
         <div class="card tbl-card">
           <table class="tbl">
@@ -108,7 +110,7 @@
                 {@const ch = clicksChange(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if isMaking(r.id)}<span class="making">制作中</span>{/if}{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
@@ -197,7 +199,6 @@
   .site-cell small { padding-left: 23px; display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
   .site-cell small span + span:not(.tag)::before { content: '·'; margin-right: 8px; color: var(--border2); }
   .tag { color: var(--dim); }
-  .making { flex: none; font-size: 10.5px; font-weight: 500; color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; line-height: 16px; }
   .dm { display: inline-flex; align-items: center; gap: 5px; }
   .dm :global(svg) { flex: none; }
   .dm :global(.ico) { color: var(--dim); }
