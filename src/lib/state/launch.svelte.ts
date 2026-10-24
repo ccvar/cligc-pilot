@@ -30,6 +30,19 @@ export interface LaunchStatus {
   config_target?: string;
 }
 
+/** 「上线成功但域名打开还是旧站」的排查结果（site_domain_check）。 */
+export interface DomainIssue { kind: 'zone' | 'route' | 'worker_domain' | 'pages' | 'cache'; text: string; fix: string; conn: string; target: string }
+export interface DomainCheck {
+  domain: string;
+  pages_url: string;
+  live_title: string;
+  pages_title: string;
+  compared: boolean;
+  same: boolean;
+  issues: DomainIssue[];
+  notes: string[];
+}
+
 const DONE_KEY = 'cligc.pilot.launchDone';
 const STATUS_KEY = 'cligc.pilot.launchStatus';
 function loadStatus(): Record<string, LaunchStatus> { try { return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}'); } catch { return {}; } }
@@ -60,6 +73,9 @@ class LaunchState {
   /** 绑域名时发现的、指向别处的 DNS 记录（要你确认才替换） */
   dnsConflict = $state<Record<string, string[]>>({});
   checking = $state<Record<string, boolean>>({});
+  /** 域名排查结果；checkingDomain 是正在查的站点 */
+  domainCheck = $state<Record<string, DomainCheck | null>>({});
+  checkingDomain = $state<Record<string, boolean>>({});
   /** 记住「已经全部完成」的站点：再打开时不先闪一下加载中的向导。 */
   done = $state<Set<string>>(loadSet(DONE_KEY));
   /** 展开着的向导（默认收起，只看进度和下一步）。 */
@@ -115,6 +131,35 @@ async function step<T>(id: string, key: string, fn: () => Promise<T>, done: (r: 
     await loadLaunch(id);
   } catch (e) { note(id, key, `失败：${String(e)}`); }
   finally { launch.busy = { ...launch.busy, [id]: '' }; }
+}
+
+/** 查一下域名现在由谁在回应：和这次上线的 pages.dev 比页面标题，再找抢在 Pages 前面的东西。 */
+export async function checkDomain(site: Site) {
+  launch.checkingDomain = { ...launch.checkingDomain, [site.id]: true };
+  try {
+    const r = await invoke<DomainCheck>('site_domain_check', { id: site.id });
+    launch.domainCheck = { ...launch.domainCheck, [site.id]: r };
+  } catch (e) { note(site.id, 'domain', `失败：${String(e)}`); }
+  finally { launch.checkingDomain = { ...launch.checkingDomain, [site.id]: false }; }
+}
+
+const FIX_CONFIRM: Record<string, string> = {
+  route: '删掉后，这条路由原来交给的 Worker 不再回应这个地址。',
+  worker_domain: '解绑后，那个 Worker 不再回应这个域名（Worker 本身不删）。',
+  pages: '去掉后，那个 Pages 项目不再用这个域名（项目本身和它的 pages.dev 地址都还在）。',
+};
+export async function fixDomain(site: Site, issue: DomainIssue) {
+  if (issue.kind !== 'cache') {
+    const ok = await confirmDialog(`${issue.text}\n\n${FIX_CONFIRM[issue.kind] ?? ''}确定${issue.fix}？`, { title: issue.fix, kind: 'danger', confirmText: issue.fix });
+    if (!ok) return;
+  }
+  launch.busy = { ...launch.busy, [site.id]: 'domain' };
+  try {
+    const r = await invoke<string>('site_domain_fix', { id: site.id, kind: issue.kind, conn: issue.conn, target: issue.target });
+    note(site.id, 'domain', r);
+    await checkDomain(site);
+  } catch (e) { note(site.id, 'domain', `失败：${String(e)}`); }
+  finally { launch.busy = { ...launch.busy, [site.id]: '' }; }
 }
 
 /** 把配置变量同步到部署目标（Pages 环境变量 / Worker 密钥 / 服务器 env 文件）。 */

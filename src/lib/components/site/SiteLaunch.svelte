@@ -14,7 +14,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { sites, deploySite, pilotDeploys, refreshSites } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns, checkDomain, fixDomain } from '$lib/state/launch.svelte.js';
   import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -189,6 +189,32 @@
         <b><span class="si"><Icon name="rocket" size={14} /></span>在 Pilot 里上线一次</b>
         <small>{st.deployed ? '已上线过' : site.deploy.mode === 'vps' ? 'Pilot 跑完检查后执行发布脚本，发布到你的服务器。' : site.deploy.mode === 'workers' ? 'Pilot 构建、检查后部署到 Workers。' : 'Pilot 构建、检查后上传到 Pages。'}</small>
         {#if !st.deployed && pilotDeploys(site.deploy.mode)}<div class="row"><button class="btn tiny" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}><Icon name="rocket" size={11} />构建并上线</button></div>{/if}
+        {#if st.deployed && site.domain && site.deploy.mode !== 'workers' && site.deploy.mode !== 'vps'}
+          {@const dc = launch.domainCheck[site.id]}
+          {#if !dc}
+            <div class="row"><button class="link-btn" onclick={() => checkDomain(site)} disabled={launch.checkingDomain[site.id]}>{launch.checkingDomain[site.id] ? `正在检查 ${site.domain}…` : `打开 ${site.domain} 不是这次上线的内容？检查一下`}</button></div>
+          {:else}
+            <div class="dchk">
+              {#if dc.compared && dc.same}
+                <small class="ok-note"><Icon name="check" size={11} />{dc.domain} 打开就是这次上线的版本（{dc.live_title || '标题为空'}）。</small>
+              {:else if dc.compared}
+                <small class="pending-note">{dc.domain} 现在返回的是「{dc.live_title || '没有标题'}」，这次上线的是「{dc.pages_title || '没有标题'}」（{dc.pages_url.replace('https://', '')}）。</small>
+              {/if}
+              {#if dc.issues.length}
+                <ul class="dissues">
+                  {#each dc.issues as is, i (i)}
+                    <li><span>{is.text}</span>{#if is.fix}<button class="btn tiny" onclick={() => fixDomain(site, is)} disabled={!!busy}>{busy === 'domain' ? '处理中…' : is.fix}</button>{/if}</li>
+                  {/each}
+                </ul>
+              {:else if dc.compared && !dc.same}
+                <small>没查到别的项目占用这个域名。DNS 刚改过的话要等几分钟；也可能是浏览器缓存，换个浏览器或无痕窗口打开看看。</small>
+              {/if}
+              {#each dc.notes as n, i (i)}<small class="faint-note">{n}</small>{/each}
+              <div class="row"><button class="link-btn" onclick={() => checkDomain(site)} disabled={launch.checkingDomain[site.id]}>{launch.checkingDomain[site.id] ? '检查中…' : '重新检查'}</button></div>
+            </div>
+          {/if}
+          {#if notes.domain}<small class:err={notes.domain.startsWith('失败')}>{notes.domain}</small>{/if}
+        {/if}
       </div>
     </div>
 
@@ -253,6 +279,13 @@
 <style>
   .pg { margin: 6px 0 2px; max-width: 560px; }
   .pending-note { color: #8a5a08 !important; }
+  .ok-note { display: inline-flex; align-items: center; gap: 4px; color: var(--ok) !important; }
+  .faint-note { color: var(--faint) !important; font-size: 11px !important; }
+  .dchk { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+  .dissues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .dissues li { display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; border-radius: 8px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12px; line-height: 1.55; color: #6b4a10; }
+  .dissues li span { flex: 1; min-width: 0; }
+  .dissues li .btn { flex: none; }
   .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) backwards; }
   .lhead { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: -2px -6px; padding: 2px 6px; border-radius: 8px; cursor: pointer; user-select: none; transition: background-color .12s; }
   .lhead:not(.static):hover { background: var(--su-hover); }

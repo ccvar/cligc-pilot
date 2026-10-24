@@ -444,9 +444,100 @@ pub async fn ensure_dns_record(
     Ok(true)
 }
 
+/// Zone 的状态和分到的名称服务器：同名 Zone 在别的账号里生效时，这里是 pending / moved，名称服务器也对不上。
+pub async fn zone_info(token: &str, zone_id: &str) -> Result<(String, Vec<String>), String> {
+    let b = cf_get(token, &format!("/zones/{zone_id}")).await?;
+    let ns = b["result"]["name_servers"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(|s| s.to_ascii_lowercase())).collect();
+    Ok((b["result"]["status"].as_str().unwrap_or_default().to_string(), ns))
+}
+
+/// Zone 里的 Worker 路由（pattern 命中的请求先进 Worker，不会到 Pages）。
+#[derive(Serialize, Clone, Debug)]
+pub struct WorkerRoute {
+    pub id: String,
+    pub pattern: String,
+    pub script: String,
+}
+
+pub async fn worker_routes(token: &str, zone_id: &str) -> Result<Vec<WorkerRoute>, String> {
+    let b = cf_get(token, &format!("/zones/{zone_id}/workers/routes")).await?;
+    Ok(b["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| WorkerRoute {
+            id: r["id"].as_str().unwrap_or_default().into(),
+            pattern: r["pattern"].as_str().unwrap_or_default().into(),
+            script: r["script"].as_str().unwrap_or_default().into(),
+        })
+        .collect())
+}
+
+pub async fn delete_worker_route(token: &str, zone_id: &str, route_id: &str) -> Result<(), String> {
+    cf_send(token, reqwest::Method::DELETE, &format!("/zones/{zone_id}/workers/routes/{route_id}"), None).await.map(|_| ())
+}
+
+/// 路由 pattern 的主机部分是否命中这个域名（`htxneo.com/*`、`*htxneo.com/*`、`*.htxneo.com/*` 这类）。
+pub fn route_matches(pattern: &str, host: &str) -> bool {
+    let p = pattern.trim().trim_start_matches("https://").trim_start_matches("http://");
+    let ph = p.split('/').next().unwrap_or_default().to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    match ph.strip_prefix('*') {
+        Some(rest) => host.ends_with(rest),
+        None => ph == host,
+    }
+}
+
+/// 绑到 Worker 上的自定义域名（优先于 DNS 记录，域名直接由这个 Worker 回应）。
+#[derive(Serialize, Clone, Debug)]
+pub struct WorkerDomain {
+    pub id: String,
+    pub hostname: String,
+    pub service: String,
+}
+
+pub async fn worker_domains(token: &str, account_id: &str, hostname: &str) -> Result<Vec<WorkerDomain>, String> {
+    let b = cf_get_query(token, &format!("/accounts/{account_id}/workers/domains"), &[("hostname", hostname)]).await?;
+    Ok(b["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|d| WorkerDomain {
+            id: d["id"].as_str().unwrap_or_default().into(),
+            hostname: d["hostname"].as_str().unwrap_or_default().into(),
+            service: d["service"].as_str().unwrap_or_default().into(),
+        })
+        .filter(|d| d.hostname.eq_ignore_ascii_case(hostname))
+        .collect())
+}
+
+pub async fn delete_worker_domain(token: &str, account_id: &str, id: &str) -> Result<(), String> {
+    cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/workers/domains/{id}"), None).await.map(|_| ())
+}
+
+/// 从 Pages 项目里去掉一个自定义域名。
+pub async fn delete_pages_domain(token: &str, account_id: &str, project: &str, domain: &str) -> Result<(), String> {
+    cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/pages/projects/{project}/domains/{domain}"), None).await.map(|_| ())
+}
+
+/// 清掉这些主机名在 Cloudflare 边缘的缓存（令牌要有「区域 → 缓存清除」权限）。
+pub async fn purge_hosts(token: &str, zone_id: &str, hosts: &[String]) -> Result<(), String> {
+    cf_send(token, reqwest::Method::POST, &format!("/zones/{zone_id}/purge_cache"), Some(serde_json::json!({ "hosts": hosts }))).await.map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_patterns_match_hosts() {
+        assert!(route_matches("htxneo.com/*", "htxneo.com"));
+        assert!(route_matches("*htxneo.com/*", "htxneo.com"));
+        assert!(route_matches("*htxneo.com/*", "www.htxneo.com"));
+        assert!(!route_matches("*.htxneo.com/*", "htxneo.com"));
+        assert!(route_matches("HTXNEO.com/blog/*", "htxneo.com"));
+        assert!(!route_matches("api.htxneo.com/*", "htxneo.com"));
+    }
 
     #[test]
     fn parses_id_name_lists_without_panicking_on_partial_items() {

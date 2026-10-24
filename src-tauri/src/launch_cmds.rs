@@ -469,6 +469,261 @@ pub async fn site_pages_dns_replace(state: tauri::State<'_, AppState>, id: Strin
     Ok(format!("已把 {} 换成 CNAME → {target}（删掉了原来的 {} 条记录）。DNS 生效可能要几分钟", site.domain, recs.len()))
 }
 
+/// 「上线成功但域名打开还是旧站」的排查结果：域名实际返回的页面 vs 这次上线的 pages.dev，
+/// 以及会抢在 Pages 前面回应这个域名的东西（没生效的 Zone、Worker 路由、Worker 自定义域名、别的 Pages 项目）。
+#[derive(Serialize, Default)]
+pub struct DomainCheck {
+    pub domain: String,
+    pub pages_url: String,
+    pub live_title: String,
+    pub pages_title: String,
+    /// 两边都打开了、标题能比
+    pub compared: bool,
+    pub same: bool,
+    pub issues: Vec<DomainIssue>,
+    /// 没查成的项（多半是令牌少权限），不算问题
+    pub notes: Vec<String>,
+}
+
+#[derive(Serialize, Default, Clone)]
+pub struct DomainIssue {
+    /// zone | route | worker_domain | pages | cache
+    pub kind: String,
+    pub text: String,
+    /// 修复按钮的文字；空 = Pilot 修不了，要去 Cloudflare 后台
+    pub fix: String,
+    pub conn: String,
+    pub target: String,
+}
+
+async fn page_title(url: &str) -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .get(url)
+        .header("Cache-Control", "no-cache")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("打不开 {url}：{e}"))?;
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let lower = html.to_ascii_lowercase();
+    let t = lower
+        .find("<title")
+        .and_then(|i| lower[i..].find('>').map(|j| i + j + 1))
+        .and_then(|a| lower[a..].find("</title>").map(|b| html[a..a + b].trim().to_string()))
+        .unwrap_or_default();
+    Ok(t.replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\""))
+}
+
+/// 公网上这个域名现在用的名称服务器（走 1.1.1.1 的 DoH，不看本机缓存）。
+async fn live_ns(name: &str) -> Vec<String> {
+    let Ok(resp) = reqwest::Client::new()
+        .get(format!("https://cloudflare-dns.com/dns-query?name={name}&type=NS"))
+        .header("Accept", "application/dns-json")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    else {
+        return Vec::new();
+    };
+    let v: serde_json::Value = resp.json().await.unwrap_or_default();
+    let mut out: Vec<String> = v["Answer"].as_array().into_iter().flatten().filter(|a| a["type"].as_u64() == Some(2)).filter_map(|a| a["data"].as_str().map(|d| d.trim_end_matches('.').to_ascii_lowercase())).collect();
+    out.sort();
+    out
+}
+
+#[tauri::command]
+pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String) -> Result<DomainCheck, String> {
+    let site = state.sites.get(&id)?;
+    if site.domain.is_empty() {
+        return Err("站点没有填写域名".into());
+    }
+    let domain = site.domain.to_ascii_lowercase();
+    let mut out = DomainCheck { domain: domain.clone(), ..Default::default() };
+    // 站点用的那条 Cloudflare 连接排第一，其余连接也查（旧站可能在另一个账号里）
+    let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
+    conns.sort_by_key(|c| c.id != site.deploy.cf_conn_id);
+    if let Some(own) = conns.first().filter(|c| c.id == site.deploy.cf_conn_id) {
+        if let Ok(token) = crate::keychain::get_key(&own.id) {
+            if let Ok(Some(p)) = crate::cf::get_pages_project(&token, &own.account_id, &site.deploy.project).await {
+                out.pages_url = format!("https://{}", if p.subdomain.is_empty() { format!("{}.pages.dev", site.deploy.project) } else { p.subdomain });
+            }
+        }
+    }
+    let live_url = format!("https://{domain}/");
+    let live = page_title(&live_url);
+    let pages = async {
+        if out.pages_url.is_empty() {
+            Err(String::new())
+        } else {
+            page_title(&format!("{}/", out.pages_url)).await
+        }
+    };
+    let (live, pages) = tokio::join!(live, pages);
+    match (&live, &pages) {
+        (Ok(a), Ok(b)) => {
+            out.compared = true;
+            out.same = a == b;
+        }
+        (Err(e), _) => out.notes.push(e.clone()),
+        (_, Err(e)) if !e.is_empty() => out.notes.push(e.clone()),
+        _ => {}
+    }
+    out.live_title = live.unwrap_or_default();
+    out.pages_title = pages.unwrap_or_default();
+
+    let mut seen_zones = std::collections::HashSet::new();
+    let mut seen_accounts = std::collections::HashSet::new();
+    let mut active_zone: Option<(String, String)> = None; // (conn, zone_id)
+    for c in &conns {
+        let Ok(token) = crate::keychain::get_key(&c.id) else { continue };
+        let label = if c.remark.is_empty() { c.name.clone() } else { c.remark.clone() };
+        if let Ok(Some(zone)) = crate::cf::zone_for(&token, &domain).await {
+            if seen_zones.insert(zone.id.clone()) {
+                let ns_live = live_ns(&zone.name).await;
+                match crate::cf::zone_info(&token, &zone.id).await {
+                    Ok((status, mut ns)) => {
+                        ns.sort();
+                        let ns_ok = ns_live.is_empty() || ns.is_empty() || ns == ns_live;
+                        if status == "active" && ns_ok {
+                            active_zone.get_or_insert((c.id.clone(), zone.id.clone()));
+                        } else {
+                            out.issues.push(DomainIssue {
+                                kind: "zone".into(),
+                                text: format!(
+                                    "「{label}」这个 Cloudflare 账号里的 {} 没在生效（状态 {status}{}），在这里改的 DNS 和域名绑定都不起作用。域名实际用的名称服务器是 {}，在用的是另一个账号里的同名域名{}",
+                                    zone.name,
+                                    if ns.is_empty() { String::new() } else { format!("，分到的名称服务器 {}", ns.join(" / ")) },
+                                    if ns_live.is_empty() { "（没查到）".into() } else { ns_live.join(" / ") },
+                                    if conns.len() > 1 { "" } else { "：在 Pilot 里连上那个账号再检查，或去那个账号的后台改" }
+                                ),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                    Err(e) => out.notes.push(format!("没读到 {} 的状态：{e}", zone.name)),
+                }
+                match crate::cf::worker_routes(&token, &zone.id).await {
+                    Ok(routes) => {
+                        for r in routes.into_iter().filter(|r| crate::cf::route_matches(&r.pattern, &domain)) {
+                            out.issues.push(DomainIssue {
+                                kind: "route".into(),
+                                text: if r.script.is_empty() {
+                                    format!("Worker 路由 {}（没有挂 Worker）：命中的请求不会交给 Pages", r.pattern)
+                                } else {
+                                    format!("Worker 路由 {} → Worker「{}」：这个地址的请求先交给这个 Worker，到不了 Pages", r.pattern, r.script)
+                                },
+                                fix: "删掉这条路由".into(),
+                                conn: c.id.clone(),
+                                target: format!("{}/{}", zone.id, r.id),
+                            });
+                        }
+                    }
+                    Err(e) => out.notes.push(format!("没读到 {} 的 Worker 路由（令牌可能缺「区域 → Workers 路由 → 读取」）：{e}", zone.name)),
+                }
+            }
+        }
+        if c.account_id.is_empty() || !seen_accounts.insert(c.account_id.clone()) {
+            continue;
+        }
+        match crate::cf::worker_domains(&token, &c.account_id, &domain).await {
+            Ok(ds) => {
+                for d in ds {
+                    out.issues.push(DomainIssue {
+                        kind: "worker_domain".into(),
+                        text: format!("{domain} 绑在「{label}」的 Worker「{}」上（Workers 自定义域名）：它比 DNS 记录优先，域名一直由这个 Worker 回应", d.service),
+                        fix: format!("从 Worker「{}」解绑", d.service),
+                        conn: c.id.clone(),
+                        target: d.id,
+                    });
+                }
+            }
+            Err(e) => out.notes.push(format!("没读到「{label}」的 Workers 自定义域名（令牌可能缺「账户 → Workers 脚本 → 读取」）：{e}")),
+        }
+        match crate::cf::list_pages_projects(&token, &c.account_id).await {
+            Ok(ps) => {
+                for p in ps.into_iter().filter(|p| !(c.id == site.deploy.cf_conn_id && p.name == site.deploy.project) && p.domains.iter().any(|d| d.eq_ignore_ascii_case(&domain))) {
+                    out.issues.push(DomainIssue {
+                        kind: "pages".into(),
+                        text: format!("{domain} 也绑在「{label}」的 Pages 项目「{}」上", p.name),
+                        fix: format!("从「{}」去掉这个域名", p.name),
+                        conn: c.id.clone(),
+                        target: p.name,
+                    });
+                }
+            }
+            Err(e) => out.notes.push(format!("没读到「{label}」的 Pages 项目：{e}")),
+        }
+    }
+    // 没找到别的占用、页面却还是旧的：多半是边缘缓存
+    if out.compared && !out.same && out.issues.is_empty() {
+        if let Some((conn, zone)) = active_zone {
+            out.issues.push(DomainIssue {
+                kind: "cache".into(),
+                text: format!("没找到别的项目占用 {domain}，可能是 Cloudflare 边缘缓存着旧页面"),
+                fix: "清除这个域名的缓存".into(),
+                conn,
+                target: zone,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// 执行排查结果里的一项修复（界面上确认过才调用）。改完顺手清一下这个域名的缓存。
+#[tauri::command]
+pub async fn site_domain_fix(state: tauri::State<'_, AppState>, id: String, kind: String, conn: String, target: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let domain = site.domain.to_ascii_lowercase();
+    let c = state.conns.get(&conn)?;
+    if c.kind != "cloudflare" {
+        return Err("不是 Cloudflare 连接".into());
+    }
+    let token = crate::keychain::get_key(&c.id)?;
+    let msg = match kind.as_str() {
+        "route" => {
+            let (zone, route) = target.split_once('/').ok_or("路由参数不对")?;
+            crate::cf::delete_worker_route(&token, zone, route).await?;
+            "已删掉这条 Worker 路由".to_string()
+        }
+        "worker_domain" => {
+            crate::cf::delete_worker_domain(&token, &c.account_id, &target).await?;
+            "已从 Worker 上解绑这个域名".to_string()
+        }
+        "pages" => {
+            crate::cf::delete_pages_domain(&token, &c.account_id, &target, &domain).await?;
+            format!("已从 Pages 项目「{target}」去掉 {domain}")
+        }
+        "cache" => {
+            crate::cf::purge_hosts(&token, &target, &[domain.clone()]).await.map_err(|e| format!("清除缓存失败（令牌可能缺「区域 → 缓存清除」权限）：{e}"))?;
+            return Ok(format!("已清除 {domain} 的缓存，刷新一下页面看看"));
+        }
+        _ => return Err("不认识的修复项".into()),
+    };
+    // 旧项目放手后，确保域名在这个站点的 Pages 项目上、DNS 指向它
+    let mut extra = Vec::new();
+    if site.deploy.mode == "direct" || site.deploy.mode.is_empty() {
+        if let Ok(own) = state.conns.get(&site.deploy.cf_conn_id) {
+            if let Ok(t) = crate::keychain::get_key(&own.id) {
+                if let Ok(Some(p)) = crate::cf::get_pages_project(&t, &own.account_id, &site.deploy.project).await {
+                    let _ = crate::cf::add_pages_domain(&t, &own.account_id, &site.deploy.project, &domain).await;
+                    let target = if p.subdomain.is_empty() { format!("{}.pages.dev", site.deploy.project) } else { p.subdomain };
+                    if let Ok(Some(zone)) = crate::cf::zone_for(&t, &domain).await {
+                        if let Ok(recs) = crate::cf::dns_records(&t, &zone.id, &domain).await {
+                            if recs.is_empty() && crate::cf::ensure_dns_record(&t, &zone.id, "CNAME", &domain, &target, true).await.is_ok() {
+                                extra.push(format!("补上了 CNAME → {target}"));
+                            }
+                        }
+                        if crate::cf::purge_hosts(&t, &zone.id, &[domain.clone()]).await.is_ok() {
+                            extra.push("清了缓存".into());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(if extra.is_empty() { msg } else { format!("{msg}，{}", extra.join("、")) })
+}
+
 async fn manage_token(state: &AppState, conn_id: &str) -> Result<String, String> {
     let c = state.conns.get(conn_id)?;
     let raw = crate::keychain::get_key(&c.id)?;

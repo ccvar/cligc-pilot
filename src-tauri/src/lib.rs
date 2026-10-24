@@ -4614,6 +4614,8 @@ pub fn run() {
             launch_cmds::site_to_github,
             launch_cmds::ga4_to_config,
             launch_cmds::site_pages_dns_replace,
+            launch_cmds::site_domain_check,
+            launch_cmds::site_domain_fix,
             launch_cmds::site_setup_pages,
             launch_cmds::ga4_create_property,
             launch_cmds::gsc_setup_domain,
