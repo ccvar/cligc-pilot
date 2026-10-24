@@ -380,11 +380,12 @@ pub fn out_dir(app: &Path, out: &str) -> PathBuf {
 }
 
 /// 第一版的进度：规划 → 页面 → 约定 → 构建 → 提交。`commits` 是 HEAD 上的提交数。
-pub fn progress(app: &Path, code: &Path, out: &str, commits: usize) -> Vec<MakeStep> {
+/// `built_app`：构建在哪个目录的站点目录里发生（本地来源就是 app；GitHub 来源是部署工作树）。
+pub fn progress(app: &Path, code: &Path, built_app: &Path, out: &str, commits: usize) -> Vec<MakeStep> {
     let conv = std::fs::read_to_string(code.join(".pilot/site.md")).unwrap_or_default();
     let planned = conv.contains("内容规划");
-    let built_dir = out_dir(app, out);
-    let skip = if out.is_empty() || out == "." { vec![] } else { vec![built_dir.clone()] };
+    let built_dir = out_dir(built_app, out);
+    let skip = if out.is_empty() || out == "." { vec![] } else { vec![out_dir(app, out)] };
     let mut src = Vec::new();
     walk(app, &skip, &mut src, &|p| has_ext(p, &["md", "mdx", "markdown", "html", "htm", "astro", "vue", "tsx", "jsx", "njk"]) && !p.ends_with("README.md"));
     // 只数像页面的源文件：内容目录里的 Markdown、页面目录里的组件、纯静态站的 html
@@ -683,14 +684,14 @@ mod tests {
     #[test]
     fn progress_reads_files_not_promises() {
         let t = tempfile::tempdir().unwrap();
-        let steps = progress(t.path(), t.path(), "dist", 1);
+        let steps = progress(t.path(), t.path(), t.path(), "dist", 1);
         assert!(steps.iter().all(|s| !s.done));
         write(t.path(), ".pilot/site.md", &format!("# 站点约定\n\n## 内容规划\n\n{}", "说明".repeat(120)));
         for i in 0..4 {
             write(t.path(), &format!("src/content/p{i}.md"), "# x");
         }
         write(t.path(), "dist/index.html", "<html></html>");
-        let steps = progress(t.path(), t.path(), "dist", 2);
+        let steps = progress(t.path(), t.path(), t.path(), "dist", 2);
         assert!(steps.iter().all(|s| s.done), "{:?}", steps.iter().map(|s| (s.key, s.done)).collect::<Vec<_>>());
     }
 

@@ -31,8 +31,9 @@
     if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: 'AI 正在制作…', tone: 'live' };
     const ms = siteMake.state[s.id];
     if (!ms) return { text: '读取中…', tone: '' };
-    const next = ms.steps.find((x) => !x.done);
-    if (next) return { text: `进行到：${next.label}`, tone: '' };
+    const left = ms.steps.filter((x) => !x.done);
+    if (left.length && left.every((x) => x.key === 'build')) return { text: '只差构建一次', tone: '' };
+    if (left.length) return { text: `进行到：${left[0].label}`, tone: '' };
     const fails = ms.checks.filter((c) => c.level === 'fail').length;
     if (!ms.built_at) return { text: '等待构建并检查', tone: '' };
     if (fails) return { text: `上线前检查有 ${fails} 项要修`, tone: 'warn' };

@@ -28,6 +28,7 @@
   const bad = $derived(ms?.checks.filter((c) => c.level !== 'ok' && c.key !== 'todo') ?? []);
   const fails = $derived(bad.filter((c) => c.level === 'fail').length);
   const pending = $derived(ms?.steps.filter((s) => !s.done).map((s) => s.label) ?? []);
+  const onlyBuild = $derived(!!ms && ms.steps.filter((s) => !s.done).every((s) => s.key === 'build') && pending.length > 0);
   // GA4 由 Pilot 自己处理：衡量 ID 还没进配置变量就显示一条（构建过以后才出现，免得刚开始做就打扰）
   const ga = $derived(siteMake.ga[site.id] ?? {});
   // 老站点读到了 ID 但代码还没接这个变量：这一条也留着（等交给 AI 接上）
@@ -82,7 +83,13 @@
   </h3>
 
   {#if ms}
-    {#if !aiRunning && pending.length}
+    {#if !aiRunning && onlyBuild}
+      <!-- 只差构建：不用叫 AI，构建一次就行 -->
+      <div class="resume">
+        <span>页面、约定和提交都好了，只差构建一次{site.source === 'github' ? '（代码已经放到 GitHub，构建在新的位置进行）' : ''}。</span>
+        <button class="btn small primary" onclick={() => checkSite(site.id)} disabled={building || job?.status === 'running'}><Icon name="play" size={12} />{building ? '构建中…' : '构建并检查'}</button>
+      </div>
+    {:else if !aiRunning && pending.length}
       <div class="resume">
         <span>第一版还没做完，还差：{pending.join('、')}。AI 停下了（可能是中断、出错或额度用完）。</span>
         <button class="btn small primary" onclick={() => continueMaking(site)}><Icon name="play" size={12} />继续制作</button>

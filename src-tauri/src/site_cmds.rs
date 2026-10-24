@@ -423,7 +423,10 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
     let gh = state.conns.get(&site.gh_conn_id).ok();
     let code = crate::site_git::code_dir(&site, gh.as_ref())?;
     let app = site.app_dir(&code);
-    let out = mk::out_dir(&app, &site.build.out_dir);
+    // GitHub 来源的「构建并检查」在 <站点数据>/deploy 工作树里构建（见 site_deploy::prepare_github），产物在那里
+    let deploy = state.sites.data_dir(&id).join("deploy");
+    let built_app = if site.source == "github" && deploy.is_dir() { site.app_dir(&deploy) } else { app.clone() };
+    let out = mk::out_dir(&built_app, &site.build.out_dir);
     let commits = if full.unwrap_or(true) && code.join(".git").exists() {
         crate::site_git::git(&code, &["rev-list", "--count", "HEAD"], "").await.map(|o| o.stdout.trim().parse().unwrap_or(0)).unwrap_or(0)
     } else {
@@ -441,7 +444,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
     if !full.unwrap_or(true) {
         return Ok(MakeState { conventions: mk::has_conventions(&code), todos, config, steps: vec![], checks: vec![], built_at });
     }
-    let (steps, mut checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &site.build.out_dir, commits), mk::readiness(&out)))
+    let (steps, mut checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &built_app, &site.build.out_dir, commits), mk::readiness(&out)))
         .await
         .map_err(|e| e.to_string())?;
     if let Some(t) = &todos {
@@ -459,7 +462,9 @@ pub async fn site_continue_message(state: tauri::State<'_, AppState>, id: String
     let site = state.sites.get(&id)?;
     let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
     let commits = crate::site_git::git(&code, &["rev-list", "--count", "HEAD"], "").await.map(|o| o.stdout.trim().parse().unwrap_or(0)).unwrap_or(0);
-    let steps = mk::progress(&site.app_dir(&code), &code, &site.build.out_dir, commits);
+    let deploy = state.sites.data_dir(&id).join("deploy");
+    let built_app = if site.source == "github" && deploy.is_dir() { site.app_dir(&deploy) } else { site.app_dir(&code) };
+    let steps = mk::progress(&site.app_dir(&code), &code, &built_app, &site.build.out_dir, commits);
     let pending: Vec<&str> = steps.iter().filter(|s| !s.done).map(|s| s.label).collect();
     Ok(mk::continue_message(&pending, &site.framework))
 }
