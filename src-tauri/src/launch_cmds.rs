@@ -94,6 +94,8 @@ pub struct LaunchStatus {
     pub bing_pending: bool,
     pub bing_note: String,
     pub deployed: bool,
+    /// Pilot 会随上线放进去、但线上还没有的文件（IndexNow / Bing 验证文件）：要再「构建并上线」一次才生效
+    pub needs_redeploy: Vec<String>,
     /// 有没有一条授予了管理权限的 Google OAuth 连接（自动建 GA4 / 验证 Search Console 需要）。
     pub google_manage_conn: String,
     /// 这次检查时按域名自动绑定上的资源（「Search Console sc-domain:x.com」这类说明）。
@@ -431,6 +433,21 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
         errors: probe_errs,
         ..Default::default()
     };
+    // Pilot 自己构建上传的站点：IndexNow / Bing 验证文件是上线时放进去的，线上没有就提醒再上线一次
+    if !quick && st.deployed && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+        let mut files = Vec::new();
+        if !site.data.indexnow_key.is_empty() {
+            files.push((format!("{}.txt", site.data.indexnow_key), "IndexNow 验证文件"));
+        }
+        if !site.data.bing_auth.is_empty() && site.data.bing_site.is_empty() {
+            files.push(("BingSiteAuth.xml".to_string(), "Bing 验证文件"));
+        }
+        for (f, label) in files {
+            if !url_ok(&format!("https://{}/{f}", site.domain)).await {
+                st.needs_redeploy.push(label.to_string());
+            }
+        }
+    }
     if matches!(site.deploy.mode.as_str(), "workers" | "vps") {
         // Workers / VPS 的路由、域名由项目自己的配置管，不走 Pages 这一步。 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
         st.pages = true;
@@ -657,6 +674,10 @@ pub struct DomainIssue {
     pub target: String,
     /// 明确是在跟这个站点抢同一个域名、可以直接处理的（路由主机名正好是这个域名、Worker 自定义域名、别的 Pages 项目绑着它）
     pub auto: bool,
+}
+
+async fn url_ok(url: &str) -> bool {
+    reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(10)).send().await.map(|r| r.status().is_success()).unwrap_or(true)
 }
 
 async fn page_title(url: &str) -> Result<String, String> {

@@ -224,7 +224,7 @@
       <span class="n">{st.indexnow ? '✓' : 6}</span>
       <div class="lb">
         <b><span class="si"><Icon name="zap" size={14} /></span>IndexNow</b>
-        <small>{st.indexnow ? (pilotBuilds ? '已自动配好：验证文件随每次上线放进构建产物（不改代码），上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。' : '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。') : pilotBuilds ? '下次「构建并上线」时自动配好：Pilot 生成密钥、把验证文件放进构建产物，不用改代码。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
+        <small>{st.indexnow ? (pilotBuilds ? (st.needs_redeploy?.includes('IndexNow 验证文件') ? '已生成密钥，验证文件还没在线上：下次「构建并上线」时自动放进去，之后每次上线自动提交有变化的页面。' : '已自动配好：验证文件随每次上线放进构建产物（不改代码），上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。') : '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。') : pilotBuilds ? '下次「构建并上线」时自动配好：Pilot 生成密钥、把验证文件放进构建产物，不用改代码。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
         {#if !st.indexnow}<div class="row"><button class="btn tiny" onclick={() => setupIndexNow(site)} disabled={!!busy || !site.domain}><Icon name="key" size={11} />{busy === 'indexnow' ? '处理中…' : pilotBuilds ? '现在生成密钥' : '生成并写入'}</button></div>{/if}
         {#if notes.indexnow}<small class:err={notes.indexnow.startsWith('失败')}>{notes.indexnow}</small>{/if}
       </div>

@@ -42,9 +42,10 @@
       <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'} · 每天早上 7 点自动同步</span>
       <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
-    {#if d?.meta.gsc.error}<div class="err-note src"><GoogleMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
-    {#if d?.meta.ga4.error}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}
-    {#if d?.meta.bing.error}<div class="err-note src"><BingMark size={13} />Bing：{d.meta.bing.error}</div>{/if}
+    <!-- 只显示还接着的数据源的错误（解绑后上次同步留下的报错不再挂着） -->
+    {#if site.data.gsc_site && d?.meta.gsc.error}<div class="err-note src"><GoogleMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
+    {#if site.data.ga4_property && d?.meta.ga4.error}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}
+    {#if site.data.bing_site && d?.meta.bing.error}<div class="err-note src"><BingMark size={13} />Bing：{d.meta.bing.error}</div>{:else if !site.data.bing_site && site.data.bing_auth}<div class="soft-note src"><BingMark size={13} />Bing：已把 {site.domain} 加到 Bing，正在验证，通过后开始拉数据。</div>{/if}
 
     {#if d}
       <div class="card groups" style="--g:{[site.data.gsc_site && '4fr', site.data.ga4_property && '2fr', site.data.bing_site && '1.2fr'].filter(Boolean).join(' ')}">
@@ -219,4 +220,5 @@
   .ev { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-top: 8px; }
   .ev-dim { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 0 2px; }
   .ev-dim small { color: var(--dim); font-size: 11.5px; }
+  .soft-note { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12.5px; color: #6b4a10; }
 </style>

@@ -10,6 +10,7 @@
   import SiteMakeCard from './SiteMakeCard.svelte';
   import SiteTodos from './SiteTodos.svelte';
   import SiteDomainLive from './SiteDomainLive.svelte';
+  import { launch } from '$lib/state/launch.svelte.js';
   import { isMaking } from '$lib/state/siteCreate.svelte.js';
   import { siteMake, loadMake, writeConventions, hideConventionsHint } from '$lib/state/siteMake.svelte.js';
   import { clock } from './fmt';
@@ -111,6 +112,10 @@
           </dd>
         {/if}
         {#if last?.ok && site.domain && !['none', 'workers', 'vps'].includes(site.deploy.mode)}<SiteDomainLive {site} deployedAt={last.ts} />{/if}
+        {#if launch.status[site.id]?.needs_redeploy?.length && job?.status !== 'running'}
+          <dt>待生效</dt>
+          <dd class="redeploy"><span>{launch.status[site.id]?.needs_redeploy?.join('、')}还没在线上：Pilot 会在下次上线时自动放进去，上线一次就生效（不改代码）。</span><button class="btn tiny" onclick={() => deploySite(site.id)}><Icon name="rocket" size={11} />现在上线</button></dd>
+        {/if}
       </dl>
     </div>
   </div>
@@ -128,6 +133,9 @@
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   .small { font-size: 11.5px; }
   .binds { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 24px; }
+  .redeploy { display: flex; align-items: flex-start; gap: 10px; }
+  .redeploy span { flex: 1; min-width: 0; color: var(--su-warn-ink, #8a5a08); }
+  .redeploy .btn { flex: none; }
   .bind { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .bh { display: flex; align-items: center; gap: 8px; }
   .bk { font-size: 12.5px; font-weight: 600; color: var(--text); }

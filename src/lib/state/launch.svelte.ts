@@ -23,6 +23,8 @@ export interface LaunchStatus {
   /** 上次自动验证 Bing 每一步的结果 */
   bing_note?: string;
   deployed: boolean;
+  /** Pilot 会随上线放进去、但线上还没有的文件：再上线一次才生效 */
+  needs_redeploy?: string[];
   google_manage_conn: string;
   /** 这次检查按域名自动绑定上的资源。 */
   auto_bound: string[];
