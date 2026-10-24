@@ -13,6 +13,7 @@ import { brainUsable } from './models';
 import { startChat } from './turns.svelte.js';
 
 export const SITE_KINDS = [
+  { value: '', label: '让 AI 判断', sub: '按上面的描述判断是哪类站', stack: '' },
   { value: 'content', label: '内容 / SEO 站', sub: '文章、指南、评测，靠搜索带来流量', stack: 'astro' },
   { value: 'docs', label: '文档 / 知识库', sub: '教程、帮助中心、API 文档', stack: 'vitepress' },
   { value: 'landing', label: '落地页 / 产品介绍', sub: '一个或几个页面，讲清楚一件事', stack: 'html' },
@@ -25,7 +26,10 @@ export const STACKS = [
   { value: 'html', label: '纯 HTML', sub: '不需要构建，几页的落地页改起来最直接' },
   { value: 'next', label: 'Next.js 静态导出', sub: '交互较多的工具类站点；只用静态导出' },
 ];
-export const LANGUAGES = ['简体中文', 'English', '繁體中文', '日本語', '한국어', '中英双语'];
+export const LANGUAGES = [
+  { value: '', label: '让 AI 判断', sub: '按定位和读者判断' },
+  ...['简体中文', 'English', '繁體中文', '日本語', '한국어', '中英双语'].map((l) => ({ value: l, label: l })),
+];
 export const GOALS = ['广告变现', '联盟推广', '获客留资', '品牌展示', '卖产品'];
 export const PAGE_COUNTS = [5, 8, 12, 16];
 
@@ -34,7 +38,7 @@ const PARENT_KEY = 'cligc.pilot.newSiteParent';
 function blank() {
   return {
     open: false, step: 'brief' as 'brief' | 'build',
-    name: '', domain: '', about: '', kind: 'content', audience: '', language: '简体中文', goals: [] as string[],
+    name: '', domain: '', about: '', kind: '', audience: '', language: '', goals: [] as string[],
     stack: '', stackTouched: false, style: '', pages: 8, parent: '',
     busy: false, err: '',
   };
@@ -65,12 +69,23 @@ export function isMaking(id: string): boolean {
   return !!s && s.origin === 'created' && s.deploy.mode === 'none';
 }
 
-export function recommendedStack(kind: string): string { return SITE_KINDS.find((k) => k.value === kind)?.stack ?? 'astro'; }
+/** 类型交给 AI 判断时，先按描述里的字眼猜一个，只用来在第二步标「推荐」的技术栈。 */
+export function guessKind(about: string): string {
+  const t = about.toLowerCase();
+  if (/文档|教程|帮助中心|知识库|手册|api|docs?\b|wiki/.test(t)) return 'docs';
+  if (/工具|导航|计算器|生成器|转换|查询|在线.{0,4}(测|算)|tool|calculator|generator/.test(t)) return 'tool';
+  if (/落地页|官网|产品介绍|单页|landing|预约|报名/.test(t)) return 'landing';
+  return 'content';
+}
+export function recommendedStack(kind: string, about = ''): string {
+  const k = kind || guessKind(about);
+  return SITE_KINDS.find((x) => x.value === k)?.stack || 'astro';
+}
 
 export function toBuildStep() {
   const f = siteCreate;
   if (!f.name.trim() && f.domain.trim()) f.name = f.domain.trim();
-  if (!f.stackTouched) f.stack = recommendedStack(f.kind);
+  if (!f.stackTouched) f.stack = recommendedStack(f.kind, f.about);
   f.err = '';
   f.step = 'build';
 }

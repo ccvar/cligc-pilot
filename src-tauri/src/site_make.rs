@@ -50,8 +50,9 @@ pub const KINDS: &[(&str, &str)] = &[
     ("tool", "工具 / 导航站"),
 ];
 
-fn kind_label(kind: &str) -> &'static str {
-    KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or("内容 / SEO 站")
+/// 空＝让 AI 按定位判断。
+fn kind_label(kind: &str) -> Option<&'static str> {
+    KINDS.iter().find(|k| k.0 == kind).map(|k| k.1)
 }
 
 /// 新站点的文件夹名：有域名就用域名（和已有站点的习惯一致，如 `cexask.com`），否则用站点名的 slug。
@@ -106,14 +107,18 @@ pub fn pages_of(req: &CreateSiteRequest) -> u32 {
 /// 存成「运营确认过的定位」：托管运营做增量选题时直接用它。
 pub fn positioning_text(req: &CreateSiteRequest) -> String {
     let mut out = req.about.trim().to_string();
-    let reader = [req.audience.trim(), req.language.trim()].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("；语言：");
-    if !reader.is_empty() {
-        out.push_str(&format!("\n读者：{reader}"));
+    if !req.audience.trim().is_empty() {
+        out.push_str(&format!("\n读者：{}", req.audience.trim()));
+    }
+    if !req.language.trim().is_empty() {
+        out.push_str(&format!("\n语言：{}", req.language.trim()));
     }
     if !req.goals.is_empty() {
         out.push_str(&format!("\n商业目标：{}", req.goals.join("、")));
     }
-    out.push_str(&format!("\n类型：{}", kind_label(&req.kind)));
+    if let Some(k) = kind_label(&req.kind) {
+        out.push_str(&format!("\n类型：{k}"));
+    }
     out
 }
 
@@ -137,6 +142,17 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
         head.push_str(&format!("（{}）", req.domain.trim()));
     }
     head.push_str(&format!("\n【定位】{}", positioning_text(req)));
+    // 类型、语言没指定：让 AI 按定位和读者判断，判断结果写进站点约定
+    let mut judge = vec![];
+    if kind_label(&req.kind).is_none() {
+        judge.push("站点类型（内容站、文档、落地页还是工具站）");
+    }
+    if req.language.trim().is_empty() {
+        judge.push("页面语言");
+    }
+    if !judge.is_empty() {
+        head.push_str(&format!("\n【需要你判断】{}没有指定：按上面的定位和读者判断，在规划里写明你的判断和理由。", judge.join("和")));
+    }
     let style = if req.style.trim().is_empty() { "按定位和读者自己定，简洁、易读、移动端优先。".to_string() } else { req.style.trim().to_string() };
     format!(
         "{head}\n\n【技术栈】{stack}。{guide}\n当前目录是新建的空仓库（已 git init，`.pilot/brief.md` 记着上面这些需求）。\n\n\
@@ -474,6 +490,9 @@ mod tests {
         assert!(m.contains("手冲咖啡入门指南") && m.contains("商业目标：广告变现"));
         assert!(m.contains(".pilot/site.md") && m.contains("8 个核心页面") && m.contains("不要部署"));
         assert!(m.contains("Astro"));
+        assert!(m.contains("站点类型") && m.contains("页面语言") && m.contains("需要你判断"));
+        let set = first_message(&CreateSiteRequest { kind: "docs".into(), language: "English".into(), ..req() });
+        assert!(!set.contains("需要你判断") && set.contains("类型：文档 / 知识库") && set.contains("\n语言：English") && !set.contains("读者："));
         assert_eq!(pages_of(&CreateSiteRequest { pages: 50, ..req() }), 20);
     }
 

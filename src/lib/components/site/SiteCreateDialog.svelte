@@ -5,12 +5,13 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import ModelFx from '$lib/ModelFx.svelte';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import Icon from './Icon.svelte';
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, pickCombo, persistLauncherEffort, setFast, STYLE_OPTS } from '$lib/state/launcher.svelte.js';
   import { brainUsable, brainSetupHint } from '$lib/state/models';
   import { siteCreate as f, closeSiteCreate, toBuildStep, createSite, pickParent, folderName, recommendedStack, SITE_KINDS, STACKS, LANGUAGES, GOALS, PAGE_COUNTS } from '$lib/state/siteCreate.svelte.js';
 
-  const rec = $derived(recommendedStack(f.kind));
+  const rec = $derived(recommendedStack(f.kind, f.about));
   const sep = $derived(f.parent.includes('\\') && !f.parent.includes('/') ? '\\' : '/');
   const target = $derived(f.parent ? `${f.parent.replace(/[\\/]+$/, '')}${sep}${folderName(f.domain, f.name)}` : '');
   function toggleGoal(g: string) { f.goals = f.goals.includes(g) ? f.goals.filter((x) => x !== g) : [...f.goals, g]; }
@@ -21,7 +22,11 @@
   <div class="su modal sc" role="dialog" aria-modal="true" aria-label="新建站点">
     <header class="sheet-head">
       <b><SiteMark size={15} /> 新建站点</b>
-      <span class="steps" aria-hidden="true"><i class:on={f.step === 'brief'}>1 定位</i><i class:on={f.step === 'build'}>2 技术栈与风格</i></span>
+      <ol class="stepper" aria-label="步骤">
+        <li class:on={f.step === 'brief'} class:done={f.step === 'build'}><span class="n">{f.step === 'build' ? '✓' : 1}</span>定位</li>
+        <li class="bar" aria-hidden="true"></li>
+        <li class:on={f.step === 'build'}><span class="n">2</span>技术栈与风格</li>
+      </ol>
       <button class="x" onclick={closeSiteCreate} disabled={f.busy}>×</button>
     </header>
     <div class="sheet-body">
@@ -37,13 +42,15 @@
         <div class="field"><span class="lbl">站点类型</span>
           <div class="kinds">
             {#each SITE_KINDS as k (k.value)}
-              <button type="button" class="kind" class:on={f.kind === k.value} onclick={() => (f.kind = k.value)}><b>{k.label}</b><small>{k.sub}</small></button>
+              <button type="button" class="kind" class:ai={!k.value} class:on={f.kind === k.value} onclick={() => (f.kind = k.value)}>
+                {#if !k.value}<Icon name="sparkles" size={14} />{/if}<b>{k.label}</b><small>{k.sub}</small>
+              </button>
             {/each}
           </div>
         </div>
         <div class="grid2">
           <div class="field"><label for="sc-aud">目标读者 <small class="opt">选填</small></label><input id="sc-aud" class="tin" bind:value={f.audience} placeholder="如 刚入门的咖啡爱好者" /></div>
-          <div class="field"><span class="lbl">页面语言</span><Dropdown bind:value={f.language} options={LANGUAGES.map((l) => ({ value: l, label: l }))} /></div>
+          <div class="field"><span class="lbl">页面语言</span><Dropdown bind:value={f.language} options={LANGUAGES} /></div>
         </div>
         <div class="field"><span class="lbl">想靠它做什么 <small class="opt">可多选</small></span>
           <div class="chips">{#each GOALS as g (g)}<button type="button" class="chip" class:on={f.goals.includes(g)} aria-pressed={f.goals.includes(g)} onclick={() => toggleGoal(g)}>{g}</button>{/each}</div>
@@ -92,9 +99,17 @@
 
 <style>
   .sc { width: min(640px, calc(100vw - 32px)); }
-  .steps { display: inline-flex; gap: 10px; margin-left: 12px; font-size: 12px; color: var(--faint); }
-  .steps i { font-style: normal; }
-  .steps i.on { color: var(--text); font-weight: 600; }
+  /* 步骤条紧跟标题，× 留在最右 */
+  .sc .sheet-head { justify-content: flex-start; gap: 16px; }
+  .sc .sheet-head .x { margin-left: auto; }
+  .stepper { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); }
+  .stepper li { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .stepper li.on { color: var(--text); font-weight: 600; }
+  .stepper li.done { color: var(--dim); }
+  .stepper .n { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border2); box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 600; }
+  .stepper li.on .n { background: var(--text); border-color: var(--text); color: #fff; }
+  .stepper li.done .n { background: var(--su-ok-soft, #e6f4ea); border-color: transparent; color: var(--ok); }
+  .stepper .bar { width: 22px; height: 1px; background: var(--border2); }
   .opt { font-weight: 400; color: var(--faint); font-size: 11px; margin-left: 4px; }
   .kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .kind { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; text-align: left; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: none; font: inherit; color: var(--text); cursor: pointer; transition: border-color .12s, background-color .12s; }
@@ -102,6 +117,9 @@
   .kind.on { border-color: var(--text); background: #f7f6f2; }
   .kind b { font-size: 13px; font-weight: 600; }
   .kind small { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
+  /* 「让 AI 判断」占一整行，横排：图标 + 名称 + 说明 */
+  .kind.ai { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 8px; padding: 8px 11px; }
+  .kind.ai > :global(svg) { flex: none; color: var(--accent, #b4541a); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { height: 28px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; transition: border-color .12s, color .12s, background-color .12s; }
   .chip:hover { color: var(--text); border-color: var(--border2); }
