@@ -29,6 +29,13 @@
   // 老站点：没有站点约定就提示补一份（托管运营和 AI 加内容都按它来）
   $effect(() => { if (!isMaking(site.id)) void loadMake(site.id, false); });
   const needConventions = $derived(!making && siteMake.state[site.id]?.conventions === false && !siteMake.hidden.includes(site.id));
+  // 数据和收录接到了哪些：一眼看清哪些绑好了、哪些还差（细节在设置里）
+  const binds = $derived([
+    { k: 'GA4', ok: !!site.data.ga4_property, text: site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未绑定' },
+    { k: 'Search Console', ok: !!site.data.gsc_site, text: site.data.gsc_site || '未绑定' },
+    { k: 'Bing', ok: !!site.data.bing_site, pending: !site.data.bing_site && !!site.data.bing_auth, text: site.data.bing_site || (site.data.bing_auth ? '已加到 Bing，正在验证' : '未接入') },
+    { k: 'IndexNow', ok: !!site.data.indexnow_key, text: site.data.indexnow_key ? '上线后自动提交有变化的页面' : '未配置' },
+  ]);
   const queue = $derived((ops.queue[site.id] ?? []).filter((q) => q.status === 'open' || q.status === 'proposed'));
 </script>
 
@@ -56,6 +63,18 @@
   {/if}
 
   {#if hasData}<SiteSummary {site} />{/if}
+
+  <div class="card">
+    <h3><Icon name="chart" />数据与收录 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'settings')}><Icon name="sliders" size={12} />设置</button></h3>
+    <div class="binds">
+      {#each binds as b (b.k)}
+        <div class="bind">
+          <div class="bh"><span class="bk">{b.k}</span><span class="pill {b.ok ? 'ok' : b.pending ? 'warn' : ''}">{b.ok ? '已接入' : b.pending ? '验证中' : '未接入'}</span></div>
+          <small class="bt" title={b.text}>{b.text}</small>
+        </div>
+      {/each}
+    </div>
+  </div>
 
   <div class="cards">
     <div class="card">
@@ -108,5 +127,10 @@
   .ov { display: flex; flex-direction: column; gap: 14px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   .small { font-size: 11.5px; }
+  .binds { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px 24px; }
+  .bind { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .bh { display: flex; align-items: center; gap: 8px; }
+  .bk { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .bt { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

@@ -14,7 +14,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { sites, deploySite, pilotDeploys, refreshSites } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns, verifyBing } from '$lib/state/launch.svelte.js';
   import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -237,9 +237,14 @@
         {#if st.bing}
           <small>已绑定 {site.data.bing_site}</small>
         {:else if st.bing_pending}
-          <small class="pending-note">已把 {site.domain} 加到 Bing，正在验证：Pilot 加了 DNS 验证记录{pilotBuilds ? '，下次上线也会带上验证文件' : ''}，通过后自动绑定（一般几分钟到几小时，可以点右上角刷新看看）。</small>
+          <small class="pending-note">已把 {site.domain} 加到 Bing，正在验证，通过后自动绑定。</small>
+          {#if st.bing_note && !notes.bing}<small>{st.bing_note}</small>{/if}
+          {#if notes.bing}<small class:err={notes.bing.startsWith('失败')}>{notes.bing}</small>{/if}
+          <div class="row"><button class="btn tiny" onclick={() => verifyBing(site)} disabled={!!busy}><Icon name="refresh" size={11} />{busy === 'bing' ? '验证中…' : '立即验证'}</button></div>
         {:else if hasBing}
-          <small>Pilot 会自动把 {site.domain || '这个站点'} 加到你的 Bing Webmaster 并验证（域名在 Cloudflare 上会自动加 DNS 验证记录），点右上角刷新就会开始。</small>
+          <small>Pilot 会自动把 {site.domain || '这个站点'} 加到你的 Bing Webmaster 并验证（域名在 Cloudflare 上会自动加 DNS 验证记录）。</small>
+          {#if notes.bing}<small class:err={notes.bing.startsWith('失败')}>{notes.bing}</small>{/if}
+          {#if site.domain}<div class="row"><button class="btn tiny" onclick={() => verifyBing(site)} disabled={!!busy}><BingMark size={11} />{busy === 'bing' ? '处理中…' : '现在加到 Bing 并验证'}</button></div>{/if}
         {:else}
           <small>只用看 Bing 的搜索数据才需要（收录不受影响：IndexNow 已经会直接通知 Bing）。一次性设置：在 Bing Webmaster 的设置里生成 API 密钥，连接到 Pilot；之后每个站点 Pilot 都会自动加到 Bing、验证并绑定。</small>
           <div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button><button class="btn tiny" onclick={() => openDataConnect('bing')}><BingMark size={11} />连接 Bing</button></div>

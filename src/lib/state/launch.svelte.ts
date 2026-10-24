@@ -20,6 +20,8 @@ export interface LaunchStatus {
   bing: boolean;
   /** Pilot 已把站点加到 Bing、还在等验证 */
   bing_pending?: boolean;
+  /** 上次自动验证 Bing 每一步的结果 */
+  bing_note?: string;
   deployed: boolean;
   google_manage_conn: string;
   /** 这次检查按域名自动绑定上的资源。 */
@@ -172,6 +174,11 @@ export async function fixDomain(site: Site, issue: DomainIssue) {
     await checkDomain(site);
   } catch (e) { note(site.id, 'domain', `失败：${String(e)}`); }
   finally { launch.busy = { ...launch.busy, [site.id]: '' }; }
+}
+
+/** Bing：找到（没有就加）这个站点，加 DNS 验证记录，再让 Bing 验证一次。 */
+export async function verifyBing(site: Site) {
+  await step(site.id, 'bing', () => invoke<string>('site_bing_verify', { id: site.id }), (r) => r);
 }
 
 /** 把配置变量同步到部署目标（Pages 环境变量 / Worker 密钥 / 服务器 env 文件）。 */

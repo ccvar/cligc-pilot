@@ -9,6 +9,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { app, say } from '$lib/state/app.svelte.js';
   import { refreshSites } from '$lib/state/sites.svelte.js';
+  import { launch, verifyBing } from '$lib/state/launch.svelte.js';
   import { datasrc, openDataConnect, loadGoogleRes, loadBingSites } from '$lib/state/datasrc.svelte.js';
 
   let { site, draft }: { site: Site; draft: Site } = $props();
@@ -116,6 +117,14 @@
           </div>
         {/if}
       </div>
+      {#if !site.data.bing_site && site.data.bing_auth}
+        <!-- Pilot 已经把站点加到 Bing、还在等验证：验证通过前这里是空的，别让人以为没接 -->
+        <div class="bing-pending">
+          <span><b>正在验证</b> Pilot 已把 {site.domain} 加到 Bing{launch.status[site.id]?.bing_note ? `：${launch.status[site.id]?.bing_note}` : '，通过后自动绑定。'}</span>
+          <button class="btn tiny" onclick={() => verifyBing(site)} disabled={launch.busy[site.id] === 'bing'}>{launch.busy[site.id] === 'bing' ? '验证中…' : '立即验证'}</button>
+        </div>
+        {#if launch.notes[site.id]?.bing}<div class="hint">{launch.notes[site.id]?.bing}</div>{/if}
+      {/if}
       {#if berr}<div class="err-note">{berr}</div>{/if}
     {/if}
   </div>
@@ -142,4 +151,8 @@
 <style>
   .ds-block { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
   .ds-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .bing-pending { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12px; line-height: 1.55; color: #6b4a10; }
+  .bing-pending span { flex: 1; min-width: 0; }
+  .bing-pending b { font-weight: 600; margin-right: 4px; }
+  .bing-pending .btn { flex: none; }
 </style>
