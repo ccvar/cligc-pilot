@@ -236,11 +236,12 @@
         <b><span class="si"><BingMark size={13} /></span>Bing Webmaster<span class="opt">可选</span></b>
         {#if st.bing}
           <small>已绑定 {site.data.bing_site}</small>
+        {:else if st.bing_pending}
+          <small class="pending-note">已把 {site.domain} 加到 Bing，正在验证：Pilot 加了 DNS 验证记录{pilotBuilds ? '，下次上线也会带上验证文件' : ''}，通过后自动绑定（一般几分钟到几小时，可以点右上角刷新看看）。</small>
         {:else if hasBing}
-          <small>Bing 里还没有 {site.domain || '这个站点'}：在 Bing Webmaster 里再「从 Google Search Console 导入」一次（新站点要重新导入），回来点右上角刷新，Pilot 会按域名自动绑上。</small>
-          <div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button></div>
+          <small>Pilot 会自动把 {site.domain || '这个站点'} 加到你的 Bing Webmaster 并验证（域名在 Cloudflare 上会自动加 DNS 验证记录），点右上角刷新就会开始。</small>
         {:else}
-          <small>只用看 Bing 的搜索数据才需要（收录不受影响：IndexNow 已经会直接通知 Bing）。一次性设置，之后所有站点自动绑定：① 在 Bing Webmaster 里「从 Google Search Console 导入」，GSC 里的站点会一起导进去；② 在 Bing 的设置里生成 API 密钥，连接到 Pilot。</small>
+          <small>只用看 Bing 的搜索数据才需要（收录不受影响：IndexNow 已经会直接通知 Bing）。一次性设置：在 Bing Webmaster 的设置里生成 API 密钥，连接到 Pilot；之后每个站点 Pilot 都会自动加到 Bing、验证并绑定。</small>
           <div class="row"><button class="btn tiny" onclick={() => openUrl('https://www.bing.com/webmasters/')}><Icon name="external" size={11} />打开 Bing Webmaster</button><button class="btn tiny" onclick={() => openDataConnect('bing')}><BingMark size={11} />连接 Bing</button></div>
         {/if}
       </div>

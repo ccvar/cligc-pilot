@@ -12,6 +12,12 @@ const INDEXNOW: &str = "https://api.indexnow.org/indexnow";
 pub struct BingSite {
     pub url: String,
     pub verified: bool,
+    /// 文件 / meta 验证用的码（BingSiteAuth.xml 里的 `<user>`、`msvalidate.01`）
+    #[serde(skip)]
+    pub auth_code: String,
+    /// DNS 验证：`<这个码>.<域名>` CNAME → verify.bing.com
+    #[serde(skip)]
+    pub dns_code: String,
 }
 
 /// `/Date(1700000000000-0800)/` → 毫秒时间戳。
@@ -60,6 +66,41 @@ async fn call(key: &str, method: &str, query: &[(&str, &str)]) -> Result<Value, 
     Ok(v.get("d").cloned().unwrap_or(Value::Null))
 }
 
+async fn post(key: &str, method: &str, body: Value) -> Result<Value, String> {
+    let key = key.trim();
+    let mut url = reqwest::Url::parse(&format!("{API}/{method}")).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().append_pair("apikey", key);
+    let resp = reqwest::Client::new()
+        .post(url)
+        .header("Content-Type", "application/json; charset=utf-8")
+        .body(body.to_string())
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| redact(&format!("请求 Bing 失败：{e}"), key))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if status.as_u16() == 401 || text.contains("InvalidApiKey") || text.contains("NotAuthorized") {
+        return Err("Bing API Key 无效，或没有这个站点的权限".into());
+    }
+    if !status.is_success() {
+        let msg: String = redact(&text, key).chars().take(200).collect();
+        return Err(format!("Bing 返回 {status}：{msg}"));
+    }
+    let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    Ok(v.get("d").cloned().unwrap_or(Value::Null))
+}
+
+/// 把站点加到 Bing Webmaster（加了还要验证才算数）。
+pub async fn add_site(key: &str, site_url: &str) -> Result<(), String> {
+    post(key, "AddSite", serde_json::json!({ "siteUrl": site_url })).await.map(|_| ())
+}
+
+/// 让 Bing 去验证（DNS / BingSiteAuth.xml / meta 任一通过即可），返回是否通过。
+pub async fn verify_site(key: &str, site_url: &str) -> Result<bool, String> {
+    Ok(post(key, "VerifySite", serde_json::json!({ "siteUrl": site_url })).await?.as_bool().unwrap_or(false))
+}
+
 pub async fn list_sites(key: &str) -> Result<Vec<BingSite>, String> {
     let d = call(key.trim(), "GetUserSites", &[]).await?;
     Ok(d.as_array()
@@ -68,6 +109,8 @@ pub async fn list_sites(key: &str) -> Result<Vec<BingSite>, String> {
                 .map(|s| BingSite {
                     url: s["Url"].as_str().unwrap_or_default().to_string(),
                     verified: s["IsVerified"].as_bool().unwrap_or(false),
+                    auth_code: s["AuthenticationCode"].as_str().unwrap_or_default().to_string(),
+                    dns_code: s["DnsVerificationCode"].as_str().unwrap_or_default().to_string(),
                 })
                 .filter(|s| !s.url.is_empty())
                 .collect()

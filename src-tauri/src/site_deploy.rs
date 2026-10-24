@@ -515,6 +515,13 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
             job.line("已把 IndexNow 验证文件放进构建产物");
         }
     }
+    // Bing 验证文件：Pilot 把站点加到 Bing 后、验证通过前，随上线放进构建产物
+    if !site.data.bing_auth.is_empty() && site.data.bing_site.is_empty() {
+        let f = built.out.join("BingSiteAuth.xml");
+        if !f.exists() && std::fs::write(&f, format!("<?xml version=\"1.0\"?>\n<users>\n\t<user>{}</user>\n</users>\n", site.data.bing_auth)).is_ok() {
+            job.line("已把 Bing 验证文件放进构建产物");
+        }
+    }
     let manifest = build_manifest(&built.out);
     // 上传
     job.step("upload", "running", &site.deploy.project);

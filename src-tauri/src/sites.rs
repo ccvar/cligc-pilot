@@ -103,6 +103,10 @@ pub struct DataBinding {
     /// Bing Webmaster 里的站点网址（形如 `https://example.com/`）。
     #[serde(default)]
     pub bing_site: String,
+    /// Pilot 自动加到 Bing 时拿到的验证码（BingSiteAuth.xml 的内容）：验证通过前上线会把验证文件放进构建产物。
+    /// 有它、`bing_site` 还空着 = 已加到 Bing、等验证。
+    #[serde(default)]
+    pub bing_auth: String,
     /// IndexNow 验证密钥（站点根目录下 `<key>.txt` 的内容）。
     #[serde(default)]
     pub indexnow_key: String,

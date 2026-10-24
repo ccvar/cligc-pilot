@@ -90,6 +90,8 @@ pub struct LaunchStatus {
     pub gsc: bool,
     pub indexnow: bool,
     pub bing: bool,
+    /// Pilot 已把站点加到 Bing、还在等验证
+    pub bing_pending: bool,
     pub deployed: bool,
     /// 有没有一条授予了管理权限的 Google OAuth 连接（自动建 GA4 / 验证 Search Console 需要）。
     pub google_manage_conn: String,
@@ -221,12 +223,24 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
         }
     }
     if site.data.bing_site.is_empty() {
-        for c in state.conns.list().into_iter().filter(|c| c.kind == "bing") {
+        let bings: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "bing").collect();
+        let mut found = false;
+        for c in &bings {
             let Ok(key) = crate::keychain::get_key(&c.id) else { continue };
             match crate::bing::list_sites(&key).await {
                 Ok(list) => {
                     let hit = list.iter().find(|b| crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &site.domain)));
                     if let Some(b) = hit {
+                        found = true;
+                        // 加过但还没验证（多半是 Pilot 上次加的）：接着验证，过了才绑
+                        if !b.verified {
+                            match bing_verify(state, site, &c.id, &key, b).await {
+                                Ok(true) => bound.push(format!("Bing {}（已验证）", b.url)),
+                                Ok(false) => {}
+                                Err(e) => errs.push(format!("Bing：{e}")),
+                            }
+                            break;
+                        }
                         let (cid, url) = (c.id.clone(), b.url.clone());
                         if state.sites.update(&site.id, crate::now_secs(), |x| {
                             x.data.bing_conn_id = cid;
@@ -241,8 +255,60 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
                 Err(e) => errs.push(format!("Bing：{e}")),
             }
         }
+        // 哪个 Bing 账号里都没有：用第一条 Bing 连接直接加进去，再自动验证（DNS 记录 + 上线时放验证文件）
+        if !found {
+            if let Some(c) = bings.first() {
+                if let Ok(key) = crate::keychain::get_key(&c.id) {
+                    let url = format!("https://{}/", site.domain);
+                    let added = crate::bing::add_site(&key, &url).await;
+                    match crate::bing::list_sites(&key).await.map(|l| l.into_iter().find(|b| crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &site.domain)))) {
+                        Ok(Some(b)) => match bing_verify(state, site, &c.id, &key, &b).await {
+                            Ok(true) => bound.push(format!("Bing {}（已加入并验证）", b.url)),
+                            Ok(false) => bound.push(format!("已把 {} 加到 Bing，等验证通过后自动绑定", site.domain)),
+                            Err(e) => errs.push(format!("Bing：{e}")),
+                        },
+                        Ok(None) => errs.push(format!("Bing：没能把 {} 加进去{}", site.domain, added.err().map(|e| format!("（{e}）")).unwrap_or_default())),
+                        Err(e) => errs.push(format!("Bing：{e}")),
+                    }
+                }
+            }
+        }
     }
     (bound, errs)
+}
+
+/// 自动验证 Bing 里的站点：域名在已连接的 Cloudflare 里就加一条 DNS 验证记录（`<码>.<域名>` CNAME → verify.bing.com），
+/// 验证码记进站点（Pilot 上线时把 BingSiteAuth.xml 放进构建产物），然后让 Bing 验证；通过就绑上。
+async fn bing_verify(state: &AppState, site: &Site, conn_id: &str, key: &str, b: &crate::bing::BingSite) -> Result<bool, String> {
+    if !b.auth_code.is_empty() && site.data.bing_auth != b.auth_code {
+        let code = b.auth_code.clone();
+        let _ = state.sites.update(&site.id, crate::now_secs(), |x| {
+            x.data.bing_auth = code;
+            Ok(())
+        });
+    }
+    if !b.dns_code.is_empty() {
+        let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
+        conns.sort_by_key(|c| c.id != site.deploy.cf_conn_id);
+        for c in conns {
+            let Ok(token) = crate::keychain::get_key(&c.id) else { continue };
+            if let Ok(Some(zone)) = crate::cf::zone_for(&token, &site.domain).await {
+                let name = format!("{}.{}", b.dns_code.to_ascii_lowercase(), site.domain);
+                let _ = crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &name, "verify.bing.com", false).await;
+                break;
+            }
+        }
+    }
+    let ok = crate::bing::verify_site(key, &b.url).await.unwrap_or(false);
+    if ok {
+        let (cid, url) = (conn_id.to_string(), b.url.clone());
+        state.sites.update(&site.id, crate::now_secs(), |x| {
+            x.data.bing_conn_id = cid;
+            x.data.bing_site = url;
+            Ok(())
+        })?;
+    }
+    Ok(ok)
 }
 
 #[tauri::command]
@@ -269,6 +335,7 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
         gsc: !site.data.gsc_site.is_empty(),
         indexnow: !site.data.indexnow_key.is_empty(),
         bing: !site.data.bing_site.is_empty(),
+        bing_pending: site.data.bing_site.is_empty() && !site.data.bing_auth.is_empty(),
         deployed: crate::site_deploy::load_history(&state.sites.data_dir(&id)).iter().any(|r| r.ok),
         auto_bound,
         errors: probe_errs,

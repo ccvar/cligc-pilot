@@ -189,6 +189,8 @@ export interface SiteData {
   gsc_conn_id: string;
   bing_conn_id: string;
   bing_site: string;
+  /** Pilot 自动加到 Bing 时拿到的验证码 */
+  bing_auth?: string;
   indexnow_key: string;
 }
 export interface SiteOps {

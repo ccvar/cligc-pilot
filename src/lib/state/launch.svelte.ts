@@ -18,6 +18,8 @@ export interface LaunchStatus {
   gsc: boolean;
   indexnow: boolean;
   bing: boolean;
+  /** Pilot 已把站点加到 Bing、还在等验证 */
+  bing_pending?: boolean;
   deployed: boolean;
   google_manage_conn: string;
   /** 这次检查按域名自动绑定上的资源。 */
@@ -116,7 +118,7 @@ export async function loadLaunch(id: string, force = false) {
     if (!force) remember(id, await invoke<LaunchStatus>('launch_status', { id, probe: false }));
     const v = await invoke<LaunchStatus>('launch_status', { id, force, probe: true });
     remember(id, v);
-    if (v.auto_bound?.length) { await refreshSites(); say(`已按域名绑定：${v.auto_bound.join('、')}`); }
+    if (v.auto_bound?.length) { await refreshSites(); say(`已自动处理：${v.auto_bound.join('、')}`); }
     else if (force) say('状态已是最新');
   } catch (e) { say(String(e), 'err'); }
   finally { launch.checking = { ...launch.checking, [id]: false }; }
