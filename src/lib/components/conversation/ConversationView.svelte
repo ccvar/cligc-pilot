@@ -510,14 +510,16 @@
         滚到顶时页头底下是**空的**，那时打阴影＝给不存在的遮挡关系编故事
         （同 .term-wrap.with-chat 那条「独占/无对话时不加，保持齐边」的分寸）。
      z-index：阴影得压在 .thread 之上 —— .thread 是后面的兄弟，默认会盖住它。 */
-  .thread-head { flex: none; padding: 5px 24px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .thread-head { flex: none; padding: 5px 24px; border-bottom: 1px solid transparent; position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   /* ★ 阴影用伪元素而不是 box-shadow：box-shadow 天然四周都有 —— `0 6px 12px -6px` 水平方向是
      「收缩 6 再模糊 6」，**正好到边**，于是左右两端各留一段 6px 渐弱，看着就是两个圆头戳在窗沿上。
      负 spread 再加也没用：加到不露头，朝下的阴影也就没了。
      伪元素 left:0/right:0 精确铺满、只朝下，左右**零溢出、零圆头**。 */
+  /* 滚动态改成 Claude 客户端那样的渐隐：内容滑到页头底下时，从页头往下一段由底色渐变到透明，
+     文字是慢慢淡出去的，不是被一刀切掉，也不画阴影和线。 */
   .thread-head::after {
-    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 6px;
-    background: linear-gradient(rgba(20, 16, 13, .03), rgba(20, 16, 13, 0)); /* 原 .13 → .05 → .03：用户连续点名太重，压到将将可感；再嫌重就整个去掉 */
+    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 28px;
+    background: linear-gradient(var(--bg), transparent);
     opacity: 0; transition: opacity .18s ease; pointer-events: none;
   }
   /* 只在内容真滑到页头底下时才抬升。border 只改 color 不改宽度 —— 改宽度会让下面整块跳 1px。 */
