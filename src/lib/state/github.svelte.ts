@@ -33,8 +33,10 @@ const GH_TOKEN_URL = 'https://github.com/settings/personal-access-tokens/new';
 export function ghTokenTemplateUrl(): string {
   const url = new URL(GH_TOKEN_URL);
   url.searchParams.set('name', 'Cligc Pilot');
-  url.searchParams.set('description', 'Cligc Pilot：在选定仓库里改代码、推分支、提 PR');
+  url.searchParams.set('description', 'Cligc Pilot：建仓库、改代码、推分支、提 PR');
   url.searchParams.set('expires_in', '90');
+  // 建仓库要 Administration 写权限（站点制作、上线向导「代码放到 GitHub」新建仓库时用）
+  url.searchParams.set('administration', 'write');
   url.searchParams.set('contents', 'write');
   url.searchParams.set('pull_requests', 'write');
   url.searchParams.set('issues', 'write');

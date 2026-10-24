@@ -24,14 +24,15 @@
         <p class="hint">新 Token 必须属于同一个 GitHub 账号；验证通过后只替换这一条连接，已克隆的仓库和对话都保留。</p>
       {/if}
       <div class="gh-step">
-        <p class="gh-step-t">① 在 GitHub 新建一枚 <b>fine-grained</b> Token，只勾选要让 AI 处理的仓库</p>
+        <p class="gh-step-t">① 在 GitHub 新建一枚 <b>fine-grained</b> Token：仓库范围选 <b>All repositories</b>，并给 <b>Administration</b> 写权限（Pilot 要能为新站点建仓库）</p>
         <button class="gh-perms-toggle" type="button" onclick={() => (gh.ghPermsOpen = !gh.ghPermsOpen)}>
           <svg class="gh-chev" class:open={gh.ghPermsOpen} width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
           所需设置
         </button>
         {#if gh.ghPermsOpen}
           <ul class="gh-perms">
-            <li>Repository access · <b>Only select repositories</b>（选你要处理的仓库）</li>
+            <li>Repository access · <b>All repositories</b>（Pilot 会为新做的站点建仓库；选 Only select repositories 也能用，但不能自动建仓库，只能用你事先建好、并加进 Token 的空仓库）</li>
+            <li>Administration · <b>Read and write</b>（新建仓库：站点制作、上线向导「代码放到 GitHub」）</li>
             <li>Contents · <b>Read and write</b>（读代码、推分支）</li>
             <li>Pull requests · <b>Read and write</b>（提 PR）</li>
             <li>Issues · <b>Read and write</b>（可选：读写 Issue）</li>
