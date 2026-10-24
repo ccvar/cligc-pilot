@@ -528,6 +528,20 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
     job.step("upload", "ok", &url);
     job.set_url(&url);
     rec.url = url;
+    // Pages：域名打开要真是这一版。旧的 Worker 路由、别的项目绑着这个域名都会抢在 Pages 前面回应，
+    // 查到明确在抢这个域名的就直接处理掉（Worker / 旧项目本身不删），再验收
+    if site.deploy.mode == "direct" && !site.domain.is_empty() {
+        let dc = crate::launch_cmds::domain_settle(conns, site).await;
+        for m in &dc.fixed {
+            job.line(&format!("域名：{m}"));
+        }
+        if dc.compared && !dc.same {
+            job.line(&format!("域名：{} 打开还是「{}」，不是这次上线的「{}」", site.domain, dc.live_title, dc.pages_title));
+            for i in dc.issues.iter().filter(|i| !i.auto) {
+                job.line(&format!("  · {}", i.text));
+            }
+        }
+    }
     // Workers：密钥要 Worker 已经存在才写得进去，所以放在部署之后（公开变量已经随 --var 带上）
     if site.deploy.mode == "workers" {
         sync_config(site, conns, &dir, site_dir, job, false).await;

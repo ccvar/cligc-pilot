@@ -34,7 +34,7 @@
   <div class="dfull">
     {#if pending}
       {#if checking && !dc.scanned}
-        <div class="faint">正在 Cloudflare 里查原因…</div>
+        <div class="faint">正在 Cloudflare 里查原因，明确在抢这个域名的会直接处理掉…</div>
       {:else if dc.issues.length}
         <ul class="dissues">
           {#each dc.issues as is, i (i)}
@@ -46,6 +46,7 @@
       {/if}
       {#if dc.scanned}{#each dc.notes as n, i (i)}<div class="faint small">{n}</div>{/each}{/if}
     {/if}
+    {#each dc.fixed as f, i (i)}<div class="small fixed"><Icon name="check" size={11} />{f}</div>{/each}
     {#if note}<div class="small" class:err={note.startsWith('失败')}>{note}</div>{/if}
     {#if pending || !dc.compared}<div><button class="link-btn small" onclick={() => checkDomain(site, true)} disabled={checking}>{checking ? '检查中…' : '重新检查'}</button></div>{/if}
   </div>
@@ -55,6 +56,7 @@
   .dl { min-width: 0; }
   .small { font-size: 11.5px; }
   .err { color: var(--err); }
+  .fixed { display: flex; align-items: center; gap: 4px; color: var(--ok); }
   .dfull { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-top: -2px; }
   .dfull:empty { display: none; }
   .dissues { list-style: none; margin: 2px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // 「站点制作」：制作中的站点（在 Pilot 里从零做、还没配置上线的）都在这里，不进全部站点。
   // 配好部署或手动标记做完，就移到全部站点。
   import './site.css';
@@ -12,6 +13,8 @@
   import { openConv } from '$lib/state/conversations.js';
   import { makingSites, openSiteCreate, finishMaking, isMaking, STACKS } from '$lib/state/siteCreate.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
+  import { fleet, loadFleet } from '$lib/state/fleet.svelte.js';
+  import { launch, checkDomain } from '$lib/state/launch.svelte.js';
   import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
 
   // 卡片右上角「…」菜单
@@ -27,7 +30,26 @@
 
   const list = $derived(makingSites().sort((a, b) => b.updated_at - a.updated_at));
   // 在这里做出来、已经配好上线（或手动标记做完）的站点
+  // 上线记录在站点总表里（没加载过就加载一次）
+  if (!fleet.rows.length) void loadFleet();
+  // 制作完成的站点「上线」到什么程度：配了部署 ≠ 上线了；Pages 站点还要看域名打开是不是这一版
+  const pagesMode = (s: Site) => !['none', 'workers', 'vps', ''].includes(s.deploy.mode);
+  function liveState(s: Site): { text: string; tone: string; icon: string } {
+    if (!s.deploy.mode || s.deploy.mode === 'none') return { text: '还没配置上线', tone: '', icon: 'check' };
+    const row = fleet.rows.find((r) => r.id === s.id);
+    if (!row?.last_deploy_ts) return { text: '还没上线', tone: '', icon: 'rocket' };
+    if (row.last_deploy_ok === false) return { text: '上次上线失败', tone: 'err', icon: 'rocket' };
+    if (!s.domain) return { text: '已上传，还没绑域名', tone: '', icon: 'rocket' };
+    if (!pagesMode(s)) return { text: '已上线', tone: 'ok', icon: 'rocket' };
+    const dc = launch.domainCheck[s.id];
+    if (dc?.compared) return dc.same ? { text: '已上线', tone: 'ok', icon: 'rocket' } : { text: '域名待生效', tone: 'warn', icon: 'rocket' };
+    return { text: launch.checkingDomain[s.id] ? '检查域名…' : '已上传', tone: '', icon: 'rocket' };
+  }
   const done = $derived(sites.list.filter((s) => (s.origin === 'created' || s.origin === 'made') && !isMaking(s.id)).sort((a, b) => b.updated_at - a.updated_at));
+  $effect(() => {
+    const ids = done.filter((s) => pagesMode(s) && s.domain && fleet.rows.find((r) => r.id === s.id)?.last_deploy_ok).map((s) => s.id);
+    untrack(() => { for (const id of ids) { const s = done.find((x) => x.id === id); if (s && !launch.domainCheck[id]) void checkDomain(s, true); } });
+  });
   $effect(() => { for (const s of list) void loadMake(s.id); });
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {
@@ -125,7 +147,7 @@
               <button class="row-btn" onclick={() => openSite(s.id, 'overview')}>
                 <SiteIcon id={s.id} size={16} />
                 <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
-                <span class="state">{#if s.deploy.mode !== 'none' && s.deploy.mode}<Icon name="rocket" size={11} />已配置上线{:else}<Icon name="check" size={11} />已标记做完{/if}</span>
+                <span class="state {liveState(s).tone}"><Icon name={liveState(s).icon} size={11} />{liveState(s).text}</span>
                 <span class="when">{ago(s.updated_at)}</span>
                 <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
@@ -182,7 +204,10 @@
   .row-btn:hover { background: #faf9f6; }
   .row-btn .nm { flex: 1; }
   .row-btn .nm b { font-size: 13px; }
-  .state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ok); }
+  .state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--faint); }
+  .state.ok { color: var(--ok); }
+  .state.warn { color: var(--su-warn-ink, #8a5a08); }
+  .state.err { color: var(--err); }
   .row-btn .when { flex: none; width: 76px; text-align: right; font-size: 11.5px; color: var(--faint); }
   .row-btn .chev { flex: none; color: var(--faint); }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 16px; text-align: center; }

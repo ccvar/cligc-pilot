@@ -483,6 +483,8 @@ pub struct DomainCheck {
     /// 查过 Cloudflare 里占用这个域名的东西（quick 只比页面，或页面已经一致时不查）
     pub scanned: bool,
     pub issues: Vec<DomainIssue>,
+    /// 这次自动处理掉的（「已删掉 Worker 路由 …」）
+    pub fixed: Vec<String>,
     /// 没查成的项（多半是令牌少权限），不算问题
     pub notes: Vec<String>,
 }
@@ -496,6 +498,8 @@ pub struct DomainIssue {
     pub fix: String,
     pub conn: String,
     pub target: String,
+    /// 明确是在跟这个站点抢同一个域名、可以直接处理的（路由主机名正好是这个域名、Worker 自定义域名、别的 Pages 项目绑着它）
+    pub auto: bool,
 }
 
 async fn page_title(url: &str) -> Result<String, String> {
@@ -533,16 +537,58 @@ async fn live_ns(name: &str) -> Vec<String> {
     out
 }
 
+/// quick：只比页面；auto：查出明确在抢这个域名的东西就直接处理掉（Worker / 旧 Pages 项目本身都不删），再比一次。
 #[tauri::command]
-pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, quick: Option<bool>) -> Result<DomainCheck, String> {
+pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, quick: Option<bool>, auto: Option<bool>) -> Result<DomainCheck, String> {
     let site = state.sites.get(&id)?;
     if site.domain.is_empty() {
         return Err("站点没有填写域名".into());
     }
+    if auto.unwrap_or(false) {
+        return Ok(domain_settle(&state.conns, &site).await);
+    }
+    Ok(domain_check(&state.conns, &site, quick.unwrap_or(false)).await)
+}
+
+/// 查一遍，有能直接处理的就处理掉，处理过再查一次。上线后（Pages）也会跑这个。
+pub(crate) async fn domain_settle(conns: &crate::conns::ConnStore, site: &Site) -> DomainCheck {
+    let first = domain_check(conns, site, false).await;
+    if !first.compared || first.same {
+        return first;
+    }
+    let mut fixed = Vec::new();
+    let mut failed = Vec::new();
+    for is in first.issues.iter().filter(|i| i.auto) {
+        match domain_fix(conns, site, &is.kind, &is.conn, &is.target).await {
+            Ok(m) => fixed.push(m),
+            Err(e) => failed.push(format!("{}：{e}", is.fix)),
+        }
+    }
+    if fixed.is_empty() {
+        let mut out = first;
+        out.notes.extend(failed);
+        return out;
+    }
+    // 删路由、解绑之后边缘要几秒才切过去
+    let mut out = first;
+    for _ in 0..4 {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        out = domain_check(conns, site, false).await;
+        if out.compared && out.same {
+            break;
+        }
+    }
+    out.fixed = fixed;
+    out.notes.extend(failed);
+    out
+}
+
+pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, quick: bool) -> DomainCheck {
     let domain = site.domain.to_ascii_lowercase();
     let mut out = DomainCheck { domain: domain.clone(), ..Default::default() };
     // 站点用的那条 Cloudflare 连接排第一，其余连接也查（旧站可能在另一个账号里）
-    let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
+    let store = conns;
+    let mut conns: Vec<_> = store.list().into_iter().filter(|c| c.kind == "cloudflare").collect();
     conns.sort_by_key(|c| c.id != site.deploy.cf_conn_id);
     if let Some(own) = conns.first().filter(|c| c.id == site.deploy.cf_conn_id) {
         if let Ok(token) = crate::keychain::get_key(&own.id) {
@@ -573,8 +619,8 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
     out.live_title = live.unwrap_or_default();
     out.pages_title = pages.unwrap_or_default();
     // 只比页面（概览上自动检查），或者已经是这次上线的版本：不用再翻 Cloudflare
-    if quick.unwrap_or(false) || (out.compared && out.same) {
-        return Ok(out);
+    if quick || (out.compared && out.same) {
+        return out;
     }
     out.scanned = true;
 
@@ -622,6 +668,8 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
                                 fix: "删掉这条路由".into(),
                                 conn: c.id.clone(),
                                 target: format!("{}/{}", zone.id, r.id),
+                                // `*x.com/*` 这类还会拦子域名，删了可能影响别的服务：留给你点
+                                auto: !r.pattern.trim_start().starts_with('*'),
                             });
                         }
                     }
@@ -641,6 +689,7 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
                         fix: format!("从 Worker「{}」解绑", d.service),
                         conn: c.id.clone(),
                         target: d.id,
+                        auto: true,
                     });
                 }
             }
@@ -655,6 +704,7 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
                         fix: format!("从「{}」去掉这个域名", p.name),
                         conn: c.id.clone(),
                         target: p.name,
+                        auto: true,
                     });
                 }
             }
@@ -670,46 +720,51 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
                 fix: "清除这个域名的缓存".into(),
                 conn,
                 target: zone,
+                auto: true,
             });
         }
     }
-    Ok(out)
+    out
 }
 
 /// 执行排查结果里的一项修复（界面上确认过才调用）。改完顺手清一下这个域名的缓存。
 #[tauri::command]
 pub async fn site_domain_fix(state: tauri::State<'_, AppState>, id: String, kind: String, conn: String, target: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
+    domain_fix(&state.conns, &site, &kind, &conn, &target).await
+}
+
+pub(crate) async fn domain_fix(conns: &crate::conns::ConnStore, site: &Site, kind: &str, conn: &str, target: &str) -> Result<String, String> {
     let domain = site.domain.to_ascii_lowercase();
-    let c = state.conns.get(&conn)?;
+    let c = conns.get(conn)?;
     if c.kind != "cloudflare" {
         return Err("不是 Cloudflare 连接".into());
     }
     let token = crate::keychain::get_key(&c.id)?;
-    let msg = match kind.as_str() {
+    let msg = match kind {
         "route" => {
             let (zone, route) = target.split_once('/').ok_or("路由参数不对")?;
             crate::cf::delete_worker_route(&token, zone, route).await?;
-            "已删掉这条 Worker 路由".to_string()
+            "已删掉抢着回应这个域名的 Worker 路由（Worker 本身还在）".to_string()
         }
         "worker_domain" => {
-            crate::cf::delete_worker_domain(&token, &c.account_id, &target).await?;
-            "已从 Worker 上解绑这个域名".to_string()
+            crate::cf::delete_worker_domain(&token, &c.account_id, target).await?;
+            "已从 Worker 上解绑这个域名（Worker 本身还在）".to_string()
         }
         "pages" => {
-            crate::cf::delete_pages_domain(&token, &c.account_id, &target, &domain).await?;
+            crate::cf::delete_pages_domain(&token, &c.account_id, target, &domain).await?;
             format!("已从 Pages 项目「{target}」去掉 {domain}")
         }
         "cache" => {
-            crate::cf::purge_hosts(&token, &target, &[domain.clone()]).await.map_err(|e| format!("清除缓存失败（令牌可能缺「区域 → 缓存清除」权限）：{e}"))?;
+            crate::cf::purge_hosts(&token, target, &[domain.clone()]).await.map_err(|e| format!("清除缓存失败（令牌可能缺「区域 → 缓存清除」权限）：{e}"))?;
             return Ok(format!("已清除 {domain} 的缓存，刷新一下页面看看"));
         }
         _ => return Err("不认识的修复项".into()),
     };
     // 旧项目放手后，确保域名在这个站点的 Pages 项目上、DNS 指向它
     let mut extra = Vec::new();
-    if site.deploy.mode == "direct" || site.deploy.mode.is_empty() {
-        if let Ok(own) = state.conns.get(&site.deploy.cf_conn_id) {
+    if matches!(site.deploy.mode.as_str(), "direct" | "pages_git" | "") {
+        if let Ok(own) = conns.get(&site.deploy.cf_conn_id) {
             if let Ok(t) = crate::keychain::get_key(&own.id) {
                 if let Ok(Some(p)) = crate::cf::get_pages_project(&t, &own.account_id, &site.deploy.project).await {
                     let _ = crate::cf::add_pages_domain(&t, &own.account_id, &site.deploy.project, &domain).await;
