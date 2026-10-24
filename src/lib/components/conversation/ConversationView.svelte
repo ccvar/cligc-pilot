@@ -729,17 +729,18 @@
 
   /* 步骤行：一步一行，灰字，悬停有框，点开看完整参数（像 Claude 客户端） */
   .step, .steps-sum { margin: 2px 0; max-width: 100%; }
-  .step > summary, .steps-sum > summary, .step.solo { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; box-sizing: border-box; padding: 4px 10px; border: 1px solid transparent; border-radius: 9px; font-size: 13px; line-height: 1.5; color: var(--dim); cursor: pointer; list-style: none; user-select: none; transition: background-color .12s, border-color .12s; }
+  .step > summary, .steps-sum > summary, .step.solo { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; box-sizing: border-box; padding: 3px 0; font-size: 13px; line-height: 1.5; color: var(--dim); cursor: pointer; list-style: none; user-select: none; transition: color .12s; }
   .step > summary::-webkit-details-marker, .steps-sum > summary::-webkit-details-marker { display: none; }
-  .step > summary:hover, .steps-sum > summary:hover, .step[open] > summary, .steps-sum[open] > summary { border-color: var(--border); background: var(--card, #fff); }
+  .step > summary:hover, .steps-sum > summary:hover, .step[open] > summary, .steps-sum[open] > summary { color: var(--text); }
+  .step > summary:hover .st-t b, .steps-sum > summary:hover .st-t, .step[open] > summary .st-t b { color: var(--text); }
   .step.solo { cursor: default; }
   .st-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st-t b { font-weight: 550; color: var(--dim); margin-right: 2px; }
   .st-n, .st-ms { flex: none; font-size: 12px; color: var(--faint, #9a958c); font-variant-numeric: tabular-nums; }
   .st-chev { flex: none; color: var(--faint, #9a958c); transition: transform .15s; }
   details[open] > summary > .st-chev { transform: rotate(90deg); }
-  .st-full { margin: 4px 0 6px 10px; padding: 8px 10px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--code-bg, #f6f5f1); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dim); }
-  .st-list { margin: 2px 0 4px 12px; padding-left: 8px; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+  .st-full { margin: 4px 0 6px 0; padding: 8px 10px; max-height: 220px; overflow: auto; border-radius: 8px; background: var(--code-bg, #f6f5f1); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dim); }
+  .st-list { margin: 2px 0 4px 2px; padding-left: 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
   .step.running > summary { color: var(--text); }
   .step.failed { color: #b42318; }
   /* 正在跑：四个小点轮流亮 */

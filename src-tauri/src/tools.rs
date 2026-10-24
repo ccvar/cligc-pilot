@@ -142,6 +142,8 @@ function chromeFlags() {
   const flags = [
     "--remote-debugging-pipe", "--disable-gpu", "--hide-scrollbars", "--mute-audio",
     "--no-first-run", "--no-default-browser-check", "--disable-extensions",
+    // 不碰系统钥匙串 / 密码库（不然 macOS 会弹「找不到钥匙串」或要密码）
+    "--use-mock-keychain", "--password-store=basic",
     "--user-data-dir=" + profile,
     "--window-size=" + width + "," + height,
     "about:blank",

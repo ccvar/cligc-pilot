@@ -296,6 +296,7 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         }
         let home = &self.home;
         let _ = std::fs::create_dir_all(home);
+        isolated_keychain(home);
         cmd.env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("NO_COLOR", "1");
@@ -383,6 +384,29 @@ enum Gate {
     Deny,
     Confirm,
 }
+/// macOS：命令用的是单独的 HOME，钥匙串查找路径跟着 HOME 走，里面没有钥匙串时，
+/// 用到钥匙串的程序（比如无头 Chrome 截图）会弹「找不到钥匙串」。给这个 HOME 建一个空的、
+/// 不加锁的钥匙串，只给它自己用；你的登录钥匙串不受影响，也读不到。
+#[cfg(target_os = "macos")]
+fn isolated_keychain(home: &Path) {
+    let kc = home.join("Library/Keychains/login.keychain-db");
+    let run = |args: &[&str]| {
+        let _ = std::process::Command::new("/usr/bin/security").args(args).env("HOME", home).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    };
+    let path = kc.to_string_lossy().into_owned();
+    if !kc.exists() {
+        let _ = std::fs::create_dir_all(home.join("Library/Keychains"));
+        run(&["create-keychain", "-p", "", &path]);
+        // 不自动上锁（默认会在空闲或睡眠后锁上，再用时又要弹框）
+        run(&["set-keychain-settings", &path]);
+        run(&["list-keychains", "-d", "user", "-s", &path]);
+        run(&["default-keychain", "-d", "user", "-s", &path]);
+    }
+    run(&["unlock-keychain", "-p", "", &path]);
+}
+#[cfg(not(target_os = "macos"))]
+fn isolated_keychain(_home: &Path) {}
+
 fn decision(mode: PermMode, name: &str, detail: &str, safe_commands: bool) -> Gate {
     if mode == PermMode::Plan {
         return Gate::Deny;
