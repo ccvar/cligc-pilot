@@ -1,5 +1,6 @@
 <script lang="ts">
   import './site.css';
+  import { untrack } from 'svelte';
   import type { Site } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -31,7 +32,14 @@
   let priv = $state(true);
   let openGh = $state(false);
   $effect(() => { if (!ghConn && ghConns.length) ghConn = ghConns[0].id; });
-  $effect(() => { if (!repoName) repoName = site.deploy.project || site.name.replace(/[^a-zA-Z0-9._-]+/g, '-'); });
+  // 仓库名的默认值只在换站点时填一次（原来「一空就填回去」，删光后立刻被填回，看起来像改不了）
+  let repoFor = '';
+  $effect(() => {
+    const id = site.id;
+    if (repoFor === id) return;
+    repoFor = id;
+    repoName = untrack(() => (site.domain || site.deploy.project || site.name).replace(/[^a-zA-Z0-9._-]+/g, '-'));
+  });
   const checking = $derived(!!launch.checking[site.id]);
   const manage = $derived(st?.google_manage_conn ?? '');
   const steps = $derived(st ? launchSteps(site, st) : []);
