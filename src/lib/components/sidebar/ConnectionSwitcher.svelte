@@ -6,7 +6,7 @@
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import GearIcon from '$lib/components/icons/GearIcon.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
-  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote } from '$lib/state/connections.svelte.js';
+  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote, cfConns, openCloudflare } from '$lib/state/connections.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { WORKSPACE_CONN_ID } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
@@ -19,7 +19,7 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
-  import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN } from '$lib/state/env';
+  import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
 </script>
 
@@ -46,7 +46,15 @@
             {#if app.isSshConn}<span class="cs-check">✓</span>{/if}
           </button>
         {/if}
-        {#each app.conns.filter((c) => !isDataConn(c) && c.kind !== 'ssh') as c (c.id)}
+        <!-- Cloudflare 账号也合并成一行：进去之后左栏列出全部账号。 -->
+        {#if cfConns().length}
+          <button class="cs-item {app.isCfConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isCfConn} onclick={openCloudflare} oncontextmenu={(e) => openConnCtx(e, CLOUDFLARES_CONN)}>
+            <CfMark size={18} />
+            <span class="cs-main"><b>Cloudflare</b><small>{cfConns().length} 个账号{app.isCfConn && app.activeConn ? ` · 当前 ${connectionDisplayName(app.activeConn)}` : ''}</small></span>
+            {#if app.isCfConn}<span class="cs-check">✓</span>{/if}
+          </button>
+        {/if}
+        {#each app.conns.filter((c) => !isDataConn(c) && c.kind !== 'ssh' && c.kind !== 'cloudflare') as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={18} />

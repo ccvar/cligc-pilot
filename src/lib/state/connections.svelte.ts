@@ -96,6 +96,7 @@ export async function openConnWindow(id: string) {
   connections.connCtx = null;
   // 「远程连接」整组：新窗口打开上次用过的那台，窗口里左栏照样列出全部机器
   if (id === '__remotes__') id = lastRemoteId();
+  if (id === '__cloudflares__') id = lastCfId();
   if (!id) return;
   try { await invoke('open_conn_window', { connId: id }); }
   catch (e) { say(String(e), 'err'); }
@@ -114,6 +115,21 @@ function lastRemoteId(): string {
   try { last = localStorage.getItem(LAST_REMOTE_KEY) || ''; } catch { /* */ }
   return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? '';
 }
+const LAST_CF_KEY = 'cligc.pilot.lastCloudflare';
+/** 所有 Cloudflare 账号，切换器里合并成一行「Cloudflare」。 */
+export const cfConns = () => app.conns.filter((c) => c.kind === 'cloudflare');
+function lastCfId(): string {
+  const list = cfConns();
+  let last = '';
+  try { last = localStorage.getItem(LAST_CF_KEY) || ''; } catch { /* */ }
+  return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? '';
+}
+/** 进入 Cloudflare：打开上次用过的那个账号，没有就第一个。 */
+export function openCloudflare() {
+  connections.switcherOpen = false;
+  const id = lastCfId();
+  if (id) void selectConn(id);
+}
 export function openRemote() {
   connections.switcherOpen = false;
   const id = lastRemoteId();
@@ -127,6 +143,7 @@ export async function selectConn(id: string) {
   const seq = ++connections.selSeq; app.activeConnId = id;
   if (isMainWindow) { try { localStorage.setItem(LAST_CONN_KEY, id); } catch { /* */ } }
   if (conn?.kind === 'ssh') { try { localStorage.setItem(LAST_REMOTE_KEY, id); } catch { /* */ } }
+  if (conn?.kind === 'cloudflare') { try { localStorage.setItem(LAST_CF_KEY, id); } catch { /* */ } }
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;

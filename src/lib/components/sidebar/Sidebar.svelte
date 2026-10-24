@@ -22,11 +22,39 @@
   import type { Conversation } from '$lib/types';
   import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
   import RemoteRail from '$lib/components/sidebar/RemoteRail.svelte';
+  import CfRail from '$lib/components/sidebar/CfRail.svelte';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { managed, openManaged } from '$lib/state/managed.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
 </script>
+
+<!-- 按站点 / 项目分组的对话列表（普通模式直接放；Cloudflare 模式放在当前账号下面） -->
+{#snippet groupList()}
+  {#each sidebar.grouped as g (JSON.stringify([app.activeConnId, g.slug]))}
+    <button class="site-grp" onclick={() => toggleSite(g.slug)} title={g.name}>
+      <svg class="site-grp-chev" class:collapsed={sidebar.collapsedSites.has(g.slug)} width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      {#if app.isSiteConn}
+        <SiteMark size={13} />
+      {:else if app.isSshConn}
+        <SshMark size={13} />
+      {:else if app.isGhConn}
+        <GhMark size={13} />
+      {:else if app.isCfConn}
+        {#if g.url}<img class="site-grp-fav" src={faviconOf(g.url)} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
+      {:else}
+        <WorkspaceMark size={14} />
+      {/if}
+      <span class="site-grp-name">{g.name}</span>
+      {#if g.url}<span class="site-grp-host" title={hostOf(g.url)}>{hostOf(g.url)}</span>{/if}
+    </button>
+    {#if !sidebar.collapsedSites.has(g.slug)}
+      <SidebarConversationList items={g.subs.flatMap(sub => sub.items)} label={g.name}>
+        {#snippet row(c)}{@render convRow(c)}{/snippet}
+      </SidebarConversationList>
+    {/if}
+  {/each}
+{/snippet}
 
 <!-- 对话行：普通工作区和站点列表共用 -->
 {#snippet convRow(c: Conversation)}
@@ -89,34 +117,14 @@
     <SitesRail {convRow} />
   {:else if app.isSshConn}
     <RemoteRail {convRow} />
+  {:else if app.isCfConn}
+    <CfRail current={groupList} />
   {:else}
   <div class="convos" class:scrolled={ui.convosScrolled} onscroll={(e) => (ui.convosScrolled = (e.currentTarget as HTMLElement).scrollTop > 2)}>
     {#if sidebar.grouped.length === 0}
       <p class="rail-empty">还没有对话。<br />{app.isSiteConn ? '在这个站点里开一个对话，让 AI 改代码、看数据。' : app.isSshConn ? '在下方面板里直接说你想让这台机器做什么。' : app.isCfConn ? '给项目起个名，直接说你想要什么样的网站。' : app.isGhConn ? '选一个仓库，直接说你想改什么。' : '选好模型，直接说你想做什么。'}</p>
     {/if}
-    {#each sidebar.grouped as g (JSON.stringify([app.activeConnId, g.slug]))}
-      <button class="site-grp" onclick={() => toggleSite(g.slug)} title={g.name}>
-        <svg class="site-grp-chev" class:collapsed={sidebar.collapsedSites.has(g.slug)} width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        {#if app.isSiteConn}
-          <SiteMark size={13} />
-        {:else if app.isSshConn}
-          <SshMark size={13} />
-        {:else if app.isGhConn}
-          <GhMark size={13} />
-        {:else if app.isCfConn}
-          {#if g.url}<img class="site-grp-fav" src={faviconOf(g.url)} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />{/if}
-        {:else}
-          <WorkspaceMark size={14} />
-        {/if}
-        <span class="site-grp-name">{g.name}</span>
-        {#if g.url}<span class="site-grp-host" title={hostOf(g.url)}>{hostOf(g.url)}</span>{/if}
-      </button>
-      {#if !sidebar.collapsedSites.has(g.slug)}
-        <SidebarConversationList items={g.subs.flatMap(sub => sub.items)} label={g.name}>
-          {#snippet row(c)}{@render convRow(c)}{/snippet}
-        </SidebarConversationList>
-      {/if}
-    {/each}
+    {@render groupList()}
   </div>
   {/if}
 
