@@ -6,6 +6,10 @@ import type { Conversation, MakeCheck, MakeState, Site } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
 import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
+import { openConv } from './conversations.js';
+import { persistThreadPerm } from './thread.svelte.js';
+import { composer } from './composer.svelte.js';
+import { send } from './turns.svelte.js';
 
 const HIDE_KEY = 'cligc.pilot.conventionsHintHidden';
 function loadHidden(): string[] { try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch { return []; } }
@@ -33,11 +37,21 @@ export function makingConv(siteId: string): Conversation | undefined {
   return mk[mk.length - 1] ?? all[0];
 }
 
-/** 第一版没做完 AI 就停了：带上最新标准，让它先看现状再接着做（开一条新的制作对话）。 */
+/** 第一版没做完 AI 就停了：带上最新标准，让它先看现状再接着做。
+ *  接在原来那条制作对话里（同一个站点的制作是一条线，前面做到哪也在上面）；找不到才开新的。 */
 export async function continueMaking(site: Site) {
   try {
     const text = await invoke<string>('site_continue_message', { id: site.id });
-    await startSiteChat(site.id, text, undefined, MAKING_PERM);
+    const conv = makingConv(site.id);
+    if (!conv || conv.status === 'running' || app.running[conv.id]) {
+      await startSiteChat(site.id, text, undefined, MAKING_PERM);
+      return;
+    }
+    await openConv(conv.id);
+    if (app.activeConvId !== conv.id) { await startSiteChat(site.id, text, undefined, MAKING_PERM); return; }
+    await persistThreadPerm(MAKING_PERM);
+    composer.draft = text; composer.attachments = [];
+    await send();
   } catch (e) { say(String(e), 'err'); }
 }
 
