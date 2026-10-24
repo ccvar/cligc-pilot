@@ -436,6 +436,15 @@ async fn execute_model_loop_inner(
         policy
             .check_boundary(request_index)
             .map_err(|stop| stop.to_string())?;
+        // 文字部分（图片只算引用）不超过 2 MB；看过的图片另算，有自己的上限
+        let text_body = request_body_with(profile, model, effort, &instructions, &history.items, &definitions, false)?;
+        if text_body.to_string().len() > MAX_HISTORY_BYTES {
+            return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
+        }
+        let (images, image_bytes) = image_load(&history.items);
+        if images > MAX_IMAGES || image_bytes > MAX_IMAGE_TOTAL {
+            return Err(format!("这条会话里已经看过 {images} 张图片，再看会超过接口的请求上限，请新建会话继续；未自动丢弃历史"));
+        }
         let body = request_body(
             profile,
             model,
@@ -444,9 +453,6 @@ async fn execute_model_loop_inner(
             &history.items,
             &definitions,
         )?;
-        if body.to_string().len() > MAX_HISTORY_BYTES {
-            return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
-        }
         let text_checkpoint = result.text.len();
         let reply = stream_request(&client, profile, api_key, body, |delta| {
             let safe = tool_runtime::redact(delta, &[api_key, site_key]);
@@ -616,7 +622,20 @@ fn request_body(
     items: &[Value],
     definitions: &[Value],
 ) -> Result<Value, String> {
-    let expanded = expand_images(&profile.protocol, items);
+    request_body_with(profile, model, effort, system, items, definitions, true)
+}
+
+/// expand=false：图片保持引用（只用来量文字部分有多大）。
+fn request_body_with(
+    profile: &ApiProfile,
+    model: &str,
+    effort: &str,
+    system: &str,
+    items: &[Value],
+    definitions: &[Value],
+    expand: bool,
+) -> Result<Value, String> {
+    let expanded = if expand { expand_images(&profile.protocol, items) } else { items.to_vec() };
     let items = expanded.as_slice();
     let tools: Vec<Value> = definitions.iter().map(|d| match profile.protocol.as_str() {
         "openai_responses" => json!({"type":"function","name":d["name"],"description":d["description"],"parameters":d["parameters"],"strict":false}),
@@ -776,6 +795,29 @@ fn image_dims(b: &[u8]) -> Option<(u32, u32)> {
         }
     }
     None
+}
+
+/// 一条会话里最多带多少张图、多少字节（接口单次请求上限 32 MB、100 张图）。
+const MAX_IMAGES: usize = 60;
+const MAX_IMAGE_TOTAL: u64 = 24 * 1024 * 1024;
+
+/// 历史里引用了几张图、文件一共多大。
+fn image_load(items: &[Value]) -> (usize, u64) {
+    fn walk(v: &Value, n: &mut usize, bytes: &mut u64) {
+        if v["type"] == "pilot_image" {
+            *n += 1;
+            *bytes += v["file"].as_str().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0);
+            return;
+        }
+        match v {
+            Value::Array(a) => a.iter().for_each(|x| walk(x, n, bytes)),
+            Value::Object(m) => m.values().for_each(|x| walk(x, n, bytes)),
+            _ => {}
+        }
+    }
+    let (mut n, mut bytes) = (0, 0);
+    items.iter().for_each(|v| walk(v, &mut n, &mut bytes));
+    (n, bytes)
 }
 
 /// 发请求前把历史里的图片引用换成各协议的图片块（文件不在了就换成一句说明）。
@@ -1851,6 +1893,11 @@ mod image_tests {
         let sent = expand_images("openai_responses", &items);
         assert_eq!(sent[0]["type"], "function_call_output");
         assert!(sent[1]["content"][1]["image_url"].as_str().unwrap().starts_with("data:image/"));
+        // 图片只算引用：文字部分很小，图片另计
+        assert_eq!(image_load(&items).0, 1);
+        let p = tests::profile("openai_responses", "http://127.0.0.1:1");
+        let text_only = request_body_with(&p, "m", "", "", &items, &[], false).unwrap().to_string();
+        assert!(!text_only.contains("base64") && text_only.len() < 2000);
         // 文件没了：换成一句说明，不让请求失败
         let gone = json!({"type":"pilot_image","file":"/nope.jpg","media_type":"image/jpeg"});
         assert_eq!(expand_images("anthropic_messages", &[gone])[0]["type"], "text");
