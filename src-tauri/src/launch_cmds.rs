@@ -480,6 +480,8 @@ pub struct DomainCheck {
     /// 两边都打开了、标题能比
     pub compared: bool,
     pub same: bool,
+    /// 查过 Cloudflare 里占用这个域名的东西（quick 只比页面，或页面已经一致时不查）
+    pub scanned: bool,
     pub issues: Vec<DomainIssue>,
     /// 没查成的项（多半是令牌少权限），不算问题
     pub notes: Vec<String>,
@@ -532,7 +534,7 @@ async fn live_ns(name: &str) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String) -> Result<DomainCheck, String> {
+pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, quick: Option<bool>) -> Result<DomainCheck, String> {
     let site = state.sites.get(&id)?;
     if site.domain.is_empty() {
         return Err("站点没有填写域名".into());
@@ -570,6 +572,11 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String) ->
     }
     out.live_title = live.unwrap_or_default();
     out.pages_title = pages.unwrap_or_default();
+    // 只比页面（概览上自动检查），或者已经是这次上线的版本：不用再翻 Cloudflare
+    if quick.unwrap_or(false) || (out.compared && out.same) {
+        return Ok(out);
+    }
+    out.scanned = true;
 
     let mut seen_zones = std::collections::HashSet::new();
     let mut seen_accounts = std::collections::HashSet::new();

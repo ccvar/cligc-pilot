@@ -9,6 +9,7 @@
   import SiteManagedCard from './SiteManagedCard.svelte';
   import SiteMakeCard from './SiteMakeCard.svelte';
   import SiteTodos from './SiteTodos.svelte';
+  import SiteDomainLive from './SiteDomainLive.svelte';
   import { isMaking } from '$lib/state/siteCreate.svelte.js';
   import { siteMake, loadMake, writeConventions, hideConventionsHint } from '$lib/state/siteMake.svelte.js';
   import { clock } from './fmt';
@@ -90,6 +91,7 @@
             {#if last.ok && last.changed}<div class="faint">{last.changed} 个页面有变化</div>{/if}
           </dd>
         {/if}
+        {#if last?.ok && site.domain && !['none', 'workers', 'vps'].includes(site.deploy.mode)}<SiteDomainLive {site} deployedAt={last.ts} />{/if}
       </dl>
     </div>
   </div>

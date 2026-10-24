@@ -39,6 +39,8 @@ export interface DomainCheck {
   pages_title: string;
   compared: boolean;
   same: boolean;
+  /** 查过 Cloudflare 里占用这个域名的东西 */
+  scanned: boolean;
   issues: DomainIssue[];
   notes: string[];
 }
@@ -134,10 +136,13 @@ async function step<T>(id: string, key: string, fn: () => Promise<T>, done: (r: 
 }
 
 /** 查一下域名现在由谁在回应：和这次上线的 pages.dev 比页面标题，再找抢在 Pages 前面的东西。 */
-export async function checkDomain(site: Site) {
+/** quick：只比页面（概览上自动跑）；不一致时接着查原因。 */
+export async function checkDomain(site: Site, quick = false) {
+  if (launch.checkingDomain[site.id]) return;
   launch.checkingDomain = { ...launch.checkingDomain, [site.id]: true };
   try {
-    const r = await invoke<DomainCheck>('site_domain_check', { id: site.id });
+    let r = await invoke<DomainCheck>('site_domain_check', { id: site.id, quick });
+    if (quick && r.compared && !r.same) r = await invoke<DomainCheck>('site_domain_check', { id: site.id, quick: false });
     launch.domainCheck = { ...launch.domainCheck, [site.id]: r };
   } catch (e) { note(site.id, 'domain', `失败：${String(e)}`); }
   finally { launch.checkingDomain = { ...launch.checkingDomain, [site.id]: false }; }
