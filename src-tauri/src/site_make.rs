@@ -203,6 +203,26 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
     )
 }
 
+/// 「继续制作」：第一版没做完 AI 就停了（中断、出错、额度用完），接着做。
+/// `pending` 是还没完成的进度项；照样带上最新的内容标准和视觉标准，已经做好的部分也按它复查。
+pub fn continue_message(pending: &[&str], stack: &str) -> String {
+    let todo = if pending.is_empty() { "（进度上都完成了，请复查质量）".to_string() } else { pending.join("、") };
+    let stack = STACKS.iter().find(|s| s.0 == stack).map(|s| s.1).unwrap_or(stack);
+    format!(
+        "继续制作这个站点的第一版（技术栈 {stack}）。上一轮没做完就停了，先看现状再接着做：\n\
+1. 读 `.pilot/brief.md`（需求）和 `.pilot/site.md`（规划和约定），对照「内容规划」看哪些页面还没做、哪些没写完；已经做好的部分不要推倒重写。\n\
+2. 还没完成的进度：{todo}。\n\
+3. 把规划里的页面都做完（核心页面、关于、联系、隐私政策），按下面的【内容标准】写；已有的页面达不到标准的，一并改好。\n\
+4. 视觉按下面的【视觉标准】：设计方向还没写进 `.pilot/site.md` 的先定下来；在 375、768、1280 宽度截图首页和两个内容页，逐项评估、改完复查，直到找不出明显可提升之处。\n\
+5. `.pilot/site.md` 里补上「内容与视觉标准」一节（如果还没有）。\n\
+6. 跑构建确认通过，`git add -A && git commit -m \"搭建第一版\"`，然后简要汇报：做了哪些页面、设计方向、最后一轮自评、还有哪些需要我确认或补充。\n\n\
+{content}\n\n{visual}\n\n\
+不要部署——上线由 Pilot 负责。",
+        content = CONTENT_STANDARD,
+        visual = VISUAL_STANDARD,
+    )
+}
+
 // ───────────────────────── 第一版进度 + 上线前检查 ─────────────────────────
 //
 // 进度看文件，不看对话：AI 说做完了不算，`.pilot/site.md` 写了、页面有了、构建产物在、提交了才算。
@@ -574,5 +594,12 @@ mod tests {
         write(t.path(), "dist/index.html", "<html></html>");
         let steps = progress(t.path(), t.path(), "dist", 2);
         assert!(steps.iter().all(|s| s.done), "{:?}", steps.iter().map(|s| (s.key, s.done)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn continue_message_lists_what_is_left_and_carries_the_standards() {
+        let m = continue_message(&["构建通过", "提交第一版"], "astro");
+        assert!(m.contains("构建通过、提交第一版") && m.contains("不要推倒重写") && m.contains("Astro"));
+        assert!(m.contains("【内容标准】") && m.contains("【视觉标准】") && m.contains("不要部署"));
     }
 }

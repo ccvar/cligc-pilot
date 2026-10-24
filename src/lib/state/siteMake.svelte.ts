@@ -3,8 +3,8 @@
 import { untrack } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import type { Conversation, MakeCheck, MakeState, Site } from '$lib/types';
-import { app } from './app.svelte.js';
-import { SITE_PREFIX } from './sites.svelte.js';
+import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
+import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
 import { startSiteChat } from './siteCreate.svelte.js';
 
 const HIDE_KEY = 'cligc.pilot.conventionsHintHidden';
@@ -26,9 +26,41 @@ export async function loadMake(id: string, full = true) {
   finally { siteMake.loading[id] = false; }
 }
 
-/** 这个站点最早的那条对话＝制作第一版的对话。 */
+/** 制作对话：最近一条「从零搭建 / 继续制作」的对话；都没有就用这个站点最早的那条。 */
 export function makingConv(siteId: string): Conversation | undefined {
-  return app.convos.filter((c) => c.conn_id === SITE_PREFIX + siteId).sort((a, b) => a.created_at - b.created_at)[0];
+  const all = app.convos.filter((c) => c.conn_id === SITE_PREFIX + siteId).sort((a, b) => a.created_at - b.created_at);
+  const mk = all.filter((c) => /^(请从零搭建|继续制作)/.test(c.title));
+  return mk[mk.length - 1] ?? all[0];
+}
+
+/** 第一版没做完 AI 就停了：带上最新标准，让它先看现状再接着做（开一条新的制作对话）。 */
+export async function continueMaking(site: Site) {
+  try {
+    const text = await invoke<string>('site_continue_message', { id: site.id });
+    await startSiteChat(site.id, text);
+  } catch (e) { say(String(e), 'err'); }
+}
+
+/** 本地预览构建产物（和上线的是同一份文件），在预览窗里打开。 */
+export async function previewSite(site: Site) {
+  try { await invoke<string>('site_preview_start', { id: site.id }); }
+  catch (e) { say(String(e), 'err'); }
+}
+
+/** 从 Pilot 移除，文件夹留在原处。 */
+export async function removeMade(site: Site) {
+  const ok = await confirmDialog(`从 Pilot 移除「${site.name}」？站点的制作记录和对话会一并删除，文件夹 ${site.local_dir} 保留在原处。`, { title: '移除站点', kind: 'danger', confirmText: '移除' });
+  if (!ok) return;
+  try { await invoke('remove_site', { id: site.id }); await refreshSites(); await refreshConvos(); say(`已移除「${site.name}」`); }
+  catch (e) { say(String(e), 'err'); }
+}
+
+/** 放弃制作：文件夹移到废纸篓（可以恢复），再从 Pilot 移除。 */
+export async function discardMade(site: Site) {
+  const ok = await confirmDialog(`删除「${site.name}」？文件夹 ${site.local_dir} 会移到废纸篓（可以从废纸篓恢复），站点的制作记录和对话也会一并删除。`, { title: '删除站点', kind: 'danger', confirmText: '删除' });
+  if (!ok) return;
+  try { await invoke('discard_made_site', { id: site.id }); await refreshSites(); await refreshConvos(); say(`已删除「${site.name}」，文件夹在废纸篓里`); }
+  catch (e) { say(String(e), 'err'); }
 }
 
 export function fixWithAi(site: Site, checks: MakeCheck[]) {

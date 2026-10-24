@@ -436,6 +436,64 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
     Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), steps, checks, built_at })
 }
 
+/// 「继续制作」的消息：按当前进度列出还没完成的项，带上最新标准。
+#[tauri::command]
+pub async fn site_continue_message(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    use crate::site_make as mk;
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    let commits = crate::site_git::git(&code, &["rev-list", "--count", "HEAD"], "").await.map(|o| o.stdout.trim().parse().unwrap_or(0)).unwrap_or(0);
+    let steps = mk::progress(&site.app_dir(&code), &code, &site.build.out_dir, commits);
+    let pending: Vec<&str> = steps.iter().filter(|s| !s.done).map(|s| s.label).collect();
+    Ok(mk::continue_message(&pending, &site.framework))
+}
+
+/// 把文件夹移到废纸篓（可恢复），不直接删。
+fn move_to_trash(p: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSFileManager, NSString, NSURL};
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy()));
+        NSFileManager::defaultManager()
+            .trashItemAtURL_resultingItemURL_error(&url, None)
+            .map_err(|e| format!("移到废纸篓失败：{}", e.localizedDescription()))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let path = p.to_string_lossy().replace('\'', "''");
+        let script = format!("Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('{path}', 'OnlyErrorDialogs', 'SendToRecycleBin')");
+        let ok = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).status().map(|s| s.success()).unwrap_or(false);
+        if ok { Ok(()) } else { Err("移到回收站失败".into()) }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let ok = std::process::Command::new("gio").args(["trash", &p.to_string_lossy()]).status().map(|s| s.success()).unwrap_or(false);
+        if ok { Ok(()) } else { Err("移到废纸篓失败（需要 gio）".into()) }
+    }
+}
+
+/// 放弃一个在 Pilot 里制作的站点：文件夹移到废纸篓，再从 Pilot 移除。只对「在 Pilot 里制作的本地站点」开放——
+/// 导入的站点是用户自己的代码，只能「移除」不能删文件夹。
+#[tauri::command]
+pub fn discard_made_site(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let site = state.sites.get(&id)?;
+    if site.origin != "created" || site.source != "local" {
+        return Err("只有在 Pilot 里制作的站点才能连文件夹一起删除".into());
+    }
+    if state.site_jobs.running(&id) {
+        return Err("站点有任务正在运行，请先停止".into());
+    }
+    let conv = format!("site:{id}");
+    if state.convos.list().iter().any(|c| c.conn_id == conv && c.status == "running") {
+        return Err("站点下有对话正在运行，请先停止".into());
+    }
+    let dir = Path::new(&site.local_dir);
+    if dir.is_dir() {
+        move_to_trash(dir)?;
+    }
+    remove_site(state, id)
+}
+
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。
 #[tauri::command]
 pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, String> {
@@ -839,5 +897,18 @@ mod cf_match_tests {
         site.repo = String::new();
         site.local_dir = "/nonexistent".into();
         assert!(match_cf_deploy(&all, &site).is_none());
+    }
+}
+
+#[cfg(test)]
+mod trash_tests {
+    /// 真的会往废纸篓里放一个空文件夹，所以默认不跑：cargo test -- --ignored trash
+    #[test]
+    #[ignore]
+    fn moves_a_folder_to_the_trash() {
+        let d = std::env::temp_dir().join(format!("pilot-trash-check-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("x")).unwrap();
+        super::move_to_trash(&d).unwrap();
+        assert!(!d.exists());
     }
 }

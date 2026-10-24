@@ -2173,6 +2173,34 @@ fn wrangler_hint() -> String {
         .to_string()
 }
 
+/// 站点的本地预览：用内建静态服务器伺候构建产物（和上线的是同一份文件），开预览窗。
+/// 产物改了不用重启：服务器每次请求都现读文件，重新构建后刷新即可。
+#[tauri::command]
+async fn site_preview_start(app: AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let code = site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    let out = site_make::out_dir(&site.app_dir(&code), &site.build.out_dir);
+    if !out.join("index.html").is_file() {
+        return Err("还没有构建产物：先点「构建并检查」".into());
+    }
+    let key = format!("site:{id}");
+    if let Some(u) = reusable_preview(&app, &state, &key) {
+        open_preview_window(&app, &u, &site.name)?;
+        return Ok(u);
+    }
+    let old_port = state.preview.lock().unwrap().as_ref().and_then(|h| url_port(&h.url));
+    stop_preview(&state);
+    if let Some(p) = old_port {
+        wait_port_released(p, 2500).await;
+    }
+    let port = free_port(PREVIEW_DEFAULT_PORT).ok_or("找不到空闲的预览端口")?;
+    let proc = start_builtin(out, port).await?;
+    let url = format!("http://127.0.0.1:{port}");
+    *state.preview.lock().unwrap() = Some(PreviewHandle { proc, url: url.clone(), project: key });
+    open_preview_window(&app, &url, &site.name)?;
+    Ok(url)
+}
+
 #[tauri::command]
 fn cf_preview_stop(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     stop_preview(&state);
@@ -4472,6 +4500,7 @@ pub fn run() {
             cf_project_ready,
             cf_preview_start,
             cf_preview_stop,
+            site_preview_start,
             cf_preview_template,
             list_templates,
             template_index_html,
@@ -4510,6 +4539,8 @@ pub fn run() {
             site_cmds::import_site,
             site_cmds::create_site,
             site_cmds::site_make_state,
+            site_cmds::site_continue_message,
+            site_cmds::discard_made_site,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_env_keys,

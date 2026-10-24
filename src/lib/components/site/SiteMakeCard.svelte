@@ -9,7 +9,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sites, checkSite } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
-  import { siteMake, loadMake, makingConv, fixWithAi } from '$lib/state/siteMake.svelte.js';
+  import { siteMake, loadMake, makingConv, fixWithAi, continueMaking, previewSite } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
   const ms = $derived(siteMake.state[site.id]);
@@ -21,6 +21,7 @@
   const doneN = $derived(ms?.steps.filter((s) => s.done).length ?? 0);
   const bad = $derived(ms?.checks.filter((c) => c.level !== 'ok') ?? []);
   const fails = $derived(bad.filter((c) => c.level === 'fail').length);
+  const pending = $derived(ms?.steps.filter((s) => !s.done).map((s) => s.label) ?? []);
   const ready = $derived(!!ms && ms.built_at > 0 && fails === 0);
   let openItems = $state<Set<string>>(new Set());
   function toggle(k: string) { const n = new Set(openItems); if (n.has(k)) n.delete(k); else n.add(k); openItems = n; }
@@ -39,11 +40,18 @@
     {#if ms}<span class="prog"><span class="meter"><i style="width:{(doneN / Math.max(ms.steps.length, 1)) * 100}%"></i></span>{doneN}/{ms.steps.length}</span>{/if}
     <span class="grow"></span>
     {#if aiRunning}<span class="live"><span class="spin"></span>AI 正在制作…</span>{/if}
+    {#if ms?.built_at}<button class="btn tiny" onclick={() => previewSite(site)} data-tip="在预览窗里打开构建产物（和上线的是同一份文件）"><Icon name="external" size={12} />本地预览</button>{/if}
     {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />制作对话</button>{/if}
     <button class="ic-btn" onclick={() => loadMake(site.id)} disabled={loading} aria-label="重新检查" data-tip="重新看一遍站点文件"><RefreshIcon spinning={loading} /></button>
   </h3>
 
   {#if ms}
+    {#if !aiRunning && pending.length}
+      <div class="resume">
+        <span>第一版还没做完，还差：{pending.join('、')}。AI 停下了（可能是中断、出错或额度用完）。</span>
+        <button class="btn small primary" onclick={() => continueMaking(site)}><Icon name="play" size={12} />继续制作</button>
+      </div>
+    {/if}
     <ol class="mk-steps">
       {#each ms.steps as s (s.key)}
         <li class:done={s.done}><span class="tick">{#if s.done}<Icon name="check" size={11} />{/if}</span><b>{s.label}</b>{#if s.detail}<small>{s.detail}</small>{/if}</li>
@@ -89,6 +97,9 @@
   @keyframes mk-spin { to { transform: rotate(360deg); } }
   .ic-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .ic-btn:hover { background: #f1efe9; color: var(--text); }
+  .resume { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin-bottom: 14px; border-radius: 10px; background: #faf6ec; border: 1px solid #f0e4c4; font-size: 12.5px; color: #6b4e12; }
+  .resume span { flex: 1; min-width: 0; line-height: 1.5; }
+  .resume .btn { flex: none; }
   .mk-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
   .mk-steps li { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--dim); }
   .mk-steps li b { font-weight: 500; }

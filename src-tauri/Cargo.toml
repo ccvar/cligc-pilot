@@ -53,7 +53,7 @@ drag = "2.1"
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSAttributedString", "NSBezierPath", "NSColor", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSFilePromiseProvider", "NSFont", "NSImage", "NSParagraphStyle", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSStringDrawing", "NSView", "NSWindow", "NSWorkspace"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSFileCoordinator", "NSFilePresenter", "NSGeometry", "NSHFSFileTypes", "NSObject", "NSOperation", "NSString", "NSURL", "NSValue"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSError", "NSFileCoordinator", "NSFileManager", "NSFilePresenter", "NSGeometry", "NSHFSFileTypes", "NSObject", "NSOperation", "NSString", "NSURL", "NSValue"] }
 block2 = "0.6"
 libc = "0.2"
 

@@ -11,7 +11,18 @@
   import { openSite } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingSites, openSiteCreate, finishMaking, STACKS } from '$lib/state/siteCreate.svelte.js';
-  import { siteMake, loadMake, makingConv } from '$lib/state/siteMake.svelte.js';
+  import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
+
+  // 卡片右上角「…」菜单
+  let menu = $state('');
+  $effect(() => {
+    if (!menu) return;
+    const close = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest('.more')) menu = ''; };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') menu = ''; };
+    document.addEventListener('mousedown', close, true); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close, true); document.removeEventListener('keydown', esc); };
+  });
+  const running = (id: string) => app.convos.some((c) => c.conn_id === `site:${id}` && c.status === 'running');
 
   const list = $derived(makingSites().sort((a, b) => b.updated_at - a.updated_at));
   $effect(() => { for (const s of list) void loadMake(s.id); });
@@ -59,21 +70,39 @@
             {@const st = status(s)}
             {@const conv = makingConv(s.id)}
             {@const done = ms?.steps.filter((x) => x.done).length ?? 0}
+            {@const pending = !!ms && ms.steps.some((x) => !x.done) && !running(s.id)}
             <div class="card item">
-              <button class="top" onclick={() => openSite(s.id, 'overview')}>
-                <SiteIcon id={s.id} size={18} />
-                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
-              </button>
+              <div class="top-row">
+                <button class="top" onclick={() => openSite(s.id, 'overview')}>
+                  <SiteIcon id={s.id} size={18} />
+                  <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
+                </button>
+                <div class="more">
+                  <button class="more-btn" class:on={menu === s.id} aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === s.id} onclick={() => (menu = menu === s.id ? '' : s.id)}>
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="12.5" cy="8" r="1.3" /></svg>
+                  </button>
+                  {#if menu === s.id}
+                    <div class="menu" role="menu">
+                      {#if ms?.built_at}<button role="menuitem" onclick={() => { menu = ''; void previewSite(s); }}><Icon name="external" size={13} />本地预览</button>{/if}
+                      {#if pending}<button role="menuitem" onclick={() => { menu = ''; void continueMaking(s); }}><Icon name="play" size={13} />继续制作</button>{/if}
+                      <button role="menuitem" onclick={() => { menu = ''; void finishMaking(s); }}><Icon name="check" size={13} />标记做完，移到全部站点</button>
+                      <div class="sep"></div>
+                      <button role="menuitem" onclick={() => { menu = ''; void removeMade(s); }}><Icon name="x" size={13} />从 Pilot 移除（保留文件夹）</button>
+                      <button role="menuitem" class="danger" onclick={() => { menu = ''; void discardMade(s); }}><Icon name="trash" size={13} />删除站点和文件夹…</button>
+                    </div>
+                  {/if}
+                </div>
+              </div>
               <div class="prog">
                 <span class="meter"><i style="width:{ms ? (done / Math.max(ms.steps.length, 1)) * 100 : 0}%"></i></span>
                 <span class="n">{ms ? `${done}/${ms.steps.length}` : ''}</span>
               </div>
               <div class="st {st.tone}">{#if st.tone === 'live'}<span class="spin"></span>{/if}{st.text}</div>
               <div class="acts">
+                {#if pending}<button class="btn tiny primary" onclick={() => continueMaking(s)}><Icon name="play" size={11} />继续制作</button>{/if}
                 <button class="btn tiny" onclick={() => openSite(s.id, 'overview')}><Icon name="checks" size={11} />查看进度</button>
                 {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />制作对话</button>{/if}
-                <span class="grow"></span>
-                <button class="link-btn" onclick={() => finishMaking(s)} data-tip="不等配置部署，直接移到全部站点">标记做完</button>
+                {#if ms?.built_at}<button class="btn tiny" onclick={() => previewSite(s)}><Icon name="external" size={11} />预览</button>{/if}
               </div>
               <small class="when">更新于 {ago(s.updated_at)}</small>
             </div>
@@ -88,6 +117,20 @@
   .lead { margin: 0 0 2px; font-size: 12.5px; line-height: 1.6; max-width: 720px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .item { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }
+  .top-row { display: flex; align-items: flex-start; gap: 8px; }
+  .top-row .top { flex: 1; }
+  .more { position: relative; flex: none; }
+  .more-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 7px; color: var(--faint); cursor: pointer; transition: background-color .12s, color .12s; }
+  .more-btn:hover, .more-btn.on { background: #f1efe9; color: var(--text); }
+  .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 200px; padding: 5px; background: #fff; border: 1px solid var(--border); border-radius: 11px; box-shadow: 0 12px 32px rgba(30, 25, 15, .16); animation: mkl-pop .12s ease-out backwards; }
+  @keyframes mkl-pop { from { opacity: 0; transform: translateY(-3px); } }
+  .menu button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: none; background: none; border-radius: 7px; font: inherit; font-size: 12.5px; color: var(--text); text-align: left; cursor: pointer; white-space: nowrap; }
+  .menu button:hover { background: #f1efe9; }
+  .menu button :global(svg) { color: var(--faint); flex: none; }
+  .menu button.danger { color: var(--err); }
+  .menu button.danger :global(svg) { color: var(--err); }
+  .menu button.danger:hover { background: var(--err-soft, #fde8e8); }
+  .sep { height: 1px; background: var(--border); margin: 4px 2px; }
   .top { display: flex; align-items: center; gap: 10px; border: none; background: none; padding: 0; font: inherit; color: var(--text); text-align: left; cursor: pointer; min-width: 0; }
   .nm { display: flex; flex-direction: column; min-width: 0; }
   .nm b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -104,9 +147,7 @@
   .spin { width: 10px; height: 10px; border: 1.5px solid var(--border2); border-top-color: var(--dim); border-radius: 50%; animation: mkl-spin .7s linear infinite; }
   @keyframes mkl-spin { to { transform: rotate(360deg); } }
   .acts { display: flex; align-items: center; gap: 6px; }
-  .acts .link-btn { font-size: 12px; color: var(--faint); }
-  .acts .link-btn:hover { color: var(--text); }
-  .grow { flex: 1; }
+  .acts { flex-wrap: wrap; }
   .when { font-size: 11px; color: var(--faint); }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 16px; text-align: center; }
   .empty > :global(svg) { color: var(--accent, #b4541a); margin-bottom: 4px; }
