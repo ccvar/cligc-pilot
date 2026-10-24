@@ -397,6 +397,45 @@ pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_mak
     Ok(CreatedSite { message: mk::first_message(&req), site })
 }
 
+/// 站点制作的状态：站点约定写了没有、第一版进度、上线前检查（扫构建产物）。
+#[derive(Serialize)]
+pub struct MakeState {
+    pub conventions: bool,
+    pub steps: Vec<crate::site_make::MakeStep>,
+    pub checks: Vec<crate::site_make::Check>,
+    /// 构建产物的时间（index.html 的修改时间，秒）；0＝还没构建
+    pub built_at: u64,
+}
+
+#[tauri::command]
+pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full: Option<bool>) -> Result<MakeState, String> {
+    use crate::site_make as mk;
+    let site = state.sites.get(&id)?;
+    let gh = state.conns.get(&site.gh_conn_id).ok();
+    let code = crate::site_git::code_dir(&site, gh.as_ref())?;
+    let app = site.app_dir(&code);
+    let out = mk::out_dir(&app, &site.build.out_dir);
+    let commits = if full.unwrap_or(true) && code.join(".git").exists() {
+        crate::site_git::git(&code, &["rev-list", "--count", "HEAD"], "").await.map(|o| o.stdout.trim().parse().unwrap_or(0)).unwrap_or(0)
+    } else {
+        0
+    };
+    let built_at = std::fs::metadata(out.join("index.html"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 不要 full：只看站点约定有没有写（站点看板每次打开都会问，别去扫整个构建产物）
+    if !full.unwrap_or(true) {
+        return Ok(MakeState { conventions: mk::has_conventions(&code), steps: vec![], checks: vec![], built_at });
+    }
+    let (steps, checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &site.build.out_dir, commits), mk::readiness(&out)))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), steps, checks, built_at })
+}
+
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。
 #[tauri::command]
 pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, String> {

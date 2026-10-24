@@ -7,6 +7,9 @@
   import SiteSummary from './SiteSummary.svelte';
   import SiteLaunch from './SiteLaunch.svelte';
   import SiteManagedCard from './SiteManagedCard.svelte';
+  import SiteMakeCard from './SiteMakeCard.svelte';
+  import { isMaking } from '$lib/state/siteCreate.svelte.js';
+  import { siteMake, loadMake, writeConventions, hideConventionsHint } from '$lib/state/siteMake.svelte.js';
   import { clock } from './fmt';
   import { sites, deploySite, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { ops } from "$lib/state/ops.svelte.js";
@@ -20,10 +23,15 @@
   const hasData = $derived(!!(site.data.ga4_property || site.data.gsc_site || site.data.bing_site));
   // 家目录缩写成 ~，路径太长时在中间省略交给 CSS
   const shortPath = (p: string) => p.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
+  const making = $derived(isMaking(site.id));
+  // 老站点：没有站点约定就提示补一份（托管运营和 AI 加内容都按它来）
+  $effect(() => { if (!isMaking(site.id)) void loadMake(site.id, false); });
+  const needConventions = $derived(!making && siteMake.state[site.id]?.conventions === false && !siteMake.hidden.includes(site.id));
   const queue = $derived((ops.queue[site.id] ?? []).filter((q) => q.status === 'open' || q.status === 'proposed'));
 </script>
 
 <div class="ov">
+  {#if making}<SiteMakeCard {site} />{/if}
   <SiteLaunch {site} />
 
   {#if job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
@@ -31,6 +39,15 @@
   {/if}
 
   <SiteManagedCard {site} />
+
+  {#if needConventions}
+    <div class="card conv-hint">
+      <Icon name="doc" />
+      <div class="ch-main"><b>补一份站点约定</b><small>写清内容放哪、页面格式、新增一页要改哪些地方（<code>.pilot/site.md</code>），托管运营和 AI 加内容会照着来，更稳。</small></div>
+      <button class="btn tiny" onclick={() => writeConventions(site)}><Icon name="wand" size={11} />让 AI 写一份</button>
+      <button class="link-btn" onclick={() => hideConventionsHint(site.id)}>以后再说</button>
+    </div>
+  {/if}
 
   {#if hasData}<SiteSummary {site} />{/if}
 
@@ -74,6 +91,13 @@
 </div>
 
 <style>
+  .conv-hint { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .conv-hint > :global(svg) { flex: none; color: var(--dim); }
+  .ch-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ch-main b { font-size: 13px; font-weight: 600; }
+  .ch-main small { font-size: 12px; color: var(--faint); line-height: 1.5; }
+  .conv-hint .link-btn { flex: none; font-size: 12px; color: var(--faint); }
+  .conv-hint .link-btn:hover { color: var(--text); }
   .ov { display: flex; flex-direction: column; gap: 14px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   .small { font-size: 11.5px; }

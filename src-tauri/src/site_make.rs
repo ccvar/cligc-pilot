@@ -155,6 +155,295 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
     )
 }
 
+// ───────────────────────── 第一版进度 + 上线前检查 ─────────────────────────
+//
+// 进度看文件，不看对话：AI 说做完了不算，`.pilot/site.md` 写了、页面有了、构建产物在、提交了才算。
+// 上线前检查扫构建产物里的 HTML：缺页、占位、断链、标题描述、薄内容、sitemap / robots。
+
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+
+#[derive(Serialize, Clone)]
+pub struct MakeStep {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub done: bool,
+    pub detail: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct Check {
+    pub key: &'static str,
+    pub label: &'static str,
+    /// ok | warn | fail（fail 的问题不修不该上线）
+    pub level: &'static str,
+    pub detail: String,
+    pub items: Vec<String>,
+}
+
+const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".pilot", ".astro", ".next", ".wrangler", ".cache", "resources", "shots"];
+
+fn walk(dir: &Path, skip: &[PathBuf], out: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if p.is_dir() {
+            if SKIP_DIRS.contains(&name.as_str()) || skip.iter().any(|s| s == &p) || out.len() > 3000 {
+                continue;
+            }
+            walk(&p, skip, out, keep);
+        } else if keep(&p) {
+            out.push(p);
+        }
+    }
+}
+
+fn has_ext(p: &Path, exts: &[&str]) -> bool {
+    p.extension().and_then(|e| e.to_str()).map(|e| exts.contains(&e.to_ascii_lowercase().as_str())).unwrap_or(false)
+}
+
+/// 站点约定有没有写（至少几百字，不是空壳）。
+pub fn has_conventions(code: &Path) -> bool {
+    std::fs::read_to_string(code.join(".pilot/site.md")).map(|t| t.trim().chars().count() >= 200).unwrap_or(false)
+}
+
+/// 构建产物目录（纯静态站就是站点目录本身）。
+pub fn out_dir(app: &Path, out: &str) -> PathBuf {
+    if out.is_empty() || out == "." { app.to_path_buf() } else { app.join(out) }
+}
+
+/// 第一版的进度：规划 → 页面 → 约定 → 构建 → 提交。`commits` 是 HEAD 上的提交数。
+pub fn progress(app: &Path, code: &Path, out: &str, commits: usize) -> Vec<MakeStep> {
+    let conv = std::fs::read_to_string(code.join(".pilot/site.md")).unwrap_or_default();
+    let planned = conv.contains("内容规划");
+    let built_dir = out_dir(app, out);
+    let skip = if out.is_empty() || out == "." { vec![] } else { vec![built_dir.clone()] };
+    let mut src = Vec::new();
+    walk(app, &skip, &mut src, &|p| has_ext(p, &["md", "mdx", "markdown", "html", "htm", "astro", "vue", "tsx", "jsx", "njk"]) && !p.ends_with("README.md"));
+    // 只数像页面的源文件：内容目录里的 Markdown、页面目录里的组件、纯静态站的 html
+    let pages = src
+        .iter()
+        .filter(|p| {
+            let s = p.to_string_lossy();
+            has_ext(p, &["md", "mdx", "markdown", "html", "htm"]) || s.contains("/pages/") || s.contains("/app/") || s.contains("/content/")
+        })
+        .filter(|p| !p.starts_with(code.join(".pilot")))
+        .count();
+    let index = built_dir.join("index.html").is_file();
+    let mut html = Vec::new();
+    if index {
+        walk(&built_dir, &[], &mut html, &|p| has_ext(p, &["html"]));
+    }
+    vec![
+        MakeStep { key: "plan", label: "规划站点结构", done: planned, detail: if planned { "写在 .pilot/site.md 的「内容规划」里".into() } else { String::new() } },
+        MakeStep { key: "pages", label: "搭骨架、写首批页面", done: pages >= 4, detail: if pages > 0 { format!("已有 {pages} 个页面文件") } else { String::new() } },
+        MakeStep { key: "conventions", label: "写站点约定", done: has_conventions(code), detail: if has_conventions(code) { ".pilot/site.md".into() } else { String::new() } },
+        MakeStep { key: "build", label: "构建通过", done: index, detail: if index { format!("产物里有 {} 个页面", html.len()) } else { String::new() } },
+        MakeStep { key: "commit", label: "提交第一版", done: commits > 1, detail: if commits > 1 { format!("{commits} 次提交") } else { String::new() } },
+    ]
+}
+
+/// 去掉整段的标签块（`<script>…</script>` 之类），大小写不敏感（ASCII 小写不改字节位置）。
+fn drop_blocks(s: &str, tags: &[&str]) -> String {
+    let mut out = s.to_string();
+    for t in tags {
+        loop {
+            let low = out.to_ascii_lowercase();
+            let Some(a) = low.find(&format!("<{t}")) else { break };
+            let close = format!("</{t}>");
+            let b = low[a..].find(&close).map(|i| a + i + close.len()).unwrap_or(out.len());
+            out.replace_range(a..b, " ");
+        }
+    }
+    out
+}
+
+fn strip_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ").replace("&amp;", "&")
+}
+
+/// 第一个 `<tag …>…</tag>` 的内部。
+fn inner<'a>(html: &'a str, low: &str, tag: &str) -> Option<&'a str> {
+    let a = low.find(&format!("<{tag}"))?;
+    let start = a + low[a..].find('>')? + 1;
+    let end = low[start..].find(&format!("</{tag}>")).map(|i| start + i).unwrap_or(html.len());
+    html.get(start..end)
+}
+
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let low = tag.to_ascii_lowercase();
+    for q in ['"', '\''] {
+        let key = format!("{name}={q}");
+        if let Some(i) = low.find(&key) {
+            let v = &tag[i + key.len()..];
+            return v.find(q).map(|j| v[..j].to_string());
+        }
+    }
+    None
+}
+
+/// 所有 `<tagname …>` 开始标签的原文。
+fn tags<'a>(html: &'a str, low: &str, name: &str) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let pat = format!("<{name}");
+    let mut from = 0;
+    while let Some(i) = low[from..].find(&pat) {
+        let a = from + i;
+        let after = low.as_bytes().get(a + pat.len()).copied().unwrap_or(b' ');
+        let Some(j) = low[a..].find('>') else { break };
+        if after.is_ascii_whitespace() || after == b'>' || after == b'/' {
+            out.push(&html[a..a + j + 1]);
+        }
+        from = a + j + 1;
+    }
+    out
+}
+
+/// 站内链接指向的文件存在吗（`/a/`、`/a`、`/a.html`、相对路径都认）。
+fn link_ok(root: &Path, page: &Path, href: &str) -> bool {
+    let h = href.split(['#', '?']).next().unwrap_or("").trim();
+    if h.is_empty() {
+        return true;
+    }
+    let base = if h.starts_with('/') { root.to_path_buf() } else { page.parent().unwrap_or(root).to_path_buf() };
+    let mut p = base;
+    for seg in h.trim_start_matches('/').split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if p != root {
+                    p.pop();
+                }
+            }
+            s => p.push(s),
+        }
+    }
+    p.is_file() || p.join("index.html").is_file() || p.with_extension("html").is_file() || (h.ends_with('/') && p.join("index.html").is_file())
+}
+
+fn is_external(h: &str) -> bool {
+    let l = h.trim().to_ascii_lowercase();
+    l.is_empty() || l.starts_with('#') || l.contains("://") || l.starts_with("//") || ["mailto:", "tel:", "javascript:", "data:", "sms:"].iter().any(|p| l.starts_with(p))
+}
+
+const REQUIRED: &[(&str, &[&str])] = &[("关于", &["about", "关于"]), ("联系", &["contact", "联系"]), ("隐私政策", &["privacy", "隐私"])];
+const LISTING: &[&str] = &["tag", "categor", "page/", "archive", "search", "blog/index", "posts/index"];
+const EXTRA_PLACEHOLDERS: &[&str] = &["敬请期待", "coming soon", "待补", "your-email", "example@example.com", "xxx-xxxx"];
+/// 内容页的文字量下限（和托管运营判断「新页面太薄」用同一把尺）。
+pub const THIN_UNITS: usize = 600;
+
+/// 扫构建产物，给出上线前检查的结果。
+pub fn readiness(out: &Path) -> Vec<Check> {
+    if !out.join("index.html").is_file() {
+        return vec![Check { key: "build", label: "构建产物", level: "fail", detail: "还没有构建产物（找不到 index.html）：先构建一次".into(), items: vec![] }];
+    }
+    let mut files = Vec::new();
+    walk(out, &[], &mut files, &|p| has_ext(p, &["html"]));
+    files.sort();
+    let url = |p: &Path| -> String {
+        let r = p.strip_prefix(out).unwrap_or(p).to_string_lossy().replace('\\', "/");
+        let r = r.strip_suffix("index.html").map(|x| x.to_string()).unwrap_or(r);
+        format!("/{r}")
+    };
+    let (mut no_title, mut no_desc, mut no_h1, mut no_lang, mut thin, mut ph, mut broken) = (vec![], vec![], vec![], 0usize, vec![], vec![], vec![]);
+    let mut titles: std::collections::HashMap<String, Vec<String>> = Default::default();
+    let mut found = [false; 3];
+    let mut favicon = out.join("favicon.ico").is_file() || out.join("favicon.svg").is_file();
+    let mut pages = 0;
+    for f in &files {
+        let Ok(html) = std::fs::read_to_string(f) else { continue };
+        let u = url(f);
+        let ul = u.to_ascii_lowercase();
+        let low = html.to_ascii_lowercase();
+        // 跳转页（meta refresh）和 404 不当正经页面查
+        if low.contains("http-equiv=\"refresh\"") || ul.contains("404") {
+            continue;
+        }
+        pages += 1;
+        let title = inner(&html, &low, "title").map(|t| strip_tags(t).trim().to_string()).unwrap_or_default();
+        if title.is_empty() {
+            no_title.push(u.clone());
+        } else {
+            titles.entry(title.clone()).or_default().push(u.clone());
+        }
+        let metas = tags(&html, &low, "meta");
+        if !metas.iter().any(|m| attr(m, "name").map(|n| n.eq_ignore_ascii_case("description")).unwrap_or(false) && attr(m, "content").map(|c| !c.trim().is_empty()).unwrap_or(false)) {
+            no_desc.push(u.clone());
+        }
+        if !low.contains("<h1") {
+            no_h1.push(u.clone());
+        }
+        if tags(&html, &low, "html").first().map(|t| attr(t, "lang").is_none()).unwrap_or(true) {
+            no_lang += 1;
+        }
+        if tags(&html, &low, "link").iter().any(|l| attr(l, "rel").map(|r| r.to_ascii_lowercase().contains("icon")).unwrap_or(false)) {
+            favicon = true;
+        }
+        for (i, (_, keys)) in REQUIRED.iter().enumerate() {
+            if keys.iter().any(|k| ul.contains(k) || title.to_lowercase().contains(k)) {
+                found[i] = true;
+            }
+        }
+        // 正文：有 <main> / <article> 用它，否则 body 去掉页头页脚导航
+        let body = inner(&html, &low, "main").or_else(|| inner(&html, &low, "article")).or_else(|| inner(&html, &low, "body")).unwrap_or(&html);
+        let text = strip_tags(&drop_blocks(body, &["script", "style", "nav", "header", "footer", "aside", "noscript", "svg", "template"]));
+        if let Some(m) = crate::managed::leak_marker(&text).or_else(|| {
+            let l = text.to_lowercase();
+            EXTRA_PLACEHOLDERS.iter().copied().find(|m| l.contains(m))
+        }) {
+            ph.push(format!("{u}（{m}）"));
+        }
+        let special = u == "/" || REQUIRED.iter().any(|(_, ks)| ks.iter().any(|k| ul.contains(k))) || LISTING.iter().any(|k| ul.contains(k));
+        let units = crate::managed::text_units(&text);
+        if !special && units < THIN_UNITS {
+            thin.push(format!("{u}（约 {units} 字）"));
+        }
+        for a in tags(&html, &low, "a") {
+            if let Some(h) = attr(a, "href") {
+                if !is_external(&h) && !link_ok(out, f, &h) && broken.len() < 30 {
+                    broken.push(format!("{u} → {h}"));
+                }
+            }
+        }
+    }
+    let dup: Vec<String> = titles.into_iter().filter(|(_, v)| v.len() > 1).map(|(t, v)| format!("「{t}」：{}", v.join("、"))).collect();
+    let missing: Vec<&str> = REQUIRED.iter().zip(found).filter(|(_, f)| !f).map(|((n, _), _)| *n).collect();
+    let mut seo_files = vec![];
+    if !out.join("sitemap.xml").is_file() && !out.join("sitemap-index.xml").is_file() {
+        seo_files.push("sitemap.xml");
+    }
+    if !out.join("robots.txt").is_file() {
+        seo_files.push("robots.txt");
+    }
+    let lvl = |bad: bool, worst: &'static str| if bad { worst } else { "ok" };
+    vec![
+        Check { key: "pages", label: "页面数量", level: lvl(pages < 4, "warn"), detail: format!("共 {pages} 个页面"), items: vec![] },
+        Check { key: "required", label: "关于 / 联系 / 隐私政策", level: lvl(!missing.is_empty(), "warn"), detail: if missing.is_empty() { "都有".into() } else { format!("缺：{}", missing.join("、")) }, items: vec![] },
+        Check { key: "placeholder", label: "占位和待补内容", level: lvl(!ph.is_empty(), "fail"), detail: if ph.is_empty() { "没有发现".into() } else { format!("{} 个页面还有占位或待补的内容", ph.len()) }, items: ph },
+        Check { key: "links", label: "站内链接", level: lvl(!broken.is_empty(), "fail"), detail: if broken.is_empty() { "没有断链".into() } else { format!("{} 个链接指向不存在的页面", broken.len()) }, items: broken },
+        Check { key: "title", label: "页面标题", level: if !no_title.is_empty() { "fail" } else if !dup.is_empty() { "warn" } else { "ok" }, detail: if !no_title.is_empty() { format!("{} 个页面没有标题", no_title.len()) } else if !dup.is_empty() { format!("{} 组页面标题重复", dup.len()) } else { "每页都有、不重复".into() }, items: no_title.into_iter().chain(dup).collect() },
+        Check { key: "description", label: "页面描述", level: lvl(!no_desc.is_empty(), "warn"), detail: if no_desc.is_empty() { "每页都有".into() } else { format!("{} 个页面没有 description", no_desc.len()) }, items: no_desc },
+        Check { key: "h1", label: "一级标题", level: lvl(!no_h1.is_empty(), "warn"), detail: if no_h1.is_empty() { "每页都有".into() } else { format!("{} 个页面没有 h1", no_h1.len()) }, items: no_h1 },
+        Check { key: "thin", label: "内容厚度", level: lvl(!thin.is_empty(), "warn"), detail: if thin.is_empty() { format!("内容页正文都在 {THIN_UNITS} 字以上") } else { format!("{} 个内容页正文不到 {THIN_UNITS} 字，容易被搜索引擎当成薄内容", thin.len()) }, items: thin },
+        Check { key: "seo_files", label: "sitemap.xml / robots.txt", level: lvl(!seo_files.is_empty(), "warn"), detail: if seo_files.is_empty() { "都有".into() } else { format!("缺：{}", seo_files.join("、")) }, items: vec![] },
+        Check { key: "basics", label: "语言标记和网站图标", level: lvl(no_lang > 0 || !favicon, "warn"), detail: match (no_lang > 0, favicon) { (false, true) => "都有".into(), (true, true) => format!("{no_lang} 个页面的 <html> 没有 lang"), (false, false) => "没有网站图标（favicon）".into(), (true, false) => format!("没有网站图标；{no_lang} 个页面没有 lang") }, items: vec![] },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +475,51 @@ mod tests {
         assert!(m.contains(".pilot/site.md") && m.contains("8 个核心页面") && m.contains("不要部署"));
         assert!(m.contains("Astro"));
         assert_eq!(pages_of(&CreateSiteRequest { pages: 50, ..req() }), 20);
+    }
+
+    fn write(root: &Path, rel: &str, body: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn page(title: &str, body: &str, links: &str) -> String {
+        format!("<!doctype html><html lang=\"zh\"><head><title>{title}</title><meta name=\"description\" content=\"d\"><link rel=\"icon\" href=\"/favicon.svg\"></head><body><nav><a href=\"/\">首页</a>{links}</nav><main><h1>{title}</h1><p>{body}</p></main></body></html>")
+    }
+
+    #[test]
+    fn readiness_flags_missing_build_broken_links_placeholders_and_thin_pages() {
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(readiness(t.path())[0].level, "fail");
+        let long = "手冲咖啡".repeat(200);
+        write(t.path(), "index.html", &page("首页", "欢迎", "<a href=\"/guide/\">指南</a><a href=\"/missing/\">x</a><a href=\"https://x.com\">外</a><a href=\"mailto:a@b.c\">信</a>"));
+        write(t.path(), "guide/index.html", &page("指南", &long, "<a href=\"../about.html\">关于</a>"));
+        write(t.path(), "about.html", &page("关于我们", "我们是谁", ""));
+        write(t.path(), "short/index.html", &page("短页", "只有一句话。待补充：价格表", ""));
+        let r = readiness(t.path());
+        let get = |k: &str| r.iter().find(|c| c.key == k).unwrap().clone();
+        assert_eq!(get("links").level, "fail");
+        assert!(get("links").items.iter().any(|i| i.contains("/missing/")), "{:?}", get("links").items);
+        assert_eq!(get("links").items.len(), 1, "外链、mailto、相对路径都不算断链");
+        assert_eq!(get("placeholder").level, "fail");
+        assert!(get("thin").items.iter().any(|i| i.starts_with("/short/")) && !get("thin").items.iter().any(|i| i.starts_with("/guide/")));
+        assert!(get("required").detail.contains("联系") && !get("required").detail.contains("关于"));
+        assert_eq!(get("seo_files").level, "warn");
+        assert_eq!(get("basics").level, "ok");
+        assert_eq!(get("title").level, "ok");
+    }
+
+    #[test]
+    fn progress_reads_files_not_promises() {
+        let t = tempfile::tempdir().unwrap();
+        let steps = progress(t.path(), t.path(), "dist", 1);
+        assert!(steps.iter().all(|s| !s.done));
+        write(t.path(), ".pilot/site.md", &format!("# 站点约定\n\n## 内容规划\n\n{}", "说明".repeat(120)));
+        for i in 0..4 {
+            write(t.path(), &format!("src/content/p{i}.md"), "# x");
+        }
+        write(t.path(), "dist/index.html", "<html></html>");
+        let steps = progress(t.path(), t.path(), "dist", 2);
+        assert!(steps.iter().all(|s| s.done), "{:?}", steps.iter().map(|s| (s.key, s.done)).collect::<Vec<_>>());
     }
 }

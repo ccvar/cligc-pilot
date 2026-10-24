@@ -88,6 +88,16 @@ export async function pickParent() {
   if (typeof picked === 'string' && picked.trim()) siteCreate.parent = picked;
 }
 
+/** 在站点里开一个新对话，把 text 作为第一条消息发出去；没有可用模型时停在启动页、消息留在输入框里。 */
+export async function startSiteChat(siteId: string, text: string, noBrainHint = '消息已经写好：选一个可用的模型后发送') {
+  await selectConn(SITE_PREFIX + siteId);
+  app.activeConvId = ''; app.activeConv = null;
+  composer.attachments = [];
+  launcher.lDraft = text;
+  if (brainUsable(launcher.lBrain)) await startChat();
+  else { app.view = 'launcher'; say(noBrainHint, 'err'); }
+}
+
 export async function createSite() {
   const f = siteCreate;
   if (f.busy) return;
@@ -104,13 +114,8 @@ export async function createSite() {
     f.busy = false;
     closeSiteCreate();
     await refreshSites();
-    await selectConn(SITE_PREFIX + r.site.id);
     // 在新站点里开第一版对话：需求就是第一条消息（看得见、可追溯）
-    app.activeConvId = ''; app.activeConv = null;
-    composer.attachments = [];
-    launcher.lDraft = r.message;
-    if (brainUsable(launcher.lBrain)) await startChat();
-    else { app.view = 'launcher'; say('站点已建好，需求也写好了：选一个可用的模型后发送，就开始制作第一版', 'err'); }
+    await startSiteChat(r.site.id, r.message, '站点已建好，需求也写好了：选一个可用的模型后发送，就开始制作第一版');
   } catch (e) {
     f.err = String(e);
   } finally {

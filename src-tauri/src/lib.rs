@@ -4509,6 +4509,7 @@ pub fn run() {
             site_cmds::list_sites,
             site_cmds::import_site,
             site_cmds::create_site,
+            site_cmds::site_make_state,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_env_keys,

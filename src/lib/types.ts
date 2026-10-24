@@ -223,6 +223,11 @@ export interface Site {
   created_at: number;
   updated_at: number;
 }
+/** 站点制作：第一版进度的一步（看文件判断，不看对话） */
+export interface MakeStep { key: string; label: string; done: boolean; detail: string }
+/** 上线前检查的一项（扫构建产物）。fail 的问题不修不该上线 */
+export interface MakeCheck { key: string; label: string; level: 'ok' | 'warn' | 'fail'; detail: string; items: string[] }
+export interface MakeState { conventions: boolean; steps: MakeStep[]; checks: MakeCheck[]; built_at: number }
 export interface SiteDetected {
   framework: string;
   build: SiteBuild;
