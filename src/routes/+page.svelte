@@ -33,6 +33,9 @@
   import SitesOverview from '$lib/components/site/SitesOverview.svelte';
   import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
   import { initManaged } from '$lib/state/managed.svelte.js';
+  import { phone, initPhone } from '$lib/state/phone.svelte.js';
+  import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
+  import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { initOpsLive } from '$lib/state/turns.svelte.js';
   import DataConnectDialog from '$lib/components/site/DataConnectDialog.svelte';
   import TemplateSaveDialog from '$lib/components/library/TemplateSaveDialog.svelte';
@@ -82,6 +85,7 @@
   initOps();
   initFleet();
   initManaged();
+  initPhone();
   initOpsLive();
 </script>
 
@@ -99,7 +103,7 @@
 <main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible}>
   <!-- 融合式标题栏：透明拖拽条铺满顶部，红绿灯与工具按钮浮在其上（macOS Overlay） -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? (updater.topUpdateVisible ? 167 : 140) : ui.railWidth}px"></div>
+  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 140 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
 
   <!-- 顶部工具：折叠侧栏 + 搜索会话（窗口模式紧挨红绿灯右侧；全屏时无红绿灯，与左栏菜单左对齐） -->
   <div class="win-tools" class:fs={ui.isFullscreen} class:win={isWindows}>
@@ -116,6 +120,13 @@
         <path d="M11.7 11.7L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
       </svg>
     </button>
+    {#if phone.ready.length || phone.pending.length}
+      <!-- 连着安卓手机时显示：AI 可以在对话里操作手机、截图 -->
+      <button class="wt ph" class:pend={!phone.ready.length} onclick={(e) => { phone.focus = true; openConnectionSetup(e); }}
+        data-tip={phone.ready.length ? `${phone.ready.map((d) => d.model || d.serial).join('、')} 已连上\nAI 可以在对话里操作手机、截图` : '手机已连上，等你在手机上点「允许 USB 调试」'} aria-label="安卓手机">
+        <AndroidMark size={17} />
+      </button>
+    {/if}
     {#if updater.topUpdateVisible}
       <button class="wt upd" class:active={updater.updateCenterOpen} onclick={openUpdateCenter}
         title={updater.pilotUpdateStatus === 'checking' ? '正在检查更新' : updater.updAvail ? `发现新版本 ${updater.updAvail}，打开更新中心` : '打开更新中心'} aria-label="打开更新中心">
@@ -335,6 +346,9 @@
   /* 待更新图标：锚在侧栏右上角（跟随 rail 右边界），静默检查发现新版时出现。 */
   /* 待更新指示：并入 win-tools，样式同折叠/搜索（无底、灰色 + 悬停高亮），仅右上角一个柔和强调色小点。 */
   .wt.upd { position: relative; }
+  .wt.ph { position: relative; }
+  /* 还没在手机上点「允许」：图标变淡 */
+  .wt.ph.pend { opacity: .45; }
   .wt.upd.active { background: rgba(0, 0, 0, .07); color: var(--text); }
   .wt.upd:disabled { opacity: .55; }
   .upd-count { position: absolute; top: -1px; right: -3px; min-width: 12px; height: 12px; padding: 0 3px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; border: 1.5px solid var(--rail); border-radius: 999px; background: var(--accent); color: #fff; font-size: 7.5px; font-weight: 750; line-height: 1; }

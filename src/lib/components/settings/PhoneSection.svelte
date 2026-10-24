@@ -5,19 +5,18 @@
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import { say } from '$lib/state/app.svelte.js';
+  import { phone, loadPhone } from '$lib/state/phone.svelte.js';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
 
-  type Device = { serial: string; state: string; model: string };
-  type Status = { adb: string; managed: boolean; devices: Device[]; error: string };
-  let st = $state<Status | null>(null);
-  let loading = $state(false);
   let installing = $state(false);
-  async function load() {
-    loading = true;
-    try { st = await invoke<Status>('phone_status'); } catch (e) { say(String(e), 'err'); }
-    finally { loading = false; }
-  }
-  onMount(() => { void load(); });
+  let el: HTMLDivElement | undefined = $state();
+  const st = $derived(phone.status);
+  const load = loadPhone;
+  onMount(() => {
+    void load();
+    // 从左上角的手机图标进来：滚到这一节
+    if (phone.focus) { phone.focus = false; setTimeout(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120); }
+  });
   async function install() {
     installing = true;
     try { await invoke<string>('install_adb'); say('adb 已安装'); await load(); }
@@ -31,7 +30,7 @@
 
 <div class="sec-head">
   <span class="sec-title">安卓手机<InfoTip text={'连上之后，在对话里说「打开 XX app，每一步截一张图」就行。\n登录、验证码、支付这些 AI 会停下来交给你。'} label="手机怎么用" /></span>
-  {#if st?.adb}<button class="icon-btn" onclick={load} aria-label="重新检测" data-tip="重新检测连接的手机"><RefreshIcon spinning={loading} /></button>{/if}
+  {#if st?.adb}<button class="icon-btn" onclick={load} aria-label="重新检测" data-tip="重新检测连接的手机"><RefreshIcon spinning={phone.loading} /></button>{/if}
 </div>
 
 {#if st && !st.adb}
