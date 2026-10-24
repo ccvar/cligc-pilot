@@ -16,6 +16,7 @@
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
+  import Icon from '$lib/components/site/Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, makingSites } from '$lib/state/siteCreate.svelte.js';
@@ -77,8 +78,9 @@
       </div>
       <div class="cs-actions">
         <div class="cs-div"></div>
-        <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><SiteMark size={15} />制作站点</button>
-        <button class="cs-act" role="menuitem" onclick={() => openSiteImport()}><SiteMark size={15} />导入站点</button>
+        <!-- 和站点页的按钮同一套图标：制作 = 魔法棒，导入 = 上传箭头（原来两个都是地球，分不出来） -->
+        <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><Icon name="wand" size={15} />制作站点</button>
+        <button class="cs-act" role="menuitem" onclick={() => openSiteImport()}><Icon name="upload" size={15} />导入站点</button>
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
         <button class="cs-act" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshConnect(); }}><SshMark size={15} />新建远程连接</button>
