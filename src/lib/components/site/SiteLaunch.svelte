@@ -19,6 +19,8 @@
 
   let { site }: { site: Site } = $props();
   let gaBusy = $state(false);
+  // Pilot 自己构建、上传的方式：IndexNow 验证文件上线时放进构建产物，不用改代码
+  const pilotBuilds = $derived(site.deploy.mode === 'direct' || site.deploy.mode === 'workers');
   // 构建并上线是后台任务：跑完（成功或失败）重新读一遍向导状态，不然「上线一次」一直是灰的
   let lastJob = '';
   $effect(() => {
@@ -221,8 +223,8 @@
       <span class="n">{st.indexnow ? '✓' : 6}</span>
       <div class="lb">
         <b><span class="si"><Icon name="zap" size={14} /></span>IndexNow</b>
-        <small>{st.indexnow ? '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
-        {#if !st.indexnow}<div class="row"><button class="btn tiny" onclick={() => setupIndexNow(site)} disabled={!!busy || !site.domain}><Icon name="key" size={11} />{busy === 'indexnow' ? '处理中…' : '生成并写入'}</button></div>{/if}
+        <small>{st.indexnow ? '已配置：每次上线后自动提交内容有变化的页面（Bing、Yandex 等共享）。' : pilotBuilds ? '下次「构建并上线」时自动配好：Pilot 生成密钥、把验证文件放进构建产物，不用改代码。' : '生成验证密钥并写进站点，下次上线后生效。'}</small>
+        {#if !st.indexnow}<div class="row"><button class="btn tiny" onclick={() => setupIndexNow(site)} disabled={!!busy || !site.domain}><Icon name="key" size={11} />{busy === 'indexnow' ? '处理中…' : pilotBuilds ? '现在生成密钥' : '生成并写入'}</button></div>{/if}
         {#if notes.indexnow}<small class:err={notes.indexnow.startsWith('失败')}>{notes.indexnow}</small>{/if}
       </div>
     </div>

@@ -508,6 +508,13 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         },
     );
     let built = build_and_check(site, &dir, stamp.as_deref(), job).await?;
+    // IndexNow 验证文件：站点自己没带就放进构建产物（只在这次上传的产物里，不改代码）
+    if !site.data.indexnow_key.is_empty() {
+        let f = built.out.join(format!("{}.txt", site.data.indexnow_key));
+        if !f.exists() && std::fs::write(&f, &site.data.indexnow_key).is_ok() {
+            job.line("已把 IndexNow 验证文件放进构建产物");
+        }
+    }
     let manifest = build_manifest(&built.out);
     // 上传
     job.step("upload", "running", &site.deploy.project);

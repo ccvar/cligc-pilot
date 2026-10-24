@@ -664,7 +664,15 @@ pub fn cancel_site_job(state: tauri::State<'_, AppState>, id: String) -> bool {
 /// 构建并上线（后台作业，立即返回作业 id；进度走 site-job 事件）。
 #[tauri::command]
 pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
-    let site = state.sites.get(&id)?;
+    let mut site = state.sites.get(&id)?;
+    // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
+    if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+        let key = crate::bing::new_indexnow_key();
+        site = state.sites.update(&id, now(), |s| {
+            s.data.indexnow_key = key.clone();
+            Ok(())
+        })?;
+    }
     if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err(if site.deploy.mode == "pages_git" {
             "这个站点由 Cloudflare 在合并后自动构建，可以在下方「重新部署」".into()

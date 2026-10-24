@@ -277,6 +277,11 @@ pub async fn setup_indexnow(state: tauri::State<'_, AppState>, id: String) -> Re
     let rel_dir = [site.build.root.trim_matches('/'), rel_dir].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("/");
     let rel = if rel_dir.is_empty() { format!("{key}.txt") } else { format!("{rel_dir}/{key}.txt") };
     let mut out = IndexNowSetup { key: key.clone(), file: rel.clone(), pr_url: String::new(), note: String::new() };
+    // Pilot 自己构建、上传的站点：验证文件在上线时放进构建产物（site_deploy::deploy_inner），不改代码、不开 PR
+    if matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+        out.file = format!("{key}.txt（上线时放进构建产物）");
+        out.note = "已生成密钥。Pilot 上线时会把验证文件放进构建产物，不用改代码；下次上线后生效，之后每次上线自动提交改动的页面。".into();
+    } else {
     match site.source.as_str() {
         "local" => {
             let p = std::path::Path::new(&site.local_dir).join(&rel);
@@ -309,6 +314,7 @@ pub async fn setup_indexnow(state: tauri::State<'_, AppState>, id: String) -> Re
             crate::site_git::remove_worktree(&main, &wt).await;
             out.note = "已开 PR，合并并上线后生效。".into();
         }
+    }
     }
     state.sites.update(&id, crate::now_secs(), |s| {
         s.data.indexnow_key = key;
