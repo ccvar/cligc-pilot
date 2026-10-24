@@ -282,9 +282,9 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         let req = self.pending.join(format!("{id}.req.json"));
         let resp = self.pending.join(format!("{id}.resp.json"));
         let payload = json!({"id":id,"conv":self.turn_id,"tool":if name=="write_file"{"Write"}else{"Bash"},
-            "cmd":detail,"input":{"command":detail},"dangerous":host||crate::permit::is_dangerous(detail),
+            "cmd":detail,"input":{"command":detail},"dangerous":crate::permit::is_dangerous(detail),
             "mode":self.mode.as_str(),"ts":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|x|x.as_millis() as u64).unwrap_or(0),
-            "desc":if host{"API 模型请求本机执行（不是沙箱，不注入站点密钥）"}else{"API 模型请求执行操作"},"arg":detail});
+            "desc":if host{"AI 想在本机运行这条命令"}else{"AI 想执行这个操作"},"arg":detail});
         std::fs::write(&req, payload.to_string()).map_err(|e| e.to_string())?;
         let _cleanup = ApprovalFiles(req.clone(), resp.clone());
         let wait = async {
@@ -441,11 +441,14 @@ fn decision(mode: PermMode, name: &str, detail: &str, safe_commands: bool) -> Ga
     if mode == PermMode::Full {
         return Gate::Allow;
     }
-    if name == "run_command" && safe_commands && mode == PermMode::Auto {
-        return if crate::permit::is_dangerous(detail) { Gate::Confirm } else { Gate::Allow };
-    }
-    if name == "run_command" || mode == PermMode::Ask {
+    let _ = safe_commands;
+    if mode == PermMode::Ask {
         return Gate::Confirm;
+    }
+    // 自动档：和 Claude CLI 的自动档同一条规则——不在危险清单上的命令（读文件、构建、检查、git 提交）直接跑，
+    // 部署、推送、删库、外发请求、读令牌这类才停下来等你确认
+    if name == "run_command" {
+        return if crate::permit::is_dangerous(detail) { Gate::Confirm } else { Gate::Allow };
     }
     if name == "write_file" {
         return Gate::Allow;
@@ -630,10 +633,11 @@ mod tests {
     }
 
     #[test]
-    fn host_commands_require_confirmation_except_full() {
-        for mode in [PermMode::Ask, PermMode::Auto] {
-            assert_eq!(decision(mode, "run_command", "echo safe", false), Gate::Confirm);
-        }
+    fn auto_mode_only_confirms_dangerous_commands() {
+        assert_eq!(decision(PermMode::Ask, "run_command", "echo safe", false), Gate::Confirm);
+        // 自动档：安全命令直接跑，危险命令要确认
+        assert_eq!(decision(PermMode::Auto, "run_command", "echo safe", false), Gate::Allow);
+        assert_eq!(decision(PermMode::Auto, "run_command", "wrangler deploy", false), Gate::Confirm);
         assert_eq!(
             decision(PermMode::Plan, "run_command", "echo safe", false),
             Gate::Deny
