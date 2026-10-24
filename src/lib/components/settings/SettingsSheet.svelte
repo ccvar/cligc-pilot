@@ -27,6 +27,35 @@
   import { elapsedLabel } from '$lib/state/messages.svelte.js';
   import { customsOf } from '$lib/state/models';
   import { updater, openUpdateCenter } from '$lib/state/updater.svelte.js';
+  import type { Connection } from '$lib/types';
+
+  // 连接按类型分组、每条一行：原来每条一张大卡片、各类混排，又长又乱。
+  // 组可以折叠（记在本机）；条目多的组默认收起，只看组头的数量。
+  const CONN_GROUPS: { kind: string; label: string; add?: () => void }[] = [
+    { kind: 'cloudflare', label: 'Cloudflare', add: openCfConnect },
+    { kind: 'github', label: 'GitHub', add: openGhConnect },
+    { kind: 'ssh', label: '远程机器', add: openSshConnect },
+  ];
+  const connGroups = $derived.by(() => {
+    const list = app.conns.filter((c) => !isDataConn(c));
+    const known = new Set(CONN_GROUPS.map((g) => g.kind));
+    const groups = CONN_GROUPS.map((g) => ({ ...g, items: list.filter((c) => c.kind === g.kind) }));
+    const other = list.filter((c) => !known.has(c.kind));
+    if (other.length) groups.push({ kind: 'other', label: '其他', add: undefined, items: other });
+    return groups.filter((g) => g.items.length);
+  });
+  const FOLD_KEY = 'cligc.pilot.connFold';
+  let fold = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch { return {}; } })());
+  const folded = (kind: string, n: number) => fold[kind] ?? n > 4;
+  function toggleFold(kind: string, n: number) {
+    fold = { ...fold, [kind]: !folded(kind, n) };
+    try { localStorage.setItem(FOLD_KEY, JSON.stringify(fold)); } catch { /* */ }
+  }
+  function connSub(c: Connection): string {
+    if (c.kind === 'cloudflare') return c.remark?.trim() || c.key_prefix || '';
+    if (c.kind === 'github') return c.remark?.trim() || c.login || '';
+    return '';
+  }
 </script>
 
 <!-- 设置弹窗 -->
@@ -63,34 +92,45 @@
         </div>
       </div>
       {#if app.conns.length === 0}<p class="hint">还没有连接。可以连接 Cloudflare 建站部署、连接 GitHub 改仓库代码，或新建一个 SSH 远程连接。本地对话不需要连接。</p>{/if}
-      <div class="conn-list">
-        {#each app.conns.filter((c) => !isDataConn(c)) as c (c.id)}
-          <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
-            onclick={() => selectConn(c.id)}
-            onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
-            oncontextmenu={(e) => openConnCtx(e, c)}>
-            <ConnectionMark kind={c.kind} size={22} />
-            <span class="conn-main"><b>{connectionDisplayName(c)}</b>
-              {#if c.kind === 'ssh'}
-                <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
-              {:else if c.kind === 'cloudflare'}
-                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
-              {:else if c.kind === 'github'}
-                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.login}</span> · GitHub</small>
-              {:else if c.kind === 'google'}
-                <small>{c.remark?.trim() || c.login} · Google {c.key_kind === 'oauth' ? 'OAuth' : '服务账号'}</small>
-              {:else if c.kind === 'bing'}
-                <small>{c.remark?.trim() || c.key_prefix} · Bing Webmaster</small>
-              {/if}</span>
-            <button
-              class="icon-btn sm"
-              class:active={connections.connCtx?.conn.id === c.id}
-              title="连接设置"
-              aria-label={`打开 ${connectionDisplayName(c)} 的连接设置`}
-              aria-haspopup="menu"
-              aria-expanded={connections.connCtx?.conn.id === c.id}
-              onclick={(e) => toggleConnCtx(e, c)}
-            ><SettingsIcon /></button>
+      <div class="conn-groups">
+        {#each connGroups as g (g.kind)}
+          {@const isFolded = folded(g.kind, g.items.length)}
+          <div class="cg">
+            <div class="cg-head">
+              <button class="cg-toggle" onclick={() => toggleFold(g.kind, g.items.length)} aria-expanded={!isFolded}>
+                <svg class="cg-chev" class:folded={isFolded} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                <ConnectionMark kind={g.kind === 'other' ? g.items[0].kind : g.kind} size={14} />
+                <span class="cg-label">{g.label}</span><span class="cg-n">{g.items.length}</span>
+              </button>
+              {#if g.add}<button class="icon-btn sm cg-add" data-tip="添加{g.label}" aria-label="添加{g.label}" onclick={() => g.add?.()}><PlusIcon /></button>{/if}
+            </div>
+            {#if !isFolded}
+              <div class="cg-list">
+                {#each g.items as c (c.id)}
+                  <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
+                    onclick={() => selectConn(c.id)}
+                    onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
+                    oncontextmenu={(e) => openConnCtx(e, c)}>
+                    {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
+                    <b class="cr-name">{connectionDisplayName(c)}</b>
+                    {#if c.kind === 'ssh'}
+                      <small class="cr-sub">{sshSub(c)}</small>
+                    {:else if connSub(c)}
+                      <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{connSub(c)}</small>
+                    {/if}
+                    <button
+                      class="icon-btn sm cr-gear"
+                      class:active={connections.connCtx?.conn.id === c.id}
+                      title="连接设置"
+                      aria-label={`打开 ${connectionDisplayName(c)} 的连接设置`}
+                      aria-haspopup="menu"
+                      aria-expanded={connections.connCtx?.conn.id === c.id}
+                      onclick={(e) => { e.stopPropagation(); toggleConnCtx(e, c); }}
+                    ><SettingsIcon /></button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -264,15 +304,6 @@
 {/if}
 
 <style>
-  /* 远端系统信息（页脚可点＝重新检测；下拉/设置里只读） */
-  .cs-os { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
-  .cs-os { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cs-os-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .dot.ok { background: #16a34a; }
   .dot.warn { background: #d97706; }
@@ -339,18 +370,27 @@
   .conn-remark { cursor: help; }
   .sec-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 1px; }
   .sec-head.mt { margin-top: 12px; }
-  .conn-list { display: flex; flex-direction: column; gap: 5px; }
-  .conn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 11px; cursor: pointer; transition: border-color .12s, background .12s; }
+  .conn-groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .cg { border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
+  .cg-head { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 4px; }
+  .cg-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; border: none; background: none; padding: 5px 6px; border-radius: 7px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; text-align: left; }
+  .cg-toggle:hover { background: #f5f4f1; }
+  .cg-chev { flex: none; color: var(--faint); transition: transform .15s; }
+  .cg-chev.folded { transform: rotate(-90deg); }
+  .cg-label { font-weight: 600; }
+  .cg-n { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .cg-add { flex: none; color: var(--faint); }
+  .cg-list { border-top: 1px solid var(--border); }
+  .conn-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 6px 4px 31px; cursor: pointer; transition: background .12s; }
+  .conn-row + .conn-row { border-top: 1px solid #f1f0ec; }
   .conn-row:hover { background: #faf9f6; }
-  .conn-row.on { border-color: #cfc9ec; background: #f7f6ff; }
+  .conn-row.on { background: #f5f4f1; }
   .conn-row :global(.sm) { border-radius: 6px; }
-  .conn-main { flex: 1; min-width: 0; }
-  .conn-main b { display: block; font-size: 13.5px; }
-  .conn-main small { display: block; color: var(--dim); font-size: 11px; }
-  /* ★ 上面这条 display:block（0,1,1）会压过 .cs-os 的 inline-flex（0,1,0）：设置弹窗的连接行里
-     发行版图标于是退回**行内基线对齐**——12px 的图标坐在 11px 文字的基线上，整个上蹿一截。
-     这里把 flex 垂直居中赢回来（用 flex 而非 inline-flex：副标题本来就独占一行）。 */
-  .conn-main small.cs-os { display: flex; align-items: center; }
+  .cr-os { flex: none; display: inline-flex; width: 14px; margin-left: -22px; } /* 放进左侧缩进里，机器名和其他组的名字对齐 */
+  .cr-name { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cr-sub { flex: 1 1 0; min-width: 0; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cr-gear { flex: none; margin-left: auto; opacity: .55; }
+  .conn-row:hover .cr-gear, .cr-gear.active { opacity: 1; }
   .icon-btn.sm { padding: 4px; border-radius: 7px; }
   .brain-row { display: flex; align-items: center; gap: 11px; padding: 0; }
   .brain-auth-actions { flex: none; display: inline-flex; align-items: center; gap: 8px; }
