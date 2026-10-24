@@ -73,14 +73,18 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
 
 let loading = false;
 let again = false;
-// 每次启动只自动识别一次：没配置部署的站点，去 Cloudflare 按域名 / 仓库找对应的 Pages 项目并填上
+// 每次启动只自动识别一次：没配置部署的站点去 Cloudflare 找对应的 Pages 项目，没接的数据源去 Google / Bing 账号里按域名找
 let autodetected = false;
 async function autodetectDeploys() {
   autodetected = true;
   try {
-    const filled = await invoke<string[]>('autodetect_cf_deploys');
-    if (filled.length) {
-      say(`在 Cloudflare 里认出了 ${filled.length} 个站点的部署：${filled.join('；')}`);
+    const [deploys, data] = await Promise.all([
+      fleet.rows.some((r) => r.deploy_mode === 'none') ? invoke<string[]>('autodetect_cf_deploys').catch(() => []) : Promise.resolve([] as string[]),
+      invoke<string[]>('autodetect_data_bindings').catch(() => [] as string[]),
+    ]);
+    if (deploys.length) say(`在 Cloudflare 里认出了 ${deploys.length} 个站点的部署：${deploys.join('；')}`);
+    if (data.length) say(`按域名接上了 ${data.length} 个站点的数据源：${data.join('；')}。数据马上开始拉取`);
+    if (deploys.length || data.length) {
       await refreshSites();
       void loadFleet();
     }
@@ -93,7 +97,7 @@ export async function loadFleet() {
     const rows = await invoke<SiteRow[]>('sites_overview');
     fleet.rows = rows;
     fleet.loaded = true;
-    if (!autodetected && rows.some((r) => r.deploy_mode === 'none')) void autodetectDeploys();
+    if (!autodetected) void autodetectDeploys();
   } catch (e) { say(String(e), 'err'); }
   finally {
     loading = false;

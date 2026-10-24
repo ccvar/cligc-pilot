@@ -2029,6 +2029,8 @@ fn set_last_data_sync(data_dir: &Path, date: &str) {
 /// 一个一个站点拉取数据（不占站点作业，不和构建、运营任务抢）；每个站点拉完发 site-data 事件，开着的看板会刷新。
 async fn daily_data_sync(ctx: Ctx) {
     let st = ctx.state();
+    // 先把没接上的数据源按域名接上（新建的 GA4 / Search Console 资源第二天就能自动用上）
+    let _ = crate::data_cmds::auto_bind_data(&st).await;
     for site in st.sites.list() {
         let d = &site.data;
         if d.gsc_site.is_empty() && d.ga4_property.is_empty() && d.bing_site.is_empty() {

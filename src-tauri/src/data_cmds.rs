@@ -107,6 +107,132 @@ pub async fn list_bing_sites(state: tauri::State<'_, AppState>, conn_id: String)
     crate::bing::list_sites(&crate::keychain::get_key(&c.id)?).await
 }
 
+/// 能匹配的资源：站点域名对得上的 Search Console 资源 / GA4 媒体资源 / Bing 站点。
+fn gsc_matches(url: &str, bare: &str) -> bool {
+    let u = url.trim_end_matches('/').to_ascii_lowercase();
+    u == format!("sc-domain:{bare}") || u == format!("https://{bare}") || u == format!("https://www.{bare}") || u == format!("http://{bare}") || u == format!("http://www.{bare}")
+}
+
+fn ga4_matches(name: &str, bare: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    let label = bare.split('.').next().unwrap_or(bare);
+    n == bare || n == label || n == format!("www.{bare}") || n.split(|c: char| c.is_whitespace() || "-–—|·/()（）".contains(c)).any(|w| w == bare || w == format!("www.{bare}"))
+}
+
+/// 没接数据源的地方，按域名在所有已连接的 Google / Bing 账号里找对应的资源并填上（只填空着的，不改你选过的；
+/// GA4 只有唯一一个名字对得上的媒体资源才填）。返回填了哪些。
+pub async fn auto_bind_data(state: &AppState) -> Vec<(String, String)> {
+    let sites: Vec<crate::sites::Site> = state.sites.list().into_iter().filter(|s| {
+        let d = &s.data;
+        !s.domain.trim().is_empty() && (d.gsc_site.is_empty() || d.ga4_property.is_empty() || d.bing_site.is_empty())
+    }).collect();
+    if sites.is_empty() {
+        return Vec::new();
+    }
+    let mut google: Vec<(String, GoogleResources)> = Vec::new();
+    let mut bing: Vec<(String, Vec<crate::bing::BingSite>)> = Vec::new();
+    for c in state.conns.list() {
+        let Ok(raw) = crate::keychain::get_key(&c.id) else { continue };
+        if c.kind == "google" {
+            if let Ok(cred) = google::parse_credential(&c.key_kind, &raw) {
+                if let Ok(r) = resources_with(&c.id, &cred).await {
+                    google.push((c.id.clone(), r));
+                }
+            }
+        } else if c.kind == "bing" {
+            if let Ok(list) = crate::bing::list_sites(&raw).await {
+                bing.push((c.id.clone(), list));
+            }
+        }
+    }
+    let mut filled = Vec::new();
+    for site in sites {
+        let bare = site.domain.trim().trim_start_matches("www.").to_ascii_lowercase();
+        let mut d = site.data.clone();
+        let mut what = Vec::new();
+        if d.ga4_property.is_empty() {
+            let hits: Vec<(&String, &google::Ga4Property)> = google.iter().flat_map(|(id, r)| r.properties.iter().map(move |p| (id, p))).filter(|(_, p)| ga4_matches(&p.name, &bare)).collect();
+            if let [(id, p)] = hits.as_slice() {
+                if d.google_conn_id.is_empty() || d.google_conn_id == **id {
+                    d.google_conn_id = (*id).clone();
+                    d.ga4_property = p.property.clone();
+                    d.ga4_property_name = p.name.clone();
+                    what.push(format!("GA4「{}」", p.name));
+                }
+            }
+        }
+        if d.gsc_site.is_empty() {
+            // 优先用 GA4 的那个 Google 账号；它没有这个资源就用别的账号（记成单独的 Search Console 账号）
+            let mut order: Vec<&(String, GoogleResources)> = google.iter().filter(|(id, _)| *id == d.google_conn_id).collect();
+            order.extend(google.iter().filter(|(id, _)| *id != d.google_conn_id));
+            if let Some((id, url)) = order.iter().find_map(|(id, r)| r.sites.iter().find(|s| gsc_matches(&s.url, &bare)).map(|s| (id.clone(), s.url.clone()))) {
+                if d.google_conn_id.is_empty() {
+                    d.google_conn_id = id.clone();
+                } else if d.google_conn_id != id {
+                    d.gsc_conn_id = id.clone();
+                }
+                d.gsc_site = url.clone();
+                what.push(format!("Search Console {url}"));
+            }
+        }
+        if d.bing_site.is_empty() {
+            if let Some((id, url)) = bing.iter().find_map(|(id, list)| list.iter().find(|s| gsc_matches(&s.url, &bare)).map(|s| (id.clone(), s.url.clone()))) {
+                d.bing_conn_id = id;
+                d.bing_site = url.clone();
+                what.push(format!("Bing {url}"));
+            }
+        }
+        if what.is_empty() {
+            continue;
+        }
+        let saved = state.sites.update(&site.id, crate::now_secs(), |s| {
+            // 只填还空着的（中途你可能在设置里改过）
+            if s.data.ga4_property.is_empty() && !d.ga4_property.is_empty() {
+                s.data.google_conn_id = d.google_conn_id.clone();
+                s.data.ga4_property = d.ga4_property.clone();
+                s.data.ga4_property_name = d.ga4_property_name.clone();
+            }
+            if s.data.gsc_site.is_empty() && !d.gsc_site.is_empty() {
+                if s.data.google_conn_id.is_empty() {
+                    s.data.google_conn_id = d.google_conn_id.clone();
+                }
+                s.data.gsc_conn_id = if d.gsc_conn_id == s.data.google_conn_id { String::new() } else { d.gsc_conn_id.clone() };
+                s.data.gsc_site = d.gsc_site.clone();
+            }
+            if s.data.bing_site.is_empty() && !d.bing_site.is_empty() {
+                s.data.bing_conn_id = d.bing_conn_id.clone();
+                s.data.bing_site = d.bing_site.clone();
+            }
+            Ok(())
+        });
+        if saved.is_ok() {
+            filled.push((site.id.clone(), format!("{}：{}", site.name, what.join("、"))));
+        }
+    }
+    filled
+}
+
+/// 站点总览加载时跑一次：没接的数据源按域名自动接上。
+/// 接上之后在后台把这些站点的数据拉一遍（拉完发 site-data 事件，开着的看板会刷新）。
+#[tauri::command]
+pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    use tauri::{Emitter, Manager};
+    let filled = auto_bind_data(&state).await;
+    let ids: Vec<String> = filled.iter().map(|(id, _)| id.clone()).collect();
+    if !ids.is_empty() {
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let st = app2.state::<AppState>();
+            for id in ids {
+                let Ok(site) = st.sites.get(&id) else { continue };
+                crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&id), true).await;
+                let _ = app2.emit("site-data", serde_json::json!({ "site_id": id }));
+            }
+        });
+    }
+    Ok(filled.into_iter().map(|(_, d)| d).collect())
+}
+
 /// 拉取站点数据（force=false 时只拉 6 小时内没拉过的源）。
 #[tauri::command]
 pub async fn refresh_site_data(state: tauri::State<'_, AppState>, id: String, force: bool) -> Result<crate::site_data::CacheMeta, String> {
@@ -345,5 +471,19 @@ mod tests {
         assert!(!valid_client_id(".apps.googleusercontent.com"));
         assert!(!valid_client_id("1234 abcd.apps.googleusercontent.com"));
         assert!(!valid_client_id("GOCSPX-secret"));
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+    #[test]
+    fn resources_match_by_domain() {
+        assert!(gsc_matches("sc-domain:xtexe.com", "xtexe.com"));
+        assert!(gsc_matches("https://www.xtexe.com/", "xtexe.com"));
+        assert!(!gsc_matches("sc-domain:xtexe.com.cn", "xtexe.com"));
+        assert!(!gsc_matches("https://blog.xtexe.com/", "xtexe.com"));
+        assert!(ga4_matches("xtexe.com", "xtexe.com") && ga4_matches("xtexe", "xtexe.com") && ga4_matches("xtexe.com - GA4", "xtexe.com"));
+        assert!(!ga4_matches("xtexe2", "xtexe.com") && !ga4_matches("gatesor", "gategas.com"));
     }
 }

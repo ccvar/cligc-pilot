@@ -4530,6 +4530,7 @@ pub fn run() {
             data_cmds::connect_google_sa,
             data_cmds::update_google_sa,
             data_cmds::list_google_resources,
+            data_cmds::autodetect_data_bindings,
             data_cmds::verify_bing_key,
             data_cmds::connect_bing,
             data_cmds::update_bing_key,

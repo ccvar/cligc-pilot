@@ -339,6 +339,13 @@ export async function removeSite(s: Site) {
   } catch (e) { say(String(e), 'err'); }
 }
 
+// 数据拉完后刷新站点总览（「未接数据」、点击数），短时间内多次只刷一次
+let fleetTimer: ReturnType<typeof setTimeout> | undefined;
+function loadFleetSoon() {
+  clearTimeout(fleetTimer);
+  fleetTimer = setTimeout(() => { void import('./fleet.svelte.js').then((m) => m.loadFleet()); }, 1500);
+}
+
 export function initSites() {
   $effect(() => { void refreshSites(); });
   $effect(() => {
@@ -367,6 +374,7 @@ export function initSites() {
     const un3 = listen<{ site_id: string; errors: string[] }>('site-data', (ev) => {
       const id = ev.payload.site_id;
       if (sites.dash[id]) void loadDashboard(id);
+      void loadFleetSoon();
     });
     return () => { void un1.then((f) => f()); void un2.then((f) => f()); void un3.then((f) => f()); };
   });
