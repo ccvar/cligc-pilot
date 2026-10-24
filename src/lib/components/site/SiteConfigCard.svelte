@@ -53,15 +53,16 @@
   {#if cs && cs.vars.length}
     <ul class="vars">
       {#each cs.vars as v (v.key)}
-        <li class:missing={v.declared && !v.set}>
+        <li class:missing={v.declared && !v.set && !v.auto}>
           <div class="vk">
             <span class="mono k">{v.key}</span>
             <span class="tag" class:secret={v.secret}>{tag(v)}</span>
             {#if !v.declared}<span class="tag">手动添加</span>{/if}
             <span class="grow"></span>
-            {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else}<span class="st no">未填</span>{/if}
+            {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else}<span class="st no">未填</span>{/if}
           </div>
           {#if v.desc}<small class="desc">{v.desc}</small>{/if}
+          {#if !v.set && v.auto}<small class="auto">自动用 <code>{v.auto}</code>（按站点域名，改域名会跟着变）</small>{/if}
           {#if editing === v.key}
             <div class="row">
               <input class="tin mono" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '输入新值（会覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
@@ -70,8 +71,8 @@
             </div>
           {:else}
             <div class="acts">
-              <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set ? '修改值' : '填写'}</button>
-              {#if v.set}<button class="link-btn danger" onclick={() => clear(v.key)}>清除</button>{/if}
+              <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set ? '修改值' : v.auto ? '改成别的' : '填写'}</button>
+              {#if v.set}<button class="link-btn danger" onclick={() => clear(v.key)}>{v.auto ? '清除（改回自动）' : '清除'}</button>{/if}
             </div>
           {/if}
         </li>
@@ -107,6 +108,8 @@
   .st.ok { color: var(--ok); }
   .st.no { color: #8a5a08; }
   .desc { font-size: 12px; color: var(--faint); }
+  .auto { font-size: 12px; color: var(--dim); }
+  .auto code { font-size: 11.5px; }
   .acts { display: flex; gap: 12px; }
   .acts .link-btn { font-size: 12px; }
   .acts .link-btn.danger { color: var(--err); }

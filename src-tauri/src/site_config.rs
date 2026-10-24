@@ -21,6 +21,8 @@ pub struct ConfigVar {
     pub declared: bool,
     /// Pilot 里已经有值
     pub set: bool,
+    /// 没填值时 Pilot 自动给的值（比如 SITE_URL＝https://<站点域名>）；填了就用填的
+    pub auto: String,
 }
 
 /// 解析 `.env.example`：变量上方的注释是说明，`[secret]` / `[public]` 标明类别；没标的按名字猜。
@@ -62,6 +64,24 @@ pub fn parse_example(text: &str) -> Vec<(String, String, bool)> {
     out
 }
 
+/// 不用填、Pilot 能按站点信息自动给的变量：站点地址类（SITE_URL / PUBLIC_SITE_URL / SITE）＝https://<站点域名>。
+pub fn derived(site: &Site, key: &str) -> Option<String> {
+    let u = key.to_ascii_uppercase();
+    let site_url = u.ends_with("SITE_URL") || u == "SITE" || u == "PUBLIC_SITE";
+    (site_url && !site.domain.trim().is_empty()).then(|| format!("https://{}", site.domain.trim()))
+}
+
+/// 构建、同步时实际用的值：填过的 + 声明了、没填、但能自动给的。
+pub fn effective_values(site: &Site, code: &Path) -> Vec<(String, String)> {
+    let mut v = sites::load_env(&site.id);
+    for c in vars(site, code) {
+        if c.declared && !c.set && !c.auto.is_empty() && !v.iter().any(|(k, _)| k == &c.key) {
+            v.push((c.key, c.auto));
+        }
+    }
+    v
+}
+
 fn guess_secret(k: &str) -> bool {
     let u = k.to_ascii_uppercase();
     !u.starts_with("PUBLIC_") && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PRIVATE"].iter().any(|w| u.contains(w))
@@ -77,11 +97,11 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
     let declared = example_path(site, code).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| parse_example(&t)).unwrap_or_default();
     let mut out: Vec<ConfigVar> = declared
         .into_iter()
-        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), key, desc, secret, declared: true })
+        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true })
         .collect();
     for k in &site.build.env_keys {
         if !out.iter().any(|v| &v.key == k) {
-            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: guess_secret(k), declared: false, set: true });
+            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: guess_secret(k), declared: false, set: true, auto: String::new() });
         }
     }
     out
@@ -176,10 +196,10 @@ pub struct ConfigState {
 
 pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
     let vars = vars(site, code);
-    let missing = vars.iter().filter(|v| v.declared && !v.set).map(|v| v.key.clone()).collect();
+    let missing = vars.iter().filter(|v| v.declared && !v.set && v.auto.is_empty()).map(|v| v.key.clone()).collect();
     let target = target_of(site);
     let rec = load_sync(site_dir);
-    let values = sites::load_env(&site.id);
+    let values = effective_values(site, code);
     let changed = rec.target != target || rec.hash != values_hash(site, &values);
     // 删光了但以前同步过：也要同步一次（把那边的删掉）
     let needs_sync = !target.is_empty() && (!values.is_empty() || !rec.keys.is_empty()) && changed;
@@ -227,7 +247,7 @@ pub async fn sync(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path) 
     if target.is_empty() {
         return Err("还没配置部署：配置变量只在 Pilot 构建时使用".into());
     }
-    let values = sites::load_env(&site.id);
+    let values = effective_values(site, code);
     let rec = load_sync(site_dir);
     let remove: Vec<String> = if rec.target == target { rec.keys.iter().filter(|k| !values.iter().any(|(v, _)| v == *k)).cloned().collect() } else { vec![] };
     let secret_of: std::collections::HashMap<String, bool> = vars(site, code).into_iter().map(|v| (v.key, v.secret)).collect();
@@ -332,7 +352,7 @@ mod tests {
 
     #[test]
     fn ga_variable_is_found_by_name() {
-        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false };
+        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new() };
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID"), v("PUBLIC_GA_ID")]).as_deref(), Some("PUBLIC_GA_ID"));
         assert_eq!(ga_key(&[v("PUBLIC_SITE_URL"), v("PUBLIC_GA4_ID")]).as_deref(), Some("PUBLIC_GA4_ID"));
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID")]).as_deref(), Some("GA_MEASUREMENT_ID"));
@@ -357,6 +377,11 @@ mod tests {
         assert_eq!(env_file(&s), "/opt/ng-neo/config/ng-neo.env");
         s.deploy.env_file = "/srv/a.env".into();
         assert_eq!(env_file(&s), "/srv/a.env");
+        assert_eq!(derived(&s, "SITE_URL"), None, "没有域名就不自动给");
+        s.domain = "ngneo.com".into();
+        assert_eq!(derived(&s, "PUBLIC_SITE_URL").as_deref(), Some("https://ngneo.com"));
+        assert_eq!(derived(&s, "SITE").as_deref(), Some("https://ngneo.com"));
+        assert_eq!(derived(&s, "PUBLIC_GA_ID"), None);
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
     }
 }

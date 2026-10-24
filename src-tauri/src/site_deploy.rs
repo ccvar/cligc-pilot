@@ -234,8 +234,9 @@ fn without_proxy(env: &[(String, String)]) -> Vec<(String, String)> {
     out
 }
 
-pub fn build_env(site: &Site, job: &Job) -> Vec<(String, String)> {
-    let env = crate::sites::load_env(&site.id);
+pub fn build_env(site: &Site, code: &Path, job: &Job) -> Vec<(String, String)> {
+    // 填过的配置变量 + 能自动给的（SITE_URL＝https://<站点域名>）
+    let env = crate::site_config::effective_values(site, code);
     for (_, v) in &env {
         job.add_secret(v);
     }
@@ -267,7 +268,7 @@ pub async fn build_and_check(site: &Site, code: &Path, stamp: Option<&Path>, job
     // 站点在子目录里时，安装 / 构建 / 检查 / 上传都在子目录执行
     let app = site.app_dir(code);
     let dir = app.as_path();
-    let env = build_env(site, job);
+    let env = build_env(site, code, job);
     // 安装
     if !site.build.install.trim().is_empty() && needs_install(dir, stamp) {
         job.step("install", "running", &site.build.install);
@@ -365,7 +366,7 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
         args.push("deploy".into());
         // 公开的配置变量随部署带上（密钥另外写进 Worker 的密钥，不放进命令行）
         let secret_of: std::collections::HashMap<String, bool> = crate::site_config::vars(site, &b.dir).into_iter().map(|v| (v.key, v.secret)).collect();
-        for (k, v) in crate::sites::load_env(&site.id) {
+        for (k, v) in crate::site_config::effective_values(site, &b.dir) {
             if !secret_of.get(&k).copied().unwrap_or(false) {
                 args.push("--var".into());
                 args.push(format!("{k}:{v}"));
@@ -652,7 +653,7 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     // 配置变量合并写进服务器上的 env 文件（发布脚本 / 服务从那里读）
     sync_config(site, conns, &dir, site_dir, job, false).await;
     let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;
-    let mut env = build_env(site, job);
+    let mut env = build_env(site, &dir, job);
     env.extend(crate::site_vps::deploy_env(&shim));
     job.shell(&site.deploy.command, &site.app_dir(&dir), &env, STEP_TIMEOUT).await.map_err(|e| {
         job.step("upload", "failed", "");
