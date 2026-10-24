@@ -1079,7 +1079,9 @@ fn find_by_basename(root: &std::path::Path, raw: &str) -> Option<std::path::Path
             let p = e.path();
             let fname = e.file_name();
             let fname = fname.to_string_lossy();
-            if fname.starts_with('.') || fname == "node_modules" {
+            // 构建产物（dist / build 等）是源文件的副本：跳过，否则 public/logo.svg 和 dist/logo.svg 会被当成「同名多处」
+            // 只跳过项目根目录下的构建目录（brand/out 这种内容文件夹照常搜）
+            if fname.starts_with('.') || fname == "node_modules" || (depth == 0 && matches!(fname.as_ref(), "dist" | "build" | "out" | "target")) {
                 continue;
             }
             let Ok(ft) = e.file_type() else { continue };
@@ -1327,6 +1329,9 @@ mod workdir_tests {
         );
 
         // 文件名兜底：模型把真实文件链接成想象中的前缀（/mnt/data/、sandbox: 剥壳后）
+        // 构建产物里的同名副本不算歧义
+        std::fs::create_dir_all(tmp.join("dist/brand/out")).unwrap();
+        std::fs::write(tmp.join("dist/brand/out/preview.webp"), "x").unwrap();
         std::fs::create_dir_all(tmp.join("brand/out")).unwrap();
         std::fs::write(tmp.join("brand/out/preview.webp"), "x").unwrap();
         assert!(

@@ -371,6 +371,22 @@ function splitMarked(text: string, marker: string): { body: string; atts: string
 }
 export function splitAttachments(text: string) { return splitMarked(text, ATT_MARKER); }
 export function splitGenImages(text: string) { return splitMarked(text, GEN_MARKER); }
+/** 回复里提到的图片文件（行内代码 `public/logo.svg`、Markdown 图片 / 链接），像 Claude 客户端那样在回复下面显示出来。
+ *  只认本地路径（不是网址），去重，最多 8 张。 */
+export function mentionedImages(text: string): string[] {
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const v = raw.trim().replace(/^<|>$/g, '');
+    if (!v || /^https?:/i.test(v) || /^data:/i.test(v) || !isImgPath(v.split(/[?#]/)[0])) return;
+    const p = relWorkPath(v) || workAbsPath(v);
+    if (p && !out.includes(p) && out.length < 8) out.push(p);
+  };
+  // 代码块里的不算（多半是命令或代码）
+  const body = text.replace(/```[\s\S]*?```/g, '');
+  for (const m of body.matchAll(/`([^`\n]{1,300})`/g)) add(m[1]);
+  for (const m of body.matchAll(/!?\[[^\]]*\]\(([^)\s]{1,500})\)/g)) add(m[1]);
+  return out;
+}
 export function isImgPath(p: string): boolean { return /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(p); }
 const thumbJobs = new Map<string, Promise<string>>();
 export function conversationProject(c: Conversation): string { return c.task_type === 'workspace' ? c.id : c.site_slug; }
@@ -539,7 +555,7 @@ export function initMessages() {
     const stale = Object.keys(media.thumbs).filter((k) => !prefixes.some(prefix=>k.startsWith(prefix)));
     if (stale.length) { const keep = { ...media.thumbs }; for (const k of stale) delete keep[k]; media.thumbs = keep; }
     const images=contexts.flatMap(c=>c.messages.flatMap(m=> {
-      const atts=m.role==='user'?splitAttachments(m.text).atts:splitGenImages(m.text).atts;
+      const atts=m.role==='user'?splitAttachments(m.text).atts:[...splitGenImages(m.text).atts, ...mentionedImages(splitGenImages(m.text).body)];
       return atts.filter(isImgPath).map(p=>({c,p}));
     })).slice(-80);
     for(const {c,p} of images)ensureThumb(c.conn_id,conversationProject(c),p);

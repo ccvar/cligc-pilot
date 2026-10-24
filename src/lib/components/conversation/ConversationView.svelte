@@ -11,7 +11,7 @@
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mdRenderCached, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
+  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mentionedImages, mdRenderCached, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
   import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
@@ -120,6 +120,15 @@
             {:else}<div class="text md" onclick={(e)=>mdClick(e,context)} onauxclick={(e)=>mdClick(e,context)}>{@html mdRenderCached(part.text)}</div>{/if}
           {/each}
           {#if pj.plan}{@render planCard(pj.plan)}{/if}
+          {@const shown = mentionedImages(pj.body).filter((p) => !ga.atts.includes(p) && media.thumbs[thumbKey(p,context)])}
+          {#if shown.length}
+            <!-- 回复里提到的图片：读得到的才显示（像 Claude 客户端），点开放大 -->
+            <div class="ub-atts gen-imgs ref-imgs">
+              {#each shown as p (p)}
+                <button class="ub-att-img ref" data-tip={p} onclick={() => (ui.lightbox = media.thumbs[thumbKey(p,context)])}><img src={media.thumbs[thumbKey(p,context)]} alt={p.split(/[\\/]/).pop()} /><span class="ref-n">{p.split(/[\\/]/).pop()}</span></button>
+              {/each}
+            </div>
+          {/if}
           {#if ga.atts.length}
             <!-- codex 生图产物：缩略图（点击放大）；读不到的退回文件名卡（点击访达定位） -->
             <div class="ub-atts gen-imgs">
@@ -766,4 +775,9 @@
   @media (prefers-reduced-motion: reduce) { .st-dots i { animation: none; opacity: .7; } }
   .msg.assistant .body > .text + .step, .msg.assistant .body > .text + .steps-sum { margin-top: 8px; }
   .msg.assistant .body > .step + .text, .msg.assistant .body > .steps-sum + .text { margin-top: 8px; }
+  .ref-imgs { margin-top: 10px; }
+  .ub-att-img.ref { position: relative; background: repeating-conic-gradient(#f1efea 0 25%, #fff 0 50%) 0 0 / 14px 14px; }
+  .ub-att-img.ref { width: 120px; height: 120px; }
+  .ub-att-img.ref img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; padding: 10px; box-sizing: border-box; }
+  .ref-n { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 6px; font-size: 10.5px; line-height: 1.5; color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, .55)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 </style>
