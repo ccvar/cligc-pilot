@@ -719,6 +719,46 @@ pub(crate) async fn start_publish_files(app: &tauri::AppHandle, state: &AppState
     }
 }
 
+/// 会话工作目录属于哪个站点（GitHub 来源：同一条连接、仓库检出目录一致；本地来源：站点文件夹）。
+pub(crate) fn site_for_work(conn: &crate::conns::Connection, work: &Path) -> Option<Site> {
+    use tauri::Manager;
+    let app = crate::APP.get()?;
+    let state = app.state::<AppState>();
+    let work = std::fs::canonicalize(work).ok()?;
+    state.sites.list().into_iter().find(|s| {
+        let dir = if s.source == "github" {
+            if s.gh_conn_id != conn.id { return false; }
+            crate::github::repo_dir(&conn.skill_dir, &s.repo).ok()
+        } else {
+            Some(std::path::PathBuf::from(&s.local_dir))
+        };
+        dir.and_then(|d| std::fs::canonicalize(d).ok()).is_some_and(|d| d == work)
+    })
+}
+
+/// 替会话启动「构建并上线」并等它跑完（最多 15 分钟），返回结果给 AI 汇报。确认由调用方先做。
+pub(crate) async fn deploy_and_wait(site_id: &str) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    let app = crate::APP.get().ok_or("Pilot 还没准备好")?.clone();
+    let state = app.state::<AppState>();
+    let job_id = start_deploy(app.clone(), &state, site_id.to_string())?;
+    let started = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let Some(j) = state.site_jobs.snapshot(site_id) else { return Err("上线作业不见了".into()) };
+        if j.id == job_id && j.status != "running" {
+            let failed: Vec<String> = j.steps.iter().filter(|s| s.status == "failed").map(|s| format!("{}：{}", s.label, s.detail)).collect();
+            return Ok(serde_json::json!({
+                "status": j.status, "url": j.url, "error": j.error, "failed_steps": failed,
+                "log_tail": j.log.iter().rev().take(12).rev().cloned().collect::<Vec<_>>(),
+            }));
+        }
+        if started.elapsed() > std::time::Duration::from_secs(900) {
+            return Ok(serde_json::json!({ "status": "running", "note": "上线还在跑，进度在 Pilot 站点页" }));
+        }
+    }
+}
+
 /// 预检：构建并跑检查，不上传（后台作业）。
 #[tauri::command]
 pub fn check_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
@@ -892,7 +932,9 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         "你是站点「{name}」（{domain}）的运营与维护助手。{flow}\n\
 【站点信息】{root}框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
 【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
-你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\n\
+你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\
+用户要你上线时：有 `site_deploy` 工具就调用它（Pilot 先请用户确认，再构建并上线、跑完把结果给你）；GitHub 来源先合并进默认分支（`github_merge` 传 deploy=true 可以合并完直接上线）；\
+没有这个工具时请用户在站点页点「构建并上线」。\n\
 【干活的规矩】仓库里有 `.pilot/site.md`（站点约定：内容放哪、页面格式、新增一页要改哪些地方）就先读它并照着做，改了目录结构或页面格式时同步更新它；\
 再读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\
 改完先跑构建（和检查命令）确认通过再交付。面向访客的文字遵循随消息附带的公开文案规范。\

@@ -110,7 +110,8 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         if self.conn.kind == "github" {
             text.push_str("\n当前是 GitHub 仓库检出。run_command 里没有 GitHub Token（git push / gh 会因为没有凭据失败），不得尝试获取 Token。\
 推送和 PR 用专用工具，由 Pilot 代为执行：在功能分支上提交好以后调用 github_publish（推送当前分支并开 PR，已有 PR 就复用，返回 PR 链接）；\
-要把 PR 合并进默认分支时调用 github_merge，Pilot 会先弹卡片让用户确认。不要让用户自己去推送。");
+要把 PR 合并进默认分支时调用 github_merge，Pilot 会先弹卡片让用户确认；用户要上线时传 deploy=true，合并后直接构建并上线（同一张卡片）。\
+有 site_deploy 工具时，上线也由它完成（同样先请用户确认、跑完返回结果）。不要让用户自己去推送或点上线。");
         }
         if self.conn.kind == "cloudflare" {
             text.push_str("\n当前是 Cloudflare 工作区。本版 API 执行器没有 Cloudflare 凭据工具，只能编辑/检查本地文件。不得读取配置或尝试其他方式获取 Cloudflare token；需要鉴权部署或远端操作时明确建议切换到本地客户端。");
@@ -132,7 +133,10 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         }
         if self.conn.kind == "github" {
             tools.push(def("github_publish","Push the current git branch of this checkout to GitHub and open a pull request into the default branch (reuses an open PR for the same branch). Pilot runs it with its own credentials; you never see a token. Pushing the default branch itself asks the user first.",json!({"title":{"type":"string","description":"PR title"},"body":{"type":"string","description":"What changed, why, how it was verified"}}),&["title"]));
-            tools.push(def("github_merge","Merge a pull request into the default branch (squash) after the user confirms in a card, then update the local default branch.",json!({"number":{"type":"integer","minimum":1}}),&["number"]));
+            tools.push(def("github_merge","Merge a pull request into the default branch (squash) after the user confirms in a card, then update the local default branch. deploy=true also runs Pilot's build-and-deploy for this site right after merging (same single confirmation).",json!({"number":{"type":"integer","minimum":1},"deploy":{"type":"boolean"}}),&["number"]));
+        }
+        if crate::site_cmds::site_for_work(self.conn, &self.work).is_some_and(|s| matches!(s.deploy.mode.as_str(), "direct" | "workers" | "vps")) {
+            tools.push(def("site_deploy","Run Pilot's build-and-deploy (构建并上线) for this site after the user confirms in a card, wait for it to finish and return the result. For GitHub sites it deploys the default branch on GitHub, so merge first.",json!({}),&[]));
         }
         if self.conn.kind == "ssh" && self.lease.is_some() {
             tools.push(def("ssh_command","Run a command on the current SSH connection through Pilot's existing permission bridge. No other hosts or SSH credentials are exposed.",json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}}),&["command"]));
@@ -285,14 +289,29 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                 if pr.merged {
                     return Ok(json!({"merged": true, "note": "这个 PR 已经合并过了"}));
                 }
+                let site = if args["deploy"].as_bool().unwrap_or(false) { crate::site_cmds::site_for_work(self.conn, &self.work) } else { None };
                 // 合并会改默认分支（通常就是要上线的代码）：不管哪个权限档位都要用户点确认
-                self.ask_card("github_merge", &format!("把 PR #{number}（{}）合并进 {repo} 的 {default}", pr.head), false).await?;
+                let what = if site.is_some() { format!("把 PR #{number}（{}）合并进 {repo} 的 {default}，然后构建并上线", pr.head) } else { format!("把 PR #{number}（{}）合并进 {repo} 的 {default}", pr.head) };
+                self.ask_card("github_merge", &what, false).await?;
                 let sha = crate::site_github::merge_pr(&token, &repo, number, &format!("Merge #{number}")).await?;
                 // 本地默认分支跟上，后续改动从最新代码开始
                 let _ = crate::site_git::git_ok(&self.work, &["fetch", "origin", &default], &token).await;
                 let _ = crate::site_git::git_ok(&self.work, &["switch", &default], "").await;
                 let _ = crate::site_git::git_ok(&self.work, &["merge", "--ff-only", &format!("origin/{default}")], "").await;
-                Ok(json!({"merged": true, "sha": sha, "base": default, "note": "已合并；站点要上线时在 Pilot 站点页「构建并上线」"}))
+                if let Some(site) = site {
+                    let deploy = crate::site_cmds::deploy_and_wait(&site.id).await?;
+                    return Ok(json!({"merged": true, "sha": sha, "base": default, "deploy": deploy}));
+                }
+                Ok(json!({"merged": true, "sha": sha, "base": default, "note": "已合并；要上线就调用 site_deploy（会请用户确认）"}))
+            }
+            "site_deploy" => {
+                if self.mode == PermMode::Plan {
+                    return Err("计划模式不上线".into());
+                }
+                let site = crate::site_cmds::site_for_work(self.conn, &self.work).ok_or("当前目录不是 Pilot 里的站点")?;
+                // 上线改的是正式站点：不管哪个权限档位都要用户点确认
+                self.ask_card("site_deploy", &format!("构建并上线 {}（{}）", site.name, if site.domain.is_empty() { "还没填域名".to_string() } else { site.domain.clone() }), false).await?;
+                crate::site_cmds::deploy_and_wait(&site.id).await
             }
             "ssh_command" if self.conn.kind == "ssh" && self.lease.is_some() => {
                 if self.mode == PermMode::Plan {

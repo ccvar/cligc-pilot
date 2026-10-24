@@ -63,6 +63,9 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 use convo::{Conversation, Message};
 
+/// 应用句柄（setup 时放进来）：给拿不到 tauri State 的地方用，比如 API 执行器的工具里替用户启动「构建并上线」。
+pub(crate) static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
 struct AppState {
     conns: conns::ConnStore,
     convos: convo::ConvStore,
@@ -4386,6 +4389,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            let _ = APP.set(app.handle().clone());
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             // 托管 Node（若已自举过）：bin + npm 全局 bin 前置进程 PATH——
