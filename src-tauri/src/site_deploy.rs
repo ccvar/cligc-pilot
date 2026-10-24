@@ -442,6 +442,103 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
     result.map(|_| rec)
 }
 
+/// Pilot 随上线放进构建产物的验证文件（只在这次上传的产物里，不改代码）：IndexNow 密钥文件、Bing 的 BingSiteAuth.xml。
+fn add_verify_files(site: &Site, out: &Path, job: &Job) {
+    if !site.data.indexnow_key.is_empty() {
+        let f = out.join(format!("{}.txt", site.data.indexnow_key));
+        if !f.exists() && std::fs::write(&f, &site.data.indexnow_key).is_ok() {
+            job.line("已把 IndexNow 验证文件放进构建产物");
+        }
+    }
+    // Pilot 把站点加到 Bing 后一直带上（Bing 会定期复查验证）
+    if !site.data.bing_auth.is_empty() {
+        let f = out.join("BingSiteAuth.xml");
+        if !f.exists() && std::fs::write(&f, format!("<?xml version=\"1.0\"?>\n<users>\n\t<user>{}</user>\n</users>\n", site.data.bing_auth)).is_ok() {
+            job.line("已把 Bing 验证文件放进构建产物");
+        }
+    }
+}
+
+pub const REPUBLISH_STEPS: &[(&str, &str)] = &[("prepare", "核对构建产物"), ("upload", "上传"), ("indexnow", "提交 IndexNow")];
+
+/// 上次上线的构建产物还原样在磁盘上（同一个提交、没有未提交改动、页面清单和上线时一致）就返回它，否则说明原因。
+pub async fn live_build(site: &Site, site_dir: &Path) -> Result<(BuildOutcome, DeployRecord), String> {
+    if site.deploy.mode != "direct" {
+        return Err("只有 Pilot 上传到 Pages 的站点能直接补文件".into());
+    }
+    let last = load_history(site_dir).into_iter().filter(|r| r.ok).max_by_key(|r| r.ts).ok_or("还没成功上线过")?;
+    if last.commit.is_empty() || last.dirty {
+        return Err("上次上线的不是一个干净的提交".into());
+    }
+    let code = if site.source == "github" { site_dir.join("deploy") } else { crate::site_git::code_dir(site, None)? };
+    if crate::site_git::head_sha(&code).await != last.commit {
+        return Err("代码在上次上线后有新提交".into());
+    }
+    if site.source != "github" && !crate::site_git::is_clean(&code).await {
+        return Err("代码有没提交的改动".into());
+    }
+    let dir = site.app_dir(&code);
+    let out = dir.join(&site.build.out_dir);
+    let saved = load_manifest(site_dir);
+    if !out.is_dir() || saved.is_empty() || build_manifest(&out) != saved {
+        return Err("构建产物和上线时的不一样（重新构建过）".into());
+    }
+    Ok((BuildOutcome { dir, out }, last))
+}
+
+/// 线上缺的只是 Pilot 放的验证文件时：拿上次上线的构建产物原样补上文件再传一次，不重新构建，页面内容不变。
+/// IndexNow 密钥刚生效，顺带把全站页面提交一次。
+pub async fn run_republish(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job) -> Result<DeployRecord, String> {
+    let started = now();
+    let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: "files".into(), ..Default::default() };
+    let result = async {
+        job.step("prepare", "running", "");
+        let (built, last) = live_build(&site, &site_dir).await.inspect_err(|_| job.step("prepare", "failed", ""))?;
+        rec.commit = last.commit.clone();
+        rec.message = last.message.clone();
+        job.step("prepare", "ok", &format!("和线上同一版 {}，不重新构建", last.commit.get(..7).unwrap_or_default()));
+        add_verify_files(&site, &built.out, &job);
+        let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
+        job.step("upload", "running", &site.deploy.project);
+        let url = upload(&site, &cf, &built, &rec.commit, &rec.message, false, &job).await.inspect_err(|_| job.step("upload", "failed", ""))?;
+        job.step("upload", "ok", &url);
+        job.set_url(&url);
+        rec.url = url;
+        if site.data.indexnow_key.is_empty() || site.domain.is_empty() {
+            job.step("indexnow", "skipped", "站点没有配置 IndexNow 密钥");
+            rec.indexnow = "skipped".into();
+        } else {
+            let urls: Vec<String> = load_manifest(&site_dir).keys().filter_map(|k| html_to_path(k)).map(|p| format!("https://{}{p}", site.domain)).collect();
+            job.step("indexnow", "running", &format!("{} 个网址", urls.len()));
+            // 刚上传的文件边缘要几秒才看得到
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &urls).await {
+                Ok(msg) => {
+                    job.line(&format!("IndexNow：{msg}"));
+                    job.step("indexnow", "ok", &format!("已提交 {} 个网址", urls.len()));
+                    rec.indexnow = "ok".into();
+                }
+                Err(e) => {
+                    job.line(&format!("IndexNow 提交失败：{e}"));
+                    job.step("indexnow", "failed", &e);
+                    rec.indexnow = format!("failed: {e}");
+                }
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    rec.duration = now().saturating_sub(started);
+    rec.ok = result.is_ok();
+    if let Err(e) = &result {
+        rec.error = e.clone();
+    }
+    // 先记历史再结束作业：界面在作业结束时会重新读部署记录
+    push_history(&site_dir, &rec);
+    job.finish(&result);
+    result.map(|_| rec)
+}
+
 pub const CHECK_STEPS: &[(&str, &str)] = &[
     ("prepare", "准备代码"),
     ("install", "安装依赖"),
@@ -508,20 +605,7 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         },
     );
     let built = build_and_check(site, &dir, stamp.as_deref(), job).await?;
-    // IndexNow 验证文件：站点自己没带就放进构建产物（只在这次上传的产物里，不改代码）
-    if !site.data.indexnow_key.is_empty() {
-        let f = built.out.join(format!("{}.txt", site.data.indexnow_key));
-        if !f.exists() && std::fs::write(&f, &site.data.indexnow_key).is_ok() {
-            job.line("已把 IndexNow 验证文件放进构建产物");
-        }
-    }
-    // Bing 验证文件：Pilot 把站点加到 Bing 后一直随上线放进构建产物（Bing 会定期复查验证）
-    if !site.data.bing_auth.is_empty() {
-        let f = built.out.join("BingSiteAuth.xml");
-        if !f.exists() && std::fs::write(&f, format!("<?xml version=\"1.0\"?>\n<users>\n\t<user>{}</user>\n</users>\n", site.data.bing_auth)).is_ok() {
-            job.line("已把 Bing 验证文件放进构建产物");
-        }
-    }
+    add_verify_files(site, &built.out, job);
     let manifest = build_manifest(&built.out);
     // 上传
     job.step("upload", "running", &site.deploy.project);

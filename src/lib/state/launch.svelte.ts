@@ -25,6 +25,8 @@ export interface LaunchStatus {
   deployed: boolean;
   /** Pilot 会随上线放进去、但线上还没有的文件：再上线一次才生效 */
   needs_redeploy?: string[];
+  /** 刚自动开始补验证文件 */
+  republishing?: boolean;
   google_manage_conn: string;
   /** 这次检查按域名自动绑定上的资源。 */
   auto_bound: string[];

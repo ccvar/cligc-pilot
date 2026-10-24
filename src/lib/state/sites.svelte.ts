@@ -156,6 +156,11 @@ export async function deploySite(id: string) {
     await invoke<string>('deploy_site', { id });
   } catch (e) { say(String(e), 'err'); }
 }
+/** 补上线上缺的验证文件：上次上线的构建产物还在就原样补文件再传（不重新构建），否则走完整的构建并上线。 */
+export async function publishFiles(id: string) {
+  try { await invoke<string>('site_publish_files', { id, fallback: true }); }
+  catch (e) { say(String(e), 'err'); }
+}
 export async function checkSite(id: string) {
   try { await invoke<string>('check_site', { id }); }
   catch (e) { say(String(e), 'err'); }

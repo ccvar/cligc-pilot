@@ -96,6 +96,8 @@ pub struct LaunchStatus {
     pub deployed: bool,
     /// Pilot 会随上线放进去、但线上还没有的文件（IndexNow / Bing 验证文件）：要再「构建并上线」一次才生效
     pub needs_redeploy: Vec<String>,
+    /// 刚自动开始补验证文件（不重新构建的那种上传）
+    pub republishing: bool,
     /// 有没有一条授予了管理权限的 Google OAuth 连接（自动建 GA4 / 验证 Search Console 需要）。
     pub google_manage_conn: String,
     /// 这次检查时按域名自动绑定上的资源（「Search Console sc-domain:x.com」这类说明）。
@@ -115,6 +117,9 @@ struct LaunchCache {
     /// 上次自动验证 Bing 时每一步的结果
     #[serde(default)]
     bing_note: String,
+    /// 上次自动补验证文件的时间
+    #[serde(default)]
+    republished: u64,
 }
 
 #[derive(Serialize, serde::Deserialize, Default, Clone)]
@@ -426,7 +431,7 @@ pub async fn site_bing_verify(state: tauri::State<'_, AppState>, id: String) -> 
 #[tauri::command]
 /// `probe=false` 只读当前状态（快，打开页面先用它）；默认会按域名去已连接账号里找资源（较慢，有 10 分钟节流）；
 /// `force=true` 是手动刷新，不受节流。
-pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
+pub async fn launch_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
     let site = state.sites.get(&id)?;
     let force = force.unwrap_or(false);
     let quick = !force && !probe.unwrap_or(true);
@@ -467,6 +472,14 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
             if !url_ok(&format!("https://{}/{f}", site.domain)).await {
                 st.needs_redeploy.push(label.to_string());
             }
+        }
+    }
+    // 缺的只是验证文件、上次上线的构建产物还原样在：自动补上再传一次（不重新构建，页面内容不变）。
+    // 一小时最多自动试一次，免得文件一直出不来时反复上传。
+    if !st.needs_redeploy.is_empty() && site.deploy.mode == "direct" && crate::now_secs().saturating_sub(read_cache(&state, &id).republished) > 3600 {
+        update_cache(&state, &id, |c| c.republished = crate::now_secs());
+        if crate::site_cmds::start_publish_files(&app, &state, &id, false).await.is_ok() {
+            st.republishing = true;
         }
     }
     if matches!(site.deploy.mode.as_str(), "workers" | "vps") {

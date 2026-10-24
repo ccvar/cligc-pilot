@@ -14,7 +14,7 @@
   import { isMaking } from '$lib/state/siteCreate.svelte.js';
   import { siteMake, loadMake, writeConventions, hideConventionsHint } from '$lib/state/siteMake.svelte.js';
   import { clock } from './fmt';
-  import { sites, deploySite, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
+  import { sites, deploySite, publishFiles, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { ops } from "$lib/state/ops.svelte.js";
   import { app } from '$lib/state/app.svelte.js';
 
@@ -114,7 +114,7 @@
         {#if last?.ok && site.domain && !['none', 'workers', 'vps'].includes(site.deploy.mode)}<SiteDomainLive {site} deployedAt={last.ts} />{/if}
         {#if launch.status[site.id]?.needs_redeploy?.length && job?.status !== 'running'}
           <dt>待生效</dt>
-          <dd class="redeploy"><span>{launch.status[site.id]?.needs_redeploy?.join('、')}还没在线上：Pilot 会在下次上线时自动放进去，上线一次就生效（不改代码）。</span><button class="btn tiny" onclick={() => deploySite(site.id)}><Icon name="rocket" size={11} />现在上线</button></dd>
+          <dd class="redeploy"><span>{launch.status[site.id]?.needs_redeploy?.join('、')}还没在线上。Pilot 会自动拿上次上线的构建产物补上再传一次（不重新构建，页面不变）；自动那次没成功的话，也可以现在补上。</span><button class="btn tiny" onclick={() => publishFiles(site.id)}><Icon name="rocket" size={11} />现在补上</button></dd>
         {/if}
       </dl>
     </div>

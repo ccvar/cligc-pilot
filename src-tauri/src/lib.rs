@@ -4617,6 +4617,7 @@ pub fn run() {
             launch_cmds::site_domain_check,
             launch_cmds::site_domain_fix,
             launch_cmds::site_bing_verify,
+            site_cmds::site_publish_files,
             launch_cmds::site_setup_pages,
             launch_cmds::ga4_create_property,
             launch_cmds::gsc_setup_domain,

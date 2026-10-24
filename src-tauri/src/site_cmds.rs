@@ -664,6 +664,10 @@ pub fn cancel_site_job(state: tauri::State<'_, AppState>, id: String) -> bool {
 /// 构建并上线（后台作业，立即返回作业 id；进度走 site-job 事件）。
 #[tauri::command]
 pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    start_deploy(app, &state, id)
+}
+
+pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) -> Result<String, String> {
     let mut site = state.sites.get(&id)?;
     // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
     if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
@@ -688,6 +692,31 @@ pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id:
         let _ = crate::site_deploy::run_deploy(site, conns, site_dir, job, "manual").await;
     });
     Ok(job_id)
+}
+
+/// 线上缺 Pilot 放的验证文件（IndexNow / Bing）：上次上线的构建产物还在就原样补文件再传（不重新构建）；
+/// `fallback`：产物对不上时改走完整的构建并上线（界面上点「现在上线」时为 true，自动触发时为 false）。
+#[tauri::command]
+pub async fn site_publish_files(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, fallback: Option<bool>) -> Result<String, String> {
+    start_publish_files(&app, &state, &id, fallback.unwrap_or(false)).await
+}
+
+pub(crate) async fn start_publish_files(app: &tauri::AppHandle, state: &AppState, id: &str, fallback: bool) -> Result<String, String> {
+    let site = state.sites.get(id)?;
+    let site_dir = state.sites.data_dir(id);
+    match crate::site_deploy::live_build(&site, &site_dir).await {
+        Ok(_) => {
+            let job = state.site_jobs.start(Some(app.clone()), id, "deploy", "补上验证文件", crate::site_deploy::REPUBLISH_STEPS)?;
+            let job_id = job.id.clone();
+            let conns = state.conns.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::site_deploy::run_republish(site, conns, site_dir, job).await;
+            });
+            Ok(job_id)
+        }
+        Err(_) if fallback => start_deploy(app.clone(), state, id.to_string()),
+        Err(e) => Err(e),
+    }
 }
 
 /// 预检：构建并跑检查，不上传（后台作业）。

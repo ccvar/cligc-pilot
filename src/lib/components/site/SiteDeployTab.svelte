@@ -25,7 +25,7 @@
     ...(site.data.indexnow_key ? [{ t: '提交 IndexNow', code: false }] : []),
   ]);
   const pagesStatus = (s: string) => (s === 'success' ? '已上线' : s === 'failure' ? '失败' : s === 'canceled' ? '已取消' : '进行中');
-  const trig = (t: string) => (t === 'ops' ? '运营任务' : t === 'rollback' ? '回滚' : '手动');
+  const trig = (t: string) => (t === 'ops' ? '运营任务' : t === 'rollback' ? '回滚' : t === 'files' ? '补验证文件' : '手动');
   $effect(() => { void loadDeploys(site.id); if (site.deploy.mode !== 'none' && site.deploy.project) void loadPagesDeploys(site.id); });
 </script>
 
