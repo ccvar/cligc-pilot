@@ -33,8 +33,9 @@ export const SITES_CONN_ID = '__sites__';
 export const SITES_CONN: Connection = { id: SITES_CONN_ID, name: '站点', kind: 'sites', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
 /** 切换器里「远程连接」这一行（右键菜单用；新窗口打开时落到上次用过的那台机器）。 */
 export const REMOTES_CONN: Connection = { id: '__remotes__', name: '远程连接', kind: 'remotes', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
-/** 切换器里「Cloudflare」这一行：多个 Cloudflare 账号合并成一个入口（新窗口打开时落到上次用过的那个账号）。 */
+/** 切换器里「Cloudflare」「GitHub」这两行：同类账号合并成一个入口（新窗口打开时落到上次用过的那个账号）。 */
 export const CLOUDFLARES_CONN: Connection = { id: '__cloudflares__', name: 'Cloudflare', kind: 'cloudflares', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
+export const GITHUBS_CONN: Connection = { id: '__githubs__', name: 'GitHub', kind: 'githubs', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
 export const LOCAL_CONN: Connection = { id: WORKSPACE_CONN_ID, name: '本地对话', kind: 'workspace', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
 // Claude Code 用官方原生安装器（独立二进制，不需要 Node/npm）——npm 命令对新手是三重门槛。
 // 注意：不能引用 isWindows（声明在后面，TDZ），这里自足判断。

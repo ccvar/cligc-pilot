@@ -6,7 +6,7 @@
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
   import GearIcon from '$lib/components/icons/GearIcon.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
-  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote, cfConns, openCloudflare } from '$lib/state/connections.svelte.js';
+  import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote, accountConns, openAccounts } from '$lib/state/connections.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { WORKSPACE_CONN_ID } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
@@ -19,7 +19,7 @@
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
-  import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN } from '$lib/state/env';
+  import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN, GITHUBS_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
 </script>
 
@@ -46,26 +46,27 @@
             {#if app.isSshConn}<span class="cs-check">✓</span>{/if}
           </button>
         {/if}
-        <!-- Cloudflare 账号也合并成一行：进去之后左栏列出全部账号。 -->
-        {#if cfConns().length}
-          <button class="cs-item {app.isCfConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isCfConn} onclick={openCloudflare} oncontextmenu={(e) => openConnCtx(e, CLOUDFLARES_CONN)}>
+        <!-- Cloudflare / GitHub 账号也各自合并成一行：进去之后左栏列出这一类的全部账号。 -->
+        {#if accountConns('cloudflare').length}
+          <button class="cs-item {app.isCfConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isCfConn} onclick={() => openAccounts('cloudflare')} oncontextmenu={(e) => openConnCtx(e, CLOUDFLARES_CONN)}>
             <CfMark size={18} />
-            <span class="cs-main"><b>Cloudflare</b><small>{cfConns().length} 个账号{app.isCfConn && app.activeConn ? ` · 当前 ${connectionDisplayName(app.activeConn)}` : ''}</small></span>
+            <span class="cs-main"><b>Cloudflare</b><small>{accountConns('cloudflare').length} 个账号{app.isCfConn && app.activeConn ? ` · 当前 ${connectionDisplayName(app.activeConn)}` : ''}</small></span>
             {#if app.isCfConn}<span class="cs-check">✓</span>{/if}
           </button>
         {/if}
-        {#each app.conns.filter((c) => !isDataConn(c) && c.kind !== 'ssh' && c.kind !== 'cloudflare') as c (c.id)}
+        {#if accountConns('github').length}
+          <button class="cs-item {app.isGhConn ? 'on' : ''}" role="menuitemradio" aria-checked={app.isGhConn} onclick={() => openAccounts('github')} oncontextmenu={(e) => openConnCtx(e, GITHUBS_CONN)}>
+            <GhMark size={18} />
+            <span class="cs-main"><b>GitHub</b><small>{accountConns('github').length} 个账号{app.isGhConn && app.activeConn ? ` · 当前 ${app.activeConn.login || connectionDisplayName(app.activeConn)}` : ''}</small></span>
+            {#if app.isGhConn}<span class="cs-check">✓</span>{/if}
+          </button>
+        {/if}
+        <!-- 其它类型的连接（如果有）还是一条一行 -->
+        {#each app.conns.filter((c) => !isDataConn(c) && !['ssh', 'cloudflare', 'github'].includes(c.kind)) as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={18} />
-            <span class="cs-main"><b>{connectionDisplayName(c)}</b>
-              {#if c.kind === 'ssh'}
-                <small class="cs-os"><DistroMark id={distroOf(c)} size={12} /><span class="cs-os-label">{sshSub(c)}</span></small>
-              {:else if c.kind === 'cloudflare'}
-                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.key_prefix}</span> · Cloudflare</small>
-              {:else if c.kind === 'github'}
-                <small><span class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{c.remark?.trim() || c.login}</span> · GitHub</small>
-              {/if}</span>
+            <span class="cs-main"><b>{connectionDisplayName(c)}</b></span>
             {#if app.activeConnId === c.id}<span class="cs-check">✓</span>{/if}
           </button>
         {/each}
@@ -99,12 +100,11 @@
 </div>
 
 <style>
-  /* 远端系统信息（页脚可点＝重新检测；下拉/设置里只读） */
-  .foot-os, .cs-os { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+  /* 远端系统信息（页脚可点＝重新检测） */
+  .foot-os { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
   .foot-os { cursor: pointer; border-radius: 5px; padding: 0 3px; margin-left: -3px; }
   .foot-os:hover { background: var(--accent-soft); color: var(--text); }
   .foot-os :global(svg.distro) { transform: translateY(1px); }
-  .cs-os { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rail-foot { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: none; border-top: 1px solid var(--border); background: none; cursor: pointer; text-align: left; -webkit-appearance: none; appearance: none; box-shadow: none; }
   .rail-foot:focus, .rail-foot:active { outline: none; box-shadow: none; }
   .rail-foot:hover { background: #f1efe9; }
@@ -147,19 +147,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .cs-main small.cs-os {
-    display: flex;
-    align-items: center;
-  }
-  .cs-main small.cs-os :global(svg.distro) {
-    transform: translateY(1px);
-  }
-  .cs-os-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .cs-check { color: var(--accent); flex: none; font-size: 13px; }
   .cs-div { height: 1px; background: var(--border); margin: 3.5px 4px; }
   /* 动作行是单行：比原来(7px)收，但别收到发挤——padding 5.5px + line-height 1.3 落在约 28px，
@@ -172,5 +159,4 @@
   .cs-act:hover { background: #f4f3ef; color: var(--text); }
   .cs-act :global(svg) { color: var(--faint); flex: none; }
   @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
-  .conn-remark { cursor: help; }
 </style>

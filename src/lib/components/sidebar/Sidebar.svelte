@@ -22,14 +22,14 @@
   import type { Conversation } from '$lib/types';
   import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
   import RemoteRail from '$lib/components/sidebar/RemoteRail.svelte';
-  import CfRail from '$lib/components/sidebar/CfRail.svelte';
+  import AccountRail from '$lib/components/sidebar/AccountRail.svelte';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { managed, openManaged } from '$lib/state/managed.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
 </script>
 
-<!-- 按站点 / 项目分组的对话列表（普通模式直接放；Cloudflare 模式放在当前账号下面） -->
+<!-- 按站点 / 项目分组的对话列表（普通模式直接放；Cloudflare / GitHub 模式放在当前账号下面） -->
 {#snippet groupList()}
   {#each sidebar.grouped as g (JSON.stringify([app.activeConnId, g.slug]))}
     <button class="site-grp" onclick={() => toggleSite(g.slug)} title={g.name}>
@@ -117,8 +117,8 @@
     <SitesRail {convRow} />
   {:else if app.isSshConn}
     <RemoteRail {convRow} />
-  {:else if app.isCfConn}
-    <CfRail current={groupList} />
+  {:else if app.isCfConn || app.isGhConn}
+    <AccountRail kind={app.isGhConn ? 'github' : 'cloudflare'} current={groupList} />
   {:else}
   <div class="convos" class:scrolled={ui.convosScrolled} onscroll={(e) => (ui.convosScrolled = (e.currentTarget as HTMLElement).scrollTop > 2)}>
     {#if sidebar.grouped.length === 0}

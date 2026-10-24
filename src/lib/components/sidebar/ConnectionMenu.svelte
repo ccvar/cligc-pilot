@@ -12,8 +12,8 @@
   {@const c = connections.connCtx.conn}
   <div bind:this={connections.connCtxMenuEl} class="ctx-menu fctx conn-ctx-menu" class:ready={connections.connCtx.ready} style="left:{connections.connCtx.x}px; top:{connections.connCtx.y}px" role="menu" tabindex="-1">
     {#if !isDataConn(c)}<button class="ctx-item" role="menuitem" onclick={() => openConnWindow(c.id)}>新窗口打开</button>{/if}
-    {#if c.kind === 'workspace' || c.kind === 'sites' || c.kind === 'remotes' || c.kind === 'cloudflares'}
-      <!-- 合并的入口（本地对话 / 站点 / 远程连接 / Cloudflare）：只有「新窗口打开」，没有可编辑、可删除的东西 -->
+    {#if c.kind === 'workspace' || c.kind === 'sites' || c.kind === 'remotes' || c.kind === 'cloudflares' || c.kind === 'githubs'}
+      <!-- 合并的入口（本地对话 / 站点 / 远程连接 / Cloudflare / GitHub）：只有「新窗口打开」，没有可编辑、可删除的东西 -->
     {:else if c.kind === 'ssh'}
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; selectConn(c.id); openRemote(); }}>远程终端</button>
       <div class="ctx-div"></div>
@@ -34,7 +34,7 @@
         <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c)}>更新凭据…</button>
       {/if}
     {/if}
-    {#if !['workspace', 'sites', 'remotes', 'cloudflares'].includes(c.kind)}
+    {#if !['workspace', 'sites', 'remotes', 'cloudflares', 'githubs'].includes(c.kind)}
     <div class="ctx-div"></div>
     <button
       class="ctx-item danger"

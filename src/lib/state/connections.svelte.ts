@@ -96,7 +96,8 @@ export async function openConnWindow(id: string) {
   connections.connCtx = null;
   // 「远程连接」整组：新窗口打开上次用过的那台，窗口里左栏照样列出全部机器
   if (id === '__remotes__') id = lastRemoteId();
-  if (id === '__cloudflares__') id = lastCfId();
+  if (id === '__cloudflares__') id = lastAccountId('cloudflare');
+  if (id === '__githubs__') id = lastAccountId('github');
   if (!id) return;
   try { await invoke('open_conn_window', { connId: id }); }
   catch (e) { say(String(e), 'err'); }
@@ -115,19 +116,20 @@ function lastRemoteId(): string {
   try { last = localStorage.getItem(LAST_REMOTE_KEY) || ''; } catch { /* */ }
   return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? '';
 }
-const LAST_CF_KEY = 'cligc.pilot.lastCloudflare';
-/** 所有 Cloudflare 账号，切换器里合并成一行「Cloudflare」。 */
-export const cfConns = () => app.conns.filter((c) => c.kind === 'cloudflare');
-function lastCfId(): string {
-  const list = cfConns();
+/** Cloudflare / GitHub 账号：切换器里各自合并成一行，进去之后左栏列出这一类的全部账号。 */
+export type AccountKind = 'cloudflare' | 'github';
+const LAST_ACCOUNT_KEY: Record<AccountKind, string> = { cloudflare: 'cligc.pilot.lastCloudflare', github: 'cligc.pilot.lastGithub' };
+export const accountConns = (kind: AccountKind) => app.conns.filter((c) => c.kind === kind);
+function lastAccountId(kind: AccountKind): string {
+  const list = accountConns(kind);
   let last = '';
-  try { last = localStorage.getItem(LAST_CF_KEY) || ''; } catch { /* */ }
+  try { last = localStorage.getItem(LAST_ACCOUNT_KEY[kind]) || ''; } catch { /* */ }
   return list.find((c) => c.id === last)?.id ?? list[0]?.id ?? '';
 }
-/** 进入 Cloudflare：打开上次用过的那个账号，没有就第一个。 */
-export function openCloudflare() {
+/** 进入 Cloudflare / GitHub：打开上次用过的那个账号，没有就第一个。 */
+export function openAccounts(kind: AccountKind) {
   connections.switcherOpen = false;
-  const id = lastCfId();
+  const id = lastAccountId(kind);
   if (id) void selectConn(id);
 }
 export function openRemote() {
@@ -143,7 +145,7 @@ export async function selectConn(id: string) {
   const seq = ++connections.selSeq; app.activeConnId = id;
   if (isMainWindow) { try { localStorage.setItem(LAST_CONN_KEY, id); } catch { /* */ } }
   if (conn?.kind === 'ssh') { try { localStorage.setItem(LAST_REMOTE_KEY, id); } catch { /* */ } }
-  if (conn?.kind === 'cloudflare') { try { localStorage.setItem(LAST_CF_KEY, id); } catch { /* */ } }
+  if (conn?.kind === 'cloudflare' || conn?.kind === 'github') { try { localStorage.setItem(LAST_ACCOUNT_KEY[conn.kind], id); } catch { /* */ } }
   if (switching) {
     // 换连接＝换工作区：关掉上个连接的对话视图，别串场。模板库 / 提示词库只在 CF 连接下有。
     app.activeConvId = ''; app.activeConv = null;
