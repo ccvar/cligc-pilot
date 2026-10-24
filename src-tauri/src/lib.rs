@@ -41,6 +41,7 @@ mod site_stage;
 mod window_memory;
 mod site_github;
 mod site_jobs;
+mod site_make;
 mod site_ops;
 mod site_runner;
 mod site_verify;
@@ -4507,6 +4508,7 @@ pub fn run() {
             site_cmds::autodetect_cf_deploys,
             site_cmds::list_sites,
             site_cmds::import_site,
+            site_cmds::create_site,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_env_keys,

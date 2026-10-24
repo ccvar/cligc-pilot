@@ -302,6 +302,7 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
         ops: sites::OpsConfig::default(),
         pinned: false,
         tags: Vec::new(),
+        origin: String::new(),
         created_at: t,
         updated_at: t,
     };
@@ -330,6 +331,70 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
         });
     }
     Ok(site)
+}
+
+/// 新建站点（站点制作）：建文件夹、写需求记录、git init、登记站点、存定位，
+/// 返回站点和第一版对话的第一条消息（前端用它在这个站点里开对话）。
+#[derive(Serialize)]
+pub struct CreatedSite {
+    pub site: Site,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_make::CreateSiteRequest) -> Result<CreatedSite, String> {
+    use crate::site_make as mk;
+    if req.name.trim().is_empty() {
+        return Err("请填写站点名称".into());
+    }
+    if req.about.trim().is_empty() {
+        return Err("请用一句话说清这是个什么站".into());
+    }
+    let build = mk::stack_build(&req.stack).ok_or("请选择技术栈")?;
+    let parent = Path::new(req.parent_dir.trim());
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Err("存放位置不存在".into());
+    }
+    let domain = sites::normalize_domain(&req.domain)?;
+    let dir = parent.join(mk::folder_name(&domain, &req.name));
+    if dir.exists() && std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(true) {
+        return Err(format!("{} 已经存在且不是空文件夹，换个名字或位置", dir.display()));
+    }
+    let t = now();
+    let mut site = Site {
+        id: String::new(),
+        name: req.name.trim().to_string(),
+        domain,
+        source: "local".into(),
+        gh_conn_id: String::new(),
+        repo: String::new(),
+        local_dir: dir.to_string_lossy().into_owned(),
+        default_branch: "main".into(),
+        framework: req.stack.clone(),
+        build,
+        deploy: sites::DeployConfig { mode: "none".into(), ..Default::default() },
+        data: sites::DataBinding::default(),
+        ops: sites::OpsConfig::default(),
+        pinned: false,
+        tags: Vec::new(),
+        origin: "created".into(),
+        created_at: t,
+        updated_at: t,
+    };
+    std::fs::create_dir_all(dir.join(".pilot")).map_err(|e| format!("创建文件夹失败：{e}"))?;
+    std::fs::write(dir.join(".pilot/brief.md"), mk::brief_md(&req)).map_err(|e| e.to_string())?;
+    let cleanup = |e: String| {
+        let _ = std::fs::remove_dir_all(&dir);
+        e
+    };
+    crate::launch_cmds::init_repo(&dir).await.map_err(cleanup)?;
+    validate(&mut site, &state).map_err(cleanup)?;
+    let site = state.sites.insert(site).map_err(cleanup)?;
+    let _ = crate::site_stage::save_positioning(
+        &state.sites.data_dir(&site.id),
+        &crate::site_stage::Positioning { text: mk::positioning_text(&req).chars().take(1200).collect(), by: "user".into(), updated: t },
+    );
+    Ok(CreatedSite { message: mk::first_message(&req), site })
 }
 
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。
@@ -643,7 +708,8 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
 【站点信息】{root}框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
 【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
 你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\n\
-【干活的规矩】先读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\
+【干活的规矩】仓库里有 `.pilot/site.md`（站点约定：内容放哪、页面格式、新增一页要改哪些地方）就先读它并照着做，改了目录结构或页面格式时同步更新它；\
+再读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\
 改完先跑构建（和检查命令）确认通过再交付。面向访客的文字遵循随消息附带的公开文案规范。\
 不要把流量、收入等运营数字写进代码、提交说明或 PR 描述（仓库可能是公开的）。{data}\n\
 用用户所用语言回复，简洁说明做了什么、结果如何、还需要用户确认什么。",

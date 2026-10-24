@@ -6,6 +6,7 @@
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import { siteIdOf, openSite } from '$lib/state/sites.svelte.js';
   import { fleet, trafficDown } from '$lib/state/fleet.svelte.js';
+  import { isMaking } from '$lib/state/siteCreate.svelte.js';
 
   // 左栏只放「有对话的站点」：它是对话的入口，不是站点目录。没建过对话的站点不出现——
   // 找站点、管站点都在「全部站点」总览和全局搜索里。顺序：按最近一次对话。
@@ -45,6 +46,7 @@
     <span class="ic"><SiteIcon id={s.id} size={14} /></span>
     <span class="name">{s.name}</span>
     <span class="badges">
+      {#if isMaking(s.id)}<span class="making" title="新建的站点，还没配置上线">制作中</span>{/if}
       {#if s.job}<span class="run" title={s.job}></span>{/if}
       {#if s.proposed}<span class="cnt" title="{s.proposed} 条待确认">{s.proposed}</span>{/if}
       {#if s.last_deploy_ok === false || s.failed}<span class="bad" title={s.last_deploy_ok === false ? '上次上线失败' : `${s.failed} 条运营任务失败`}>!</span>{/if}
@@ -83,6 +85,7 @@
   .ic { color: var(--dim); display: inline-flex; flex: none; }
   .name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .badges { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  .making { font-size: 10px; color: var(--faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; line-height: 14px; }
   .cnt { min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; background: #faf1d8; color: #8a5a08; font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .bad { width: 15px; height: 15px; border-radius: 50%; background: var(--err-soft); color: var(--err); font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
   .down { color: var(--err); font-size: 12px; font-weight: 700; }

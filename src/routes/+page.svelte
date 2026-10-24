@@ -24,6 +24,7 @@
   import CloudflareConnectDialog from '$lib/components/cloudflare/CloudflareConnectDialog.svelte';
   import GithubConnectDialog from '$lib/components/github/GithubConnectDialog.svelte';
   import SiteImportDialog from '$lib/components/site/SiteImportDialog.svelte';
+  import SiteCreateDialog from '$lib/components/site/SiteCreateDialog.svelte';
   import SiteWorkbench from '$lib/components/site/SiteWorkbench.svelte';
   import { initSites } from '$lib/state/sites.svelte.js';
   import { initOps } from '$lib/state/ops.svelte.js';
@@ -232,6 +233,7 @@
 <CloudflareConnectDialog />
 <GithubConnectDialog />
 <SiteImportDialog />
+<SiteCreateDialog />
 <DataConnectDialog />
 <TemplateSaveDialog />
 <TemplateUseDialog />

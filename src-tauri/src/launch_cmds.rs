@@ -53,13 +53,14 @@ pub async fn import_cf_project(state: tauri::State<'_, AppState>, conn_id: Strin
         ops: sites::OpsConfig::default(),
         pinned: false,
         tags: Vec::new(),
+        origin: String::new(),
         created_at: t,
         updated_at: t,
     };
     state.sites.insert(site)
 }
 
-async fn init_repo(dir: &Path) -> Result<(), String> {
+pub(crate) async fn init_repo(dir: &Path) -> Result<(), String> {
     use crate::site_git::git_ok;
     git_ok(dir, &["init", "-q", "-b", "main"], "").await?;
     let ignore = dir.join(".gitignore");

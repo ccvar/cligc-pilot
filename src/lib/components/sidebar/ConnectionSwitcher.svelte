@@ -18,6 +18,7 @@
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { sites, openSiteImport } from '$lib/state/sites.svelte.js';
+  import { openSiteCreate } from '$lib/state/siteCreate.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN, GITHUBS_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
@@ -73,6 +74,7 @@
       </div>
       <div class="cs-actions">
         <div class="cs-div"></div>
+        <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><SiteMark size={15} />新建站点</button>
         <button class="cs-act" role="menuitem" onclick={() => openSiteImport()}><SiteMark size={15} />导入站点</button>
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>

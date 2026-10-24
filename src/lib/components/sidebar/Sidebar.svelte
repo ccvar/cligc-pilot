@@ -22,6 +22,7 @@
   import type { Conversation } from '$lib/types';
   import SitesRail from '$lib/components/sidebar/SitesRail.svelte';
   import RemoteRail from '$lib/components/sidebar/RemoteRail.svelte';
+  import { openSiteCreate } from '$lib/state/siteCreate.svelte.js';
   import AccountRail from '$lib/components/sidebar/AccountRail.svelte';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { managed, openManaged } from '$lib/state/managed.svelte.js';
@@ -88,6 +89,10 @@
       <SiteMark size={14} />
       全部站点
       {#if fleet.pendingCount}<span class="nav-cnt" title="{fleet.pendingCount} 条改动等你确认">{fleet.pendingCount}</span>{/if}
+    </button>
+    <button class="railnav" onclick={() => openSiteCreate()}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" /><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+      新建站点
     </button>
     <button class="railnav {app.view === 'managed' ? 'on' : ''}" onclick={() => openManaged()}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8V4H8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /><rect x="4" y="8" width="16" height="12" rx="2" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /><path d="M2 14h2M20 14h2M9 13v2M15 13v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>

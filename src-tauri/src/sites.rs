@@ -264,6 +264,9 @@ pub struct Site {
     /// 标签（分组、筛选用）。
     #[serde(default)]
     pub tags: Vec<String>,
+    /// created：在 Pilot 里从零制作的；空＝导入的。还没配部署的新站在列表里标「制作中」。
+    #[serde(default)]
+    pub origin: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -1227,6 +1230,7 @@ mod tests {
             ops: OpsConfig::default(),
             pinned: false,
             tags: Vec::new(),
+            origin: String::new(),
             created_at: 1,
             updated_at: 1,
         };

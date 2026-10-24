@@ -7,6 +7,7 @@
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
+  import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
   import { fleet, applyFilter, sortRows, clicksChange, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
@@ -68,7 +69,8 @@
       {#if fleet.tags.length}
         <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
       {/if}
-      <button class="btn small primary" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
+      <button class="btn small" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
+      <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="plus" size={13} />新建站点</button>
     </div>
   </header>
 
@@ -106,7 +108,7 @@
                 {@const ch = clicksChange(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if isMaking(r.id)}<span class="making">制作中</span>{/if}{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
@@ -195,6 +197,7 @@
   .site-cell small { padding-left: 23px; display: flex; flex-wrap: nowrap; overflow: hidden; white-space: nowrap; gap: 0 8px; font-size: 11.5px; color: var(--faint); margin-top: 1px; }
   .site-cell small span + span:not(.tag)::before { content: '·'; margin-right: 8px; color: var(--border2); }
   .tag { color: var(--dim); }
+  .making { flex: none; font-size: 10.5px; font-weight: 500; color: var(--dim); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; line-height: 16px; }
   .dm { display: inline-flex; align-items: center; gap: 5px; }
   .dm :global(svg) { flex: none; }
   .dm :global(.ico) { color: var(--dim); }

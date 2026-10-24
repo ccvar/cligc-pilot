@@ -218,6 +218,8 @@ export interface Site {
   ops: SiteOps;
   pinned: boolean;
   tags: string[];
+  /** created：在 Pilot 里从零制作的；空＝导入的 */
+  origin?: string;
   created_at: number;
   updated_at: number;
 }
