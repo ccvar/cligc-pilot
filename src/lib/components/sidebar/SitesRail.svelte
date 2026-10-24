@@ -79,8 +79,8 @@
   .sr { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }
   .site { margin: 0 8px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 10px; border-radius: 9px; cursor: pointer; min-width: 0; }
   .site { transition: background-color .12s; }
-  .site:hover { background: #f1efe9; }
-  .site.on { background: #e9e7e0; }
+  .site:hover { background: #f5f4f1; }
+  .site.on { background: #f0efeb; }
   .site.ctx .ic { color: var(--text); }
   .ic { color: var(--dim); display: inline-flex; flex: none; }
   .name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -94,7 +94,7 @@
   @keyframes sr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
   .more { display: block; margin: 1px 8px 2px 30px; padding: 3px 8px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--faint); cursor: pointer; text-align: left; }
-  .more:hover { color: var(--text); background: #f1efe9; }
+  .more:hover { color: var(--text); background: #f5f4f1; }
   .grp { padding: 6px 8px 2px 30px; font-size: 11px; color: var(--faint); font-weight: 600; }
   @keyframes pulse { 50% { opacity: .35; } }
 </style>

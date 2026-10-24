@@ -148,13 +148,13 @@
   .rail-head { padding: 8px 8px 2px; display: flex; flex-direction: column; gap: 2px; }
   .newchat { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px;
     background: none; color: var(--text); border: none; border-radius: 9px; font-size: 13.5px; font-weight: 550; cursor: pointer; text-align: left; }
-  .newchat:hover { background: #f1efe9; }
+  .newchat:hover { background: #f5f4f1; }
   .newchat:disabled { opacity: .5; cursor: default; }
   .newchat svg { flex: none; color: var(--accent); }
   .railnav { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 10px; background: none;
     border: none; border-radius: 9px; font-size: 13px; color: var(--dim); cursor: pointer; text-align: left; margin-top: -4px; }
-  .railnav:hover { background: #f1efe9; color: var(--text); }
-  .railnav.on { background: #e9e7e0; color: var(--text); font-weight: 550; }
+  .railnav:hover { background: #f5f4f1; color: var(--text); }
+  .railnav.on { background: #f0efeb; color: var(--text); font-weight: 550; }
   .railnav:disabled { opacity: .45; cursor: default; }
   .railnav :global(svg) { flex: none; }
   .nav-dim { margin-left: auto; font-size: 11px; color: var(--faint); }
@@ -176,8 +176,8 @@
      （分组头：10 左内边距 + 10 chevron + 6 gap，14px 图标中心落在 33px；
       对话行：8 外边距 + 19 左内边距，12px 图标中心也落在 33px）。顺带标题也更贴近站点名。 */
   .convo { position: relative; display: flex; align-items: center; gap: 6px; border-radius: 8px; margin: 0 8px; padding: 1px 6px 1px 19px; cursor: pointer; }
-  .convo:hover { background: #f1efe9; }
-  .convo.on { background: #e9e7e0; }
+  .convo:hover { background: #f5f4f1; }
+  .convo.on { background: #f0efeb; }
   .convo-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
   .convo-bi { flex: none; display: inline-flex; align-items: center; }
   /* 对话标题：比分组头（.site-grp-name 12.5px/var(--text)）小半号、淡一档——让站点头当主、对话当项 */

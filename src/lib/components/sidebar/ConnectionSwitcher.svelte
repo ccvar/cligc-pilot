@@ -112,8 +112,8 @@
   .foot-os :global(svg.distro) { transform: translateY(1px); }
   .rail-foot { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: none; border-top: 1px solid var(--border); background: none; cursor: pointer; text-align: left; -webkit-appearance: none; appearance: none; box-shadow: none; }
   .rail-foot:focus, .rail-foot:active { outline: none; box-shadow: none; }
-  .rail-foot:hover { background: #f1efe9; }
-  .rail-foot.open { background: #f1efe9; border-top-color: transparent; }
+  .rail-foot:hover { background: #f5f4f1; }
+  .rail-foot.open { background: #f5f4f1; border-top-color: transparent; }
   .foot-main { flex: 1; min-width: 0; }
   .foot-main b { display: block; font-size: 12.5px; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .foot-main small { display: block; color: var(--dim); font-size: 10.5px; line-height: 1.1; }

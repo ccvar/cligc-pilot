@@ -44,8 +44,8 @@
 <style>
   .cr { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }
   .acct { margin: 0 8px; min-height: 40px; display: flex; align-items: center; gap: 9px; padding: 4px 8px 4px 10px; border-radius: 9px; cursor: pointer; min-width: 0; transition: background-color .12s; }
-  .acct:hover, .acct.menu { background: #f1efe9; }
-  .acct.on { background: #e9e7e0; }
+  .acct:hover, .acct.menu { background: #f5f4f1; }
+  .acct.on { background: #f0efeb; }
   .ic { display: inline-flex; flex: none; color: var(--text); }
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
   .main b { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -53,7 +53,7 @@
   .run { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
   .convs { padding: 1px 0 6px 8px; animation: cr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
   .add { margin: 6px 8px 0; width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: none; background: none; border-radius: 9px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; transition: background-color .12s, color .12s; }
-  .add:hover { background: #f1efe9; color: var(--text); }
+  .add:hover { background: #f5f4f1; color: var(--text); }
   @keyframes pulse { 50% { opacity: .35; } }
   @keyframes cr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
