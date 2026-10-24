@@ -108,7 +108,9 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
             self.work.display(),self.reads.iter().map(|p|p.display().to_string()).collect::<Vec<_>>().join("、"),
             images = if self.vision { "图片用 view_image 查看（截图后用它确认画面是对的）；音频、PDF 暂无原生读取能力，遇到此类附件要明确说明不能查看，不得假装看过。" } else { "图片、音频、PDF 暂无原生读取能力，遇到此类附件要明确说明不能查看，不得假装看过。" });
         if self.conn.kind == "github" {
-            text.push_str("\n当前是 GitHub 仓库检出。本版 API 执行器没有 GitHub 凭据工具，只能读写、检查本地文件和运行本机命令（命令里没有 Token）。不得尝试获取 GitHub Token；需要推送分支或创建 PR 时，说明改动并建议切换到本地客户端完成。");
+            text.push_str("\n当前是 GitHub 仓库检出。run_command 里没有 GitHub Token（git push / gh 会因为没有凭据失败），不得尝试获取 Token。\
+推送和 PR 用专用工具，由 Pilot 代为执行：在功能分支上提交好以后调用 github_publish（推送当前分支并开 PR，已有 PR 就复用，返回 PR 链接）；\
+要把 PR 合并进默认分支时调用 github_merge，Pilot 会先弹卡片让用户确认。不要让用户自己去推送。");
         }
         if self.conn.kind == "cloudflare" {
             text.push_str("\n当前是 Cloudflare 工作区。本版 API 执行器没有 Cloudflare 凭据工具，只能编辑/检查本地文件。不得读取配置或尝试其他方式获取 Cloudflare token；需要鉴权部署或远端操作时明确建议切换到本地客户端。");
@@ -127,6 +129,10 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         }
         if self.site_data_script.is_file() {
             tools.push(def("site_data","Query a site's locally cached Search Console / GA4 / Bing data (read-only, no credentials; allowed in every permission mode). cache = the site's cache directory given in the system prompt.",json!({"cache":{"type":"string"},"command":{"type":"string","enum":SITE_DATA_COMMANDS},"options":{"type":"object","description":"e.g. {\"source\":\"gsc\",\"min-impressions\":500,\"max-ctr\":0.02,\"page\":\"/zh/fees\",\"sort\":\"clicks\",\"limit\":50,\"prev\":true}"}}),&["cache","command"]));
+        }
+        if self.conn.kind == "github" {
+            tools.push(def("github_publish","Push the current git branch of this checkout to GitHub and open a pull request into the default branch (reuses an open PR for the same branch). Pilot runs it with its own credentials; you never see a token. Pushing the default branch itself asks the user first.",json!({"title":{"type":"string","description":"PR title"},"body":{"type":"string","description":"What changed, why, how it was verified"}}),&["title"]));
+            tools.push(def("github_merge","Merge a pull request into the default branch (squash) after the user confirms in a card, then update the local default branch.",json!({"number":{"type":"integer","minimum":1}}),&["number"]));
         }
         if self.conn.kind == "ssh" && self.lease.is_some() {
             tools.push(def("ssh_command","Run a command on the current SSH connection through Pilot's existing permission bridge. No other hosts or SSH credentials are exposed.",json!({"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":300}}),&["command"]));
@@ -245,6 +251,49 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                 }
                 self.process(cmd, &json!({ "timeout_seconds": 30 })).await
             }
+            "github_publish" if self.conn.kind == "github" => {
+                if self.mode == PermMode::Plan {
+                    return Err("计划模式不推送".into());
+                }
+                let (token, repo, default) = self.github_ctx().await?;
+                let branch = crate::site_git::git_ok(&self.work, &["rev-parse", "--abbrev-ref", "HEAD"], "").await?;
+                if branch == "HEAD" {
+                    return Err("当前不在任何分支上（分离 HEAD），先 git switch -c pilot/<主题>".into());
+                }
+                if branch == default {
+                    // 直接推默认分支 = 跳过 PR 直接改线上代码：一律先问用户
+                    self.ask_card("github_publish", &format!("把本地 {default} 直接推送到 GitHub 仓库 {repo}（不开 PR）"), false).await?;
+                    crate::site_git::git_ok(&self.work, &["push", "origin", &default], &token).await?;
+                    return Ok(json!({"pushed": default, "pr": null, "note": "已直接推送默认分支"}));
+                }
+                if self.mode != PermMode::Full {
+                    self.ask_card("github_publish", &format!("推送分支 {branch} 到 GitHub 仓库 {repo} 并开 PR"), false).await?;
+                }
+                crate::site_git::git_ok(&self.work, &["push", "-u", "origin", &branch], &token).await?;
+                let title = required(args, "title")?;
+                let body = args["body"].as_str().unwrap_or_default();
+                let pr = crate::site_github::create_pr(&token, &repo, &branch, &default, title, body).await?;
+                Ok(json!({"pushed": branch, "pr": {"number": pr.number, "url": pr.url}, "base": default}))
+            }
+            "github_merge" if self.conn.kind == "github" => {
+                if self.mode == PermMode::Plan {
+                    return Err("计划模式不合并".into());
+                }
+                let number = args["number"].as_u64().ok_or("缺少 PR 编号")?;
+                let (token, repo, default) = self.github_ctx().await?;
+                let pr = crate::site_github::get_pr(&token, &repo, number).await?;
+                if pr.merged {
+                    return Ok(json!({"merged": true, "note": "这个 PR 已经合并过了"}));
+                }
+                // 合并会改默认分支（通常就是要上线的代码）：不管哪个权限档位都要用户点确认
+                self.ask_card("github_merge", &format!("把 PR #{number}（{}）合并进 {repo} 的 {default}", pr.head), false).await?;
+                let sha = crate::site_github::merge_pr(&token, &repo, number, &format!("Merge #{number}")).await?;
+                // 本地默认分支跟上，后续改动从最新代码开始
+                let _ = crate::site_git::git_ok(&self.work, &["fetch", "origin", &default], &token).await;
+                let _ = crate::site_git::git_ok(&self.work, &["switch", &default], "").await;
+                let _ = crate::site_git::git_ok(&self.work, &["merge", "--ff-only", &format!("origin/{default}")], "").await;
+                Ok(json!({"merged": true, "sha": sha, "base": default, "note": "已合并；站点要上线时在 Pilot 站点页「构建并上线」"}))
+            }
             "ssh_command" if self.conn.kind == "ssh" && self.lease.is_some() => {
                 if self.mode == PermMode::Plan {
                     return Err("计划模式不执行远程命令".into());
@@ -271,12 +320,24 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
     fn path(&self, raw: &str, write: bool) -> Result<PathBuf, String> {
         scoped_path(&self.work, &self.reads, raw, write)
     }
+    /// GitHub 工具的上下文：连接的 Token（只在 Pilot 进程里用，不进命令环境、不回给模型）、仓库、默认分支。
+    async fn github_ctx(&self) -> Result<(String, String, String), String> {
+        let token = crate::keychain::get_key(&self.conn.id)?;
+        let remote = crate::site_git::git_ok(&self.work, &["remote", "get-url", "origin"], "").await?;
+        let repo = crate::site_github::repo_from_remote(&remote).ok_or("origin 不是 GitHub 仓库")?;
+        let default = crate::site_github::default_branch(&token, &repo).await?;
+        Ok((token, repo, default))
+    }
     async fn authorize(&self, name: &str, detail: &str, host: bool) -> Result<(), String> {
         match decision(self.mode, name, detail, self.safe_commands) {
             Gate::Allow => return Ok(()),
             Gate::Deny => return Err("当前权限档位不允许此操作".into()),
             Gate::Confirm => {}
         }
+        self.ask_card(name, detail, host).await
+    }
+    /// 弹确认卡片等用户点（不看权限档位）。
+    async fn ask_card(&self, name: &str, detail: &str, host: bool) -> Result<(), String> {
         std::fs::create_dir_all(&self.pending).map_err(|e| e.to_string())?;
         let id = format!("api{}", uuid::Uuid::new_v4().simple());
         let req = self.pending.join(format!("{id}.req.json"));

@@ -872,8 +872,8 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         format!(
             "代码在 GitHub 仓库 `{repo}`，当前目录是 Pilot 克隆好的检出（提交作者 `{login}`，凭据已注入）。\
 【改代码的流程】不要直接提交到默认分支 `{branch}`：先 `git switch -c pilot/<简短主题>`，小步提交、写清楚提交说明；\
-改完先跑构建与检查并如实报告。需要发布时 `git push -u origin <分支>`，再用 `gh pr create` 开 PR（写清改了什么、为什么、怎么验证）。\
-没有 gh 时把 `https://github.com/{repo}/compare/<分支>?expand=1` 给用户。\
+改完先跑构建与检查并如实报告。需要发布时：有 `github_publish` 工具就用它（Pilot 代为推送并开 PR，合并用 `github_merge`，会先请用户确认）；\
+没有这个工具时 `git push -u origin <分支>`，再用 `gh pr create` 开 PR（写清改了什么、为什么、怎么验证），没有 gh 就把 `https://github.com/{repo}/compare/<分支>?expand=1` 给用户。\
 不要读取、打印 GITHUB_TOKEN / GH_TOKEN，不要改 credential 相关配置；强制推送、删分支、合并 PR 都要先征得用户同意。",
             repo = site.repo,
             branch = site.default_branch,

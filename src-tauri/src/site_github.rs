@@ -58,6 +58,22 @@ fn pr_from(v: &Value) -> Pr {
     }
 }
 
+/// 仓库的默认分支。
+pub async fn default_branch(token: &str, repo: &str) -> Result<String, String> {
+    Ok(call(token, reqwest::Method::GET, &format!("/repos/{repo}"), None).await?["default_branch"].as_str().unwrap_or("main").to_string())
+}
+
+/// 从 origin 地址里取 `owner/repo`（https://github.com/o/r(.git)、git@github.com:o/r.git）。
+pub fn repo_from_remote(url: &str) -> Option<String> {
+    let u = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    let rest = u.split_once("github.com").map(|(_, r)| r.trim_start_matches([':', '/']))?;
+    let mut it = rest.split('/');
+    match (it.next(), it.next()) {
+        (Some(o), Some(r)) if !o.is_empty() && !r.is_empty() => Some(format!("{o}/{r}")),
+        _ => None,
+    }
+}
+
 /// 开 PR；同一分支已有打开的 PR 时返回那一个。
 pub async fn create_pr(token: &str, repo: &str, head: &str, base: &str, title: &str, body: &str) -> Result<Pr, String> {
     match call(token, reqwest::Method::POST, &format!("/repos/{repo}/pulls"), Some(json!({ "title": title, "head": head, "base": base, "body": body }))).await {
@@ -113,5 +129,17 @@ pub async fn repo_is_empty(token: &str, repo: &str) -> Result<bool, String> {
         Ok(v) => Ok(v.as_array().is_none_or(|a| a.is_empty())),
         Err(e) if e.contains("409") || e.contains("empty") || e.contains("不允许") => Ok(true),
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::repo_from_remote;
+    #[test]
+    fn parses_github_remotes() {
+        assert_eq!(repo_from_remote("https://github.com/ccvar/htxneo.com.git").as_deref(), Some("ccvar/htxneo.com"));
+        assert_eq!(repo_from_remote("git@github.com:ccvar/htxneo.com.git").as_deref(), Some("ccvar/htxneo.com"));
+        assert_eq!(repo_from_remote("https://x-access-token@github.com/a/b").as_deref(), Some("a/b"));
+        assert_eq!(repo_from_remote("https://gitlab.com/a/b"), None);
     }
 }
