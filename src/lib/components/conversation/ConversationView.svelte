@@ -257,8 +257,10 @@
             {:else if !progress.thinking}
               <div class="working" aria-label="思考中">
                 <svg class="wl" viewBox="0 0 64 64" width="17" height="17" aria-hidden="true">
-                  <path class="wl-trace" d="M44 24a14 14 0 1 0 0 16" fill="none" stroke="#a03c2b" stroke-width="7" stroke-linecap="round" pathLength="100" stroke-dasharray="100" />
-                  <circle class="wl-dot" cx="45.5" cy="42" r="4.6" fill="#a03c2b" />
+                  <!-- Cligc Pilot 标志：两根斜着的圆头条，轮流画出来 -->
+                  <defs><linearGradient id="wl-g" x1="0" y1="10" x2="0" y2="56" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#6fe39c" /><stop offset="1" stop-color="#17a058" /></linearGradient></defs>
+                  <path class="wl-a" d="M38 14 19.5 44" fill="none" stroke="url(#wl-g)" stroke-width="12" stroke-linecap="round" pathLength="100" stroke-dasharray="100" />
+                  <path class="wl-b" d="M44.5 33.5 33 52.5" fill="none" stroke="url(#wl-g)" stroke-width="12" stroke-linecap="round" pathLength="100" stroke-dasharray="100" />
                 </svg>
                 <span class="working-t">{elapsedLabel(thread.nowMs - liveView.startedAt)}</span>
               </div>
@@ -631,11 +633,11 @@
   .working-t { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .context-compact-note { display: flex; align-items: center; gap: 6px; width: fit-content; margin: 2px 0 9px; padding: 5px 8px; border-radius: 8px; color: #267457; background: #edf7f1; font-size: 12px; }
   .context-compact-note small { color: #6e8d7d; font-size: 11px; }
-  .wl-trace { animation: wldraw 1.5s ease-in-out infinite; }
-  @keyframes wldraw { 0% { stroke-dashoffset: 100; opacity: 1; } 55% { stroke-dashoffset: 0; opacity: 1; } 82% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
-  .wl-dot { transform-box: fill-box; transform-origin: center; animation: wldot 1.5s ease-in-out infinite; }
-  @keyframes wldot { 0%, 45% { opacity: 0; transform: scale(.2); } 62% { opacity: 1; transform: scale(1); } 82% { opacity: 1; } 100% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .wl-trace, .wl-dot { animation: none; } .wl-trace { stroke-dashoffset: 0; } .wl-dot { opacity: 1; } }
+  .wl-a { animation: wlA 1.6s ease-in-out infinite; }
+  .wl-b { animation: wlB 1.6s ease-in-out infinite; }
+  @keyframes wlA { 0% { stroke-dashoffset: 100; opacity: 1; } 35%, 75% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: .15; } }
+  @keyframes wlB { 0%, 25% { stroke-dashoffset: 100; opacity: 1; } 60%, 75% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: .15; } }
+  @media (prefers-reduced-motion: reduce) { .wl-a, .wl-b { animation: none; stroke-dashoffset: 0; } }
   .composer-wrap { flex: none; padding: 10px 24px 20px; }
   .composer-wrap .composer { max-width: 760px; margin: 0 auto; }
   /* ---- 按钮 / 弹窗 ---- */
