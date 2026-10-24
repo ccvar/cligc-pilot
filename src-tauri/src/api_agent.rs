@@ -913,7 +913,8 @@ impl Reply {
                     ),
                 };
                 let arguments = if let Some(text) = args.as_str() {
-                    serde_json::from_str(text).map_err(|_| "模型返回的工具参数不是有效 JSON")?
+                    // 没有参数的工具（如 site_deploy）有的接口给空字符串
+                    if text.trim().is_empty() { json!({}) } else { serde_json::from_str(text).map_err(|_| "模型返回的工具参数不是有效 JSON")? }
                 } else {
                     args.clone()
                 };
@@ -1189,8 +1190,9 @@ impl Accumulator {
                 return Err("API 内容块未完整结束，未执行工具".into());
             }
             for (index, args) in self.partial {
+                // 没有参数的工具，Claude 流里的 partial_json 是空字符串
                 self.items.get_mut(&index).ok_or("API 工具流顺序异常")?["input"] =
-                    serde_json::from_str(&args).map_err(|_| "API 工具参数 JSON 不完整")?;
+                    if args.trim().is_empty() { json!({}) } else { serde_json::from_str(&args).map_err(|_| "API 工具参数 JSON 不完整")? };
             }
         }
         let items = match protocol {
@@ -1635,6 +1637,14 @@ mod tests {
         assert!(reply.output_limited);
         assert!(reply.items.is_empty());
         assert!(reply.calls().is_err());
+    }
+    #[test]
+    fn anthropic_tool_without_arguments_gets_empty_object() {
+        // 没有参数的工具（site_deploy）：Claude 流里 partial_json 是空字符串
+        let mut accumulator = anthropic_accumulator(anthropic_tool_events("", true));
+        stop_anthropic(&mut accumulator, "tool_use").unwrap();
+        let reply = accumulator.finish("anthropic_messages").unwrap();
+        assert_eq!(reply.items[0]["content"][0]["input"], json!({}));
     }
     #[test]
     fn anthropic_output_limit_requires_message_stop_not_just_stop_reason() {
