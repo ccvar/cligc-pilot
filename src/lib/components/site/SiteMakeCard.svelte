@@ -31,7 +31,7 @@
   // GA4 由 Pilot 自己处理：衡量 ID 还没进配置变量就显示一条（构建过以后才出现，免得刚开始做就打扰）
   const ga = $derived(siteMake.ga[site.id] ?? {});
   // 老站点读到了 ID 但代码还没接这个变量：这一条也留着（等交给 AI 接上）
-  const gaPending = $derived(!!ms && ms.built_at > 0 && (!gaReady(site) || (!!ga.mid && !ga.declared && !ga.wired)));
+  const gaPending = $derived(!!ms && ms.built_at > 0 && !gaReady(site) && !ga.wired);
   // 自动接好了：一行完成提示，下次构建生效
   const gaDone = $derived(!!ga.mid && !!ga.declared && !ga.rebuilt);
   const goalTodos = $derived(ms?.todos?.filter((t) => t.affects_goal).length ?? 0);

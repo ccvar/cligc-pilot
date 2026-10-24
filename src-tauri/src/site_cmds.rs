@@ -435,7 +435,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let todos = mk::load_todos(&code, &mk::load_handled(&state.sites.data_dir(&id)));
+    let todos = mk::load_todos(&code);
     let config = crate::site_config::vars(&site, &code);
     // 不要 full：只看站点约定和待办（站点看板每次打开都会问，别去扫整个构建产物）
     if !full.unwrap_or(true) {
@@ -516,16 +516,12 @@ pub fn site_todo_request_message() -> String {
     format!("请把需要我处理的事（要我提供的信息、要我做的决定、你能做但要我点头的事）整理写进 `.pilot/todo.json`，只改这个文件，提交一次。\n\n{}", crate::site_make::TODO_SPEC)
 }
 
-/// 看板上把一条待办标成「已处理 / 不需要」：记在 Pilot 自己的站点数据里，不改仓库文件。
+/// 看板上把一条待办标成「已处理 / 不需要」：直接从 .pilot/todo.json 里删掉（AI 下次读到的就是剩下的）。
 #[tauri::command]
 pub fn site_todo_handled(state: tauri::State<'_, AppState>, id: String, todo_id: String) -> Result<(), String> {
-    state.sites.get(&id)?;
-    let dir = state.sites.data_dir(&id);
-    let mut ids = crate::site_make::load_handled(&dir);
-    if !ids.contains(&todo_id) {
-        ids.push(todo_id);
-    }
-    crate::site_make::save_handled(&dir, &ids)
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    crate::site_make::remove_todo(&code, &todo_id).map(|_| ())
 }
 
 /// 站点配置变量：.env.example 里声明的 + Pilot 里手动加的、哪些还没填、同步到哪、有没有改动没同步。不返回值。

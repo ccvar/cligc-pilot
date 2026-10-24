@@ -304,21 +304,29 @@ struct TodoFile {
     items: Vec<Todo>,
 }
 
-/// 读 `.pilot/todo.json`：None＝AI 还没写这个文件；去掉我已经处理过（或说不需要）的条目。
-pub fn load_todos(code: &Path, handled: &[String]) -> Option<Vec<Todo>> {
+/// 读 `.pilot/todo.json`：None＝AI 还没写这个文件。这个文件是唯一的待办清单：
+/// 我在看板上标「已处理 / 不需要」会直接把条目从文件里删掉（见 remove_todo），AI 和看板看到的永远是同一份。
+pub fn load_todos(code: &Path) -> Option<Vec<Todo>> {
     let raw = std::fs::read(code.join(".pilot/todo.json")).ok()?;
     let f: TodoFile = serde_json::from_slice(&raw).unwrap_or(TodoFile { items: vec![] });
-    Some(f.items.into_iter().filter(|t| !t.id.trim().is_empty() && !t.title.trim().is_empty() && !handled.contains(&t.id)).take(30).collect())
+    Some(f.items.into_iter().filter(|t| !t.id.trim().is_empty() && !t.title.trim().is_empty()).take(30).collect())
 }
 
-/// 我在看板上标过「已处理 / 不需要」的条目 id（存在 Pilot 自己的站点数据目录，不改仓库）。
-pub fn load_handled(site_dir: &Path) -> Vec<String> {
-    std::fs::read(site_dir.join("todo_handled.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-pub fn save_handled(site_dir: &Path, ids: &[String]) -> Result<(), String> {
-    std::fs::create_dir_all(site_dir).map_err(|e| e.to_string())?;
-    std::fs::write(site_dir.join("todo_handled.json"), serde_json::to_vec(ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+/// 从 `.pilot/todo.json` 里删掉一条（其它条目和字段原样保留）。返回删没删到。
+pub fn remove_todo(code: &Path, id: &str) -> Result<bool, String> {
+    let path = code.join(".pilot/todo.json");
+    let Ok(raw) = std::fs::read(&path) else { return Ok(false) };
+    let mut v: serde_json::Value = serde_json::from_slice(&raw).map_err(|e| format!(".pilot/todo.json 不是合法的 JSON：{e}"))?;
+    let Some(items) = v.get_mut("items").and_then(|i| i.as_array_mut()) else { return Ok(false) };
+    let before = items.len();
+    items.retain(|t| t.get("id").and_then(|x| x.as_str()) != Some(id));
+    if items.len() == before {
+        return Ok(false);
+    }
+    let mut text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+    text.push('\n');
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// 上线前检查里的一项：有影响站点目标的待办就提醒（不算必须修，但要醒目）。
@@ -696,21 +704,22 @@ mod tests {
     #[test]
     fn todos_come_from_the_file_minus_what_i_handled_and_goal_items_raise_a_warning() {
         let t = tempfile::tempdir().unwrap();
-        assert!(load_todos(t.path(), &[]).is_none(), "没写文件＝None");
+        assert!(load_todos(t.path()).is_none(), "没写文件＝None");
         write(t.path(), ".pilot/todo.json", r#"{"items":[
             {"id":"referral","title":"填写邀请链接","kind":"input","affects_goal":true,"where":"src/site.config.ts","inputs":[{"key":"binance","label":"币安邀请链接"}]},
             {"id":"brand","title":"确认品牌名","kind":"confirm"},
             {"id":"","title":"没有 id 的不要"}
         ]}"#);
-        let all = load_todos(t.path(), &[]).unwrap();
+        let all = load_todos(t.path()).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].location, "src/site.config.ts");
         assert_eq!(todo_check(&all).level, "warn");
-        let rest = load_todos(t.path(), &["referral".into()]).unwrap();
+        // 标「已处理」直接从文件里删：AI 下次读到的就是剩下的
+        assert!(remove_todo(t.path(), "referral").unwrap());
+        assert!(!remove_todo(t.path(), "referral").unwrap());
+        let rest = load_todos(t.path()).unwrap();
         assert_eq!(rest.len(), 1);
         assert_eq!(todo_check(&rest).level, "ok");
-        save_handled(t.path(), &["brand".into()]).unwrap();
-        assert_eq!(load_handled(t.path()), vec!["brand".to_string()]);
         let m = first_message(&req());
         assert!(m.contains(".pilot/todo.json") && m.contains("【待我处理的事】") && !m.contains("在汇报里列出来"));
         assert!(m.contains("【配置变量】") && m.contains(".env.example") && m.contains("PUBLIC_GA_ID") && continue_message(&[], "astro").contains("【配置变量】"));

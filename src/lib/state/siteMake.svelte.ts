@@ -121,10 +121,15 @@ export function gaKey(site: Site): string {
   if (vars.some((v) => v.key === 'PUBLIC_GA_ID')) return 'PUBLIC_GA_ID';
   return vars.find((v) => { const u = v.key.toUpperCase(); return (u.includes('GA4') || u.startsWith('GA_') || u.includes('_GA_') || u.endsWith('_GA') || u.includes('GTAG')) && (u.includes('ID') || u.includes('MEASUREMENT')); })?.key ?? '';
 }
-/** GA4 衡量 ID 已经存进配置变量了吗。 */
+/** GA4 真的接好了吗：代码里声明了 GA 变量（.env.example），而且 Pilot 里有值。
+ *  只存了值、代码还没读这个变量的不算——站点不会加载统计代码。 */
 export function gaReady(site: Site): boolean {
   const k = gaKey(site);
-  return k ? !!siteMake.state[site.id]?.config.find((v) => v.key === k)?.set : site.build.env_keys.includes('PUBLIC_GA_ID');
+  return !!k && !!siteMake.state[site.id]?.config.find((v) => v.key === k)?.set;
+}
+/** 值已经存了（PUBLIC_GA_ID），但代码还没接：要交给 AI 接上。不依赖这次打开期间的状态，重启后也认得出。 */
+export function gaNeedsWiring(site: Site): boolean {
+  return !gaKey(site) && site.build.env_keys.includes('PUBLIC_GA_ID');
 }
 
 /** 接入 GA4：建（或读出已绑定的、或用我填的）衡量 ID，存进配置变量。
@@ -153,7 +158,7 @@ export async function ga4ToConfig(site: Site, connId = '', measurementId = '', a
 export async function wireGa(site: Site) {
   const key = siteMake.ga[site.id]?.key || 'PUBLIC_GA_ID';
   siteMake.ga[site.id] = { ...(siteMake.ga[site.id] ?? {}), wired: true };
-  await sendToMaking(site, `我已经在 Pilot 里把 GA4 衡量 ID 存成了配置变量 \`${key}\`（构建时注入，值不用写进代码）。请按【配置变量】的规矩接上：在 \`.env.example\` 里声明 \`${key}\`（[public]，GA4 衡量 ID），有值时在所有页面共用的 \`<head>\` 里用官方 gtag.js 加载，没值就不加载；站点里如果已经写死了别的统计代码，先告诉我。改完重新构建确认产物里的页面都带上了，提交一次。`);
+  await sendToMaking(site, `我已经在 Pilot 里把 GA4 衡量 ID 存成了配置变量 \`${key}\`（构建时注入，值不用写进代码）。请按【配置变量】的规矩接上：\n- 在 \`.env.example\` 里声明 \`${key}\`（[public]，GA4 衡量 ID），有值时在所有页面共用的 \`<head>\` 里用官方 gtag.js 加载，没值就不加载；站点里如果已经写死了别的统计代码，先告诉我；\n- 同步更新隐私政策：说明使用 Google Analytics 统计访问、会用到 Cookie、收集哪些数据、怎么拒绝；\n- \`.pilot/todo.json\` 里如果有「要不要加访问统计」之类的条目，接好后删掉。\n改完重新构建确认产物里的页面都带上了统计代码，提交一次。`);
 }
 
 export async function rebuildForGa(site: Site) {

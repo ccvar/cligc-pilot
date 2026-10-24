@@ -7,7 +7,7 @@
   import type { Site } from '$lib/types';
   import { app } from '$lib/state/app.svelte.js';
   import { launch } from '$lib/state/launch.svelte.js';
-  import { siteMake, ga4ToConfig, wireGa } from '$lib/state/siteMake.svelte.js';
+  import { siteMake, ga4ToConfig, wireGa, gaNeedsWiring } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
   const manage = $derived(launch.status[site.id]?.google_manage_conn ?? '');
@@ -21,13 +21,15 @@
   const own = $derived(showOwn || !autoPath);
   let mid = $state('');
 
-  $effect(() => { if (canRead && !g.tried && !g.mid) void ga4ToConfig(site, '', '', true); });
+  // 值已经存了、只差代码接上：不再去 Google 读
+  const wiring = $derived(gaNeedsWiring(site) || (!!g.mid && !g.declared));
+  $effect(() => { if (canRead && !g.tried && !g.mid && !gaNeedsWiring(site)) void ga4ToConfig(site, '', '', true); });
 </script>
 
 <li class="ga">
   <div class="t-head"><b>接入 GA4 统计</b><span class="tag pilot">Pilot 帮你做</span></div>
-  {#if g.mid && !g.declared}
-    <p class="why">已读出衡量 ID <code>{g.mid}</code>，存进了配置变量 <code>{g.key}</code>。这个站点的代码还没接这个变量，交给 AI 接上（声明进 .env.example、有值才加载 gtag.js）。</p>
+  {#if wiring}
+    <p class="why">衡量 ID {#if g.mid}<code>{g.mid}</code> {/if}已经存进配置变量 <code>{g.key || 'PUBLIC_GA_ID'}</code>，但这个站点的代码还没读这个变量，统计代码不会加载。交给 AI 接上：声明进 .env.example、有值才加载 gtag.js，并同步更新隐私政策。</p>
     <div class="acts"><button class="btn small primary" disabled={busyAi || g.wired} onclick={() => wireGa(site)}><Icon name="wand" size={12} />{g.wired ? '已交给 AI' : '交给 AI 接上'}</button></div>
   {:else}
     <p class="why">看访问量、来源和转化；上线后托管运营也要靠这些数据判断哪些页面该改。衡量 ID 存进配置变量 <code>PUBLIC_GA_ID</code>，不写进代码。</p>
