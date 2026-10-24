@@ -181,7 +181,7 @@ impl Drop for ScopedPromptFile {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnEvent {
     Delta {

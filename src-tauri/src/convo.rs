@@ -49,6 +49,10 @@ pub struct Message {
     /// 前端据此渲染「额度已用完」卡片与到点自动续跑。
     #[serde(default)]
     pub limit_reset: Option<i64>,
+    /// 运行中的这一轮写到一半的回复（每隔几秒存一次，见 turn_checkpoint）。应用中途退出时它就是
+    /// 「中断前的进度」；这一轮正常结束会被正式回复替换掉。运行中不对外返回（界面有实时的那份）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -125,12 +129,27 @@ impl ConvStore {
     /// 最近更新在前。
     pub fn list(&self) -> Vec<Conversation> {
         let _g = self.lock.lock().unwrap();
-        self.read()
+        self.read().into_iter().map(without_partial).collect()
     }
 
     pub fn get(&self, id: &str) -> Option<Conversation> {
         let _g = self.lock.lock().unwrap();
-        self.read().into_iter().find(|c| c.id == id)
+        self.read().into_iter().find(|c| c.id == id).map(without_partial)
+    }
+
+    /// 存下运行中这一轮写到一半的回复（替换上一次存的那份）。会话已经不在跑了就不存。
+    pub fn checkpoint(&self, id: &str, partial: Message) -> Result<(), String> {
+        let _g = self.lock.lock().unwrap();
+        let mut list = self.read();
+        let Some(c) = list.iter_mut().find(|c| c.id == id) else { return Ok(()) };
+        if c.status != "running" {
+            return Ok(());
+        }
+        if c.messages.last().map(|m| m.partial).unwrap_or(false) {
+            c.messages.pop();
+        }
+        c.messages.push(Message { partial: true, ..partial });
+        self.save(&list)
     }
 
     fn save(&self, list: &[Conversation]) -> Result<(), String> {
@@ -317,11 +336,44 @@ impl ConvStore {
                 c.status = "idle".into();
                 c.updated_at = now;
                 changed = true;
+                interrupted(c, now);
             }
         }
         if changed {
             let _ = self.save(&list);
         }
+    }
+}
+
+/// 运行中的会话不对外露出写到一半的那条（界面有实时的一份，不然会显示两遍）。
+fn without_partial(mut c: Conversation) -> Conversation {
+    if c.status == "running" {
+        c.messages.retain(|m| !m.partial);
+    }
+    c
+}
+
+/// 上一轮没跑完应用就退出了：把存下的进度转成一条「被中断」的回复；一点进度都没存下就补一条说明，
+/// 别让对话停在用户那条消息上、像什么都没发生过。
+fn interrupted(c: &mut Conversation, now: u64) {
+    const NOTE: &str = "这一轮没有跑完：应用被关闭或重启了。";
+    match c.messages.last_mut() {
+        Some(m) if m.partial => {
+            m.partial = false;
+            m.error = true;
+            m.text = if m.text.trim().is_empty() { format!("{NOTE}以下是中断前做过的步骤。") } else { format!("{NOTE}以下是中断前的进度：\n\n{}", m.text) };
+        }
+        Some(m) if m.role == "user" => c.messages.push(Message {
+            role: "assistant".into(),
+            text: format!("{NOTE}可以重试，或接着说要做什么。"),
+            tools: vec![],
+            ts: now,
+            hidden: false,
+            error: true,
+            limit_reset: None,
+            partial: false,
+        }),
+        _ => {}
     }
 }
 
@@ -377,6 +429,7 @@ mod tests {
             hidden: false,
             error: role == "assistant" && text.is_empty(),
             limit_reset: None,
+            partial: false,
         }
     }
     fn conv(id: &str, session: &str, msgs: Vec<Message>) -> Conversation {
@@ -404,6 +457,42 @@ mod tests {
             billed_tokens: 0,
             origin: String::new(),
         }
+    }
+
+    #[test]
+    fn running_turn_checkpoints_are_hidden_while_running_and_kept_as_interrupted_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConvStore::new(dir.path());
+        let mut c = conv("r", "", vec![msg("user", "做第一版")]);
+        c.status = "running".into();
+        store.upsert(c).unwrap();
+        store.checkpoint("r", Message { partial: true, ..msg("assistant", "写好了首页") }).unwrap();
+        store.checkpoint("r", Message { partial: true, ..msg("assistant", "写好了首页和指南") }).unwrap();
+        // 运行中：对外看不到草稿，磁盘上只存一份（后一次替换前一次）
+        assert_eq!(store.get("r").unwrap().messages.len(), 1);
+        assert_eq!(store.read()[0].messages.len(), 2);
+        // 应用重启：草稿变成「被中断」的回复
+        store.mark_idle(9);
+        let got = store.get("r").unwrap();
+        let last = got.messages.last().unwrap();
+        assert!(got.status == "idle" && last.error && !last.partial);
+        assert!(last.text.contains("没有跑完") && last.text.contains("写好了首页和指南"));
+        // 不在跑的会话不再接受草稿
+        store.checkpoint("r", Message { partial: true, ..msg("assistant", "迟到的") }).unwrap();
+        assert_eq!(store.get("r").unwrap().messages.len(), 2);
+    }
+
+    #[test]
+    fn a_turn_killed_before_any_checkpoint_still_gets_an_interrupted_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConvStore::new(dir.path());
+        let mut c = conv("k", "", vec![msg("user", "做第一版")]);
+        c.status = "running".into();
+        store.upsert(c).unwrap();
+        store.mark_idle(9);
+        let got = store.get("k").unwrap();
+        assert_eq!(got.messages.len(), 2);
+        assert!(got.messages[1].error && got.messages[1].text.contains("没有跑完"));
     }
 
     #[test]
@@ -511,6 +600,7 @@ mod tests {
                 hidden: true,
                 error: false,
                 limit_reset: None,
+                partial: false,
             },
             Message {
                 role: "assistant".into(),
@@ -520,6 +610,7 @@ mod tests {
                 hidden: false,
                 error: true,
                 limit_reset: None,
+                partial: false,
             },
             msg("user", "最新请求"),
         ];

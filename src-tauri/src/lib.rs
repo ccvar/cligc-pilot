@@ -48,6 +48,7 @@ mod site_verify;
 mod site_vps;
 mod sites;
 mod tools;
+mod turn_checkpoint;
 mod turn_deadline;
 mod usage;
 
@@ -3265,6 +3266,7 @@ fn user_msg(text: String, now: u64) -> Message {
         hidden: false,
         error: false,
         limit_reset: None,
+        partial: false,
     }
 }
 fn assistant_msg(res: &agent::TurnResult, now: u64, brain: &str) -> Message {
@@ -3285,6 +3287,7 @@ fn assistant_msg(res: &agent::TurnResult, now: u64, brain: &str) -> Message {
         // CLI 有时退出码非 0 但回答是好的（如跑了 open 打开浏览器），不该把整段染红。
         error: !res.ok && (res.text.trim().is_empty() || brain.starts_with("api:")),
         limit_reset: res.limit_reset,
+        partial: false,
     }
 }
 
@@ -3477,7 +3480,7 @@ async fn create_conversation(
         Some(sys),
         turn_message(&task_type_for_turn, message.trim().to_string()),
         conv_id.clone(),
-        on_event,
+        turn_checkpoint::wrap(convos.clone(), conv_id.clone(), on_event),
         api_execution_policy,
     )
     .await;
@@ -3491,6 +3494,7 @@ async fn create_conversation(
             c.session_ref = res.session_ref.clone();
         }
         c.status = "idle".into();
+        c.messages.retain(|m| !m.partial); // 边跑边存的那份草稿换成正式回复
         c.messages.push(assistant_msg(&res, now2, &c.brain));
         apply_usage(c, &res, &data_dir);
     })?;
@@ -3750,7 +3754,7 @@ async fn send_message(
         None,
         turn_message(&conv.task_type, message.trim().to_string()),
         conv_id.clone(),
-        on_event,
+        turn_checkpoint::wrap(state.convos.clone(), conv_id.clone(), on_event),
         Default::default(),
     )
     .await;
@@ -3758,6 +3762,7 @@ async fn send_message(
     let now2 = now_secs();
     let updated = state.convos.mutate(&conv_id, now2, |c| {
         c.status = "idle".into();
+        c.messages.retain(|m| !m.partial); // 边跑边存的那份草稿换成正式回复
         c.messages.push(assistant_msg(&res, now2, &c.brain));
         apply_usage(c, &res, &state.data_dir);
     })?;
@@ -3792,7 +3797,7 @@ async fn retry_turn(
         None,
         turn_message(&conv.task_type, message),
         conv_id.clone(),
-        on_event,
+        turn_checkpoint::wrap(state.convos.clone(), conv_id.clone(), on_event),
         Default::default(),
     )
     .await;
@@ -3800,6 +3805,7 @@ async fn retry_turn(
     let now2 = now_secs();
     let updated = state.convos.mutate(&conv_id, now2, |c| {
         c.status = "idle".into();
+        c.messages.retain(|m| !m.partial); // 边跑边存的那份草稿换成正式回复
         c.messages.push(assistant_msg(&res, now2, &c.brain));
         apply_usage(c, &res, &state.data_dir);
     })?;
@@ -3879,7 +3885,7 @@ async fn run_fresh_turn(
         Some(sys),
         turn_message(&conv.task_type, message),
         conv_id.clone(),
-        on_event,
+        turn_checkpoint::wrap(state.convos.clone(), conv_id.clone(), on_event),
         Default::default(),
     )
     .await;
@@ -3891,6 +3897,7 @@ async fn run_fresh_turn(
             c.session_ref = res.session_ref.clone();
         }
         c.status = "idle".into();
+        c.messages.retain(|m| !m.partial); // 边跑边存的那份草稿换成正式回复
         c.messages.push(assistant_msg(&res, now2, &c.brain));
         apply_usage(c, &res, &state.data_dir);
     })?;
