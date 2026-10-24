@@ -2,7 +2,7 @@
 // 进度和检查都由后端看文件得出（site_make.rs）：AI 说做完了不算，文件在、构建过、提交了才算。
 import { untrack } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
-import type { Conversation, MakeCheck, MakeState, Site } from '$lib/types';
+import type { Conversation, MakeCheck, MakeState, Site, SiteTodo } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
 import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
@@ -40,20 +40,65 @@ export function makingConv(siteId: string): Conversation | undefined {
 /** 第一版没做完 AI 就停了：带上最新标准，让它先看现状再接着做。
  *  接在原来那条制作对话里（同一个站点的制作是一条线，前面做到哪也在上面）；找不到才开新的。 */
 export async function continueMaking(site: Site) {
+  try { await sendToMaking(site, await invoke<string>('site_continue_message', { id: site.id })); }
+  catch (e) { say(String(e), 'err'); }
+}
+
+/** 发到这个站点的制作对话里（全自动）；找不到或正在跑就开一条新的。 */
+async function sendToMaking(site: Site, text: string) {
+  const conv = makingConv(site.id);
+  if (!conv || conv.status === 'running' || app.running[conv.id]) {
+    await startSiteChat(site.id, text, undefined, MAKING_PERM);
+    return;
+  }
+  await openConv(conv.id);
+  if (app.activeConvId !== conv.id) { await startSiteChat(site.id, text, undefined, MAKING_PERM); return; }
+  await persistThreadPerm(MAKING_PERM);
+  composer.draft = text; composer.attachments = [];
+  await send();
+}
+
+// ───────── 需要我处理的事（AI 写在 .pilot/todo.json 里） ─────────
+
+const doneLine = (t: SiteTodo) => `做完重新构建确认通过并提交，然后把 \`.pilot/todo.json\` 里 id 为 \`${t.id}\` 的条目删掉。`;
+
+/** 我填好了值：交给 AI 按站点约定写进去。正式域名同时存进 Pilot 的站点设置。 */
+export async function submitTodo(site: Site, t: SiteTodo, values: Record<string, string>) {
+  const filled = t.inputs.filter((i) => values[i.key]?.trim());
+  if (!filled.length) return;
   try {
-    const text = await invoke<string>('site_continue_message', { id: site.id });
-    const conv = makingConv(site.id);
-    if (!conv || conv.status === 'running' || app.running[conv.id]) {
-      await startSiteChat(site.id, text, undefined, MAKING_PERM);
-      return;
+    if (t.id === 'domain' && values.domain?.trim()) {
+      await invoke('save_site', { site: { ...site, domain: values.domain.trim() } });
+      await refreshSites();
     }
-    await openConv(conv.id);
-    if (app.activeConvId !== conv.id) { await startSiteChat(site.id, text, undefined, MAKING_PERM); return; }
-    await persistThreadPerm(MAKING_PERM);
-    composer.draft = text; composer.attachments = [];
-    await send();
+    const lines = filled.map((i) => `- ${i.label || i.key}：${values[i.key].trim()}`).join('\n');
+    const where = t.where ? `（${t.where}）` : '';
+    const extra = t.id === 'domain' ? '站点代码里用到站点地址的地方（canonical、sitemap、OG 之类）都改成这个域名。' : '';
+    await sendToMaking(site, `我补充了「${t.title}」：\n${lines}\n\n请按站点约定写进站点${where}。${extra}${doneLine(t)}`);
   } catch (e) { say(String(e), 'err'); }
 }
+
+/** 交给 AI 做（ai / confirm / suggest）。 */
+export async function delegateTodo(site: Site, t: SiteTodo) {
+  const head = t.kind === 'confirm' ? `我确认：${t.title}，按你的建议来。` : `请处理这件事：${t.title}。`;
+  const why = t.why ? `（${t.why}）` : '';
+  const where = t.where ? `涉及：${t.where}。` : '';
+  await sendToMaking(site, `${head}${why}${where}${doneLine(t)}`);
+}
+
+/** 我自己处理了 / 不需要：只记在 Pilot 里，不改仓库。 */
+export async function markTodo(site: Site, t: SiteTodo) {
+  try { await invoke('site_todo_handled', { id: site.id, todoId: t.id }); await loadMake(site.id, isFull(site.id)); }
+  catch (e) { say(String(e), 'err'); }
+}
+
+/** 老一点的站点：AI 只在汇报里写了待办，让它整理成清单。 */
+export async function askTodos(site: Site) {
+  try { await sendToMaking(site, await invoke<string>('site_todo_request_message')); }
+  catch (e) { say(String(e), 'err'); }
+}
+
+const isFull = (id: string) => (siteMake.state[id]?.steps.length ?? 0) > 0;
 
 /** 本地预览构建产物（和上线的是同一份文件），在预览窗里打开。 */
 export async function previewSite(site: Site) {
@@ -78,10 +123,10 @@ export async function discardMade(site: Site) {
 }
 
 export function fixWithAi(site: Site, checks: MakeCheck[]) {
-  const bad = checks.filter((c) => c.level !== 'ok');
+  const bad = checks.filter((c) => c.level !== 'ok' && c.key !== 'todo');
   const lines = bad.map((c) => `- ${c.label}：${c.detail}${c.items.length ? '\n' + c.items.slice(0, 15).map((i) => `  - ${i}`).join('\n') + (c.items.length > 15 ? `\n  - ……还有 ${c.items.length - 15} 处` : '') : ''}`);
   const text = `上线前检查发现了下面这些问题，请逐条修复（按站点约定 .pilot/site.md 来）：\n\n${lines.join('\n')}\n\n`
-    + '需要真实信息（联系方式、价格、数据）而你不知道的，不要编，列出来问我。修完重新构建确认通过，提交一次，再简要说明改了什么。';
+    + '需要真实信息（联系方式、价格、数据）而你不知道的，不要编，写进 `.pilot/todo.json`（Pilot 会显示在看板上让我处理）。修完重新构建确认通过，提交一次，再简要说明改了什么。';
   void startSiteChat(site.id, text, undefined, site.origin === 'created' ? MAKING_PERM : '');
 }
 

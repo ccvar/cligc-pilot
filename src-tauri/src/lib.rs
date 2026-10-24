@@ -4548,6 +4548,8 @@ pub fn run() {
             site_cmds::site_make_state,
             site_cmds::site_continue_message,
             site_cmds::discard_made_site,
+            site_cmds::site_todo_handled,
+            site_cmds::site_todo_request_message,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_env_keys,

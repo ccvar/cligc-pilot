@@ -401,6 +401,8 @@ pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_mak
 #[derive(Serialize)]
 pub struct MakeState {
     pub conventions: bool,
+    /// AI 写在 .pilot/todo.json 里、我还没处理的事；None＝AI 还没写这个文件
+    pub todos: Option<Vec<crate::site_make::Todo>>,
     pub steps: Vec<crate::site_make::MakeStep>,
     pub checks: Vec<crate::site_make::Check>,
     /// 构建产物的时间（index.html 的修改时间，秒）；0＝还没构建
@@ -426,14 +428,20 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // 不要 full：只看站点约定有没有写（站点看板每次打开都会问，别去扫整个构建产物）
+    let todos = mk::load_todos(&code, &mk::load_handled(&state.sites.data_dir(&id)));
+    // 不要 full：只看站点约定和待办（站点看板每次打开都会问，别去扫整个构建产物）
     if !full.unwrap_or(true) {
-        return Ok(MakeState { conventions: mk::has_conventions(&code), steps: vec![], checks: vec![], built_at });
+        return Ok(MakeState { conventions: mk::has_conventions(&code), todos, steps: vec![], checks: vec![], built_at });
     }
-    let (steps, checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &site.build.out_dir, commits), mk::readiness(&out)))
+    let (steps, mut checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &site.build.out_dir, commits), mk::readiness(&out)))
         .await
         .map_err(|e| e.to_string())?;
-    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), steps, checks, built_at })
+    if let Some(t) = &todos {
+        if built_at > 0 {
+            checks.push(mk::todo_check(t));
+        }
+    }
+    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), todos, steps, checks, built_at })
 }
 
 /// 「继续制作」的消息：按当前进度列出还没完成的项，带上最新标准。
@@ -492,6 +500,24 @@ pub fn discard_made_site(state: tauri::State<'_, AppState>, id: String) -> Resul
         move_to_trash(dir)?;
     }
     remove_site(state, id)
+}
+
+/// 让 AI 把需要我处理的事整理成 .pilot/todo.json 的消息（老一点的站点，AI 只在汇报里写了）。
+#[tauri::command]
+pub fn site_todo_request_message() -> String {
+    format!("请把需要我处理的事（要我提供的信息、要我做的决定、你能做但要我点头的事）整理写进 `.pilot/todo.json`，只改这个文件，提交一次。\n\n{}", crate::site_make::TODO_SPEC)
+}
+
+/// 看板上把一条待办标成「已处理 / 不需要」：记在 Pilot 自己的站点数据里，不改仓库文件。
+#[tauri::command]
+pub fn site_todo_handled(state: tauri::State<'_, AppState>, id: String, todo_id: String) -> Result<(), String> {
+    state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let mut ids = crate::site_make::load_handled(&dir);
+    if !ids.contains(&todo_id) {
+        ids.push(todo_id);
+    }
+    crate::site_make::save_handled(&dir, &ids)
 }
 
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。

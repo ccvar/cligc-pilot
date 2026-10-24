@@ -36,6 +36,9 @@
     const fails = ms.checks.filter((c) => c.level === 'fail').length;
     if (!ms.built_at) return { text: '等待构建并检查', tone: '' };
     if (fails) return { text: `上线前检查有 ${fails} 项要修`, tone: 'warn' };
+    const goal = ms.todos?.filter((t) => t.affects_goal).length ?? 0;
+    if (goal) return { text: `还有 ${goal} 项要你处理（影响站点目标）`, tone: 'warn' };
+    if (ms.todos?.length) return { text: `可以上线了 · 还有 ${ms.todos.length} 项建议`, tone: 'ok' };
     return { text: '可以上线了', tone: 'ok' };
   }
   const stackName = (id: string) => STACKS.find((x) => x.value === id)?.label ?? id;

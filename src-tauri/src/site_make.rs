@@ -145,8 +145,8 @@ const CONTENT_STANDARD: &str = "【内容标准】\n\
    - 要有信息增量：具体参数、步骤、对比、例子、常见误区和注意事项，而不是泛泛而谈；能核实的事实写清依据，时效性信息标注更新时间；不编造数据、经历、评价和引用。\n\
    - 内容厚度以把问题讲透为准：支柱页一般 1500 字以上，长尾页不少于 600 字，不注水凑字。\n\
    - 体现可信度（E-E-A-T）：关于页说清楚是谁在做、凭什么可信；内容页有更新日期，需要时注明作者。\n\
-   - 不知道的真实信息（联系方式、价格、资质、数据）不要编，也不要在页面上留「待补」之类的字样：先不放这部分，在汇报里列出来。\n\
-4. 真实截图：讲操作步骤、界面或对比时，能截到的就用随附的截图工具截真实网页（官方站点、公开页面），不用占位图、示意图或 AI 生成的界面图。截完打开检查不是错误页、验证码或 Cookie 弹窗，个人信息打码；图片压缩成适合网页的大小，写清 alt 和图注。需要登录或截不到的，正文先不放图，在汇报里列出缺哪几张。";
+   - 不知道的真实信息（联系方式、价格、资质、数据）不要编，也不要在页面上留「待补」之类的字样：先不放这部分，写进 `.pilot/todo.json`（见【待我处理的事】）。\n\
+4. 真实截图：讲操作步骤、界面或对比时，能截到的就用随附的截图工具截真实网页（官方站点、公开页面），不用占位图、示意图或 AI 生成的界面图。截完打开检查不是错误页、验证码或 Cookie 弹窗，个人信息打码；图片压缩成适合网页的大小，写清 alt 和图注。需要登录或截不到的，正文先不放图，写进 `.pilot/todo.json`。";
 
 /// 视觉标准：以获奖级网站为品质标准，但服务于内容——靠搜索带流量的站，可读性和速度是底线。
 const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby Awards、FWA 获奖网站的品质为标准，同时服务于内容：这是靠搜索带流量的站，可读性和加载速度是底线。\n\
@@ -158,6 +158,14 @@ const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby Awards、F
 - 动效与微交互：只做有目的的过渡（进入、悬停、焦点、按下、展开），时长 150–400ms；支持 prefers-reduced-motion；不为炫技牺牲性能。\n\
 - 响应式：375、768、1280、1920 宽度都要精心适配，不只是挤得下。\n\
 - 性能与可访问性：不引入大体积动画库；图片用现代格式并标明宽高；首屏快、不跳动；语义化标签、焦点可见、键盘可用。";
+
+/// 待我处理的事：写成 Pilot 能读的清单，显示在站点看板上逐条处理（不只写在汇报里——汇报会被埋在对话里）。
+pub const TODO_SPEC: &str = "【待我处理的事】凡是需要我提供信息、做决定或点头的事（邀请链接、联系方式、正式域名、品牌名、需要登录才能截的图……），都写进 `.pilot/todo.json`，Pilot 会显示在站点看板上让我逐条处理；处理完的条目由你删掉，没有待办时写 `{\"items\":[]}`。格式：\n\
+{\"items\":[{\"id\":\"短英文标识\",\"title\":\"一句话说清要我做什么\",\"why\":\"为什么重要、不处理会怎样\",\"kind\":\"input|ai|confirm|suggest\",\"affects_goal\":true,\"where\":\"会改在哪个文件的哪个字段\",\"inputs\":[{\"key\":\"字段标识\",\"label\":\"给我看的名称\",\"placeholder\":\"示例\",\"value\":\"现在的值（可选）\"}]}]}\n\
+- kind：input＝需要我提供值（inputs 里列出要填的项）；ai＝你能做、但要我点头（比如补截图）；confirm＝需要我确认一个决定；suggest＝可选的建议。\n\
+- affects_goal：不处理会直接影响站点目标（比如联盟推广站没有邀请链接就没有收入）。\n\
+- 正式域名固定用 id `domain`，inputs 里放一个 key 为 `domain` 的输入。\n\
+- 汇报里简要提一句有几件事要我处理即可，不用再长篇列出。";
 
 /// 第一版对话的第一条消息：照着它，AI 从空仓库做出能预览的第一版。
 pub fn first_message(req: &CreateSiteRequest) -> String {
@@ -193,33 +201,35 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
    - 本地预览，分别在 375、768、1280 宽度截图首页和两个内容页，从排版、留白、视觉层级、色彩、动效、微交互、响应式、原创性逐项评估，写下问题；悬停、焦点、展开这些截图看不出的状态对照代码检查；\n\
    - 改完重新截图复查，重复直到找不出明显可提升之处；\n\
    - 再按【内容标准】通读一遍页面上的文字：有没有内部表达、标题是否是自然的长尾问法、有没有薄页或重复页。\n\
-8. 完成后 `git add -A && git commit -m \"搭建第一版\"`，然后简要汇报：做了哪些页面、设计方向是什么、最后一轮自评的结论、怎么本地预览、还有哪些需要我确认或补充（包括缺的截图和真实信息）。\n\n\
-{content}\n\n{visual}\n\n\
+8. 把需要我处理的事写进 `.pilot/todo.json`，然后 `git add -A && git commit -m \"搭建第一版\"`，简要汇报：做了哪些页面、设计方向是什么、最后一轮自评的结论、怎么本地预览、有几件事要我处理。\n\n\
+{content}\n\n{visual}\n\n{todo}\n\n\
 不要部署——上线由 Pilot 负责。",
         guide = stack_guide(&req.stack),
         n = pages_of(req),
         content = CONTENT_STANDARD,
         visual = VISUAL_STANDARD,
+        todo = TODO_SPEC,
     )
 }
 
 /// 「继续制作」：第一版没做完 AI 就停了（中断、出错、额度用完），接着做。
 /// `pending` 是还没完成的进度项；照样带上最新的内容标准和视觉标准，已经做好的部分也按它复查。
 pub fn continue_message(pending: &[&str], stack: &str) -> String {
-    let todo = if pending.is_empty() { "（进度上都完成了，请复查质量）".to_string() } else { pending.join("、") };
+    let left = if pending.is_empty() { "（进度上都完成了，请复查质量）".to_string() } else { pending.join("、") };
     let stack = STACKS.iter().find(|s| s.0 == stack).map(|s| s.1).unwrap_or(stack);
     format!(
         "继续制作这个站点的第一版（技术栈 {stack}）。上一轮没做完就停了，先看现状再接着做：\n\
 1. 读 `.pilot/brief.md`（需求）和 `.pilot/site.md`（规划和约定），对照「内容规划」看哪些页面还没做、哪些没写完；已经做好的部分不要推倒重写。\n\
-2. 还没完成的进度：{todo}。\n\
+2. 还没完成的进度：{left}。\n\
 3. 把规划里的页面都做完（核心页面、关于、联系、隐私政策），按下面的【内容标准】写；已有的页面达不到标准的，一并改好。\n\
 4. 视觉按下面的【视觉标准】：设计方向还没写进 `.pilot/site.md` 的先定下来；在 375、768、1280 宽度截图首页和两个内容页，逐项评估、改完复查，直到找不出明显可提升之处。\n\
 5. `.pilot/site.md` 里补上「内容与视觉标准」一节（如果还没有）。\n\
-6. 跑构建确认通过，`git add -A && git commit -m \"搭建第一版\"`，然后简要汇报：做了哪些页面、设计方向、最后一轮自评、还有哪些需要我确认或补充。\n\n\
-{content}\n\n{visual}\n\n\
+6. 需要我处理的事写进 `.pilot/todo.json`；跑构建确认通过，`git add -A && git commit -m \"搭建第一版\"`，然后简要汇报：做了哪些页面、设计方向、最后一轮自评、有几件事要我处理。\n\n\
+{content}\n\n{visual}\n\n{todo}\n\n\
 不要部署——上线由 Pilot 负责。",
         content = CONTENT_STANDARD,
         visual = VISUAL_STANDARD,
+        todo = TODO_SPEC,
     )
 }
 
@@ -247,6 +257,76 @@ pub struct Check {
     pub level: &'static str,
     pub detail: String,
     pub items: Vec<String>,
+}
+
+/// AI 写在 `.pilot/todo.json` 里、需要我处理的一件事。
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct Todo {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub why: String,
+    /// input | ai | confirm | suggest
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub affects_goal: bool,
+    #[serde(default, rename = "where")]
+    pub location: String,
+    #[serde(default)]
+    pub inputs: Vec<TodoInput>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct TodoInput {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Deserialize)]
+struct TodoFile {
+    #[serde(default)]
+    items: Vec<Todo>,
+}
+
+/// 读 `.pilot/todo.json`：None＝AI 还没写这个文件；去掉我已经处理过（或说不需要）的条目。
+pub fn load_todos(code: &Path, handled: &[String]) -> Option<Vec<Todo>> {
+    let raw = std::fs::read(code.join(".pilot/todo.json")).ok()?;
+    let f: TodoFile = serde_json::from_slice(&raw).unwrap_or(TodoFile { items: vec![] });
+    Some(f.items.into_iter().filter(|t| !t.id.trim().is_empty() && !t.title.trim().is_empty() && !handled.contains(&t.id)).take(30).collect())
+}
+
+/// 我在看板上标过「已处理 / 不需要」的条目 id（存在 Pilot 自己的站点数据目录，不改仓库）。
+pub fn load_handled(site_dir: &Path) -> Vec<String> {
+    std::fs::read(site_dir.join("todo_handled.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+pub fn save_handled(site_dir: &Path, ids: &[String]) -> Result<(), String> {
+    std::fs::create_dir_all(site_dir).map_err(|e| e.to_string())?;
+    std::fs::write(site_dir.join("todo_handled.json"), serde_json::to_vec(ids).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// 上线前检查里的一项：有影响站点目标的待办就提醒（不算必须修，但要醒目）。
+pub fn todo_check(todos: &[Todo]) -> Check {
+    let goal: Vec<String> = todos.iter().filter(|t| t.affects_goal).map(|t| t.title.clone()).collect();
+    Check {
+        key: "todo",
+        label: "需要你处理的事",
+        level: if goal.is_empty() { "ok" } else { "warn" },
+        detail: if todos.is_empty() {
+            "没有".into()
+        } else if goal.is_empty() {
+            format!("{} 项，都不影响站点目标", todos.len())
+        } else {
+            format!("{} 项会影响站点目标，上线前最好处理掉", goal.len())
+        },
+        items: goal,
+    }
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".pilot", ".astro", ".next", ".wrangler", ".cache", "resources", "shots"];
@@ -601,5 +681,27 @@ mod tests {
         let m = continue_message(&["构建通过", "提交第一版"], "astro");
         assert!(m.contains("构建通过、提交第一版") && m.contains("不要推倒重写") && m.contains("Astro"));
         assert!(m.contains("【内容标准】") && m.contains("【视觉标准】") && m.contains("不要部署"));
+    }
+
+    #[test]
+    fn todos_come_from_the_file_minus_what_i_handled_and_goal_items_raise_a_warning() {
+        let t = tempfile::tempdir().unwrap();
+        assert!(load_todos(t.path(), &[]).is_none(), "没写文件＝None");
+        write(t.path(), ".pilot/todo.json", r#"{"items":[
+            {"id":"referral","title":"填写邀请链接","kind":"input","affects_goal":true,"where":"src/site.config.ts","inputs":[{"key":"binance","label":"币安邀请链接"}]},
+            {"id":"brand","title":"确认品牌名","kind":"confirm"},
+            {"id":"","title":"没有 id 的不要"}
+        ]}"#);
+        let all = load_todos(t.path(), &[]).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].location, "src/site.config.ts");
+        assert_eq!(todo_check(&all).level, "warn");
+        let rest = load_todos(t.path(), &["referral".into()]).unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(todo_check(&rest).level, "ok");
+        save_handled(t.path(), &["brand".into()]).unwrap();
+        assert_eq!(load_handled(t.path()), vec!["brand".to_string()]);
+        let m = first_message(&req());
+        assert!(m.contains(".pilot/todo.json") && m.contains("【待我处理的事】") && !m.contains("在汇报里列出来"));
     }
 }

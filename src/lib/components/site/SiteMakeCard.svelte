@@ -9,7 +9,8 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sites, checkSite } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
-  import { siteMake, loadMake, makingConv, fixWithAi, continueMaking, previewSite } from '$lib/state/siteMake.svelte.js';
+  import { siteMake, loadMake, makingConv, fixWithAi, continueMaking, previewSite, askTodos } from '$lib/state/siteMake.svelte.js';
+  import SiteTodos from './SiteTodos.svelte';
 
   let { site }: { site: Site } = $props();
   const ms = $derived(siteMake.state[site.id]);
@@ -19,9 +20,11 @@
   const conv = $derived(makingConv(site.id));
   const aiRunning = $derived(conv?.status === 'running' || app.convos.some((c) => c.conn_id === `site:${site.id}` && c.status === 'running'));
   const doneN = $derived(ms?.steps.filter((s) => s.done).length ?? 0);
-  const bad = $derived(ms?.checks.filter((c) => c.level !== 'ok') ?? []);
+  // 「需要你处理的事」那一项要你补信息，AI 修不了，不算进「让 AI 修复」
+  const bad = $derived(ms?.checks.filter((c) => c.level !== 'ok' && c.key !== 'todo') ?? []);
   const fails = $derived(bad.filter((c) => c.level === 'fail').length);
   const pending = $derived(ms?.steps.filter((s) => !s.done).map((s) => s.label) ?? []);
+  const goalTodos = $derived(ms?.todos?.filter((t) => t.affects_goal).length ?? 0);
   const ready = $derived(!!ms && ms.built_at > 0 && fails === 0);
   let openItems = $state<Set<string>>(new Set());
   function toggle(k: string) { const n = new Set(openItems); if (n.has(k)) n.delete(k); else n.add(k); openItems = n; }
@@ -58,6 +61,13 @@
       {/each}
     </ol>
 
+    {#if ms.todos?.length}
+      <div class="sec"><b>需要你处理</b><small>{ms.todos.length} 项{goalTodos ? ` · ${goalTodos} 项影响站点目标` : ''}</small></div>
+      <SiteTodos {site} todos={ms.todos} />
+    {:else if ms.todos === null && !pending.length && !aiRunning}
+      <div class="sec ask"><b>需要你处理</b><small>AI 还没把要你补的信息、要你做的决定整理到这里（可能只写在对话里）。</small><span class="grow"></span><button class="btn tiny" onclick={() => askTodos(site)}><Icon name="wand" size={11} />让 AI 整理</button></div>
+    {/if}
+
     <div class="sec">
       <b>上线前检查</b>
       <small>{ms.built_at ? `构建于 ${ago(ms.built_at)}` : '还没有构建产物'}</small>
@@ -77,7 +87,11 @@
     </ul>
     <div class="foot">
       {#if ready}
-        <p class="ok-note">{bad.length ? `没有必须修的问题（还有 ${bad.length} 项建议）。` : '检查都通过了。'}可以上线了：在下面的上线向导里配置部署和域名。</p>
+        {#if goalTodos}
+          <p class="hint warn-text">没有必须修的问题，但还有 {goalTodos} 项会影响站点目标（见上面「需要你处理」），最好先处理再上线。</p>
+        {:else}
+          <p class="ok-note">{bad.length ? `没有必须修的问题（还有 ${bad.length} 项建议）。` : '检查都通过了。'}可以上线了：在下面的上线向导里配置部署和域名。</p>
+        {/if}
       {:else if ms.built_at && fails}
         <p class="hint">有 {fails} 项必须修的问题，修好之前不建议上线。</p>
       {/if}
@@ -110,6 +124,7 @@
   .sec { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
   .sec b { font-size: 13px; font-weight: 600; }
   .sec small { font-size: 11.5px; color: var(--faint); }
+  .sec.ask small { flex: 1; min-width: 0; }
   .mk-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .mk-checks > li { display: flex; align-items: flex-start; gap: 9px; font-size: 12.5px; }
   .lv { flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }

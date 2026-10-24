@@ -229,7 +229,11 @@ export interface Site {
 export interface MakeStep { key: string; label: string; done: boolean; detail: string }
 /** 上线前检查的一项（扫构建产物）。fail 的问题不修不该上线 */
 export interface MakeCheck { key: string; label: string; level: 'ok' | 'warn' | 'fail'; detail: string; items: string[] }
-export interface MakeState { conventions: boolean; steps: MakeStep[]; checks: MakeCheck[]; built_at: number }
+/** AI 写在 .pilot/todo.json 里、需要我处理的一件事 */
+export interface TodoInput { key: string; label: string; placeholder: string; value: string }
+export interface SiteTodo { id: string; title: string; why: string; kind: 'input' | 'ai' | 'confirm' | 'suggest' | string; affects_goal: boolean; where: string; inputs: TodoInput[] }
+/** todos：null＝AI 还没写 .pilot/todo.json */
+export interface MakeState { conventions: boolean; todos: SiteTodo[] | null; steps: MakeStep[]; checks: MakeCheck[]; built_at: number }
 export interface SiteDetected {
   framework: string;
   build: SiteBuild;

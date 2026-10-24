@@ -8,6 +8,7 @@
   import SiteLaunch from './SiteLaunch.svelte';
   import SiteManagedCard from './SiteManagedCard.svelte';
   import SiteMakeCard from './SiteMakeCard.svelte';
+  import SiteTodos from './SiteTodos.svelte';
   import { isMaking } from '$lib/state/siteCreate.svelte.js';
   import { siteMake, loadMake, writeConventions, hideConventionsHint } from '$lib/state/siteMake.svelte.js';
   import { clock } from './fmt';
@@ -39,6 +40,10 @@
   {/if}
 
   <SiteManagedCard {site} />
+
+  {#if !making && siteMake.state[site.id]?.todos?.length}
+    <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} todos={siteMake.state[site.id]?.todos ?? []} /></div>
+  {/if}
 
   {#if needConventions}
     <div class="card conv-hint">
