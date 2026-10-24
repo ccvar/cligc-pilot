@@ -10,7 +10,8 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
-  import { makingSites, openSiteCreate, finishMaking, STACKS } from '$lib/state/siteCreate.svelte.js';
+  import { makingSites, openSiteCreate, finishMaking, isMaking, STACKS } from '$lib/state/siteCreate.svelte.js';
+  import { sites } from '$lib/state/sites.svelte.js';
   import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
 
   // 卡片右上角「…」菜单
@@ -25,6 +26,8 @@
   const running = (id: string) => app.convos.some((c) => c.conn_id === `site:${id}` && c.status === 'running');
 
   const list = $derived(makingSites().sort((a, b) => b.updated_at - a.updated_at));
+  // 在这里做出来、已经配好上线（或手动标记做完）的站点
+  const done = $derived(sites.list.filter((s) => (s.origin === 'created' || s.origin === 'made') && !isMaking(s.id)).sort((a, b) => b.updated_at - a.updated_at));
   $effect(() => { for (const s of list) void loadMake(s.id); });
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {
@@ -113,6 +116,23 @@
           {/each}
         </div>
       {/if}
+
+      {#if done.length}
+        <div class="done-head"><b>制作完成</b><small>{done.length} 个 · 已经移到「全部站点」</small></div>
+        <ul class="done">
+          {#each done as s (s.id)}
+            <li>
+              <button class="row-btn" onclick={() => openSite(s.id, 'overview')}>
+                <SiteIcon id={s.id} size={16} />
+                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
+                <span class="state">{#if s.deploy.mode !== 'none' && s.deploy.mode}<Icon name="rocket" size={11} />已配置上线{:else}<Icon name="check" size={11} />已标记做完{/if}</span>
+                <span class="when">{ago(s.updated_at)}</span>
+                <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </div>
   </div>
 </div>
@@ -153,6 +173,18 @@
   .acts { display: flex; align-items: center; gap: 6px; }
   .acts { flex-wrap: wrap; }
   .when { font-size: 11px; color: var(--faint); }
+  .done-head { display: flex; align-items: baseline; gap: 10px; margin: 18px 0 2px; }
+  .done-head b { font-size: 13.5px; font-weight: 600; }
+  .done-head small { font-size: 12px; color: var(--faint); }
+  .done { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); overflow: hidden; }
+  .done > li + li { border-top: 1px solid var(--border); }
+  .row-btn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: none; background: none; font: inherit; color: var(--text); text-align: left; cursor: pointer; transition: background-color .12s; }
+  .row-btn:hover { background: #faf9f6; }
+  .row-btn .nm { flex: 1; }
+  .row-btn .nm b { font-size: 13px; }
+  .state { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ok); }
+  .row-btn .when { flex: none; width: 76px; text-align: right; font-size: 11.5px; color: var(--faint); }
+  .row-btn .chev { flex: none; color: var(--faint); }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 16px; text-align: center; }
   .empty > :global(svg) { color: var(--accent, #b4541a); margin-bottom: 4px; }
   .empty b { font-size: 14px; font-weight: 600; }
