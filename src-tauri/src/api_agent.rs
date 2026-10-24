@@ -287,7 +287,8 @@ async fn execute(
         lease,
         site_key,
     )?
-    .with_safe_commands(policy.safe_commands);
+    .with_safe_commands(policy.safe_commands)
+    .with_vision(profile.protocol != "openai_chat");
     let mut history = if !is_first && !session_ref.is_empty() {
         let raw = std::fs::read(&path).map_err(|_| "无法恢复此 API 会话（工作区、接口或模型可能已变化），请新建会话；不会借用其他工作区历史".to_string())?;
         if raw.len() > MAX_HISTORY_BYTES {
@@ -542,7 +543,18 @@ async fn execute_model_loop_inner(
                 detail: detail.clone(),
             });
             activity(channel, &call.id, &call.name, &detail, "running", "");
-            let output = tools.execute(&call.name, &call.arguments).await;
+            let mut output = tools.execute(&call.name, &call.arguments).await;
+            // view_image：压缩一份存进会话目录，历史里只记引用，发请求时才展开（历史文件有大小上限）
+            let mut image = None;
+            if let Some(src) = output.as_ref().ok().and_then(|v| v["image_file"].as_str()).map(str::to_string) {
+                output = match prepare_image(Path::new(&src), &path.with_extension("images")) {
+                    Ok((marker, w, h)) => {
+                        image = Some(marker);
+                        Ok(json!({"opened": src, "width": w, "height": h}))
+                    }
+                    Err(e) => Err(e),
+                };
+            }
             let failed = output
                 .as_ref()
                 .map(|v| v["success"] == false)
@@ -560,9 +572,9 @@ async fn execute_model_loop_inner(
                 if failed { "failed" } else { "completed" },
                 if failed { &safe } else { "" },
             );
-            outputs.push((call.id, safe, failed));
+            outputs.push((call.id, safe, failed, image));
         }
-        append_tool_outputs(&profile.protocol, &mut history.items, outputs)?;
+        append_tool_outputs_with_images(&profile.protocol, &mut history.items, outputs)?;
         // Clear only alongside all results in the same atomic write. A crash
         // mid-batch or failed save leaves the on-disk flag true, so unfinished
         // side effects remain blocked rather than being replayed.
@@ -604,6 +616,8 @@ fn request_body(
     items: &[Value],
     definitions: &[Value],
 ) -> Result<Value, String> {
+    let expanded = expand_images(&profile.protocol, items);
+    let items = expanded.as_slice();
     let tools: Vec<Value> = definitions.iter().map(|d| match profile.protocol.as_str() {
         "openai_responses" => json!({"type":"function","name":d["name"],"description":d["description"],"parameters":d["parameters"],"strict":false}),
         "anthropic_messages" => json!({"name":d["name"],"description":d["description"],"input_schema":d["parameters"]}),
@@ -655,18 +669,146 @@ fn with_cache_breakpoint(items: &[Value]) -> Vec<Value> {
     items
 }
 
+#[cfg(test)]
 fn append_tool_outputs(
     protocol: &str,
     items: &mut Vec<Value>,
     outputs: Vec<(String, String, bool)>,
 ) -> Result<(), String> {
+    append_tool_outputs_with_images(protocol, items, outputs.into_iter().map(|(a, b, c)| (a, b, c, None)).collect())
+}
+
+/// 工具结果写进历史。带图的（view_image）：Anthropic 把图放进这条 tool_result；
+/// OpenAI Responses 的 function_call_output 只收文字，图随后作为一条用户消息补上。
+fn append_tool_outputs_with_images(
+    protocol: &str,
+    items: &mut Vec<Value>,
+    outputs: Vec<(String, String, bool, Option<Value>)>,
+) -> Result<(), String> {
     match protocol {
-        "openai_responses" => items.extend(outputs.into_iter().map(|(id,output,_)| json!({"type":"function_call_output","call_id":id,"output":output}))),
-        "anthropic_messages" => items.push(json!({"role":"user","content":outputs.into_iter().map(|(id,output,error)| json!({"type":"tool_result","tool_use_id":id,"content":output,"is_error":error})).collect::<Vec<_>>()})),
-        "openai_chat" => items.extend(outputs.into_iter().map(|(id,output,_)| json!({"role":"tool","tool_call_id":id,"content":output}))),
+        "openai_responses" => {
+            let mut images = vec![];
+            for (id, output, _, image) in outputs {
+                items.push(json!({"type":"function_call_output","call_id":id,"output":output}));
+                if let Some(img) = image {
+                    images.push(img);
+                }
+            }
+            for img in images {
+                items.push(json!({"role":"user","content":[{"type":"input_text","text":"（view_image 打开的图片）"}, img]}));
+            }
+        }
+        "anthropic_messages" => items.push(json!({"role":"user","content":outputs.into_iter().map(|(id,output,error,image)| match image {
+            Some(img) => json!({"type":"tool_result","tool_use_id":id,"content":[{"type":"text","text":output}, img],"is_error":error}),
+            None => json!({"type":"tool_result","tool_use_id":id,"content":output,"is_error":error}),
+        }).collect::<Vec<_>>()})),
+        "openai_chat" => items.extend(outputs.into_iter().map(|(id,output,_,_)| json!({"role":"tool","tool_call_id":id,"content":output}))),
         _ => return Err("不支持的 API 协议".into()),
     }
     Ok(())
+}
+
+/// 图片引用：`{"type":"pilot_image","file":…,"media_type":…}`。只存在历史里，发请求前由 expand_images 换成真正的图片块。
+const IMAGE_MAX_EDGE: u32 = 1568;
+const IMAGE_MAX_BYTES: u64 = 3_700_000;
+
+/// 把 view_image 要看的图压缩一份存进会话目录，返回（引用, 宽, 高）。
+/// macOS 用系统自带的 sips 缩到长边 1568、转 JPEG；其它平台原样复制，太大就让模型改截首屏。
+fn prepare_image(src: &Path, dir: &Path) -> Result<(Value, u32, u32), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let jpg = dir.join(format!("{id}.jpg"));
+    let squeezed = cfg!(target_os = "macos")
+        && std::process::Command::new("sips")
+            .args(["-Z", &IMAGE_MAX_EDGE.to_string(), "-s", "format", "jpeg", "-s", "formatOptions", "80"])
+            .arg(src)
+            .arg("--out")
+            .arg(&jpg)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        && jpg.is_file();
+    let (file, media) = if squeezed {
+        (jpg, "image/jpeg".to_string())
+    } else {
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("png").to_ascii_lowercase();
+        let media = match ext.as_str() { "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif", _ => "image/png" };
+        let dest = dir.join(format!("{id}.{ext}"));
+        std::fs::copy(src, &dest).map_err(|e| format!("读取图片失败：{e}"))?;
+        (dest, media.to_string())
+    };
+    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > IMAGE_MAX_BYTES {
+        let _ = std::fs::remove_file(&file);
+        return Err("图片太大：截首屏（不要 --full-page），或把宽度设小一点再看".into());
+    }
+    let (w, h) = image_dims(&bytes).unwrap_or((0, 0));
+    if w > 8000 || h > 8000 {
+        let _ = std::fs::remove_file(&file);
+        return Err(format!("图片尺寸 {w}×{h} 太大：截首屏或分段截再看"));
+    }
+    Ok((json!({"type":"pilot_image","file":file.to_string_lossy(),"media_type":media}), w, h))
+}
+
+/// PNG / JPEG 的宽高（只读文件头）。
+fn image_dims(b: &[u8]) -> Option<(u32, u32)> {
+    if b.len() > 24 && b.starts_with(b"\x89PNG") {
+        let be = |i: usize| u32::from_be_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        return Some((be(16), be(20)));
+    }
+    if b.starts_with(&[0xFF, 0xD8]) {
+        let mut i = 2;
+        while i + 9 < b.len() {
+            if b[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            let marker = b[i + 1];
+            let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+            if (0xC0..=0xCF).contains(&marker) && ![0xC4, 0xC8, 0xCC].contains(&marker) {
+                let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
+                let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
+                return Some((w, h));
+            }
+            i += 2 + len;
+        }
+    }
+    None
+}
+
+/// 发请求前把历史里的图片引用换成各协议的图片块（文件不在了就换成一句说明）。
+fn expand_images(protocol: &str, items: &[Value]) -> Vec<Value> {
+    fn walk(protocol: &str, v: &mut Value) {
+        if v["type"] == "pilot_image" {
+            let file = v["file"].as_str().unwrap_or("").to_string();
+            let media = v["media_type"].as_str().unwrap_or("image/png").to_string();
+            let anthropic = protocol == "anthropic_messages";
+            *v = match std::fs::read(&file) {
+                Ok(bytes) => {
+                    use base64::Engine;
+                    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    if anthropic {
+                        json!({"type":"image","source":{"type":"base64","media_type":media,"data":data}})
+                    } else {
+                        json!({"type":"input_image","image_url":format!("data:{media};base64,{data}")})
+                    }
+                }
+                Err(_) if anthropic => json!({"type":"text","text":"（这张图片的文件已不在了）"}),
+                Err(_) => json!({"type":"input_text","text":"（这张图片的文件已不在了）"}),
+            };
+            return;
+        }
+        match v {
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(protocol, x)),
+            Value::Object(m) => m.values_mut().for_each(|x| walk(protocol, x)),
+            _ => {}
+        }
+    }
+    let mut out = items.to_vec();
+    out.iter_mut().for_each(|v| walk(protocol, v));
+    out
 }
 
 fn recorded_call_id(protocol: &str, items: &[Value], id: &str) -> bool {
@@ -1678,5 +1820,39 @@ mod tests {
         assert!(stopped);
         assert!(registry.is_canceled("turn"));
         registry.unregister("turn");
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    // 2×3 的红色 PNG
+    const PNG: &[u8] = &[137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,3,8,2,0,0,0,18,22,241,77,0,0,0,18,73,68,65,84,120,156,99,248,207,192,0,66,12,72,4,0,63,2,11,245,20,12,90,227,0,0,0,0,73,69,78,68,174,66,96,130];
+
+    #[test]
+    fn view_image_is_stored_as_a_reference_and_expanded_per_protocol() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("shot.png");
+        std::fs::write(&src, PNG).unwrap();
+        let (marker, w, h) = prepare_image(&src, &t.path().join("s.images")).unwrap();
+        assert_eq!((w, h), (2, 3));
+        assert_eq!(marker["type"], "pilot_image");
+        // 历史里只有引用，不含图片数据
+        let mut items = vec![];
+        append_tool_outputs_with_images("anthropic_messages", &mut items, vec![("t1".into(), "{}".into(), false, Some(marker.clone()))]).unwrap();
+        assert!(!serde_json::to_string(&items).unwrap().contains("base64"));
+        let sent = expand_images("anthropic_messages", &items);
+        assert_eq!(sent[0]["content"][0]["content"][1]["type"], "image");
+        assert_eq!(sent[0]["content"][0]["content"][1]["source"]["type"], "base64");
+        // Responses：文字结果 + 一条带图的用户消息
+        let mut items = vec![];
+        append_tool_outputs_with_images("openai_responses", &mut items, vec![("c1".into(), "{}".into(), false, Some(marker))]).unwrap();
+        let sent = expand_images("openai_responses", &items);
+        assert_eq!(sent[0]["type"], "function_call_output");
+        assert!(sent[1]["content"][1]["image_url"].as_str().unwrap().starts_with("data:image/"));
+        // 文件没了：换成一句说明，不让请求失败
+        let gone = json!({"type":"pilot_image","file":"/nope.jpg","media_type":"image/jpeg"});
+        assert_eq!(expand_images("anthropic_messages", &[gone])[0]["type"], "text");
     }
 }
