@@ -70,7 +70,7 @@
         <select class="tin tagsel" bind:value={fleet.tag}><option value="">全部标签</option>{#each fleet.tags as t (t)}<option value={t}>#{t}</option>{/each}</select>
       {/if}
       <button class="btn small" onclick={() => openSiteImport()}><Icon name="upload" size={13} />导入站点</button>
-      <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="plus" size={13} />新建站点</button>
+      <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button>
     </div>
   </header>
 

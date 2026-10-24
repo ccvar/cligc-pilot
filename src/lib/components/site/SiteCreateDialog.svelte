@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 新建站点：两步。① 定位（是什么站、给谁看、想靠它做什么）② 技术栈、风格、首批页面数、存放位置。
+  // 制作站点：两步。① 定位（是什么站、给谁看、想靠它做什么）② 技术栈、风格、首批页面数、存放位置。
   // 点「开始制作」后在新站点里开第一版对话，AI 照着需求从空仓库做出能预览的第一版。
   import './site.css';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -19,9 +19,9 @@
 
 {#if f.open}
   <div class="su-mask" role="presentation" onclick={closeSiteCreate}></div>
-  <div class="su modal sc" role="dialog" aria-modal="true" aria-label="新建站点">
+  <div class="su modal sc" role="dialog" aria-modal="true" aria-label="制作站点">
     <header class="sheet-head">
-      <b><SiteMark size={15} /> 新建站点</b>
+      <b><SiteMark size={15} /> 制作站点</b>
       <ol class="stepper" aria-label="步骤">
         <li class:on={f.step === 'brief'} class:done={f.step === 'build'}><span class="n">{f.step === 'build' ? '✓' : 1}</span>定位</li>
         <li class="bar" aria-hidden="true"></li>
@@ -78,7 +78,7 @@
             <button class="btn small" onclick={pickParent} disabled={f.busy}>选择文件夹…</button>
             <span class="mono path" title={target}>{target || '还没选'}</span>
           </div>
-          <small>会在这里新建站点文件夹并 git init；代码只在你本机，Pilot 不会替你推送。</small>
+          <small>会在这里建一个站点文件夹并 git init；代码只在你本机，Pilot 不会替你推送。</small>
         </div>
         {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
       {/if}

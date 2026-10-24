@@ -333,7 +333,7 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
     Ok(site)
 }
 
-/// 新建站点（站点制作）：建文件夹、写需求记录、git init、登记站点、存定位，
+/// 制作站点：建文件夹、写需求记录、git init、登记站点、存定位，
 /// 返回站点和第一版对话的第一条消息（前端用它在这个站点里开对话）。
 #[derive(Serialize)]
 pub struct CreatedSite {

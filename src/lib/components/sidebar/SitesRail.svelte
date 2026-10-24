@@ -46,7 +46,7 @@
     <span class="ic"><SiteIcon id={s.id} size={14} /></span>
     <span class="name">{s.name}</span>
     <span class="badges">
-      {#if isMaking(s.id)}<span class="making" title="新建的站点，还没配置上线">制作中</span>{/if}
+      {#if isMaking(s.id)}<span class="making" title="在 Pilot 里制作的站点，还没配置上线">制作中</span>{/if}
       {#if s.job}<span class="run" title={s.job}></span>{/if}
       {#if s.proposed}<span class="cnt" title="{s.proposed} 条待确认">{s.proposed}</span>{/if}
       {#if s.last_deploy_ok === false || s.failed}<span class="bad" title={s.last_deploy_ok === false ? '上次上线失败' : `${s.failed} 条运营任务失败`}>!</span>{/if}

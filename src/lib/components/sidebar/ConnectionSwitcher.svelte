@@ -74,7 +74,7 @@
       </div>
       <div class="cs-actions">
         <div class="cs-div"></div>
-        <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><SiteMark size={15} />新建站点</button>
+        <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><SiteMark size={15} />制作站点</button>
         <button class="cs-act" role="menuitem" onclick={() => openSiteImport()}><SiteMark size={15} />导入站点</button>
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
