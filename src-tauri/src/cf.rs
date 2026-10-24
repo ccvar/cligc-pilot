@@ -366,16 +366,46 @@ pub async fn add_pages_domain(token: &str, account_id: &str, project: &str, doma
 
 /// 找到域名所属的 Zone（按最长后缀匹配）。
 pub async fn zone_for(token: &str, domain: &str) -> Result<Option<CfZone>, String> {
-    let body = cf_get(token, "/zones?per_page=50").await?;
-    let mut best: Option<CfZone> = None;
-    for (id, name) in parse_id_name(&body) {
-        if domain == name || domain.ends_with(&format!(".{name}")) {
-            if best.as_ref().is_none_or(|b| name.len() > b.name.len()) {
-                best = Some(CfZone { id, name });
-            }
+    // 按名字直接查（原来列前 50 个 Zone 再找，域名多的账号会漏掉）：先查域名本身，再逐级往上（www.a.com → a.com）
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let labels: Vec<&str> = domain.split('.').collect();
+    for i in 0..labels.len().saturating_sub(1) {
+        let cand = labels[i..].join(".");
+        let body = cf_get_query(token, "/zones", &[("name", cand.as_str())]).await?;
+        if let Some((id, name)) = parse_id_name(&body).into_iter().find(|(_, n)| n.eq_ignore_ascii_case(&cand)) {
+            return Ok(Some(CfZone { id, name }));
         }
     }
-    Ok(best)
+    Ok(None)
+}
+
+/// 同名的 A / AAAA / CNAME 记录（判断域名现在指向哪、能不能加 CNAME）。
+#[derive(Serialize, Clone, Debug)]
+pub struct DnsRec {
+    pub id: String,
+    pub kind: String,
+    pub content: String,
+    pub proxied: bool,
+}
+
+pub async fn dns_records(token: &str, zone_id: &str, name: &str) -> Result<Vec<DnsRec>, String> {
+    let body = cf_get_query(token, &format!("/zones/{zone_id}/dns_records"), &[("name", name)]).await?;
+    Ok(body["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| matches!(r["type"].as_str(), Some("A" | "AAAA" | "CNAME")))
+        .map(|r| DnsRec {
+            id: r["id"].as_str().unwrap_or_default().into(),
+            kind: r["type"].as_str().unwrap_or_default().into(),
+            content: r["content"].as_str().unwrap_or_default().into(),
+            proxied: r["proxied"].as_bool().unwrap_or(false),
+        })
+        .collect())
+}
+
+pub async fn delete_dns_record(token: &str, zone_id: &str, record_id: &str) -> Result<(), String> {
+    cf_send(token, reqwest::Method::DELETE, &format!("/zones/{zone_id}/dns_records/{record_id}"), None).await.map(|_| ())
 }
 
 /// 建一条 DNS 记录；同名同类型已存在则返回 false（不覆盖用户已有的记录）。

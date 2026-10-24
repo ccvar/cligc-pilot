@@ -377,6 +377,8 @@ pub struct PagesSetup {
     pub created: bool,
     pub domain_added: bool,
     pub dns: String,
+    /// 域名下已有、指向别处的记录（「类型 内容」）：要你确认后才替换成指向 Pages
+    pub conflict: Vec<String>,
 }
 
 /// 建 Pages 项目（直接上传型）、加自定义域名，并在同账号的 Zone 里补一条指向 pages.dev 的 CNAME。
@@ -395,7 +397,7 @@ pub async fn site_setup_pages(state: tauri::State<'_, AppState>, id: String) -> 
         Some(p) => p,
         None => crate::cf::create_pages_project(&token, &cf.account_id, &site.deploy.project, branch).await?,
     };
-    let mut out = PagesSetup { created, domain_added: false, dns: String::new() };
+    let mut out = PagesSetup { created, domain_added: false, dns: String::new(), conflict: vec![] };
     if site.domain.is_empty() {
         out.dns = "站点没有填写域名，跳过绑定".into();
         return Ok(out);
@@ -403,16 +405,47 @@ pub async fn site_setup_pages(state: tauri::State<'_, AppState>, id: String) -> 
     crate::cf::add_pages_domain(&token, &cf.account_id, &site.deploy.project, &site.domain).await?;
     out.domain_added = true;
     let target = if project.subdomain.is_empty() { format!("{}.pages.dev", site.deploy.project) } else { project.subdomain.clone() };
-    out.dns = match crate::cf::zone_for(&token, &site.domain).await {
-        Ok(Some(zone)) => match crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &site.domain, &target, true).await {
-            Ok(true) => format!("已在 {} 添加 CNAME → {target}", zone.name),
-            Ok(false) => "域名已有 DNS 记录，未改动（如果不是指向 Pages，请手动调整）".into(),
-            Err(e) => format!("自动添加 DNS 失败（{e}），请在 Cloudflare 里把 {} 的 CNAME 指向 {target}", site.domain),
+    match crate::cf::zone_for(&token, &site.domain).await {
+        Ok(Some(zone)) => match crate::cf::dns_records(&token, &zone.id, &site.domain).await {
+            Ok(recs) if recs.is_empty() => {
+                out.dns = match crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &site.domain, &target, true).await {
+                    Ok(_) => format!("已在 {} 添加 CNAME → {target}", zone.name),
+                    Err(e) => format!("自动添加 DNS 失败（{e}），请在 Cloudflare 里把 {} 的 CNAME 指向 {target}", site.domain),
+                };
+            }
+            Ok(recs) if recs.iter().any(|r| r.kind == "CNAME" && r.content.eq_ignore_ascii_case(&target)) => {
+                out.dns = format!("{} 已经指向 {target}", site.domain);
+            }
+            Ok(recs) => {
+                out.conflict = recs.iter().map(|r| format!("{} {}{}", r.kind, r.content, if r.proxied { "（已代理）" } else { "" })).collect();
+                out.dns = format!("{} 已经有 DNS 记录（{}），指向的不是 Pages，没有改动。要换成指向 {target}，点「替换成指向 Pages」", site.domain, out.conflict.join("、"));
+            }
+            Err(e) => out.dns = format!("读取 DNS 记录失败（{e}），请在 Cloudflare 里把 {} 的 CNAME 指向 {target}", site.domain),
         },
-        Ok(None) => format!("域名不在这个 Cloudflare 账号里：请在域名服务商处把 {} 的 CNAME 指向 {target}", site.domain),
-        Err(e) => format!("读取 Zone 失败（{e}），请手动把 CNAME 指向 {target}"),
+        Ok(None) => out.dns = format!("在这个 Cloudflare 账号里没找到 {} 的 DNS（域名在别的账号或别的服务商，或者令牌没有「区域 → DNS → 编辑」权限）：把 {} 的 CNAME 指向 {target}，或给令牌补上权限后再点一次", site.domain, site.domain),
+        Err(e) => out.dns = format!("读取 Zone 失败（{e}），请手动把 CNAME 指向 {target}"),
     };
     Ok(out)
+}
+
+/// 把域名现有的 A / AAAA / CNAME 记录换成指向 Pages 的 CNAME（界面上确认过才调用）。
+#[tauri::command]
+pub async fn site_pages_dns_replace(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    if site.domain.is_empty() {
+        return Err("站点没有填写域名".into());
+    }
+    let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
+    let token = crate::keychain::get_key(&cf.id)?;
+    let project = crate::cf::get_pages_project(&token, &cf.account_id, &site.deploy.project).await?.ok_or("Pages 项目还没建")?;
+    let target = if project.subdomain.is_empty() { format!("{}.pages.dev", site.deploy.project) } else { project.subdomain.clone() };
+    let zone = crate::cf::zone_for(&token, &site.domain).await?.ok_or_else(|| format!("在这个 Cloudflare 账号里没找到 {} 的 DNS", site.domain))?;
+    let recs = crate::cf::dns_records(&token, &zone.id, &site.domain).await?;
+    for r in &recs {
+        crate::cf::delete_dns_record(&token, &zone.id, &r.id).await?;
+    }
+    crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &site.domain, &target, true).await?;
+    Ok(format!("已把 {} 换成 CNAME → {target}（删掉了原来的 {} 条记录）。DNS 生效可能要几分钟", site.domain, recs.len()))
 }
 
 async fn manage_token(state: &AppState, conn_id: &str) -> Result<String, String> {

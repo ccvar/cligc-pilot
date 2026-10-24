@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { untrack } from 'svelte';
 import type { Site } from '$lib/types';
-import { app, say } from './app.svelte.js';
+import { app, say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites, openSite, SITE_PREFIX } from './sites.svelte.js';
 import { launcher } from './launcher.svelte.js';
 import { selectConn } from './connections.svelte.js';
@@ -55,6 +55,8 @@ class LaunchState {
   busy = $state<Record<string, string>>({});
   notes = $state<Record<string, Record<string, string>>>({});
   measurement = $state<Record<string, string>>({});
+  /** 绑域名时发现的、指向别处的 DNS 记录（要你确认才替换） */
+  dnsConflict = $state<Record<string, string[]>>({});
   checking = $state<Record<string, boolean>>({});
   /** 记住「已经全部完成」的站点：再打开时不先闪一下加载中的向导。 */
   done = $state<Set<string>>(loadSet(DONE_KEY));
@@ -132,8 +134,18 @@ export function toGithub(site: Site, ghConnId: string, repo: string, create: boo
   return step(site.id, 'github', () => invoke<Site>('site_to_github', { id: site.id, ghConnId, repo, create, private: priv }), (s) => `代码已推到 ${s.repo}，之后的改动走分支和 PR`);
 }
 export function setupPages(site: Site) {
-  return step(site.id, 'pages', () => invoke<{ created: boolean; domain_added: boolean; dns: string }>('site_setup_pages', { id: site.id }),
-    (r) => `${r.created ? '已创建 Pages 项目；' : ''}${r.domain_added ? '已绑定域名；' : ''}${r.dns}`);
+  return step(site.id, 'pages', () => invoke<{ created: boolean; domain_added: boolean; dns: string; conflict: string[] }>('site_setup_pages', { id: site.id }),
+    (r) => {
+      launch.dnsConflict = { ...launch.dnsConflict, [site.id]: r.conflict ?? [] };
+      return `${r.created ? '已创建 Pages 项目；' : ''}${r.domain_added ? '已绑定域名；' : ''}${r.dns}`;
+    });
+}
+/** 域名已有指向别处的记录：确认后换成指向 Pages 的 CNAME（会删掉原来的 A / AAAA / CNAME）。 */
+export async function replacePagesDns(site: Site) {
+  const recs = launch.dnsConflict[site.id] ?? [];
+  const ok = await confirmDialog(`把 ${site.domain} 现有的 DNS 记录（${recs.join('、')}）删掉，换成指向 Pages 的 CNAME？原来指向的服务会访问不到。`, { title: '替换 DNS 记录', kind: 'danger', confirmText: '替换' });
+  if (!ok) return;
+  await step(site.id, 'pages', () => invoke<string>('site_pages_dns_replace', { id: site.id }), (r) => { launch.dnsConflict = { ...launch.dnsConflict, [site.id]: [] }; return r; });
 }
 export function createGa4(site: Site, connId: string) {
   return step(site.id, 'ga4', () => invoke<{ property: string; measurement_id: string }>('ga4_create_property', { id: site.id, connId, account: '' }), (r) => {

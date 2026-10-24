@@ -14,7 +14,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { sites, deploySite, pilotDeploys, refreshSites } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns } from '$lib/state/launch.svelte.js';
   import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -148,6 +148,7 @@
           <div class="row"><button class="btn tiny" onclick={createPages} disabled={!!busy || (needDeploy ? !cfConn || !projName.trim() : !site.deploy.project)}><Icon name="plus" size={11} />{busy === 'pages' ? '处理中…' : '创建并绑定'}</button>{#if !site.domain}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>先填写域名</button>{/if}</div>
         {/if}
         {#if notes.pages}<small class:err={notes.pages.startsWith('失败')}>{notes.pages}</small>{/if}
+        {#if launch.dnsConflict[site.id]?.length}<div class="row"><button class="btn tiny" onclick={() => replacePagesDns(site)} disabled={!!busy}><Icon name="refresh" size={11} />替换成指向 Pages…</button></div>{/if}
       </div>
     </div>
     {/if}
