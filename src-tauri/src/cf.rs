@@ -349,6 +349,13 @@ pub async fn rollback_deployment(token: &str, account_id: &str, project: &str, i
 }
 
 /// 给 Pages 项目加自定义域名。已存在视为成功。
+/// 项目里某个自定义域名的状态（active / pending / …）；没加过就是 None。
+/// 项目详情里的 domains 只列生效了的，刚加、等验证的要从这里看。
+pub async fn pages_domain_status(token: &str, account_id: &str, project: &str, domain: &str) -> Result<Option<String>, String> {
+    let body = cf_get(token, &format!("/accounts/{account_id}/pages/projects/{project}/domains")).await?;
+    Ok(body["result"].as_array().into_iter().flatten().find(|d| d["name"].as_str().map(|n| n.eq_ignore_ascii_case(domain)).unwrap_or(false)).map(|d| d["status"].as_str().unwrap_or("pending").to_string()))
+}
+
 pub async fn add_pages_domain(token: &str, account_id: &str, project: &str, domain: &str) -> Result<(), String> {
     match cf_send(
         token,

@@ -74,6 +74,8 @@ pub(crate) async fn init_repo(dir: &Path) -> Result<(), String> {
 
 #[derive(Serialize, Default)]
 pub struct LaunchStatus {
+    /// 域名加到了 Pages 项目、但 Cloudflare 还在验证（DNS 生效前）：pending 等；生效了或没加过为空
+    pub domain_status: String,
     /// 配置变量：声明了几个、哪些还没填、有没有改动没同步到部署目标
     pub config_vars: usize,
     pub config_missing: Vec<String>,
@@ -112,6 +114,8 @@ struct PagesCache {
     project: String,
     exists: bool,
     domains: Vec<String>,
+    #[serde(default)]
+    pending: String,
     at: u64,
 }
 
@@ -269,7 +273,8 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
     } else if let Some(pc) = read_cache(&state, &id).pages.filter(|p| quick && p.project == site.deploy.project && crate::now_secs().saturating_sub(p.at) < 86_400) {
         // 快速读取：用上次查到的结果，后台那次再去 Cloudflare 刷新
         st.pages = pc.exists;
-        st.domain_attached = !site.domain.is_empty() && pc.domains.iter().any(|d| d == &site.domain);
+        st.domain_attached = !site.domain.is_empty() && (pc.domains.iter().any(|d| d == &site.domain) || !pc.pending.is_empty());
+        st.domain_status = pc.pending.clone();
         st.pages_domains = pc.domains;
     } else if let Ok(cf) = state.conns.get(&site.deploy.cf_conn_id) {
         if let Ok(token) = crate::keychain::get_key(&cf.id) {
@@ -277,10 +282,18 @@ pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force:
                 Ok(p) => {
                     let (exists, domains) = p.map(|p| (true, p.domains)).unwrap_or((false, Vec::new()));
                     st.pages = exists;
-                    st.domain_attached = !site.domain.is_empty() && domains.iter().any(|d| d == &site.domain);
+                    let live = !site.domain.is_empty() && domains.iter().any(|d| d == &site.domain);
+                    // 还没生效：看看是不是已经加了、正在等 Cloudflare 验证（DNS 生效后几分钟）
+                    let pending = if exists && !live && !site.domain.is_empty() {
+                        crate::cf::pages_domain_status(&token, &cf.account_id, &site.deploy.project, &site.domain).await.ok().flatten().filter(|s| s != "active").unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    st.domain_attached = live || !pending.is_empty();
+                    st.domain_status = pending.clone();
                     st.pages_domains = domains.clone();
                     let project = site.deploy.project.clone();
-                    update_cache(&state, &id, |c| c.pages = Some(PagesCache { project, exists, domains, at: crate::now_secs() }));
+                    update_cache(&state, &id, |c| c.pages = Some(PagesCache { project, exists, domains, pending, at: crate::now_secs() }));
                 }
                 Err(e) => st.errors.push(format!("Cloudflare：{e}")),
             }

@@ -147,6 +147,7 @@
           {/if}
           <div class="row"><button class="btn tiny" onclick={createPages} disabled={!!busy || (needDeploy ? !cfConn || !projName.trim() : !site.deploy.project)}><Icon name="plus" size={11} />{busy === 'pages' ? '处理中…' : '创建并绑定'}</button>{#if !site.domain}<button class="link-btn" onclick={() => (sites.tab = 'settings')}>先填写域名</button>{/if}</div>
         {/if}
+        {#if st.domain_status}<small class="pending-note">{site.domain} 已加到项目，Cloudflare 正在验证（DNS 生效后几分钟内自动完成，可以点右上角刷新看看）。</small>{/if}
         {#if notes.pages}<small class:err={notes.pages.startsWith('失败')}>{notes.pages}</small>{/if}
         {#if launch.dnsConflict[site.id]?.length}<div class="row"><button class="btn tiny" onclick={() => replacePagesDns(site)} disabled={!!busy}><Icon name="refresh" size={11} />替换成指向 Pages…</button></div>{/if}
       </div>
@@ -232,6 +233,7 @@
 
 <style>
   .pg { margin: 6px 0 2px; max-width: 560px; }
+  .pending-note { color: #8a5a08 !important; }
   .launch { display: flex; flex-direction: column; gap: 2px; padding-top: 12px; padding-bottom: 12px; animation: su-in .2s var(--su-ease) backwards; }
   .lhead { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: -2px -6px; padding: 2px 6px; border-radius: 8px; cursor: pointer; user-select: none; transition: background-color .12s; }
   .lhead:not(.static):hover { background: var(--su-hover); }

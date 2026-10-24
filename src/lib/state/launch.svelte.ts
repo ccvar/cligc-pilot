@@ -12,6 +12,8 @@ export interface LaunchStatus {
   pages: boolean;
   pages_domains: string[];
   domain_attached: boolean;
+  /** 域名已加到 Pages 项目、Cloudflare 还在验证（DNS 生效前）：pending 等 */
+  domain_status?: string;
   ga4: boolean;
   gsc: boolean;
   indexnow: boolean;
