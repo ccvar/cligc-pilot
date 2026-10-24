@@ -9,6 +9,7 @@ import { connections, selectConn } from './connections.svelte.js';
 import { sites, refreshSites, SITE_PREFIX } from './sites.svelte.js';
 import { SITES_CONN_ID } from './env';
 import { launcher, STYLE_DIRECTIVES } from './launcher.svelte.js';
+import { savePrefs } from '$lib/defaults';
 import { composer } from './composer.svelte.js';
 import { brainUsable } from './models';
 import { startChat } from './turns.svelte.js';
@@ -123,14 +124,26 @@ export async function pickParent() {
 }
 
 /** 在站点里开一个新对话，把 text 作为第一条消息发出去；没有可用模型时停在启动页、消息留在输入框里。 */
-export async function startSiteChat(siteId: string, text: string, noBrainHint = '消息已经写好：选一个可用的模型后发送') {
+/** 在站点里开一个新对话，把 text 作为第一条消息发出去；没有可用模型时停在启动页、消息留在输入框里。
+ *  perm 给了就只用于这一条对话（比如制作站点用「全自动」），不改你平时选的档位。 */
+export async function startSiteChat(siteId: string, text: string, noBrainHint = '消息已经写好：选一个可用的模型后发送', perm = '') {
   await selectConn(SITE_PREFIX + siteId);
   app.activeConvId = ''; app.activeConv = null;
   composer.attachments = [];
   launcher.lDraft = text;
-  if (brainUsable(launcher.lBrain)) await startChat();
-  else { app.view = 'launcher'; say(noBrainHint, 'err'); }
+  if (!brainUsable(launcher.lBrain)) { app.view = 'launcher'; say(noBrainHint, 'err'); return; }
+  if (!perm) { await startChat(); return; }
+  const keep = { l: launcher.lPerm, p: launcher.prefs.perm };
+  launcher.lPerm = perm;
+  // startChat 在第一个 await 之前就带着档位发出了请求，这里立刻换回来：不影响之后开的对话，也不写进偏好
+  const run = startChat();
+  launcher.lPerm = keep.l; launcher.prefs.perm = keep.p; savePrefs(launcher.prefs);
+  await run;
 }
+
+/** 制作站点（第一版、继续制作、修上线前检查的问题）用「全自动」：在 Pilot 新建的本地文件夹里干活，
+ *  拿不到部署凭据、提示词也要求不部署，每步都停下来等批准只会打断它。 */
+export const MAKING_PERM = 'full';
 
 export async function createSite() {
   const f = siteCreate;
@@ -149,7 +162,7 @@ export async function createSite() {
     closeSiteCreate();
     await refreshSites();
     // 在新站点里开第一版对话：需求就是第一条消息（看得见、可追溯）
-    await startSiteChat(r.site.id, r.message, '站点已建好，需求也写好了：选一个可用的模型后发送，就开始制作第一版');
+    await startSiteChat(r.site.id, r.message, '站点已建好，需求也写好了：选一个可用的模型后发送，就开始制作第一版', MAKING_PERM);
   } catch (e) {
     f.err = String(e);
   } finally {

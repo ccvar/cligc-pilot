@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Conversation, MakeCheck, MakeState, Site } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
 import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
-import { startSiteChat } from './siteCreate.svelte.js';
+import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
 
 const HIDE_KEY = 'cligc.pilot.conventionsHintHidden';
 function loadHidden(): string[] { try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch { return []; } }
@@ -37,7 +37,7 @@ export function makingConv(siteId: string): Conversation | undefined {
 export async function continueMaking(site: Site) {
   try {
     const text = await invoke<string>('site_continue_message', { id: site.id });
-    await startSiteChat(site.id, text);
+    await startSiteChat(site.id, text, undefined, MAKING_PERM);
   } catch (e) { say(String(e), 'err'); }
 }
 
@@ -68,7 +68,7 @@ export function fixWithAi(site: Site, checks: MakeCheck[]) {
   const lines = bad.map((c) => `- ${c.label}：${c.detail}${c.items.length ? '\n' + c.items.slice(0, 15).map((i) => `  - ${i}`).join('\n') + (c.items.length > 15 ? `\n  - ……还有 ${c.items.length - 15} 处` : '') : ''}`);
   const text = `上线前检查发现了下面这些问题，请逐条修复（按站点约定 .pilot/site.md 来）：\n\n${lines.join('\n')}\n\n`
     + '需要真实信息（联系方式、价格、数据）而你不知道的，不要编，列出来问我。修完重新构建确认通过，提交一次，再简要说明改了什么。';
-  void startSiteChat(site.id, text);
+  void startSiteChat(site.id, text, undefined, site.origin === 'created' ? MAKING_PERM : '');
 }
 
 export function writeConventions(site: Site) {
