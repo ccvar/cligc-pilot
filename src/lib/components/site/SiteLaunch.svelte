@@ -12,9 +12,13 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sites, deploySite, pilotDeploys } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, createGa4, setupGsc, setupIndexNow, askAiForGa4, syncConfig } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig } from '$lib/state/launch.svelte.js';
+  import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
+  let gaBusy = $state(false);
+  // GA4 是否已接进配置变量要看 .env.example（轻量读一次）
+  $effect(() => { void loadMake(site.id, false); });
   $effect(() => { void loadLaunch(site.id); });
   const st = $derived(launch.status[site.id]);
   const busy = $derived(launch.busy[site.id] ?? '');
@@ -130,7 +134,8 @@
         <b><span class="si ga"><Icon name="chart" size={14} /></span>GA4</b>
         <small>{st.ga4 ? `已绑定 ${site.data.ga4_property_name || site.data.ga4_property}` : manage ? '用你的 Google 账号新建一个 GA4 媒体资源和网页数据流。' : '自动创建需要授予管理权限的 Google 账号登录；也可以在设置里绑定已有的媒体资源。'}</small>
         <div class="row">
-          {#if !st.ga4 && manage}<button class="btn tiny" onclick={() => createGa4(site, manage)} disabled={!!busy || !site.domain}><Icon name="wand" size={11} />{busy === 'ga4' ? '创建中…' : '自动创建'}</button>{/if}
+          {#if !st.ga4 && manage}<button class="btn tiny" onclick={async () => { gaBusy = true; try { await ga4ToConfig(site, manage); await loadLaunch(site.id, true); } finally { gaBusy = false; } }} disabled={!!busy || gaBusy || !site.domain} data-tip="新建 GA4 媒体资源和网页数据流，衡量 ID 存进配置变量 PUBLIC_GA_ID（不写进代码），然后重新构建"><Icon name="wand" size={11} />{gaBusy ? '创建中…' : '自动创建并接入'}</button>{/if}
+          {#if st.ga4 && !gaReady(site)}<button class="btn tiny" onclick={async () => { gaBusy = true; try { await ga4ToConfig(site); } finally { gaBusy = false; } }} disabled={gaBusy} data-tip="读出已绑定 GA4 的衡量 ID，存进配置变量 PUBLIC_GA_ID"><Icon name="wand" size={11} />{gaBusy ? '读取中…' : '把衡量 ID 接进站点'}</button>{/if}
           {#if !st.ga4 && !manage}<button class="btn tiny" onclick={() => openDataConnect('google', 'oauth', { manage: true })}><GoogleMark size={11} />用 Google 账号登录…</button><button class="link-btn" onclick={() => (sites.tab = 'settings')}>绑定已有的</button>{/if}
           {#if launch.measurement[site.id]}<button class="btn tiny primary" onclick={() => askAiForGa4(site, launch.measurement[site.id])}><Icon name="sparkles" size={11} />让 AI 把统计代码加进站点</button>{/if}
         </div>

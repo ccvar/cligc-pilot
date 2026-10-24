@@ -440,11 +440,17 @@ pub struct Ga4Created {
 /// 在 Google 账号下建 GA4 媒体资源 + 网页数据流，绑定到站点，返回衡量 ID（用来在站点里埋代码）。
 #[tauri::command]
 pub async fn ga4_create_property(state: tauri::State<'_, AppState>, id: String, conn_id: String, account: String) -> Result<Ga4Created, String> {
+    create_ga4(&state, &id, &conn_id, account).await
+}
+
+async fn create_ga4(state: &AppState, id: &str, conn_id: &str, account: String) -> Result<Ga4Created, String> {
+    let id = id.to_string();
+    let conn_id = conn_id.to_string();
     let site = state.sites.get(&id)?;
     if site.domain.is_empty() {
         return Err("请先填写站点域名".into());
     }
-    let token = manage_token(&state, &conn_id).await?;
+    let token = manage_token(state, &conn_id).await?;
     let account = if account.is_empty() {
         let v = crate::google::api(&token, reqwest::Method::GET, "https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=50", None).await?;
         v["accountSummaries"].as_array().and_then(|a| a.first()).and_then(|a| a["account"].as_str()).map(str::to_string).ok_or("这个 Google 账号下没有 GA 账号，请先在 analytics.google.com 建一个")?
@@ -475,6 +481,62 @@ pub async fn ga4_create_property(state: tauri::State<'_, AppState>, id: String, 
         Ok(())
     })?;
     Ok(Ga4Created { property, measurement_id })
+}
+
+#[derive(Serialize)]
+pub struct Ga4Config {
+    pub measurement_id: String,
+    /// 存进了哪个配置变量
+    pub key: String,
+    /// 这个变量在 .env.example 里声明过（没声明＝老站点，还要让 AI 按配置变量的规矩接上）
+    pub declared: bool,
+    pub created: bool,
+}
+
+/// 把 GA4 接进站点的配置变量：给了衡量 ID 就用它；站点已绑 GA4 媒体资源就去 Google 读它的衡量 ID；
+/// 都没有就用 conn_id 这条 Google 账号新建一个。拿到后存进配置变量（.env.example 里声明的 GA 变量，没有就用 PUBLIC_GA_ID）。
+#[tauri::command]
+pub async fn ga4_to_config(state: tauri::State<'_, AppState>, id: String, conn_id: Option<String>, measurement_id: Option<String>) -> Result<Ga4Config, String> {
+    let site = state.sites.get(&id)?;
+    let mut created = false;
+    let mid = if let Some(m) = measurement_id.map(|m| m.trim().to_uppercase()).filter(|m| !m.is_empty()) {
+        if !m.starts_with("G-") || m.len() < 6 || !m[2..].chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("衡量 ID 的格式是 G- 开头，比如 G-AB12CD34EF".into());
+        }
+        m
+    } else if !site.data.ga4_property.is_empty() {
+        ga4_stream_id(&state, &site).await?
+    } else {
+        let conn = conn_id.filter(|c| !c.is_empty()).ok_or("还没有能建 GA4 的 Google 账号：先在连接里用浏览器登录一个 Google 账号，或直接填已有的衡量 ID")?;
+        created = true;
+        create_ga4(&state, &id, &conn, String::new()).await?.measurement_id
+    };
+    if mid.is_empty() {
+        return Err("Google 没有返回衡量 ID：到 GA4 后台看一下这个媒体资源的网页数据流".into());
+    }
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    let vars = crate::site_config::vars(&site, &code);
+    let (key, declared) = match crate::site_config::ga_key(&vars) {
+        Some(k) => (k, true),
+        None => ("PUBLIC_GA_ID".to_string(), false),
+    };
+    let keys = crate::sites::save_env(&id, &[(key.clone(), mid.clone())], &[])?;
+    state.sites.update(&id, now(), |s| {
+        s.build.env_keys = keys;
+        Ok(())
+    })?;
+    Ok(Ga4Config { measurement_id: mid, key, declared, created })
+}
+
+/// 已绑定的 GA4 媒体资源的网页数据流衡量 ID（用站点数据那条 Google 连接，只读权限就够）。
+async fn ga4_stream_id(state: &AppState, site: &crate::sites::Site) -> Result<String, String> {
+    let c = state.conns.get(&site.data.google_conn_id).map_err(|_| "站点绑定 GA4 用的 Google 连接不在了".to_string())?;
+    let raw = crate::keychain::get_key(&c.id)?;
+    let cred = crate::google::parse_credential(&c.key_kind, &raw)?;
+    let token = crate::google::access_token(&c.id, &cred, &[crate::google::SCOPE_ANALYTICS_RO]).await?;
+    let v = crate::google::api(&token, reqwest::Method::GET, &format!("https://analyticsadmin.googleapis.com/v1beta/{}/dataStreams", site.data.ga4_property), None).await?;
+    Ok(v["dataStreams"].as_array().into_iter().flatten().find_map(|s| s["webStreamData"]["measurementId"].as_str()).unwrap_or_default().to_string())
 }
 
 /// Search Console：取 DNS 验证令牌 → 在 Cloudflare 的 Zone 里写 TXT → 验证所有权 → 添加网域资源 → 提交 sitemap。

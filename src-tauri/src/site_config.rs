@@ -87,6 +87,22 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
     out
 }
 
+/// .env.example 里声明的 GA4 衡量 ID 变量（优先 PUBLIC_GA_ID，其次名字像 GA_MEASUREMENT_ID / GA4_ID 的）。
+pub fn ga_key(vars: &[ConfigVar]) -> Option<String> {
+    let declared: Vec<&ConfigVar> = vars.iter().filter(|v| v.declared && !v.secret).collect();
+    if let Some(v) = declared.iter().find(|v| v.key == "PUBLIC_GA_ID") {
+        return Some(v.key.clone());
+    }
+    declared
+        .iter()
+        .find(|v| {
+            let u = v.key.to_ascii_uppercase();
+            let ga = u.contains("GA4") || u.starts_with("GA_") || u.contains("_GA_") || u.ends_with("_GA") || u.contains("GTAG");
+            ga && (u.contains("ID") || u.contains("MEASUREMENT"))
+        })
+        .map(|v| v.key.clone())
+}
+
 /// 同步到哪：pages | workers | vps；暂不部署时为空（只在 Pilot 构建时用）。
 pub fn target_of(site: &Site) -> &'static str {
     match site.deploy.mode.as_str() {
@@ -312,6 +328,15 @@ mod tests {
         assert_eq!(v[2], ("GA_ID".into(), "统计 ID".into(), false));
         assert_eq!(v[3], ("API_TOKEN".into(), "".into(), true), "没标的按名字猜");
         assert_eq!(v.len(), 4);
+    }
+
+    #[test]
+    fn ga_variable_is_found_by_name() {
+        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false };
+        assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID"), v("PUBLIC_GA_ID")]).as_deref(), Some("PUBLIC_GA_ID"));
+        assert_eq!(ga_key(&[v("PUBLIC_SITE_URL"), v("PUBLIC_GA4_ID")]).as_deref(), Some("PUBLIC_GA4_ID"));
+        assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID")]).as_deref(), Some("GA_MEASUREMENT_ID"));
+        assert_eq!(ga_key(&[v("PUBLIC_GAME_ID"), v("PUBLIC_SITE_URL")]), None);
     }
 
     #[test]

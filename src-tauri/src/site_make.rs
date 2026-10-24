@@ -164,7 +164,8 @@ pub const CONFIG_SPEC: &str = "【配置变量】邀请链接 / 邀请码、统�
 - 集中在一个配置模块里读，给合理的默认值（比如站点地址默认用部署平台的默认域名）。Pilot 构建时把值作为进程环境变量注入，不会生成 `.env` 文件——确保 `npm run build` 时读得到进程环境变量（公开变量按框架要求加前缀，比如 Astro 的 `PUBLIC_`）。\n\
 - 写 `.env.example` 列出每个变量：上一行注释写清用途，并标 `[public]`（会出现在页面里）或 `[secret]`（只能在构建时或服务端用，绝不能进前端代码）；值留空或写示例。`.env` 不提交。\n\
 - 本地开发可以读 `.env`；值由 Pilot 保管，部署时同步到 Cloudflare 的环境变量或服务器上的 env 文件。\n\
-- 需要我填的配置值写进 `.pilot/todo.json` 时，inputs 的 key 就用变量名（和 `.env.example` 一致），我在看板上填好会直接存成配置变量，不用你改代码。";
+- 需要我填的配置值写进 `.pilot/todo.json` 时，inputs 的 key 就用变量名（和 `.env.example` 一致），我在看板上填好会直接存成配置变量，不用你改代码。\n\
+- GA4 统计固定用变量 `PUBLIC_GA_ID`（衡量 ID，[public]）：有值时在所有页面共用的 `<head>` 里用官方 gtag.js 加载，没值就不加载任何统计代码。GA4 不用写进待办，Pilot 会在看板上帮我创建并填好。";
 
 /// 待我处理的事：写成 Pilot 能读的清单，显示在站点看板上逐条处理（不只写在汇报里——汇报会被埋在对话里）。
 pub const TODO_SPEC: &str = "【待我处理的事】凡是需要我提供信息、做决定或点头的事（邀请链接、联系方式、正式域名、品牌名、需要登录才能截的图……），都写进 `.pilot/todo.json`，Pilot 会显示在站点看板上让我逐条处理；处理完的条目由你删掉，没有待办时写 `{\"items\":[]}`。格式：\n\
@@ -712,6 +713,6 @@ mod tests {
         assert_eq!(load_handled(t.path()), vec!["brand".to_string()]);
         let m = first_message(&req());
         assert!(m.contains(".pilot/todo.json") && m.contains("【待我处理的事】") && !m.contains("在汇报里列出来"));
-        assert!(m.contains("【配置变量】") && m.contains(".env.example") && continue_message(&[], "astro").contains("【配置变量】"));
+        assert!(m.contains("【配置变量】") && m.contains(".env.example") && m.contains("PUBLIC_GA_ID") && continue_message(&[], "astro").contains("【配置变量】"));
     }
 }

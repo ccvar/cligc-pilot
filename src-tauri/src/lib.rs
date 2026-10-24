@@ -4609,6 +4609,7 @@ pub fn run() {
             launch_cmds::import_cf_project,
             launch_cmds::launch_status,
             launch_cmds::site_to_github,
+            launch_cmds::ga4_to_config,
             launch_cmds::site_setup_pages,
             launch_cmds::ga4_create_property,
             launch_cmds::gsc_setup_domain,
