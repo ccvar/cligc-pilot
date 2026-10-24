@@ -18,6 +18,8 @@ export const siteMake = $state({
   state: {} as Record<string, MakeState>,
   loading: {} as Record<string, boolean>,
   hidden: loadHidden(),
+  /** 制作卡里手动展开过的部分（全部完成后默认收起；展开了这次打开期间保持展开） */
+  expanded: {} as Record<string, { steps?: boolean; checks?: boolean }>,
 });
 
 /** full=false 只问站点约定写了没有（站点看板每次打开都会问，便宜）。 */
