@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CopyLinkButton from '$lib/components/common/CopyLinkButton.svelte';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -39,7 +40,7 @@
             <li>Zone · Workers Routes · <b>Edit</b><span class="cf-opt">可选 · 用 Workers 部署、配置了路由的站点需要，没有它代码照样上线，只是更新路由那一步会报错</span></li>
           </ul>
         {/if}
-        <button class="btn soft" onclick={() => openUrl(cfTokenTemplateUrl())}>{updatingCf ? '为此连接新建' : '打开'} <CfMark size={14} /> Cloudflare Token ↗</button>
+        <div class="tok-open"><button class="btn soft" onclick={() => openUrl(cfTokenTemplateUrl())}>{updatingCf ? '为此连接新建' : '打开'} <CfMark size={14} /> Cloudflare Token ↗</button><CopyLinkButton url={() => cfTokenTemplateUrl()} tip="复制链接（在别的浏览器或账号里打开）" /></div>
       </div>
       <div class="cf-step">
         <p class="cf-step-t">② 把{updatingCf ? '新的' : '生成的'} Token 粘到这里：</p>
@@ -74,6 +75,7 @@
 {/if}
 
 <style>
+  .tok-open { display: flex; align-items: center; gap: 4px; }
   .cf-opt { display: block; color: var(--faint); font-size: 11.5px; line-height: 1.5; margin-top: 1px; }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */

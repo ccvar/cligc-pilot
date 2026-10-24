@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CopyLinkButton from '$lib/components/common/CopyLinkButton.svelte';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import GhMark from '$lib/components/icons/GhMark.svelte';
@@ -37,7 +38,7 @@
             <li>要改 <code>.github/workflows</code> 时，另需 Workflows · <b>Read and write</b></li>
           </ul>
         {/if}
-        <button class="btn soft" onclick={() => openUrl(ghTokenTemplateUrl())}>{updating ? '为此连接新建' : '打开'} <GhMark size={14} /> GitHub Token 页 ↗</button>
+        <div class="tok-open"><button class="btn soft" onclick={() => openUrl(ghTokenTemplateUrl())}>{updating ? '为此连接新建' : '打开'} <GhMark size={14} /> GitHub Token 页 ↗</button><CopyLinkButton url={() => ghTokenTemplateUrl()} tip="复制链接（在别的浏览器或账号里打开）" /></div>
       </div>
       <div class="gh-step">
         <p class="gh-step-t">② 把{updating ? '新的' : '生成的'} Token 粘到这里（以 <code>github_pat_</code> 开头）：</p>
@@ -76,6 +77,7 @@
 {/if}
 
 <style>
+  .tok-open { display: flex; align-items: center; gap: 4px; }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */
   .tin { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; }
