@@ -1,9 +1,13 @@
 <script lang="ts">
   // 站点页标题上的切换器：点站名弹出可搜索的站点列表，选中后留在同一个标签页。
+  // 站名旁的铅笔（或双击站名）就地改名，回车保存、Esc 取消。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
+  import { invoke } from '@tauri-apps/api/core';
+  import { say } from '$lib/state/app.svelte.js';
+  import type { Site } from '$lib/types';
   import { selectConn } from '$lib/state/connections.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
 
@@ -24,6 +28,29 @@
   });
   $effect(() => { void q; hi = 0; });
 
+  let editing = $state(false);
+  let nameVal = $state('');
+  let nameInput: HTMLInputElement | undefined = $state();
+  function startRename() {
+    if (!cur) return;
+    open = false; editing = true; nameVal = cur.name;
+    requestAnimationFrame(() => { nameInput?.focus(); nameInput?.select(); });
+  }
+  let renaming = false;
+  async function commitRename() {
+    if (!editing || renaming || !cur) return;
+    const name = nameVal.trim();
+    if (!name || name === cur.name) { editing = false; return; }
+    renaming = true;
+    try {
+      const saved = await invoke<Site>('save_site', { site: { ...cur, name } });
+      sites.list = sites.list.map((x) => (x.id === saved.id ? saved : x));
+      // 设置页的草稿只同步名字，别把那边没保存的改动冲掉
+      if (sites.draft?.id === saved.id) sites.draft.name = saved.name;
+      say(`已改名为「${saved.name}」`);
+    } catch (e) { say(String(e), 'err'); }
+    finally { renaming = false; editing = false; }
+  }
   function toggle() {
     open = !open;
     if (open) { q = ''; hi = 0; requestAnimationFrame(() => input?.focus()); }
@@ -52,10 +79,19 @@
 </script>
 
 <div class="sw" bind:this={root}>
-  <button type="button" class="sw-trigger" class:open onclick={toggle} aria-haspopup="listbox" aria-expanded={open} data-tip={open ? null : '切换站点'}>
-    <b>{cur?.name}</b>
-    <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-  </button>
+  {#if editing}
+    <input class="sw-name" bind:this={nameInput} bind:value={nameVal} maxlength="60" spellcheck="false" aria-label="站点名称"
+      onkeydown={(e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); void commitRename(); } if (e.key === 'Escape') { e.preventDefault(); editing = false; } }}
+      onblur={() => void commitRename()} />
+  {:else}
+    <button type="button" class="sw-trigger" class:open onclick={toggle} ondblclick={startRename} aria-haspopup="listbox" aria-expanded={open} data-tip={open ? null : '切换站点（双击改名）'}>
+      <b>{cur?.name}</b>
+      <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </button>
+    <button type="button" class="sw-edit" onclick={startRename} aria-label="重命名站点" data-tip="重命名">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13l-3.5.5L3 10z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" /></svg>
+    </button>
+  {/if}
   {#if open}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="sw-pop" onkeydown={onKey} onmousedown={(e) => e.stopPropagation()}>
@@ -85,7 +121,12 @@
 </div>
 
 <style>
-  .sw { position: relative; min-width: 0; display: flex; }
+  .sw { position: relative; min-width: 0; display: flex; align-items: center; gap: 2px; }
+  .sw-edit { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s, background-color .12s, color .12s; }
+  .sw:hover .sw-edit, .sw-edit:focus-visible { opacity: 1; }
+  .sw-edit:hover { background: rgba(0, 0, 0, .05); color: var(--text); }
+  .sw-name { min-width: 0; width: 260px; max-width: 100%; font: inherit; font-size: 15px; font-weight: 600; line-height: 1.3; color: var(--text); padding: 1px 6px; margin-left: -7px; border: 1px solid var(--border2); border-radius: 7px; background: #fff; outline: none; }
+  .sw-name:focus { border-color: var(--accent); }
   .sw-trigger { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; border: none; background: none; padding: 1px 6px 1px 0; margin: 0; border-radius: 7px; font: inherit; color: var(--text); cursor: pointer; transition: background-color .12s; }
   .sw-trigger b { font-size: 15px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sw-trigger .chev { flex: none; color: var(--faint); transition: transform .16s cubic-bezier(.2, .7, .2, 1), color .12s; }
