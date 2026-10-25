@@ -7,6 +7,7 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import type { Site } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
+  import { untrack } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { say } from '$lib/state/app.svelte.js';
   import { blogger, bloggerAccounts, bloggerLogin, loadBlogs } from '$lib/state/blogger.svelte.js';
@@ -17,7 +18,7 @@
   type Config = { blogger_conn_id: string; blog_id: string; blog_name: string; blog_url: string; mode: string };
   type Post = { path: string; title: string; summary: string; labels: string[]; status: string; post_id: string; post_url: string; error: string; updated_at: number; published_at: number };
   type Row = { path: string; url: string; title: string; date: string; post: Post | null };
-  type State = { config: Config; articles: Row[]; built: boolean; brain: string };
+  type State = { config: Config; articles: Row[]; built: boolean; brain: string; used_blogs: Record<string, string> };
 
   let st = $state<State | null>(null);
   let loadErr = $state('');
@@ -46,6 +47,9 @@
   }
   // 接上第一个账号后直接选它
   $effect(() => { if (st && !st.config.blogger_conn_id && accounts.length === 1) pickAccount(accounts[0].id); });
+  // 还没选博客时，默认选第一个没被别的站占用的（一个博客只对应一个站）
+  const freeBlogs = $derived((blogs ?? []).filter((b) => !st?.used_blogs[b.id]));
+  $effect(() => { if (st && cfg && !cfg.blog_id && freeBlogs.length) untrack(() => pickBlog(freeBlogs[0].id)); });
 
   // 每篇的操作
   let busy = $state<Record<string, string>>({});
@@ -111,8 +115,8 @@
         <span class="lbl">博客</span>
         <div class="row">
           <div class="blog-dd"><Dropdown value={cfg.blog_id} disabled={!cfg.blogger_conn_id || !blogs?.length} ariaLabel="博客"
-            placeholder={!cfg.blogger_conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : blogs.length ? '选一个博客' : '这个账号下还没有博客'}
-            options={(blogs ?? []).map((b) => ({ value: b.id, label: b.name || b.url, sub: b.url.replace(/^https?:\/\//, '').replace(/\/$/, '') }))} onchange={pickBlog} /></div>
+            placeholder={!cfg.blogger_conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : !blogs.length ? '这个账号下还没有博客' : freeBlogs.length ? '选一个博客' : '博客都给别的站用了：在 Blogger 再建一个'}
+            options={(blogs ?? []).map((b) => ({ value: b.id, label: b.name || b.url, sub: st?.used_blogs[b.id] ? `已用于 ${st.used_blogs[b.id]}` : b.url.replace(/^https?:\/\//, '').replace(/\/$/, ''), disabled: !!st?.used_blogs[b.id] }))} onchange={pickBlog} /></div>
           <button class="btn small" onclick={() => loadBlogs(cfg.blogger_conn_id, true)} disabled={!cfg.blogger_conn_id} data-tip="在 Blogger 新建博客后点这里刷新"><Icon name="refresh" size={12} />刷新</button>
           <button class="btn small" onclick={() => openUrl('https://www.blogger.com/')} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建一个，回来点刷新"><Icon name="external" size={12} />去 Blogger 新建</button>
         </div>

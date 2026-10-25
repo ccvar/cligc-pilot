@@ -166,6 +166,8 @@ pub struct SyndicationState {
     pub built: bool,
     /// 站点运营用的模型服务（写摘要用；codex / grok 不支持）
     pub brain: String,
+    /// 别的站已经绑定的博客：博客 id → 站点名（一个博客只给一个站用）
+    pub used_blogs: std::collections::HashMap<String, String>,
 }
 
 #[tauri::command]
@@ -179,13 +181,28 @@ pub async fn syndication_state(state: tauri::State<'_, AppState>, site_id: Strin
         .into_iter()
         .map(|a| ArticleRow { url: article_url(&site, &a.path), post: f.posts.iter().find(|p| p.path == a.path).cloned(), path: a.path, title: a.title, date: a.date })
         .collect();
-    Ok(SyndicationState { config: f.config, articles, built, brain: site.ops.brain.clone() })
+    let used_blogs = state
+        .sites
+        .list()
+        .into_iter()
+        .filter(|s| s.id != site.id)
+        .filter_map(|s| {
+            let c = load(&state.sites.data_dir(&s.id)).config;
+            (!c.blog_id.is_empty()).then(|| (c.blog_id, if s.domain.is_empty() { s.name } else { s.domain }))
+        })
+        .collect();
+    Ok(SyndicationState { config: f.config, articles, built, brain: site.ops.brain.clone(), used_blogs })
 }
 
 #[tauri::command]
 pub fn syndication_save_config(state: tauri::State<'_, AppState>, site_id: String, config: Config) -> Result<Config, String> {
     state.sites.get(&site_id)?;
     let dir = state.sites.data_dir(&site_id);
+    if !config.blog_id.is_empty() {
+        if let Some(other) = state.sites.list().into_iter().find(|s| s.id != site_id && load(&state.sites.data_dir(&s.id)).config.blog_id == config.blog_id) {
+            return Err(format!("这个博客已经给 {} 用了：一个博客只对应一个站，换一个或在 Blogger 再建一个", if other.domain.is_empty() { other.name } else { other.domain }));
+        }
+    }
     let mut f = load(&dir);
     f.config = Config { mode: if matches!(config.mode.as_str(), "review" | "draft" | "auto") { config.mode } else { "review".into() }, ..config };
     save(&dir, &f)?;
