@@ -40,35 +40,6 @@ jobs:
             echo "::error::缺少 TAURI_SIGNING_PRIVATE_KEY（更新包 ed25519 签名私钥）。"; exit 1
           fi
 
-      # macOS 用固定的自签名证书「Cligc Pilot」签名（不是 ad-hoc）：签名要求是 identifier + 证书哈希，
-      # 每个版本都一样，用户在钥匙串弹框点过一次「始终允许」，自动更新后不会再问。没有 Apple 公证，
-      # 首次打开仍要在「隐私与安全性」里放行。证书丢了换新的，所有用户都会再被问一次：备份在维护者的登录钥匙串里。
-      - name: 导入 macOS 签名证书
-        if: runner.os == 'macOS'
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "$MACOS_CERTIFICATE" ] || [ -z "$MACOS_CERTIFICATE_PASSWORD" ]; then
-            echo "::error::缺少 MACOS_CERTIFICATE / MACOS_CERTIFICATE_PASSWORD（macOS 签名证书）。"; exit 1
-          fi
-          kc="$RUNNER_TEMP/signing.keychain-db"
-          kpass=$(openssl rand -hex 16)
-          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$kpass" "$kc"
-          security set-keychain-settings -lut 3600 "$kc"
-          security unlock-keychain -p "$kpass" "$kc"
-          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          rm -f "$RUNNER_TEMP/cert.p12"
-          # 不设分区列表的话 codesign 取私钥会弹授权框，CI 上会卡住
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpass" "$kc" >/dev/null
-          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
-          # 自签名证书不受信任，find-identity -v 列不出来，按 SHA-1 指纹指定
-          id=$(security find-identity -p codesigning "$kc" | awk '/"Cligc Pilot"/ {print $2; exit}')
-          [ -n "$id" ] || { echo "::error::证书里没有「Cligc Pilot」签名身份"; exit 1; }
-          echo "APPLE_SIGNING_IDENTITY=$id" >> "$GITHUB_ENV"
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20

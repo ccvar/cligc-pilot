@@ -18,10 +18,6 @@ cfg="$(mktemp -t pilot-local-XXXX).json"
 trap 'rm -f "$cfg"' EXIT
 printf '{"bundle":{"createUpdaterArtifacts":false}}' > "$cfg"
 
-# 登录钥匙串里有正式版证书「Cligc Pilot」就用它签（和 CI 一致，钥匙串「始终允许」通用），否则 ad-hoc
-id=$(security find-identity -p codesigning 2>/dev/null | awk '/"Cligc Pilot"/ {print $2; exit}')
-if [ -n "$id" ]; then export APPLE_SIGNING_IDENTITY="$id"; echo "用证书「Cligc Pilot」签名"; fi
-
 t0=$(date +%s)
 npm run tauri build -- --bundles app,dmg --config "$cfg"
 echo
