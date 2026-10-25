@@ -137,6 +137,12 @@ impl ConvStore {
         self.read().into_iter().find(|c| c.id == id).map(without_partial)
     }
 
+    /// 连写到一半的那条一起取（界面丢了这一轮的实时通道时，用它接着显示进度）。
+    pub fn get_live(&self, id: &str) -> Option<Conversation> {
+        let _g = self.lock.lock().unwrap();
+        self.read().into_iter().find(|c| c.id == id)
+    }
+
     /// 存下运行中这一轮写到一半的回复（替换上一次存的那份）。会话已经不在跑了就不存。
     pub fn checkpoint(&self, id: &str, partial: Message) -> Result<(), String> {
         let _g = self.lock.lock().unwrap();

@@ -3051,6 +3051,12 @@ fn get_conversation(state: tauri::State<'_, AppState>, id: String) -> Option<Con
     state.convos.get(&id)
 }
 
+/// 进行中的对话连同写到一半的回复（每 3 秒存一次）：页面重载、开了第二个窗口，丢了这一轮的实时通道时用它接着显示。
+#[tauri::command]
+fn get_conversation_live(state: tauri::State<'_, AppState>, id: String) -> Option<Conversation> {
+    state.convos.get_live(&id)
+}
+
 #[tauri::command]
 fn delete_conversation(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     state.convos.remove(&id)
@@ -4639,6 +4645,7 @@ pub fn run() {
             clear_claude_oauth_token,
             list_conversations,
             get_conversation,
+            get_conversation_live,
             delete_conversation,
             start_conversation,
             send_message,

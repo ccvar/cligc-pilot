@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { TurnEvent, Message, Conversation, TaskType } from '$lib/types';
@@ -313,6 +314,47 @@ export async function continueInBackground(convId: string, text: string): Promis
   } catch (e) { await failTurn(e, convId); return false; }
 }
 
+/** 接上「后台在跑、但这个页面没有实时通道」的对话：页面重载（开发时热更新）、开了第二个窗口、窗口关了再开。
+ *  每 2 秒读一次后台存下的阶段性进度（正文和工具步骤），显示成进行中（能停止、不能再发）；跑完换成完整结果。
+ *  运营任务的会话有自己的实时广播（initOpsLive），不走这里。 */
+const following = new Set<string>();
+export function attachDetachedTurns() {
+  for (const c of app.convos) {
+    if (c.status !== 'running' || app.running[c.id] || following.has(c.id) || c.origin === 'ops') continue;
+    void followDetached(c);
+  }
+}
+async function followDetached(c: Conversation) {
+  following.add(c.id);
+  const started = Date.now();
+  app.running[c.id] = c.conn_id;
+  app.lives[c.id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: started, error: '', failed: false, startedAt: started };
+  try {
+    for (;;) {
+      const live = await invoke<Conversation | null>('get_conversation_live', { id: c.id }).catch(() => null);
+      // 本页又自己开了一轮（比如点了重试），交给那一轮的通道
+      if (!following.has(c.id) || app.lives[c.id]?.startedAt !== started) return;
+      if (!live) { delete app.running[c.id]; delete app.lives[c.id]; return; }
+      const msgs = live.messages as (Message & { partial?: boolean })[];
+      if (live.status !== 'running') {
+        await refreshConvos();
+        endTurn({ ...live, messages: msgs.filter((m) => !m.partial) }, c.id);
+        return;
+      }
+      const part = msgs[msgs.length - 1];
+      const buf = app.lives[c.id];
+      if (buf && part?.partial && part.text !== buf.text) {
+        buf.text = part.text;
+        buf.renderedText = mdRender(part.text);
+        buf.tools = part.tools.map((t) => ({ label: t.label, detail: t.detail, at: t.at ?? part.text.length }));
+        buf.lastActivityAt = Date.now();
+        if (app.activeConvId === c.id) scrollSoon();
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  } finally { following.delete(c.id); }
+}
+
 // ---------- 重试 / 自动重连 ----------
 // 错误文本像不像"瞬时问题"（网络/限流/过载/5xx）——只对这类做自动重试，避免对密钥错误/取消等硬错误反复重跑。
 function isTransient(err: string): boolean {
@@ -406,6 +448,8 @@ export async function send() {
 export async function stop() { if (app.running[app.activeConvId]) { try { await invoke('cancel_turn', { convId: app.activeConvId }); } catch { /* */ } } }
 
 export function initTurns() {
+  // 对话列表一更新就看看有没有「后台在跑、本页没接上」的对话
+  $effect(() => { void app.convos; untrack(() => attachDetachedTurns()); });
   $effect(() => {
     const t = setInterval(() => {
       turns.nowTick = Date.now();
