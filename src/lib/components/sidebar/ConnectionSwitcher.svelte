@@ -84,7 +84,7 @@
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
         <button class="cs-act" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshConnect(); }}><SshMark size={15} />新建远程连接</button>
-        <button type="button" class="cs-act" role="menuitem" onclick={openConnectionSetup}><GearIcon />连接与模型设置…</button>
+        <button type="button" class="cs-act" role="menuitem" onclick={openConnectionSetup}><GearIcon />管理连接与模型…</button>
       </div>
     </div>
   {/if}
