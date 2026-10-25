@@ -10,7 +10,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { untrack } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { say } from '$lib/state/app.svelte.js';
+  import { say, confirmDialog } from '$lib/state/app.svelte.js';
   import { blogger, bloggerAccounts, bloggerLogin, loadBlogs } from '$lib/state/blogger.svelte.js';
   import { wp, wpAccounts, startWpConnect, loadWpSites } from '$lib/state/wordpress.svelte.js';
   import { settings } from '$lib/state/settings.svelte.js';
@@ -38,7 +38,7 @@
   const brainOk = $derived(!!st && (st.brain === 'claude' || st.brain.startsWith('api:')));
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
   const kindLabel = (k: string) => st?.kinds.find((x) => x.kind === k)?.label ?? k;
-  const MODE: Record<string, string> = { review: '先给我看', draft: '存成草稿', auto: '自动发布' };
+  const MODE: Record<string, string> = { manual: '手动', review: '先给我看', draft: '存成草稿', auto: '自动发布' };
 
   // ── 渠道：新建 / 修改（同一时间只开一个编辑器）──
   let edit = $state<Channel | null>(null);
@@ -103,6 +103,8 @@
     finally { saving = false; }
   }
   async function removeChannel(c: Channel) {
+    const ok = await confirmDialog(`删除渠道「${kindLabel(c.kind)} · ${c.target_name || c.target_id}」？它在 Pilot 里的发布记录会一起删掉；已经发出去的文章还留在平台上，不受影响。`, { title: '删除渠道', kind: 'danger', confirmText: '删除' });
+    if (!ok) return;
     try { await invoke('syndication_remove_channel', { siteId: site.id, channelId: c.id }); edit = null; await load(); say('已删除渠道（已经发出去的文章还在平台上）'); }
     catch (e) { say(String(e), 'err'); }
   }
@@ -211,7 +213,8 @@
             onchange={pickBlog} />
           <span class="lbl">发布方式</span>
           <Dropdown value={c.mode || 'review'} ariaLabel="发布方式" onchange={(v) => { if (edit) edit = { ...edit, mode: v }; }}
-            options={[{ value: 'review', label: '先给我看', sub: '新文章上线后 AI 先写好摘要，我点「发布」才发' }, { value: 'draft', label: plat.draft, sub: '自动写好存成草稿，我去后台发' }, { value: 'auto', label: '自动发布', sub: '新文章上线后自动写摘要并发布' }]} />
+            options={[{ value: 'manual', label: '手动', sub: '不自动写也不自动发，我在文章行里点「生成摘要」「发布」' }, { value: 'review', label: '先给我看', sub: '新文章上线后 AI 先写好摘要，我点「发布」才发' }, { value: 'draft', label: plat.draft, sub: '自动写好存成草稿，我去后台发' }, { value: 'auto', label: '自动发布', sub: '新文章上线后自动写摘要并发布' }]} />
+          {#if c.mode !== 'manual'}
           <span class="lbl">每天最多</span>
           <div class="row">
             <input class="tin num" type="number" min="1" max="20" value={c.daily_limit} oninput={(e) => { if (edit) edit = { ...edit, daily_limit: Math.max(1, Math.min(20, Number(e.currentTarget.value) || 1)) }; }} />
@@ -219,6 +222,7 @@
           </div>
           <span class="lbl"></span>
           <label class="ck"><input type="checkbox" checked={c.backfill} onchange={(e) => { if (edit) edit = { ...edit, backfill: e.currentTarget.checked }; }} />补发以前的旧文章<small>不勾只处理加渠道以后发布的新文章</small></label>
+          {/if}
         </div>
         {#if blogsErr}<p class="hint warn">{blogsErr}</p>{/if}
       {/if}
@@ -257,7 +261,7 @@
               <span class="nm"><small>{kindLabel(c.kind)}</small><b data-tip={c.target_url || undefined}>{c.target_name || c.target_id}</b></span>
               {#if c.target_url}<button class="btn tiny quiet ext" onclick={() => openUrl(c.target_url)} data-tip="打开 {c.target_url}" aria-label="打开博客"><Icon name="external" size={12} /></button>{/if}
             </div>
-            <p class="ch-meta">{MODE[c.mode] ?? c.mode} · 每天最多 {c.daily_limit} 篇{#if c.backfill} · 补发旧文章{/if}</p>
+            <p class="ch-meta">{MODE[c.mode] ?? c.mode}{#if c.mode !== 'manual'} · 每天最多 {c.daily_limit} 篇{#if c.backfill} · 补发旧文章{/if}{/if}</p>
             <div class="ch-foot">
               <span class="sent">已发 <b>{sentCount(c)}</b>{#if !c.enabled} · 已停用{/if}</span>
               <button class="btn tiny quiet" onclick={() => toggleChannel(c)}>{c.enabled ? '停用' : '启用'}</button>

@@ -196,6 +196,8 @@ export async function upgradeCli() {
 }
 /** 重新绑定：先 headless 退出当前账号，再走原有授权终端登录新账号（等待轮询复用 authorize）。 */
 export async function rebind(b: Brain) {
+  const ok = await confirmDialog('先退出当前账号，再在终端里登录新账号。退出后，正在用这个客户端的对话要等新账号登录好才能继续。', { title: '重新绑定账号', kind: 'warning', confirmText: '退出并重新绑定' });
+  if (!ok) return;
   try {
     await invoke('brain_logout', { brain: b });
   } catch (e) { say(String(e), 'err'); return; }

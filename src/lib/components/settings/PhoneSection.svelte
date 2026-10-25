@@ -8,7 +8,7 @@
   import { setFolded } from '$lib/state/connFold.svelte.js';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
-  import { say } from '$lib/state/app.svelte.js';
+  import { say, confirmDialog } from '$lib/state/app.svelte.js';
   import { phone, loadPhone } from '$lib/state/phone.svelte.js';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import GmailMark from '$lib/components/icons/GmailMark.svelte';
@@ -103,6 +103,8 @@
     finally { fillBusy = false; await loadMail(); }
   }
   async function removeMail() {
+    const ok = await confirmDialog(`断开 ${mail?.email ?? '邮箱'}？钥匙串里的登录凭证会删掉，注册时就不能再自动取邮箱验证码了，要用得重新接。`, { title: '断开邮箱', kind: 'danger', confirmText: '断开' });
+    if (!ok) return;
     try { await invoke('mail_remove'); await loadMail(); say('已断开邮箱'); } catch (e) { say(String(e), 'err'); }
   }
   const isGmail = $derived(/@(gmail|googlemail)\.com$/i.test(mail?.configured ? mail.email : mailEmail.trim()) || !(mail?.configured || mailEmail.trim()));

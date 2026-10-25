@@ -4,7 +4,7 @@
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
   import { mask, maskTip } from '$lib/mask';
   import SettingsIcon from '$lib/SettingsIcon.svelte';
-  import { app, say } from '$lib/state/app.svelte.js';
+  import { app, say, confirmDialog } from '$lib/state/app.svelte.js';
   import { openDataConnect, datasrc, autoBindSites } from '$lib/state/datasrc.svelte.js';
   import { connections, toggleConnCtx, openConnCtx } from '$lib/state/connections.svelte.js';
   import { oauth, loadOauthClient } from '$lib/state/oauth.svelte.js';
@@ -52,7 +52,7 @@
           {#each report.r.errors as e (e)}<p class="warn">{e}</p>{/each}
           {#if !report.r.bound.length && !report.r.unmatched.length && !report.r.kept}<p class="dim">没有填写了域名的站点。</p>{/if}
           <span class="report-acts">
-            <button onclick={() => void autoBindSites(d.conn.id, true)} disabled={!!datasrc.binding}>全部重新绑定</button>
+            <button onclick={async () => { if (await confirmDialog('按域名把所有站点重新匹配一遍？已经绑好的（包括你手动选过的）GA4 / Search Console / Bing 资源会被这个账号里匹配到的覆盖。', { title: '全部重新绑定', kind: 'warning', confirmText: '重新绑定' })) void autoBindSites(d.conn.id, true); }} disabled={!!datasrc.binding}>全部重新绑定</button>
             <button onclick={() => (datasrc.bindReport = null)}>收起</button>
           </span>
         </div>

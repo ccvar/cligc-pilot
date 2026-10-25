@@ -32,7 +32,7 @@ pub struct Channel {
     pub target_name: String,
     #[serde(default)]
     pub target_url: String,
-    /// review（先给我看，默认）| draft（存成平台草稿）| auto（自动发布，下一期）
+    /// manual（手动：后台不自动写也不自动发）| review（先给我看，默认）| draft（存成平台草稿）| auto（自动发布）
     #[serde(default)]
     pub mode: String,
     /// 自动发布时每天最多几篇
@@ -420,7 +420,7 @@ pub fn syndication_save_channel(state: tauri::State<'_, AppState>, site_id: Stri
     if f.channels.iter().any(|c| c.id != channel.id && c.kind == channel.kind && c.target_id == channel.target_id) {
         return Err("这个站已经加过它了".into());
     }
-    let mode = if matches!(channel.mode.as_str(), "review" | "draft" | "auto") { channel.mode.clone() } else { "review".into() };
+    let mode = if matches!(channel.mode.as_str(), "manual" | "review" | "draft" | "auto") { channel.mode.clone() } else { "review".into() };
     let c = Channel { mode, daily_limit: channel.daily_limit.clamp(1, 20), ..channel };
     let out = match f.channels.iter_mut().find(|x| !c.id.is_empty() && x.id == c.id) {
         Some(x) => {
@@ -656,7 +656,7 @@ pub async fn tick(state: &AppState, site_id: &str) -> Result<usize, String> {
     let articles = tokio::task::spawn_blocking(move || crate::site_make::articles(&out)).await.map_err(|e| e.to_string())?;
     let t0 = today_start();
     let mut done = 0;
-    for c in &channels {
+    for c in channels.iter().filter(|c| c.mode != "manual") {
         let f = load(&dir);
         let todo: Vec<crate::site_make::Article> = eligible(c, &f, &articles).into_iter().cloned().collect();
         if c.mode == "review" || c.mode.is_empty() {
