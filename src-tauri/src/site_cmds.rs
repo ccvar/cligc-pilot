@@ -238,10 +238,8 @@ pub(crate) fn validate(site: &mut Site, state: &AppState) -> Result<(), String> 
             if c.kind != "ssh" {
                 return Err("VPS 部署要选一条远程（SSH）连接".into());
             }
+            // 发布命令留空＝Pilot 托管：Pilot 自己配置服务器（nginx、HTTPS）并发布（见 site_vps_host）
             sites::check_command(&site.deploy.command)?;
-            if site.deploy.command.trim().is_empty() {
-                return Err("请填写发布命令（项目自带的发布脚本）".into());
-            }
             site.deploy.command = site.deploy.command.trim().to_string();
         }
         "direct" | "pages_git" | "workers" => {

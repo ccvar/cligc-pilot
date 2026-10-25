@@ -44,6 +44,12 @@ jobs:
         with:
           node-version: 20
 
+      # 站点小服务 pilot-site（Go）：build.rs 编译成 Linux 版打包进应用，VPS 托管发布时传到服务器
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: src-tauri/pilot-site/go.sum
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

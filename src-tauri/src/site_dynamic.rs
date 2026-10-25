@@ -154,8 +154,12 @@ pub fn turnstile_domains(pages_sub: &str, domain: &str) -> Vec<String> {
 }
 
 /// 写给 AI 的接口约定：前端怎么接表单、评论、大文件（Functions 由 Pilot 维护，AI 只做页面）。
-pub fn ai_contract(d: &Dynamic, old_comments: bool) -> String {
-    let mut s = String::from("【动态功能】Pilot 已经把 Cloudflare Pages Functions 写进 `functions/`，数据表在 `db/schema.sql`，路由规则在 `public/_routes.json`：这些文件由 Pilot 维护，不要改、不要删。前端按下面的接口接：\n");
+pub fn ai_contract(d: &Dynamic, old_comments: bool, on_vps: bool) -> String {
+    let mut s = if on_vps {
+        String::from("【动态功能】站点部署在自己的服务器上，表单和评论接口由 Pilot 在服务器上提供（和 Cloudflare 版完全一样的接口）；仓库里的 `functions/`、`db/schema.sql`、`public/_routes.json` 也由 Pilot 维护，不要改、不要删。前端按下面的接口接：\n")
+    } else {
+        String::from("【动态功能】Pilot 已经把 Cloudflare Pages Functions 写进 `functions/`，数据表在 `db/schema.sql`，路由规则在 `public/_routes.json`：这些文件由 Pilot 维护，不要改、不要删。前端按下面的接口接：\n")
+    };
     if d.has("form") {
         s.push_str("- 表单：`<form method=\"post\" action=\"/api/form\">`，隐藏字段 `_form`（表单名，如 contact / subscribe）和 `_page`（当前路径）；再放一个防机器人的隐藏输入 `<input name=\"_gotcha\" tabindex=\"-1\" autocomplete=\"off\" aria-hidden=\"true\" style=\"position:absolute;left:-9999px\">`。\n  人机验证：配置变量 `PUBLIC_TURNSTILE_SITE_KEY` 有值时，在表单里放 `<div class=\"cf-turnstile\" data-sitekey=\"（这个值）\"></div>`，并加载 `https://challenges.cloudflare.com/turnstile/v0/api.js`（async defer）；没值就都不放。\n  不用 JS 也要能提交：成功后跳回原页面带 `?sent=1`，失败带 `?error=原因`，页面据此显示提示。用 fetch 提交时发 FormData 或 JSON，返回 `{ok:true}` 或 `{ok:false,error}`（captcha 人机验证没过 / rate_limited 太频繁 / empty 没填内容）。\n");
     }
@@ -166,7 +170,7 @@ pub fn ai_contract(d: &Dynamic, old_comments: bool) -> String {
         s.push_str("- 新评论：`GET /api/comments?path=<页面路径>` 返回 `{ok, comments:[{id, parent_id, name, url, content, created_at}]}`（content 是纯文本，按纯文本显示，**不要当 HTML 插入**），接在旧评论后面；发评论 `POST /api/comments`，字段 path、name、content，可选 email、url、parent_id，同样带 `_gotcha` 和 Turnstile；返回 `pending:true` 时提示「评论已提交，审核后显示」。\n");
     }
     if d.needs_r2() {
-        s.push_str("- 大文件：超过 25 MB 的文件放在 Cloudflare R2，原地址不变（Pilot 管），页面里照原路径链接，不要放进 `public/`。\n");
+        s.push_str(if on_vps { "- 大文件：超过 25 MB 的文件放在服务器的单独目录，原地址不变（Pilot 管），页面里照原路径链接，不要放进 `public/`。\n" } else { "- 大文件：超过 25 MB 的文件放在 Cloudflare R2，原地址不变（Pilot 管），页面里照原路径链接，不要放进 `public/`。\n" });
     }
     s.push_str("本地 `astro dev` / 预览时这些接口不存在（上线后才有）：页面要优雅降级（表单照常显示，评论区显示「评论暂时加载不了」），不能因此报错或白屏。");
     s
@@ -214,7 +218,7 @@ pub fn site_dynamic_message(state: tauri::State<'_, AppState>, id: String) -> Re
     Ok(format!(
         "给这个站点接上动态功能：{}。按站点现有的设计风格做，移动端也要好看；做完构建通过、本地预览检查，`git add -A && git commit`，简要汇报改了哪些页面。不要部署——上线由 Pilot 负责。\n\n{}",
         want.join("；"),
-        ai_contract(&d, old)
+        ai_contract(&d, old, crate::site_vps_host::managed(&site))
     ))
 }
 
@@ -407,11 +411,32 @@ pub struct Inbox {
     pub pending: i64,
 }
 
-async fn d1_of(state: &AppState, id: &str) -> Result<(String, String, String), String> {
+/// 收件箱的数据在哪：Cloudflare 上的 D1，或者自己服务器上的 SQLite（Pilot 托管的 VPS，经 SSH 读）。
+enum Store {
+    D1 { token: String, acct: String, db: String },
+    Vps { conn: crate::conns::Connection, v: crate::site_vps_host::VpsState },
+}
+
+impl Store {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
+        match self {
+            Store::D1 { token, acct, db } => crate::cf::d1_query(token, acct, db, sql, params).await,
+            Store::Vps { conn, v } => crate::site_vps_host::query(conn, v, sql, params).await,
+        }
+    }
+}
+
+fn store_of(state: &AppState, id: &str) -> Result<Store, String> {
     let site = state.sites.get(id)?;
-    let d = load(&state.sites.data_dir(id)).filter(|d| !d.d1_id.is_empty()).ok_or("这个站点还没有配置表单和评论")?;
+    let dir = state.sites.data_dir(id);
+    if crate::site_vps_host::managed(&site) {
+        let v = crate::site_vps_host::load(&dir).filter(|v| v.api_port > 0).ok_or("这个站点的服务器上还没开表单和评论")?;
+        let conn = state.conns.get(&site.deploy.ssh_conn_id).map_err(|_| "部署用的 SSH 连接不存在".to_string())?;
+        return Ok(Store::Vps { conn, v });
+    }
+    let d = load(&dir).filter(|d| !d.d1_id.is_empty()).ok_or("这个站点还没有配置表单和评论")?;
     let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在".to_string())?;
-    Ok((crate::keychain::get_key(&cf.id)?, cf.account_id.clone(), d.d1_id))
+    Ok(Store::D1 { token: crate::keychain::get_key(&cf.id)?, acct: cf.account_id.clone(), db: d.d1_id })
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -420,17 +445,12 @@ fn s(v: &Value, k: &str) -> String {
 
 #[tauri::command]
 pub async fn site_inbox(state: tauri::State<'_, AppState>, id: String) -> Result<Inbox, String> {
-    let (token, acct, db) = d1_of(&state, &id).await?;
-    let subs = crate::cf::d1_query(&token, &acct, &db, "SELECT id, form, page, fields, created_at, read FROM submissions ORDER BY created_at DESC LIMIT 100", &[]).await?;
-    let coms = crate::cf::d1_query(
-        &token,
-        &acct,
-        &db,
-        "SELECT id, path, parent_id, name, email, url, content, status, created_at FROM comments WHERE status != 'spam' ORDER BY (status = 'pending') DESC, created_at DESC LIMIT 100",
-        &[],
-    )
-    .await?;
-    let counts = crate::cf::d1_query(&token, &acct, &db, "SELECT (SELECT COUNT(*) FROM submissions WHERE read = 0) AS unread, (SELECT COUNT(*) FROM comments WHERE status = 'pending') AS pending", &[]).await?;
+    let st = store_of(&state, &id)?;
+    let subs = st.query("SELECT id, form, page, fields, created_at, read FROM submissions ORDER BY created_at DESC LIMIT 100", &[]).await?;
+    let coms = st
+        .query("SELECT id, path, parent_id, name, email, url, content, status, created_at FROM comments WHERE status != 'spam' ORDER BY (status = 'pending') DESC, created_at DESC LIMIT 100", &[])
+        .await?;
+    let counts = st.query("SELECT (SELECT COUNT(*) FROM submissions WHERE read = 0) AS unread, (SELECT COUNT(*) FROM comments WHERE status = 'pending') AS pending", &[]).await?;
     let c = counts.first().cloned().unwrap_or_default();
     Ok(Inbox {
         submissions: subs
@@ -482,9 +502,9 @@ pub fn inbox_sql(kind: &str, action: &str, n: usize) -> Result<String, String> {
 #[tauri::command]
 pub async fn site_inbox_act(state: tauri::State<'_, AppState>, id: String, kind: String, action: String, ids: Vec<i64>) -> Result<(), String> {
     let sql = inbox_sql(&kind, &action, ids.len())?;
-    let (token, acct, db) = d1_of(&state, &id).await?;
+    let st = store_of(&state, &id)?;
     let params: Vec<Value> = ids.into_iter().map(Value::from).collect();
-    crate::cf::d1_query(&token, &acct, &db, &sql, &params).await.map(|_| ())
+    st.query(&sql, &params).await.map(|_| ())
 }
 
 #[cfg(test)]

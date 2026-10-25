@@ -10,7 +10,7 @@
   import SiteMakeCard from './SiteMakeCard.svelte';
   import SiteMigrate from './SiteMigrate.svelte';
   import SiteInbox from './SiteInbox.svelte';
-  import { dyn, loadDynamic } from '$lib/state/dynamic.svelte.js';
+  import { dyn, loadDynamic, inboxReady } from '$lib/state/dynamic.svelte.js';
   import { showMigrateCard } from '$lib/state/migrate.svelte.js';
   import SiteTodos from './SiteTodos.svelte';
   import SiteDomainLive from './SiteDomainLive.svelte';
@@ -57,7 +57,7 @@
 
   <SiteManagedCard {site} />
 
-  {#if dyn.conf[site.id]?.d1_id}<SiteInbox {site} />{/if}
+  {#if inboxReady(dyn.conf[site.id])}<SiteInbox {site} />{/if}
 
   {#if !making && siteMake.state[site.id]?.todos?.length}
     <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} todos={siteMake.state[site.id]?.todos ?? []} /></div>

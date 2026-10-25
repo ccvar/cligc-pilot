@@ -760,8 +760,17 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
         rec.dirty = !crate::site_git::is_clean(&dir).await;
     }
     job.step("prepare", "ok", rec.commit.get(..7).unwrap_or("非 git 目录"));
-    build_and_check(site, &dir, None, job).await?;
+    let built = build_and_check(site, &dir, None, job).await?;
     job.step("upload", "running", &format!("{}@{}", ssh.ssh_user, ssh.ssh_host));
+    // Pilot 托管：打包上传、原子切换、换跳转规则（服务器由「配置服务器」配好）
+    if crate::site_vps_host::managed(site) {
+        rec.url = crate::site_vps_host::publish(site, conns, site_dir, &built.out, job).await.inspect_err(|_| job.step("upload", "failed", ""))?;
+        job.step("upload", "ok", &site.domain);
+        job.set_url(&rec.url);
+        job.step("indexnow", "skipped", "");
+        rec.indexnow = "skipped".into();
+        return Ok(());
+    }
     // 配置变量合并写进服务器上的 env 文件（发布脚本 / 服务从那里读）
     sync_config(site, conns, &dir, site_dir, job, false).await;
     let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;

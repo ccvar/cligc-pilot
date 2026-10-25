@@ -48,12 +48,12 @@ export async function inboxAct(id: string, kind: 'submission' | 'comment', actio
   } catch (e) { say(String(e), 'err'); }
 }
 
-/** 开关功能并建资源（数据库、人机验证、绑定）。 */
-export async function setupDynamic(id: string, features?: string[]) {
+/** 开关功能并建资源：Cloudflare 上建数据库、人机验证、绑定；自己的服务器上重新配置一次（装表单评论服务）。 */
+export async function setupDynamic(id: string, features?: string[], vps = false) {
   dyn.busy[id] = 'setup';
   try {
     if (features) dyn.conf[id] = await invoke<Dynamic>('site_dynamic_features', { id, features });
-    await invoke('site_dynamic_setup', { id });
+    await invoke(vps ? 'site_vps_setup' : 'site_dynamic_setup', { id });
   } catch (e) { say(String(e), 'err'); }
   finally { dyn.busy[id] = ''; }
 }
@@ -70,7 +70,7 @@ export function initDynamic() {
   $effect(() => {
     const un = listen<{ site_id: string; status: string; kind: string; error: string }>('site-job', (ev) => {
       const j = ev.payload;
-      if (j.status === 'running' || j.kind !== 'dynamic:setup') return;
+      if (j.status === 'running' || (j.kind !== 'dynamic:setup' && j.kind !== 'vps:setup')) return;
       void loadDynamic(j.site_id);
       say(j.status === 'ok' ? '动态功能配置好了：上线一次就生效' : `配置动态功能没完成：${j.error.split('\n')[0]}`, j.status === 'ok' ? 'ok' : 'err');
     });
@@ -79,3 +79,7 @@ export function initDynamic() {
 }
 
 export const isPagesDirect = (s: Site) => s.deploy.mode === 'direct' && !!s.deploy.project;
+/** Pilot 托管的 VPS（发布命令留空） */
+export const isVpsManaged = (s: Site) => s.deploy.mode === 'vps' && !s.deploy.command?.trim() && !!s.deploy.ssh_conn_id;
+/** 收件箱可用：配置过、开了表单或评论 */
+export const inboxReady = (d: Dynamic | null | undefined) => !!d?.setup_at && d.features.some((f) => f === 'form' || f === 'comments');

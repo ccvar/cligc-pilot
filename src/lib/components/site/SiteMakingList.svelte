@@ -16,7 +16,7 @@
   import { fleet, loadFleet } from '$lib/state/fleet.svelte.js';
   import { launch, checkDomain } from '$lib/state/launch.svelte.js';
   import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
-  import { migrate, loadMigrate, openMigrate, STAGES } from '$lib/state/migrate.svelte.js';
+  import { migrate, loadMigrate, openMigrate, STAGES, batch, setBatchAuto, confirmAllDefault, migratingSites } from '$lib/state/migrate.svelte.js';
 
   // 卡片右上角「…」菜单
   let menu = $state('');
@@ -94,6 +94,22 @@
 
   <div class="page-body">
     <div class="pane">
+      {#if migratingSites().length}
+        {@const ms = migratingSites()}
+        {@const byStage = STAGES.map((st) => ({ ...st, n: ms.filter((x) => migrate.view[x.id]?.stage === st.key).length })).filter((x) => x.n)}
+        {@const planN = ms.filter((x) => migrate.view[x.id]?.stage === 'plan').length}
+        <div class="card batch">
+          <div class="bh">
+            <b><Icon name="route" size={14} />迁移中 {ms.length} 个</b>
+            <span class="chips">{#each byStage as st (st.key)}<span class="pill">{st.label} {st.n}</span>{/each}</span>
+            <span class="grow"></span>
+            <button class="btn tiny" onclick={() => openMigrate(true)}><Icon name="plus" size={11} />批量迁移</button>
+            {#if planN}<button class="btn tiny" onclick={confirmAllDefault}>按默认方案确认 {planN} 个</button>{/if}
+            <label class="auto" data-tip={'打开后 Pilot 自动做：抓取内容、在后台让 AI 重做（一次一个）、核对、发布到预览地址（部署已配好的）。\n不会自动确认方案、配置服务器或 Cloudflare 项目，也不会切换域名。'}><input type="checkbox" checked={batch.auto} onchange={(e) => setBatchAuto((e.currentTarget as HTMLInputElement).checked)} />自动推进</label>
+          </div>
+          {#if batch.auto && batch.note}<p class="bn">{batch.note}</p>{/if}
+        </div>
+      {/if}
       <p class="hint lead">说清楚要做什么站，AI 从空仓库做出第一版：规划栏目、写首批内容页、配好 SEO、按获奖级的视觉标准自检。做好并配置上线后，站点会移到「全部站点」。已经有线上站点的，可以「迁移已有站点」：保留原来的 URL 和内容，用新的视觉重做。</p>
       {#if !list.length}
         <div class="card empty">
@@ -175,6 +191,14 @@
 </div>
 
 <style>
+  .batch { padding: 10px 14px; margin-bottom: 4px; }
+  .bh { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bh b { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .bh .chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .bh .grow { flex: 1; }
+  .auto { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .auto input { accent-color: var(--accent); margin: 0; }
+  .bn { margin: 8px 0 0; font-size: 12px; color: var(--dim); line-height: 1.6; }
   .lead { margin: 0 0 2px; font-size: 12.5px; line-height: 1.6; max-width: 720px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .item { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; }

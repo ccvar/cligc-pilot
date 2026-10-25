@@ -16,6 +16,8 @@
   let style = $state('');
   /** 动态功能保留 / 去掉（站内搜索固定改成静态，不用选） */
   let feats = $state<Record<string, 'keep' | 'drop'>>({});
+  /** 部署到哪：Cloudflare（默认）或自己的服务器 */
+  let deploy = $state<'direct' | 'vps'>('direct');
   let inited = '';
   $effect(() => {
     const k = `${id}:${v.plan?.confirmed_at ?? 0}`;
@@ -24,6 +26,7 @@
     dropped = new Set(v.plan?.drop_groups ?? []);
     visual = v.plan?.visual ?? 'keep_brand';
     style = v.plan?.style ?? '';
+    deploy = v.plan?.deploy === 'vps' || (!v.plan && (s.cn_share ?? 0) >= 0.5) ? 'vps' : 'direct';
     // 默认保留表单、评论；登录、购物车做不了，默认去掉（不去掉就要 VPS）
     feats = Object.fromEntries(s.features.filter((f) => f.key !== 'search').map((f) => [f.key, v.plan?.features?.[f.key] ?? (f.key === 'login' || f.key === 'cart' ? 'drop' : 'keep')]));
   });
@@ -120,6 +123,12 @@
 
   {#if editable}
     <div class="blk plan">
+      <b class="bt">部署到哪</b>
+      <div class="seg" role="tablist">
+        <button class:on={deploy === 'direct' && host.target !== 'vps'} disabled={host.target === 'vps'} onclick={() => (deploy = 'direct')}>Cloudflare{host.target !== 'vps' && (s.cn_share ?? 0) < 0.5 ? '（推荐）' : ''}</button>
+        <button class:on={deploy === 'vps' || host.target === 'vps'} onclick={() => (deploy = 'vps')}>自己的服务器{host.target === 'vps' || (s.cn_share ?? 0) >= 0.5 ? '（推荐）' : ''}</button>
+      </div>
+      <small class="faint">{deploy === 'vps' || host.target === 'vps' ? 'Pilot 配置你的服务器：Caddy 管网页和自动 HTTPS，表单和评论由一个 Go 小服务处理，数据存 SQLite。访客主要在中国大陆时更合适（放大陆的服务器要先 ICP 备案）。' : `${host.label}：速度快、免费额度够用、不用维护服务器。`}</small>
       <b class="bt">新站的样子</b>
       <div class="seg" role="tablist">
         <button class:on={visual === 'keep_brand'} onclick={() => (visual = 'keep_brand')}>保留品牌，升级设计</button>
@@ -128,9 +137,9 @@
       <small class="faint">{visual === 'keep_brand' ? '沿用 logo、站名和主色，排版、版式和细节按获奖级网站的标准重做。' : '只保留站名，设计方向重新定。'} 正文一字不改写，URL 一个不变。</small>
       <textarea class="tin" rows="2" bind:value={style} placeholder="补充要求（可选）：比如「更简洁，参考 Stripe 文档的排版」"></textarea>
       <div class="row">
-        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
+        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats, deploy: host.target === 'vps' ? 'vps' : deploy })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
         <button class="btn small quiet" onclick={() => resurvey(id)} disabled={!!busy}>重新盘点</button>
-        <small class="faint">技术栈 Astro · 部署到 Cloudflare Pages{host.target === 'cf_workers' ? ' + Functions' : ''}</small>
+        <small class="faint">技术栈 Astro</small>
       </div>
     </div>
   {/if}

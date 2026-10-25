@@ -117,6 +117,12 @@ pub struct Cutover {
     pub at: u64,
     pub host: String,
     pub zone_id: String,
+    /// 改 DNS 用的 Cloudflare 连接（自己的服务器：域名在哪个 Cloudflare 账号里）
+    #[serde(default)]
+    pub cf_conn: String,
+    /// 自己的服务器：DNS 是用户自己改的（不在 Cloudflare 里），回退也要用户自己改回去
+    #[serde(default)]
+    pub manual_dns: bool,
     /// 切换前这个主机名的记录（回退时原样恢复）
     pub before: Vec<FullRec>,
     pub notes: Vec<String>,
@@ -289,6 +295,8 @@ pub struct View {
     pub dynamic: Option<crate::site_dynamic::Dynamic>,
     /// 按确认的方案算出的部署去向（方案里去掉的功能不算）；还没确认方案时是盘点的结论
     pub hosting: Option<sm::Hosting>,
+    /// 部署到自己服务器时：服务器的状态（Pilot 托管）
+    pub vps: Option<crate::site_vps_host::VpsState>,
 }
 
 #[tauri::command]
@@ -298,8 +306,17 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
     let inv: Option<Inventory> = read_json(&dir.join("inventory.json"));
     let plan: Option<Plan> = read_json(&dir.join("plan.json"));
     let meta = load_meta(&dir);
-    let deploy_ready = site.deploy.mode == "direct" && !site.deploy.project.is_empty() && !site.deploy.cf_conn_id.is_empty();
-    let preview = if meta.live.base.is_empty() && deploy_ready { format!("https://{}.pages.dev", site.deploy.project) } else { meta.live.base.clone() };
+    let vps = crate::site_vps_host::load(&state.sites.data_dir(&id)).filter(|_| crate::site_vps_host::managed(&site));
+    let deploy_ready = (site.deploy.mode == "direct" && !site.deploy.project.is_empty() && !site.deploy.cf_conn_id.is_empty()) || vps.as_ref().is_some_and(|v| v.setup_at > 0);
+    let preview = if !meta.live.base.is_empty() {
+        meta.live.base.clone()
+    } else if let Some(v) = &vps {
+        format!("服务器 {}", v.ip)
+    } else if deploy_ready {
+        format!("https://{}.pages.dev", site.deploy.project)
+    } else {
+        String::new()
+    };
     Ok(View {
         stage: stage(inv.as_ref(), plan.as_ref(), &meta).into(),
         domain: if site.migrate_from.is_empty() { site.domain.clone() } else { site.migrate_from.clone() },
@@ -308,6 +325,7 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
         preview,
         deploy_ready,
         dynamic: crate::site_dynamic::load(&state.sites.data_dir(&id)),
+        vps,
         hosting: inv.as_ref().map(|i| sm::hosting_for(i, &plan.as_ref().map(|p| p.features.clone()).unwrap_or_default())),
         plan,
     })
@@ -475,6 +493,45 @@ fn name_from_title(title: &str, domain: &str) -> String {
 
 #[tauri::command]
 pub async fn create_migration(app: tauri::AppHandle, state: tauri::State<'_, AppState>, req: CreateMigration) -> Result<Site, String> {
+    create_one(app, &state, req).await
+}
+
+#[derive(Serialize)]
+pub struct BatchResult {
+    pub domain: String,
+    pub site_id: String,
+    pub error: String,
+}
+
+/// 批量迁移：一次给多个域名，逐个建站点并排队盘点（同时最多 2 个在抓）。某个失败不影响其它的。
+#[tauri::command]
+pub async fn create_migrations(app: tauri::AppHandle, state: tauri::State<'_, AppState>, domains: Vec<String>, parent_dir: String) -> Result<Vec<BatchResult>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let list: Vec<String> = domains.iter().map(|d| sm::clean_domain(d)).filter(|d| d.contains('.') && seen.insert(d.trim_start_matches("www.").to_string())).collect();
+    if list.is_empty() {
+        return Err("没有有效的域名".into());
+    }
+    if list.len() > 50 {
+        return Err("一次最多 50 个".into());
+    }
+    let mut out = Vec::new();
+    for d in list {
+        let r = create_one(app.clone(), &state, CreateMigration { domain: d.clone(), parent_dir: parent_dir.clone(), name: String::new() }).await;
+        out.push(match r {
+            Ok(s) => BatchResult { domain: d, site_id: s.id, error: String::new() },
+            Err(e) => BatchResult { domain: d, site_id: String::new(), error: e },
+        });
+    }
+    Ok(out)
+}
+
+/// 同时最多几个站在盘点（批量迁移时排队）。
+fn survey_slots() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(2))
+}
+
+async fn create_one(app: tauri::AppHandle, state: &AppState, req: CreateMigration) -> Result<Site, String> {
     let domain = sm::clean_domain(&req.domain);
     if !domain.contains('.') {
         return Err("请填写要迁移的网站域名，如 example.com".into());
@@ -538,9 +595,9 @@ pub async fn create_migration(app: tauri::AppHandle, state: tauri::State<'_, App
         e
     };
     crate::launch_cmds::init_repo(&dir).await.map_err(cleanup)?;
-    crate::site_cmds::validate(&mut site, &state).map_err(cleanup)?;
+    crate::site_cmds::validate(&mut site, state).map_err(cleanup)?;
     let site = state.sites.insert(site).map_err(cleanup)?;
-    start_survey(app, &state, &site.id)?;
+    start_survey(app, state, &site.id)?;
     Ok(site)
 }
 
@@ -569,6 +626,9 @@ fn start_survey(app: tauri::AppHandle, state: &AppState, id: &str) -> Result<Str
     let job = state.site_jobs.start(Some(app), id, "migrate:survey", "盘点旧站", SURVEY_STEPS)?;
     let job_id = job.id.clone();
     tauri::async_runtime::spawn(async move {
+        // 批量迁移时排队：同时最多 2 个站在抓
+        job.step("origin", "running", "排队中…");
+        let _slot = survey_slots().acquire().await;
         let r = run_survey(site, &job).await;
         job.finish(&r);
     });
@@ -1117,13 +1177,15 @@ pub async fn migrate_save_plan(state: tauri::State<'_, AppState>, id: String, pl
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let features: BTreeMap<String, String> = plan.features.into_iter().filter(|(k, v)| inv.features.iter().any(|f| &f.key == k) && matches!(v.as_str(), "keep" | "drop")).collect();
     let hosting = sm::hosting_for(&inv, &features);
-    if !hosting.supported {
-        return Err(format!("按这个方案要{}：{}。部署到 VPS 还不支持；登录、购物车这类功能可以在方案里选「去掉」再试", hosting.label, hosting.reasons.join("；")));
+    // 登录 / 购物车这类保留下来的话只能放服务器；其它的按用户选（大陆访客多时建议服务器）
+    let deploy = if hosting.target == "vps" || plan.deploy == "vps" { "vps" } else { "direct" };
+    if deploy == "vps" && features.iter().any(|(k, v)| matches!(k.as_str(), "login" | "cart") && v != "drop") {
+        return Err("登录、购物车这类功能 Pilot 还不能在服务器上重做：在方案里选「去掉」，或者迁移后另外接入".into());
     }
     let plan = Plan {
         features,
         stack: "astro".into(),
-        deploy: "direct".into(),
+        deploy: deploy.into(),
         visual: if plan.visual == "fresh" { "fresh".into() } else { "keep_brand".into() },
         style: plan.style.trim().chars().take(500).collect(),
         drop_groups: plan.drop_groups,
@@ -1541,7 +1603,7 @@ fn rebuild_message(site: &Site, inv: &Inventory, plan: &Plan, meta: &Meta, again
             String::new()
         } else {
             let d = crate::site_dynamic::Dynamic { features: meta.extract.features.clone(), large: meta.extract.large.clone(), ..Default::default() };
-            format!("{}\n\n", crate::site_dynamic::ai_contract(&d, meta.extract.comments > 0))
+            format!("{}\n\n", crate::site_dynamic::ai_contract(&d, meta.extract.comments > 0, plan.deploy == "vps"))
         },
         visual_std = crate::site_make::VISUAL_STANDARD,
         config = crate::site_make::CONFIG_SPEC,
@@ -1618,6 +1680,26 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
 
     // 预览地址实测：要先上线到 pages.dev（站点还没填正式域名，上线不会碰线上域名）
     let deployed = crate::site_deploy::load_history(&dir.parent().map(Path::to_path_buf).unwrap_or_default()).iter().any(|r| r.ok);
+    // 自己的服务器：在服务器上带 Host 头自测
+    if crate::site_vps_host::managed(&site) {
+        let v = crate::site_vps_host::load(&site_dir).filter(|v| v.setup_at > 0 && !v.current.is_empty());
+        let Some(v) = v.filter(|_| deployed) else {
+            job.step("live", "skipped", "还没发布到服务器：配好服务器后点「发布到服务器」");
+            save_meta(&dir, |m| m.live = LiveCheck::default())?;
+            return if blocks > 0 { Err(format!("{blocks} 项必须修")) } else { Ok(()) };
+        };
+        job.step("live", "running", &format!("在服务器 {} 上自测", v.ip));
+        let conn = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "部署用的 SSH 连接不存在".to_string())?;
+        let health = dynamic.as_ref().is_some_and(|d| d.needs_db());
+        let live = vps_check(&conn, &v, &map, health).await?;
+        let bad = live.bad.len();
+        save_meta(&dir, |m| m.live = live)?;
+        job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
+        if blocks > 0 || bad > 0 {
+            return Err(format!("核对没通过：{blocks} 项必须修，服务器上 {bad} 个地址不对"));
+        }
+        return Ok(());
+    }
     if site.deploy.mode != "direct" || site.deploy.project.is_empty() || !deployed {
         job.step("live", "skipped", "还没上线到预览地址：配好 Cloudflare 后点「上线到预览地址」");
         save_meta(&dir, |m| m.live = LiveCheck::default())?;
@@ -1648,6 +1730,45 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
 }
 
 /// 在某个地址上把对应表里的旧路径都请求一遍：keep 要 200，redirect 要 301/308 到新地址。
+/// 一个旧地址的实测结果对不对：keep 要 200，redirect 要 301 / 308 到新地址。
+fn judge(e: &mx::UrlEntry, s: u16, loc: &str) -> Option<String> {
+    let loc_path = Url::parse(loc).map(|u| sm::path_of(&u)).unwrap_or_else(|_| loc.to_string());
+    match e.action.as_str() {
+        "redirect" if matches!(s, 301 | 308) && (loc.ends_with(&e.new) || loc == e.new || loc_path == e.new) => None,
+        "redirect" => Some(format!("{}：应该 301 到 {}，实际 {s} {loc}", e.old, e.new)),
+        _ if s == 200 => None,
+        _ if matches!(s, 301 | 308) => Some(format!("{}：多跳了一次到 {loc}（结尾斜杠或 .html 不一致）", e.old)),
+        _ => Some(format!("{}：返回 {s}", e.old)),
+    }
+}
+
+/// 自己的服务器：域名还没指过来，在服务器上带 Host 头把每个旧路径请求一遍。
+async fn vps_check(conn: &crate::conns::Connection, v: &crate::site_vps_host::VpsState, map: &mx::UrlMap, health: bool) -> Result<LiveCheck, String> {
+    let entries: Vec<&mx::UrlEntry> = map.entries.iter().filter(|e| e.action != "drop").collect();
+    let mut paths: Vec<String> = entries.iter().map(|e| e.old.clone()).collect();
+    if health {
+        paths.push("/api/health".into());
+    }
+    let got = crate::site_vps_host::remote_check(conn, v, &paths).await?;
+    let mut out = LiveCheck { at: now(), base: format!("服务器 {}（{}）", v.ip, v.host), checked: got.len(), bad: Vec::new() };
+    let by: std::collections::HashMap<&str, (u16, &str)> = got.iter().map(|(p, c, l)| (p.as_str(), (*c, l.as_str()))).collect();
+    if health && by.get("/api/health").is_none_or(|(c, _)| *c != 200) {
+        out.bad.push(format!("/api/health：返回 {}（表单和评论服务没在跑）", by.get("/api/health").map(|x| x.0).unwrap_or(0)));
+    }
+    for e in entries {
+        match by.get(e.old.as_str()) {
+            Some((c, l)) => {
+                if let Some(b) = judge(e, *c, l) {
+                    out.bad.push(b);
+                }
+            }
+            None => out.bad.push(format!("{}：没测到", e.old)),
+        }
+    }
+    out.bad.sort();
+    Ok(out)
+}
+
 async fn live_check(base: &str, map: &mx::UrlMap, health: bool, job: &Job) -> LiveCheck {
     let c = client();
     let mut out = LiveCheck { at: now(), base: base.to_string(), ..Default::default() };
@@ -1677,13 +1798,7 @@ async fn live_check(base: &str, map: &mx::UrlMap, health: bool, job: &Job) -> Li
                 };
                 let s = r.status().as_u16();
                 let loc = r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-                match e.action.as_str() {
-                    "redirect" if matches!(s, 301 | 308) && (loc.ends_with(&e.new) || loc == e.new) => None,
-                    "redirect" => Some(format!("{}：应该 301 到 {}，实际 {s} {loc}", e.old, e.new)),
-                    _ if s == 200 => None,
-                    _ if matches!(s, 301 | 308) => Some(format!("{}：多跳了一次到 {loc}（结尾斜杠或 .html 不一致）", e.old)),
-                    _ => Some(format!("{}：返回 {s}", e.old)),
-                }
+                judge(&e, s, &loc)
             });
         }
         while let Some(r) = set.join_next().await {
@@ -1860,7 +1975,13 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     if stage(Some(&inv), plan.as_ref(), &meta) != "cutover" {
         return Err("核对还没全部通过（包括预览地址实测），先处理完再切换".into());
     }
+    if !inv.ownership.verified {
+        return Err("还没确认这个站是你的：先完成「确认这个站是你的」".into());
+    }
     let host = Url::parse(&inv.origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(site.migrate_from.clone());
+    if crate::site_vps_host::managed(&site) {
+        return cutover_vps(&state, &site, &dir, &host).await;
+    }
     let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在".to_string())?;
     let token = crate::keychain::get_key(&cf.id)?;
     let zone = crate::cf::zone_for(&token, &host).await?.ok_or_else(|| format!("{host} 的 DNS 不在这个 Cloudflare 账号里：先在「切换」里把域名接进 Cloudflare"))?;
@@ -1875,7 +1996,7 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
         .into_iter()
         .filter(|r| r.name.eq_ignore_ascii_case(&host) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME"))
         .collect();
-    let mut cut = Cutover { at: now(), host: host.clone(), zone_id: zone.id.clone(), before: before.clone(), notes: Vec::new(), rolled_back_at: 0 };
+    let mut cut = Cutover { at: now(), host: host.clone(), zone_id: zone.id.clone(), before: before.clone(), notes: Vec::new(), rolled_back_at: 0, cf_conn: cf.id.clone(), manual_dns: false };
     save_meta(&dir, |m| m.cutover = Cutover { at: 0, ..cut.clone() })?;
     crate::cf::add_pages_domain(&token, &cf.account_id, &site.deploy.project, &host).await?;
     for r in &before {
@@ -1909,6 +2030,9 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
     let dir = mdir(&state, &id);
     let meta = load_meta(&dir);
     let cut = meta.cutover.clone();
+    if crate::site_vps_host::managed(&site) && !cut.host.is_empty() {
+        return rollback_vps(&state, &site, &dir, &cut).await;
+    }
     if cut.host.is_empty() || cut.zone_id.is_empty() {
         return Err("还没切换过".into());
     }
@@ -1938,6 +2062,163 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
         m.track = Track::default();
     })?;
     Ok(format!("{} 已恢复成切换前的 {} 条记录，打开的又是旧站了（DNS 缓存可能要几分钟）", cut.host, cut.before.len()))
+}
+
+// ───────────────────────── ⑥ 切换（自己的服务器） ─────────────────────────
+
+/// 自己的服务器：域名现在解析到哪（DoH），和服务器 IP 对不对得上，域名在不在 Cloudflare 里（在就能自动改）。
+#[derive(Serialize)]
+pub struct VpsDns {
+    pub host: String,
+    pub ip: String,
+    pub host_ips: Vec<String>,
+    pub alias: String,
+    pub alias_ips: Vec<String>,
+    pub points: bool,
+    pub alias_points: bool,
+    /// 域名在已连接的 Cloudflare 账号里（切换时 Pilot 自动改 A 记录）
+    pub cf_auto: bool,
+}
+
+async fn resolve_a(name: &str) -> Vec<String> {
+    let mut v: Vec<String> = doh(name, "A").await.into_iter().map(|r| r.content).collect();
+    if v.is_empty() {
+        // CNAME 到别处的：看最终的 A
+        if let Some(c) = doh(name, "CNAME").await.first() {
+            v = doh(&c.content, "A").await.into_iter().map(|r| r.content).collect();
+        }
+    }
+    v
+}
+
+async fn cf_zone_for(state: &AppState, host: &str) -> Option<(crate::conns::Connection, String, crate::cf::CfZone)> {
+    for cf in state.conns.list().into_iter().filter(|c| c.kind == "cloudflare") {
+        let Ok(token) = crate::keychain::get_key(&cf.id) else { continue };
+        if let Ok(Some(z)) = crate::cf::zone_for(&token, host).await {
+            if crate::cf::zone_info(&token, &z.id).await.map(|x| x.0 == "active").unwrap_or(false) {
+                return Some((cf, token, z));
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub async fn migrate_vps_dns(state: tauri::State<'_, AppState>, id: String) -> Result<VpsDns, String> {
+    let v = crate::site_vps_host::load(&state.sites.data_dir(&id)).ok_or("服务器还没配置")?;
+    let host_ips = resolve_a(&v.host).await;
+    let alias_ips = if v.alias.is_empty() { Vec::new() } else { resolve_a(&v.alias).await };
+    Ok(VpsDns {
+        points: !v.ip.is_empty() && host_ips.iter().all(|i| i == &v.ip) && !host_ips.is_empty(),
+        alias_points: !v.ip.is_empty() && !alias_ips.is_empty() && alias_ips.iter().all(|i| i == &v.ip),
+        cf_auto: cf_zone_for(&state, &v.host).await.is_some(),
+        host: v.host,
+        ip: v.ip,
+        host_ips,
+        alias: v.alias,
+        alias_ips,
+    })
+}
+
+/// 切到自己的服务器：域名在 Cloudflare 里就由 Pilot 改 A 记录（不开代理，大陆访问不绕路），不在就要用户先自己改好；
+/// 域名指过来以后打开 Caddy 的自动 HTTPS，等它拿到证书。
+async fn cutover_vps(state: &AppState, site: &Site, dir: &Path, host: &str) -> Result<Cutover, String> {
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+    let v = crate::site_vps_host::load(&site_dir).filter(|v| v.setup_at > 0 && !v.ip.is_empty()).ok_or("服务器还没配置好（没有拿到服务器 IP）")?;
+    let conn = state.conns.get(&site.deploy.ssh_conn_id).map_err(|_| "部署用的 SSH 连接不存在".to_string())?;
+    let mut cut = Cutover { at: now(), host: host.to_string(), ..Default::default() };
+    let names: Vec<String> = [host.to_string(), v.alias.clone()].into_iter().filter(|n| !n.is_empty()).collect();
+    if let Some((cf, token, zone)) = cf_zone_for(state, host).await {
+        cut.zone_id = zone.id.clone();
+        cut.cf_conn = cf.id.clone();
+        cut.before = crate::cf::all_dns_records(&token, &zone.id)
+            .await?
+            .into_iter()
+            .filter(|r| names.iter().any(|n| r.name.eq_ignore_ascii_case(n)) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME"))
+            .collect();
+        save_meta(dir, |m| m.cutover = Cutover { at: 0, ..cut.clone() })?;
+        for r in &cut.before {
+            crate::cf::delete_dns_record(&token, &zone.id, &r.id).await?;
+        }
+        for n in &names {
+            crate::cf::create_dns_record(&token, &zone.id, &FullRec { kind: "A".into(), name: n.clone(), content: v.ip.clone(), proxied: false, ttl: 300, ..Default::default() }).await?;
+        }
+        // 等公共 DNS 看到新记录（Cloudflare 一般几秒）
+        for _ in 0..12 {
+            if resolve_a(host).await.iter().any(|i| i == &v.ip) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        cut.notes.push(format!("已在 Cloudflare 把 {} 的 A 记录改成 {}（不开代理），原来的 {} 条记录存下来了，可以一键回退", names.join("、"), v.ip, cut.before.len()));
+    } else {
+        // 域名不在 Cloudflare：先看用户改好了没有
+        let ips = resolve_a(host).await;
+        if !ips.iter().any(|i| i == &v.ip) {
+            return Err(format!("{host} 现在解析到 {}，还没指向服务器 {}：到域名的 DNS 服务商把 A 记录改成 {}（www 也改），改好后再点切换", if ips.is_empty() { "（没有记录）".to_string() } else { ips.join("、") }, v.ip, v.ip));
+        }
+        cut.manual_dns = true;
+        // 记下切换前别人查到的旧记录（回退时提示用户改回去）
+        cut.before = load_meta(dir).dns.snapshot.into_iter().filter(|r| names.iter().any(|n| r.name.eq_ignore_ascii_case(n)) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME")).collect();
+    }
+    let alias_ok = !v.alias.is_empty() && resolve_a(&v.alias).await.iter().any(|i| i == &v.ip);
+    let got = crate::site_vps_host::set_https(&conn, &site_dir, true, alias_ok, None).await?;
+    cut.notes.push(if got { format!("HTTPS 证书已经由 Caddy 申请好（Let's Encrypt，会自动续期）") } else { "Caddy 还在申请 HTTPS 证书（DNS 刚改，可能要几分钟），拿到后自动生效".into() });
+    if !v.alias.is_empty() && !alias_ok {
+        cut.notes.push(format!("{} 还没指向服务器：改好 A 记录后，它会自动跳到 {host}", v.alias));
+    }
+    cut.notes.push("旧主机先别停：确认新站稳定（建议跟踪满 2 周）再停".into());
+    if v.api_port > 0 {
+        cut.notes.push("表单和评论在服务器上照常可用，提交和评论在概览的「表单和评论」里看".into());
+    }
+    state.sites.update(&site.id, now(), |s| {
+        s.domain = host.to_string();
+        s.origin = "migrated".into();
+        Ok(())
+    })?;
+    save_meta(dir, |m| m.cutover = cut.clone())?;
+    Ok(cut)
+}
+
+async fn rollback_vps(state: &AppState, site: &Site, dir: &Path, cut: &Cutover) -> Result<String, String> {
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
+    let mut msg;
+    if !cut.manual_dns && !cut.zone_id.is_empty() {
+        let cf = state.conns.get(&cut.cf_conn)?;
+        let token = crate::keychain::get_key(&cf.id)?;
+        let names: Vec<String> = cut.before.iter().map(|r| r.name.to_ascii_lowercase()).chain([cut.host.to_ascii_lowercase()]).collect();
+        for r in crate::cf::all_dns_records(&token, &cut.zone_id).await?.iter().filter(|r| names.contains(&r.name.to_ascii_lowercase()) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME")) {
+            crate::cf::delete_dns_record(&token, &cut.zone_id, &r.id).await?;
+        }
+        for r in &cut.before {
+            crate::cf::create_dns_record(&token, &cut.zone_id, r).await?;
+        }
+        msg = format!("已在 Cloudflare 恢复 {} 条原来的记录，打开的又是旧站了（DNS 缓存可能要几分钟）", cut.before.len());
+    } else {
+        let old: Vec<String> = cut.before.iter().map(|r| format!("{} {} → {}", r.kind, r.name, r.content)).collect();
+        msg = if old.is_empty() { "DNS 是你自己改的：到域名的 DNS 服务商把 A 记录改回旧主机的地址".to_string() } else { format!("DNS 是你自己改的：到域名的 DNS 服务商改回原来的记录：{}", old.join("；")) };
+    }
+    // 服务器上关掉 HTTPS（域名不再指过来，免得 Caddy 一直续期失败）
+    if let Ok(conn) = state.conns.get(&site.deploy.ssh_conn_id) {
+        if let Err(e) = crate::site_vps_host::set_https(&conn, &site_dir, false, false, None).await {
+            msg.push_str(&format!("；服务器上关 HTTPS 没成功（{e}），不影响回退"));
+        }
+    }
+    let host = cut.host.clone();
+    state.sites.update(&site.id, now(), |s| {
+        s.domain.clear();
+        s.origin = "migrating".into();
+        if s.migrate_from.is_empty() {
+            s.migrate_from = host.clone();
+        }
+        Ok(())
+    })?;
+    save_meta(dir, |m| {
+        m.cutover.at = 0;
+        m.cutover.rolled_back_at = now();
+        m.track = Track::default();
+    })?;
+    Ok(msg)
 }
 
 // ───────────────────────── ⑦ 跟踪 ─────────────────────────

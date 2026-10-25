@@ -268,6 +268,32 @@ export async function startChat() {
   } catch (e) { await failTurn(e, id); }
 }
 
+/** 在后台开一条站点对话（批量迁移自动推进用）：不切换界面，侧栏照样显示转圈，跑完刷新列表。
+ *  模型用启动页当前选的；perm 只用于这一条对话。 */
+export async function startBackgroundChat(o: { siteId: string; siteName: string; text: string; perm: string }) {
+  if (!brainUsable(launcher.lBrain)) throw new Error('没有可用的模型：先在启动页选一个');
+  const id = crypto.randomUUID();
+  const now = Math.floor(Date.now() / 1000);
+  const connId = SITE_PREFIX + o.siteId;
+  const optimistic: Conversation = {
+    id, conn_id: connId, conn_name: o.siteName, site_slug: o.siteId, site_name: o.siteName, workspace_dir: '',
+    task_type: 'site', brain: launcher.lBrain, model: launcher.lModel, perm_mode: o.perm, effort: launcher.lEffort, session_ref: '',
+    title: o.text.slice(0, 30), messages: [optimisticUser(o.text)], status: 'running', created_at: now, updated_at: now,
+  };
+  app.convos = [optimistic, ...app.convos];
+  const startedAt = Date.now();
+  app.lives[id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
+  app.running[id] = connId;
+  try {
+    const conv = await invoke<Conversation>('start_conversation', {
+      convId: id, connId, siteSlug: o.siteId, siteName: o.siteName, taskType: 'site', brain: launcher.lBrain, model: launcher.lModel,
+      permMode: o.perm, effort: launcher.lEffort, fast: launcher.lFast, workspaceDir: '', message: o.text, onEvent: makeChannel(id),
+    });
+    await refreshConvos();
+    endTurn(conv, id);
+  } catch (e) { await failTurn(e, id); }
+}
+
 // ---------- 重试 / 自动重连 ----------
 // 错误文本像不像"瞬时问题"（网络/限流/过载/5xx）——只对这类做自动重试，避免对密钥错误/取消等硬错误反复重跑。
 function isTransient(err: string): boolean {

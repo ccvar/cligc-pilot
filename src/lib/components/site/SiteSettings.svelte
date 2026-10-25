@@ -7,6 +7,7 @@
   import VpsAuth from './VpsAuth.svelte';
   import SiteConfigCard from './SiteConfigCard.svelte';
   import SiteDynamicSettings from './SiteDynamicSettings.svelte';
+  import SiteVpsCard from './SiteVpsCard.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { sites, editSite, saveSiteDraft, removeSite } from '$lib/state/sites.svelte.js';
@@ -43,7 +44,7 @@
   const modeOpts = $derived([
     { value: 'direct', label: 'Pilot 构建后上传到 Pages' },
     { value: 'workers', label: 'Pilot 构建后部署到 Workers（wrangler deploy）' },
-    { value: 'vps', label: 'VPS（项目自带的发布脚本）' },
+    { value: 'vps', label: 'VPS（自己的服务器）' },
     { value: 'pages_git', label: site.source === 'github' ? 'Pages 绑定 GitHub（合并即上线）' : 'Pages 绑定 GitHub（推送到 GitHub 即上线）' },
     { value: 'none', label: '暂不部署' },
   ]);
@@ -98,8 +99,8 @@
         <div class="field"><span class="lbl">方式</span><Dropdown bind:value={d.deploy.mode} options={modeOpts} /></div>
         {#if d.deploy.mode === 'vps'}
           <div class="field"><span class="lbl">服务器（SSH 连接）</span><Dropdown bind:value={d.deploy.ssh_conn_id} placeholder="选择远程连接" options={app.conns.filter((c) => c.kind === 'ssh').map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} /></div>
-          <div class="field" style="grid-column:1/-1"><label for="ss-cmd">发布命令</label><input id="ss-cmd" class="tin mono" bind:value={d.deploy.command} spellcheck="false" /><small>在站点根目录执行。发布脚本自己负责上传、备份、健康检查和失败恢复；Pilot 只在构建和检查通过后才执行它。</small></div>
-          <div class="field" style="grid-column:1/-1"><label for="ss-envf">服务器上的配置文件</label><input id="ss-envf" class="tin mono" bind:value={d.deploy.env_file} placeholder={`/opt/${(site.domain.split('.')[0] || 'site')}/config/${(site.domain.split('.')[0] || 'site')}.env`} spellcheck="false" /><small>上线时 Pilot 把「配置变量」合并写进这个文件（权限 600，文件里 Pilot 没管的行原样保留），服务或发布脚本从这里读。留空用默认路径。</small></div>
+          <div class="field" style="grid-column:1/-1"><label for="ss-cmd">发布命令</label><input id="ss-cmd" class="tin mono" bind:value={d.deploy.command} placeholder="留空＝由 Pilot 配置服务器并发布" spellcheck="false" /><small>{d.deploy.command.trim() ? '在站点根目录执行。发布脚本自己负责上传、备份、健康检查和失败恢复；Pilot 只在构建和检查通过后才执行它。' : '留空时由 Pilot 托管：Pilot 自己配置服务器（Caddy 自动 HTTPS），每次上线打包发布、原子切换，可以回退。项目自带发布脚本的，在这里填上命令。'}</small></div>
+          {#if d.deploy.command.trim()}<div class="field" style="grid-column:1/-1"><label for="ss-envf">服务器上的配置文件</label><input id="ss-envf" class="tin mono" bind:value={d.deploy.env_file} placeholder={`/opt/${(site.domain.split('.')[0] || 'site')}/config/${(site.domain.split('.')[0] || 'site')}.env`} spellcheck="false" /><small>上线时 Pilot 把「配置变量」合并写进这个文件（权限 600，文件里 Pilot 没管的行原样保留），服务或发布脚本从这里读。留空用默认路径。</small></div>{/if}
         {:else if d.deploy.mode !== 'none'}
           <div class="field"><span class="lbl">Cloudflare 连接</span><Dropdown bind:value={d.deploy.cf_conn_id} placeholder="选择连接" options={cfConns.map((c) => ({ value: c.id, label: c.remark?.trim() || c.name }))} /></div>
           <div class="field"><label for="ss-proj">{d.deploy.mode === 'workers' ? 'Worker 名称' : 'Pages 项目'}</label><input id="ss-proj" class="tin mono" bind:value={d.deploy.project} spellcheck="false" />{#if d.deploy.mode === 'workers'}<small>路由、绑定、变量都按仓库里的 wrangler 配置部署。</small>{/if}</div>
@@ -108,8 +109,10 @@
       </div>
     </div>
 
-    {#if site.deploy.mode === 'vps'}
+    {#if site.deploy.mode === 'vps' && site.deploy.command.trim()}
       <div class="card"><h3><Icon name="key" />VPS 部署授权</h3><VpsAuth {site} /></div>
+    {:else if site.deploy.mode === 'vps'}
+      <SiteVpsCard {site} />
     {/if}
 
     <SiteDataSettings draft={d} {site} />

@@ -54,6 +54,7 @@ mod site_migrate;
 mod migrate_extract;
 mod migrate_cmds;
 mod site_dynamic;
+mod site_vps_host;
 mod site_ops;
 mod site_runner;
 mod site_verify;
@@ -4662,6 +4663,7 @@ pub fn run() {
             site_cmds::import_site,
             site_cmds::create_site,
             migrate_cmds::create_migration,
+            migrate_cmds::create_migrations,
             migrate_cmds::migrate_state,
             migrate_cmds::migrate_survey,
             migrate_cmds::migrate_save_plan,
@@ -4675,12 +4677,16 @@ pub fn run() {
             migrate_cmds::migrate_rollback,
             migrate_cmds::migrate_track,
             migrate_cmds::migrate_hosting,
+            migrate_cmds::migrate_vps_dns,
             site_dynamic::site_dynamic_state,
             site_dynamic::site_dynamic_features,
             site_dynamic::site_dynamic_setup,
             site_dynamic::site_inbox,
             site_dynamic::site_inbox_act,
             site_dynamic::site_dynamic_message,
+            site_vps_host::site_vps_setup,
+            site_vps_host::site_vps_activate,
+            site_vps_host::site_vps_state,
             site_cmds::site_make_state,
             site_cmds::site_continue_message,
             site_cmds::discard_made_site,

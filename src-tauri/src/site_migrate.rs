@@ -1,8 +1,8 @@
 //! 站点迁移：把一个线上站点搬进 Pilot 重做，保留原来的 URL 和内容，换新的视觉和技术栈。
 //!
 //! 七个阶段：盘点 → 确认方案 → 抓取 → 重做 → 核对 → 切换 → 跟踪（命令在 migrate_cmds）。
-//! 支持 Astro + Cloudflare：纯静态，以及表单、评论、大文件这类动态功能（Pages Functions + D1 / R2，见 site_dynamic）；
-//! 需要 VPS 的站先给出结论，不往下做。
+//! 部署到 Cloudflare（纯静态，或者表单、评论、大文件用 Pages Functions + D1 / R2，见 site_dynamic），
+//! 或者自己的服务器（Caddy + Go + SQLite，Pilot 托管，见 site_vps_host）。
 //!
 //! 这里只放纯函数：URL 规范化、robots / sitemap 解析、页面信息提取、分组、动态功能识别、部署去向判断。
 //! 正文提取、URL 对应表和核对规则在 migrate_extract。
@@ -205,7 +205,7 @@ pub struct Plan {
     /// 第一步固定 astro
     #[serde(default)]
     pub stack: String,
-    /// 第一步固定 direct（Pilot 构建后上传到 Pages）
+    /// direct 部署到 Cloudflare Pages | vps 部署到自己的服务器（Caddy + Go + SQLite，Pilot 托管）
     #[serde(default)]
     pub deploy: String,
     /// keep_brand 保留品牌（logo、名称、主色）只升级设计 | fresh 全新视觉
@@ -1024,7 +1024,7 @@ pub fn decide_hosting(i: &HostingInput) -> Hosting {
     if target == "cf_static" && reasons.is_empty() {
         reasons.push("没有发现需要服务端的功能，整站可以做成静态页面：速度快、免费额度够用、不用维护服务器".into());
     }
-    Hosting { target: target.into(), label: label.into(), reasons, paid, supported: target != "vps" }
+    Hosting { target: target.into(), label: label.into(), reasons, paid, supported: true }
 }
 
 /// 按方案重新判断部署去向：方案里去掉的动态功能不再算（比如去掉登录 / 购物车后就能放 Cloudflare）。

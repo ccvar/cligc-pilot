@@ -6,10 +6,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { Site } from '$lib/types';
-import { say, confirmDialog } from './app.svelte.js';
+import { app, say, confirmDialog } from './app.svelte.js';
 import { connections } from './connections.svelte.js';
-import { sites, refreshSites, openSite } from './sites.svelte.js';
-import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
+import { sites, refreshSites, openSite, deploySite } from './sites.svelte.js';
+import { startSiteChat, MAKING_PERM, openMaking } from './siteCreate.svelte.js';
+import { startBackgroundChat } from './turns.svelte.js';
 import { sendToMaking } from './siteMake.svelte.js';
 import type { Dynamic } from './dynamic.svelte.js';
 
@@ -33,11 +34,13 @@ export interface MMeta {
   parity: MParity[];
   live: { at: number; base: string; checked: number; bad: string[] };
   dns: MDns;
-  cutover: { at: number; host: string; zone_id: string; before: MRec[]; notes: string[]; rolled_back_at: number };
+  cutover: { at: number; host: string; zone_id: string; cf_conn: string; manual_dns: boolean; before: MRec[]; notes: string[]; rolled_back_at: number };
   track: { at: number; checked: number; bad: string[]; base_clicks: number; after_clicks: number; after_days: number; sitemap_submitted: boolean; indexnow_submitted: boolean; notes: string[] };
 }
 export type MStage = 'survey' | 'plan' | 'extract' | 'rebuild' | 'verify' | 'cutover' | 'track' | 'done';
-export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean; dynamic: Dynamic | null; hosting: MHosting | null }
+export interface MVps { slug: string; root: string; host: string; alias: string; ip: string; os: string; arch: string; api_port: number; https: boolean; https_at: number; setup_at: number; releases: string[]; current: string; notes: string[] }
+export interface MVpsDns { host: string; ip: string; host_ips: string[]; alias: string; alias_ips: string[]; points: boolean; alias_points: boolean; cf_auto: boolean }
+export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean; dynamic: Dynamic | null; hosting: MHosting | null; vps: MVps | null }
 
 export const STAGES: { key: MStage; label: string }[] = [
   { key: 'survey', label: '盘点' },
@@ -56,7 +59,7 @@ export const migrate = $state({
   loading: {} as Record<string, boolean>,
   /** 正在做的操作（按站点）：plan / dns / cutover / rollback / own … */
   busy: {} as Record<string, string>,
-  dialog: { open: false, domain: '', parent: '', busy: false, err: '' },
+  dialog: { open: false, multi: false, domain: '', domains: '', parent: '', busy: false, err: '', results: [] as { domain: string; site_id: string; error: string }[] },
 });
 
 export function isMigrating(s: Site | undefined): boolean { return !!s && s.origin === 'migrating'; }
@@ -74,9 +77,9 @@ function defaultParent(): string {
   return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
 }
 
-export function openMigrate() {
+export function openMigrate(multi = false) {
   connections.switcherOpen = false;
-  migrate.dialog = { open: true, domain: '', parent: defaultParent(), busy: false, err: '' };
+  migrate.dialog = { open: true, multi, domain: '', domains: '', parent: defaultParent(), busy: false, err: '', results: [] };
 }
 export function closeMigrate() { if (!migrate.dialog.busy) migrate.dialog.open = false; }
 
@@ -101,6 +104,25 @@ export async function createMigration() {
   finally { d.busy = false; }
 }
 
+/** 批量：每行一个域名（逗号、空格分隔也行）。建好后排队盘点，结果留在弹窗里。 */
+export async function createMigrations() {
+  const d = migrate.dialog;
+  if (d.busy) return;
+  const domains = d.domains.split(/[\s,，;；]+/).map((x) => x.trim()).filter(Boolean);
+  if (!domains.length) { d.err = '至少填一个域名'; return; }
+  d.busy = true; d.err = ''; d.results = [];
+  try {
+    d.results = await invoke<{ domain: string; site_id: string; error: string }[]>('create_migrations', { domains, parentDir: d.parent });
+    try { localStorage.setItem(PARENT_KEY, d.parent); } catch { /* */ }
+    await refreshSites();
+    for (const r of d.results) if (r.site_id) void loadMigrate(r.site_id);
+    const ok = d.results.filter((r) => r.site_id).length;
+    say(`建好 ${ok} 个迁移站点，正在排队盘点${d.results.length > ok ? `；${d.results.length - ok} 个没建成` : ''}`, ok ? 'ok' : 'err');
+    if (ok && d.results.every((r) => r.site_id)) { d.open = false; openMaking(); }
+  } catch (e) { d.err = String(e); }
+  finally { d.busy = false; }
+}
+
 export async function loadMigrate(id: string) {
   if (untrack(() => migrate.loading[id])) return;
   untrack(() => { migrate.loading[id] = true; });
@@ -119,9 +141,9 @@ async function run(id: string, busy: string, f: () => Promise<unknown>, ok?: str
 export const resurvey = (id: string) => run(id, 'survey', () => invoke('migrate_survey', { id }));
 
 /** 确认方案并直接开始抓取。 */
-export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style' | 'features'>) {
+export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style' | 'features' | 'deploy'>) {
   await run(id, 'plan', async () => {
-    await invoke('migrate_save_plan', { id, plan: { ...plan, stack: 'astro', deploy: 'direct', confirmed_at: 0 } });
+    await invoke('migrate_save_plan', { id, plan: { ...plan, stack: 'astro', confirmed_at: 0 } });
     await invoke('migrate_extract', { id });
   });
 }
@@ -132,6 +154,18 @@ export async function previewHosting(id: string, features: Record<string, string
 
 /** 建动态功能的资源（数据库、人机验证、R2 大文件、绑定到 Pages 项目）。 */
 export const setupDynamic = (id: string) => run(id, 'dynamic', () => invoke('site_dynamic_setup', { id }));
+
+/** 自己的服务器：选好 SSH 连接、配置服务器（装 Caddy，有表单评论时装 pilot-site）。 */
+export const setupVps = (id: string, sshConnId: string) => run(id, 'vps', () => invoke('site_vps_setup', { id, sshConnId }));
+
+/** 自己的服务器：域名现在解析到哪、和服务器 IP 对不对得上。 */
+export const vpsDns = $state({} as Record<string, MVpsDns | undefined>);
+export async function checkVpsDns(id: string) {
+  migrate.busy[id] = 'vpsdns';
+  try { vpsDns[id] = await invoke<MVpsDns>('migrate_vps_dns', { id }); }
+  catch (e) { say(String(e), 'err'); }
+  finally { migrate.busy[id] = ''; }
+}
 
 export const extract = (id: string) => run(id, 'extract', () => invoke('migrate_extract', { id }));
 
@@ -161,8 +195,12 @@ export async function fixDns(id: string, n: number) {
   await run(id, 'dns', () => invoke('migrate_dns_fix', { id }), 'DNS 记录已补上');
 }
 
-export async function cutover(id: string, host: string) {
-  if (!await confirmDialog(`${host} 会改为指向新站：原来这个主机名的 DNS 记录会被替换（已存下来，可以一键回退）。旧主机先别停。`, { title: '切换到新站', kind: 'danger', confirmText: '切换' })) return;
+export async function cutover(id: string, host: string, vps = false, cfAuto = false) {
+  const msg = vps
+    ? (cfAuto ? `Pilot 会在 Cloudflare 把 ${host} 的 A 记录改成服务器的 IP（原来的记录存下来，可以一键回退），然后由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款）。旧主机先别停。`
+             : `${host} 已经指向服务器了：接下来由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款），站点正式切到新站。旧主机先别停。`)
+    : `${host} 会改为指向新站：原来这个主机名的 DNS 记录会被替换（已存下来，可以一键回退）。旧主机先别停。`;
+  if (!await confirmDialog(msg, { title: '切换到新站', kind: 'danger', confirmText: '切换' })) return;
   await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, '已切换到新站，DNS 和证书生效一般要几分钟');
 }
 
@@ -173,6 +211,82 @@ export async function rollback(id: string, host: string) {
 
 export const track = (id: string) => run(id, 'track', () => invoke('migrate_track', { id }));
 
+// ───────── 批量迁移：按默认方案确认、自动推进 ─────────
+
+/** 自动推进：抓取 → AI 重做（后台对话，一次 aiMax 个）→ 核对 → 发布到预览（部署已配好的）→ 再核对。
+ *  不会自动确认方案、不会配置服务器 / Cloudflare 项目、不会切换域名。 */
+export const batch = $state({ auto: false, aiMax: 1, deployed: {} as Record<string, number>, note: '' });
+
+export function migratingSites(): Site[] { return sites.list.filter((s) => s.origin === 'migrating'); }
+
+/** 默认方案：全部页面组保留、保留品牌升级设计、表单评论保留、登录购物车去掉；访客主要在大陆时部署到服务器。 */
+function defaultPlan(v: MView) {
+  const s = v.survey!;
+  const features = Object.fromEntries(s.features.filter((f) => f.key !== 'search').map((f) => [f.key, f.key === 'login' || f.key === 'cart' ? 'drop' : 'keep'])) as Record<string, 'keep' | 'drop'>;
+  return { drop_groups: [], drop_paths: [], visual: 'keep_brand' as const, style: '', features, deploy: ((s.cn_share ?? 0) >= 0.5 ? 'vps' : 'direct') as 'vps' | 'direct' };
+}
+
+export async function confirmAllDefault() {
+  const list = migratingSites().filter((s) => migrate.view[s.id]?.stage === 'plan' && migrate.view[s.id]?.survey);
+  if (!list.length) { say('没有等确认方案的站点'); return; }
+  if (!await confirmDialog(`按默认方案确认 ${list.length} 个站点并开始抓取：页面全部保留、保留品牌升级设计、表单和评论保留、登录和购物车去掉；访客主要在中国大陆的部署到自己的服务器，其余部署到 Cloudflare。\n\n${list.map((s) => s.migrate_from).join('、')}`, { title: '按默认方案确认', kind: 'info', confirmText: '确认' })) return;
+  for (const s of list) await confirmPlan(s.id, defaultPlan(migrate.view[s.id]!));
+}
+
+const aiRunningFor = (id: string) => app.convos.some((c) => c.conn_id === `site:${id}` && c.status === 'running');
+
+let ticking = false;
+export async function batchTick() {
+  if (!batch.auto || ticking) return;
+  ticking = true;
+  try {
+    const list = migratingSites();
+    let ai = list.filter((s) => aiRunningFor(s.id)).length;
+    const waiting: string[] = [];
+    for (const s of list) {
+      await loadMigrate(s.id);
+      const v = migrate.view[s.id];
+      if (!v || sites.jobs[s.id]?.status === 'running' || aiRunningFor(s.id)) continue;
+      const lastJob = sites.jobs[s.id];
+      const justFailed = lastJob && lastJob.status === 'failed' && lastJob.finished_at > Date.now() / 1000 - 600;
+      if (v.stage === 'plan') { waiting.push(`${s.migrate_from} 等你确认方案`); continue; }
+      if (v.stage === 'extract') { if (!justFailed || lastJob?.kind !== 'migrate:extract') await extract(s.id); continue; }
+      if (v.stage === 'rebuild') {
+        if (!v.meta.rebuild_at) {
+          if (ai >= batch.aiMax) continue;
+          try {
+            const text = await invoke<string>('migrate_rebuild_message', { id: s.id });
+            void startBackgroundChat({ siteId: s.id, siteName: s.name, text, perm: MAKING_PERM });
+            ai += 1;
+          } catch (e) { batch.note = `${s.migrate_from}：${String(e)}`; }
+        } else if (!justFailed) await verify(s.id);
+        continue;
+      }
+      if (v.stage === 'verify') {
+        const blocks = v.meta.parity.some((p) => p.level === 'block');
+        if (blocks || v.meta.live.bad.length) { waiting.push(`${s.migrate_from} 核对没通过，要你看一下`); continue; }
+        if (!v.deploy_ready) { waiting.push(`${s.migrate_from} 等你配置${v.plan?.deploy === 'vps' ? '服务器' : ' Cloudflare 项目'}`); continue; }
+        if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') { waiting.push(`${s.migrate_from} 等你配置动态功能`); continue; }
+        // 先发布到预览，发布完再核对一次
+        if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id); }
+        else if (lastJob?.kind === 'deploy' && lastJob.status === 'ok') { delete batch.deployed[s.id]; await verify(s.id); }
+        else if (justFailed) { waiting.push(`${s.migrate_from} 发布失败，要你看一下`); delete batch.deployed[s.id]; }
+        continue;
+      }
+      if (v.stage === 'cutover') waiting.push(`${s.migrate_from} 核对通过，等你切换`);
+    }
+    batch.note = waiting.join('；');
+  } finally { ticking = false; }
+}
+
+let timer: ReturnType<typeof setInterval> | null = null;
+export function setBatchAuto(on: boolean) {
+  batch.auto = on;
+  if (timer) { clearInterval(timer); timer = null; }
+  if (on) { timer = setInterval(() => void batchTick(), 20000); void batchTick(); }
+  else batch.note = '';
+}
+
 /** 迁移作业结束（或者上线到预览地址结束）就刷新迁移状态。 */
 export function initMigrate() {
   $effect(() => {
@@ -181,7 +295,7 @@ export function initMigrate() {
       if (j.status === 'running') return;
       const s = sites.list.find((x) => x.id === j.site_id);
       if (!showMigrateCard(s)) return;
-      void loadMigrate(j.site_id);
+      void loadMigrate(j.site_id).then(() => batchTick());
       if (j.kind.startsWith('migrate:')) say(j.status === 'ok' ? `${j.title}完成` : j.status === 'canceled' ? `已停止${j.title}` : `${j.title}没通过：${j.error.split('\n')[0]}`, j.status === 'ok' ? 'ok' : 'err');
     });
     return () => { void un.then((f) => f()); };

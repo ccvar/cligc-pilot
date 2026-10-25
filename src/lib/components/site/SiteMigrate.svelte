@@ -14,7 +14,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -60,6 +60,13 @@
     } catch (e) { say(String(e), 'err'); }
     finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
   }
+  const isVps = $derived(v?.plan?.deploy === 'vps');
+  const sshConns = $derived(app.conns.filter((c) => c.kind === 'ssh'));
+  let sshConn = $state('');
+  $effect(() => { if (!sshConn && sshConns.length) sshConn = site.deploy.ssh_conn_id || sshConns[0].id; });
+  const vpsSetting = $derived(busy === 'vps' || (jobRunning && job.kind === 'vps:setup'));
+  const vd = $derived(vpsDns[site.id]);
+  $effect(() => { if (isVps && v?.stage === 'cutover' && !vd) void checkVpsDns(site.id); });
   const featNames = (fs: string[]) => ['form', 'comments', 'files'].filter((f) => fs.includes(f)).map((f) => FEATURE_LABEL[f]).join('、');
   const dynNeed = $derived(!!v?.dynamic && v.dynamic.features.length > 0);
   const dynReady = $derived(!dynNeed || !!v?.dynamic?.setup_at);
@@ -97,7 +104,7 @@
     <MigrateSurvey id={site.id} {v} editable={!jobRunning} />
   {:else}
     {#if v.survey}
-      <div class="sec first"><b>盘点报告</b><small>{v.survey.pages} 个网页 · {(v.hosting ?? v.survey.hosting).label} · <span data-tip={full(v.survey.finished_at)}>{ago(v.survey.finished_at)}</span></small><span class="grow"></span><button class="fold" onclick={() => (showSurvey = !showSurvey)}>{showSurvey ? '收起' : '展开'}</button></div>
+      <div class="sec first"><b>盘点报告</b><small>{v.survey.pages} 个网页 · {v.plan?.deploy === 'vps' ? '部署到自己的服务器' : (v.hosting ?? v.survey.hosting).label} · <span data-tip={full(v.survey.finished_at)}>{ago(v.survey.finished_at)}</span></small><span class="grow"></span><button class="fold" onclick={() => (showSurvey = !showSurvey)}>{showSurvey ? '收起' : '展开'}</button></div>
       {#if showSurvey}<MigrateSurvey id={site.id} {v} editable={false} />{/if}
     {/if}
 
@@ -149,8 +156,30 @@
 
       <!-- 预览地址实测 -->
       <div class="sub-sec">
-        <b>预览地址实测</b>
-        {#if !v.deploy_ready}
+        <b>{isVps ? '服务器上实测' : '预览地址实测'}</b>
+        {#if isVps}
+          {#if !v.vps?.setup_at}
+            <p class="hint">选一台服务器（SSH 连接）。Pilot 会装 Caddy（网页和自动 HTTPS）{dynNeed ? '，再装一个 Go 写的小服务处理表单和评论（数据存 SQLite）' : ''}。需要这个账号是 root 或能免密 sudo；80 / 443 端口被别的网站服务占着时不会去动它。</p>
+            {#if sshConns.length}
+              <div class="row wrap">
+                <div class="dd"><Dropdown bind:value={sshConn} options={sshConns.map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} /></div>
+                <button class="btn small primary" onclick={() => setupVps(site.id, sshConn)} disabled={!!busy || jobRunning || !sshConn}>{vpsSetting ? '配置中…' : '配置服务器'}</button>
+              </div>
+            {:else}<p class="hint warn-text">还没有远程连接：先在设置里新建一条 SSH 连接。</p>{/if}
+          {:else if !v.meta.live.at}
+            <p class="dyn-ok"><Icon name="check" size={12} />服务器已配置 · {v.vps.ip} · {v.vps.os}{v.vps.api_port ? ' · 表单和评论服务' : ''} <button class="link-btn" onclick={() => setupVps(site.id, site.deploy.ssh_conn_id)} disabled={jobRunning || !!busy}>重新配置</button></p>
+            {#each v.vps.notes as n (n)}<p class="hint warn-text">{n}</p>{/each}
+            <div class="row"><span class="hint grow">发布到服务器，然后点「重新核对」：Pilot 在服务器上带域名请求每个旧地址，不用先改 DNS。</span><button class="btn small" onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? '发布中…' : '发布到服务器'}</button></div>
+            {#if blocks.length}<p class="hint">先把上面必须修的问题修好再发布。</p>{/if}
+          {:else}
+            <div class="row">
+              {#if v.meta.live.bad.length}<span class="lv block">✕</span><span class="grow">{v.meta.live.checked} 个地址里 {v.meta.live.bad.length} 个不对 <button class="link-btn" onclick={() => toggleItem('live')}>{openItems.has('live') ? '收起' : '查看'}</button></span>
+              {:else}<span class="lv ok">✓</span><span class="grow">{v.meta.live.checked} 个旧地址在服务器上都能正常打开或跳转</span>{/if}
+              <button class="btn tiny" onclick={() => deploySite(site.id)} disabled={jobRunning}><Icon name="rocket" size={11} />{deploying ? '发布中…' : '重新发布'}</button>
+            </div>
+            {#if openItems.has('live')}<ul class="items">{#each v.meta.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
+          {/if}
+        {:else if !v.deploy_ready}
           <p class="hint">还要在预览地址上把每个旧地址实际打开一遍（Cloudflare 的跳转规则只有上线后才生效）。先建一个 Pages 项目——只用来预览，不会动线上域名。</p>
           {#if cfConns.length}
             <div class="row wrap">
@@ -159,7 +188,7 @@
               <button class="btn small" onclick={setupPreview} disabled={!!busy || !cfConn || !project.trim()}>{busy === 'pages' ? '创建中…' : '创建 Pages 项目'}</button>
             </div>
           {:else}<p class="hint warn-text">还没有 Cloudflare 连接：先在设置里连接 Cloudflare。</p>{/if}
-        {:else if dynNeed && !dynReady}
+        {:else if dynNeed && !dynReady && !isVps}
           <p class="hint">保留了{featNames(v.dynamic?.features ?? [])}：还要在 Cloudflare 上建数据库（D1）{v.dynamic?.features.includes('form') || v.dynamic?.features.includes('comments') ? '和人机验证（Turnstile）' : ''}{v.dynamic?.large.length ? `，把 ${v.dynamic.large.length} 个大文件传到 R2` : ''}，绑到这个 Pages 项目。</p>
           <div class="row"><button class="btn small primary" onclick={() => setupDynamic(site.id)} disabled={jobRunning || !!busy}>{dynSetting ? '配置中…' : '配置动态功能'}</button><small class="faint">令牌要有 D1、Turnstile{v.dynamic?.large.length ? '、R2' : ''} 的编辑权限</small></div>
         {:else if !v.meta.live.at}
@@ -197,6 +226,20 @@
             {/if}
           </div>
         </li>
+        {#if isVps}
+        <li class:ok={!!vd?.points}>
+          <span class="lv">{vd?.points ? '✓' : '2'}</span>
+          <div class="cb">
+            <span><b>域名指向服务器 {v.vps?.ip}</b>{#if vd?.points}<small>已指向</small>{:else if vd?.cf_auto}<small>域名在你的 Cloudflare 账号里，切换时 Pilot 自动改</small>{/if}</span>
+            {#if vd && !vd.points && !vd.cf_auto}
+              <small class="desc">到域名的 DNS 服务商，把这两条 A 记录改成服务器的 IP（改之前访客照常看到旧站；改完一般几分钟到几小时生效）：</small>
+              <div class="ns"><code>{vd.host} → {vd.ip}</code>{#if vd.alias}<code>{vd.alias} → {vd.ip}</code>{/if}</div>
+              <small class="faint">现在：{vd.host} → {vd.host_ips.join('、') || '没有记录'}{vd.alias ? `；${vd.alias} → ${vd.alias_ips.join('、') || '没有记录'}` : ''}</small>
+            {/if}
+            <div class="row"><button class="btn tiny" onclick={() => checkVpsDns(site.id)} disabled={!!busy}>{busy === 'vpsdns' ? '检查中…' : '重新检查'}</button></div>
+          </div>
+        </li>
+        {:else}
         <li class:ok={dns?.zone_status === 'active'}>
           <span class="lv">{dns?.zone_status === 'active' ? '✓' : '2'}</span>
           <div class="cb">
@@ -221,11 +264,12 @@
             {/if}
           </div>
         </li>
+        {/if}
         <li>
           <span class="lv">3</span>
           <div class="cb">
-            <span><b>切换到新站</b><small>{host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。</small></span>
-            <div class="row"><button class="btn small primary" onclick={() => cutover(site.id, host)} disabled={!!busy || jobRunning || !own?.verified || dns?.zone_status !== 'active' || !!dns?.missing.length}><Icon name="rocket" size={12} />{busy === 'cutover' ? '切换中…' : '切换到新站'}</button></div>
+            <span><b>切换到新站</b><small>{isVps ? `${host} 指向服务器后，Caddy 自动申请 HTTPS 证书；原来的 DNS 记录存下来，可以回退。旧主机先别停。` : `${host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。`}</small></span>
+            <div class="row"><button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning || !own?.verified || (isVps ? !(vd?.points || vd?.cf_auto) : dns?.zone_status !== 'active' || !!dns?.missing.length)}><Icon name="rocket" size={12} />{busy === 'cutover' ? '切换中…' : '切换到新站'}</button></div>
           </div>
         </li>
       </ol>

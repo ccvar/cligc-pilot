@@ -1,0 +1,2 @@
+# go build 在本目录的产物（Pilot 用 build.rs 编到 OUT_DIR）
+/pilot-site
