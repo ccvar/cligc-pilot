@@ -122,7 +122,7 @@
     </button>
     {#if phone.ready.length || phone.pending.length}
       <!-- 连着安卓手机时显示：AI 可以在对话里操作手机、截图 -->
-      <button class="wt ph" class:pend={!phone.ready.length} onclick={(e) => { phone.focus = true; openConnectionSetup(e); }}
+      <button class="wt ph" class:pend={!phone.ready.length} onclick={(e) => { phone.focus = 'phone'; openConnectionSetup(e); }}
         data-tip={phone.ready.length ? `${phone.ready.map((d) => d.model || d.serial).join('、')} 已连上\nAI 可以在对话里操作手机、截图` : '手机已连上，等你在手机上点「允许 USB 调试」'} aria-label="安卓手机">
         <AndroidMark size={17} />
       </button>

@@ -17,9 +17,15 @@
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
   import { openGhConnect } from '$lib/state/github.svelte.js';
-  import { isDataConn } from '$lib/state/datasrc.svelte.js';
+  import { isDataConn, openDataConnect } from '$lib/state/datasrc.svelte.js';
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
   import PhoneSection from '$lib/components/settings/PhoneSection.svelte';
+  import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
+  import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import BingMark from '$lib/components/icons/BingMark.svelte';
+  import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
+  import GmailMark from '$lib/components/icons/GmailMark.svelte';
+  import { showPhoneGroup } from '$lib/state/phone.svelte.js';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openSshConnect } from '$lib/state/ssh.svelte.js';
@@ -30,8 +36,8 @@
   import { updater, openUpdateCenter } from '$lib/state/updater.svelte.js';
   import type { Connection } from '$lib/types';
 
-  // 连接按类型分组、每条一行：原来每条一张大卡片、各类混排，又长又乱。
-  // 组可以折叠（记在本机）；条目多的组默认收起，只看组头的数量。
+  // 连接按类型分组、每条一行（组的样子见 ConnGroup）。Google / Bing（网站数据）、安卓手机、邮箱也是组，
+  // 写在各自的组件里，接在这几组后面；右上角的 + 能加所有类型。
   const CONN_GROUPS: { kind: string; label: string; add?: () => void }[] = [
     { kind: 'cloudflare', label: 'Cloudflare', add: openCfConnect },
     { kind: 'github', label: 'GitHub', add: openGhConnect },
@@ -45,13 +51,7 @@
     if (other.length) groups.push({ kind: 'other', label: '其他', add: undefined, items: other });
     return groups.filter((g) => g.items.length);
   });
-  const FOLD_KEY = 'cligc.pilot.connFold';
-  let fold = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch { return {}; } })());
-  const folded = (kind: string, n: number) => fold[kind] ?? n > 4;
-  function toggleFold(kind: string, n: number) {
-    fold = { ...fold, [kind]: !folded(kind, n) };
-    try { localStorage.setItem(FOLD_KEY, JSON.stringify(fold)); } catch { /* */ }
-  }
+  function addFromMenu(f: () => void) { settings.setupAddOpen = false; f(); }
   function connSub(c: Connection): string {
     if (c.kind === 'cloudflare') return c.remark?.trim() || c.key_prefix || '';
     if (c.kind === 'github') return c.remark?.trim() || c.login || '';
@@ -88,58 +88,60 @@
               <button role="menuitem" onclick={() => { settings.setupAddOpen = false; openSshConnect(); }}>
                 <SshMark size={15} /><span>新建远程连接</span>
               </button>
+              <div class="menu-sep"></div>
+              <button role="menuitem" onclick={() => addFromMenu(() => openDataConnect('google'))}>
+                <GoogleMark size={15} /><span>Google 账号<small>GA4 + Search Console，浏览器授权</small></span>
+              </button>
+              <button role="menuitem" onclick={() => addFromMenu(() => openDataConnect('google', 'service_account'))}>
+                <GoogleMark size={15} /><span>Google 服务账号<small>JSON 密钥</small></span>
+              </button>
+              <button role="menuitem" onclick={() => addFromMenu(() => openDataConnect('bing'))}>
+                <BingMark size={15} /><span>Bing Webmaster<small>API Key</small></span>
+              </button>
+              <div class="menu-sep"></div>
+              <button role="menuitem" onclick={() => addFromMenu(() => showPhoneGroup('phone'))}>
+                <AndroidMark size={15} /><span>安卓手机<small>让 AI 操作手机 app、截图</small></span>
+              </button>
+              <button role="menuitem" onclick={() => addFromMenu(() => showPhoneGroup('mail'))}>
+                <GmailMark size={14} /><span>邮箱验证码<small>注册时自动取验证码填进手机</small></span>
+              </button>
             </div>
           {/if}
         </div>
       </div>
-      {#if app.conns.length === 0}<p class="hint">还没有连接。可以连接 Cloudflare 建站部署、连接 GitHub 改仓库代码，或新建一个 SSH 远程连接。本地对话不需要连接。</p>{/if}
+      {#if app.conns.length === 0}<p class="hint">还没有连接。点右上角 + 可以连接 Cloudflare 建站部署、GitHub 改仓库代码、SSH 远程机器、Google / Bing 看网站数据，或接上安卓手机。本地对话不需要连接。</p>{/if}
       <div class="conn-groups">
         {#each connGroups as g (g.kind)}
-          {@const isFolded = folded(g.kind, g.items.length)}
-          <div class="cg">
-            <div class="cg-head">
-              <button class="cg-toggle" onclick={() => toggleFold(g.kind, g.items.length)} aria-expanded={!isFolded}>
-                <svg class="cg-chev" class:folded={isFolded} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                <ConnectionMark kind={g.kind === 'other' ? g.items[0].kind : g.kind} size={14} />
-                <span class="cg-label">{g.label}</span><span class="cg-n">{g.items.length}</span>
-              </button>
-              {#if g.add}<button class="icon-btn sm cg-add" data-tip="添加{g.label}" aria-label="添加{g.label}" onclick={() => g.add?.()}><PlusIcon /></button>{/if}
-            </div>
-            {#if !isFolded}
-              <div class="cg-list">
-                {#each g.items as c (c.id)}
-                  <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
-                    onclick={() => selectConn(c.id)}
-                    onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
-                    oncontextmenu={(e) => openConnCtx(e, c)}>
-                    {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
-                    <b class="cr-name">{connectionDisplayName(c)}</b>
-                    {#if c.kind === 'ssh'}
-                      <small class="cr-sub">{sshSub(c)}</small>
-                    {:else if connSub(c)}
-                      <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{connSub(c)}</small>
-                    {/if}
-                    <button
-                      class="icon-btn sm cr-gear"
-                      class:active={connections.connCtx?.conn.id === c.id}
-                      title="连接设置"
-                      aria-label={`打开 ${connectionDisplayName(c)} 的连接设置`}
-                      aria-haspopup="menu"
-                      aria-expanded={connections.connCtx?.conn.id === c.id}
-                      onclick={(e) => { e.stopPropagation(); toggleConnCtx(e, c); }}
-                    ><SettingsIcon /></button>
-                  </div>
-                {/each}
+          <ConnGroup kind={g.kind} label={g.label} n={g.items.length} add={g.add}>
+            {#snippet icon()}<ConnectionMark kind={g.kind === 'other' ? g.items[0].kind : g.kind} size={14} />{/snippet}
+            {#each g.items as c (c.id)}
+              <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
+                onclick={() => selectConn(c.id)}
+                onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
+                oncontextmenu={(e) => openConnCtx(e, c)}>
+                {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
+                <b class="cr-name">{connectionDisplayName(c)}</b>
+                {#if c.kind === 'ssh'}
+                  <small class="cr-sub">{sshSub(c)}</small>
+                {:else if connSub(c)}
+                  <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{connSub(c)}</small>
+                {/if}
+                <button
+                  class="icon-btn sm cr-gear"
+                  class:active={connections.connCtx?.conn.id === c.id}
+                  title="连接设置"
+                  aria-label={`打开 ${connectionDisplayName(c)} 的连接设置`}
+                  aria-haspopup="menu"
+                  aria-expanded={connections.connCtx?.conn.id === c.id}
+                  onclick={(e) => { e.stopPropagation(); toggleConnCtx(e, c); }}
+                ><SettingsIcon /></button>
               </div>
-            {/if}
-          </div>
+            {/each}
+          </ConnGroup>
         {/each}
+        <DataSourcesSection />
+        <PhoneSection />
       </div>
-
-      <DataSourcesSection />
-      <PhoneSection />
-
-
 
       <div class="sec-head mt"><span class="sec-title">模型服务 · 本地客户端<InfoTip text={`自定义模型 ID 会作为该厂商模型下拉里的附加档位（可加多个）。\n仅限本人订阅账户驱动本地官方 CLI，密钥存 ${keystoreName}。`} /></span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
       {#if app.brains}
@@ -334,7 +336,7 @@
   .setup-add-trigger { width: 27px; height: 27px; padding: 0; }
   .setup-add-trigger.open { color: var(--text); background: #f1efe9; }
   .setup-add-menu {
-    position: absolute; z-index: 8; top: calc(100% + 5px); right: 0; width: 216px; padding: 5px;
+    position: absolute; z-index: 8; top: calc(100% + 5px); right: 0; width: 240px; padding: 5px;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
     box-shadow: 0 10px 28px rgba(30, 25, 15, .15); animation: pop .1s ease-out;
   }
@@ -346,6 +348,9 @@
   .setup-add-menu button:hover { background: #f4f3ef; }
   .setup-add-menu button:disabled { opacity: .5; cursor: default; }
   .setup-add-menu button :global(svg) { flex: none; color: var(--dim); }
+  .setup-add-menu button span { display: flex; flex-direction: column; line-height: 1.35; }
+  .setup-add-menu small { font-size: 10.5px; color: var(--faint); font-weight: 400; }
+  .menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
   .wr-btn { flex: none; border: none; background: #d9a400; color: #fff; font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 6px; cursor: pointer; }
   .wr-btn:hover { background: #c08f00; }
   .wr-btn:disabled { opacity: .85; cursor: default; }
@@ -372,26 +377,8 @@
   .sec-head.mt { margin-top: 12px; }
   .sec-title { display: inline-flex; align-items: center; }
   .conn-groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-  .cg { border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
-  .cg-head { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 4px; }
-  .cg-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; border: none; background: none; padding: 5px 6px; border-radius: 7px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; text-align: left; }
-  .cg-toggle:hover { background: #f5f4f1; }
-  .cg-chev { flex: none; color: var(--faint); transition: transform .15s; }
-  .cg-chev.folded { transform: rotate(-90deg); }
-  .cg-label { font-weight: 600; }
-  .cg-n { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .cg-add { flex: none; color: var(--faint); }
-  .cg-list { border-top: 1px solid var(--border); }
-  .conn-row { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 6px 4px 31px; cursor: pointer; transition: background .12s; }
-  .conn-row + .conn-row { border-top: 1px solid #f1f0ec; }
-  .conn-row:hover { background: #faf9f6; }
-  .conn-row.on { background: #f5f4f1; }
-  .conn-row :global(.sm) { border-radius: 6px; }
   .cr-os { flex: none; display: inline-flex; width: 14px; margin-left: -22px; } /* 放进左侧缩进里，机器名和其他组的名字对齐 */
-  .cr-name { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cr-sub { flex: 1 1 0; min-width: 0; font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cr-gear { flex: none; margin-left: auto; opacity: .55; }
-  .conn-row:hover .cr-gear, .cr-gear.active { opacity: 1; }
+  .conn-row :global(.sm) { border-radius: 6px; }
   .icon-btn.sm { padding: 4px; border-radius: 7px; }
   .brain-row { display: flex; align-items: center; gap: 11px; padding: 0; }
   .brain-auth-actions { flex: none; display: inline-flex; align-items: center; gap: 8px; }

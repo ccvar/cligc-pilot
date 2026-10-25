@@ -8,14 +8,23 @@ export type PhoneStatus = { adb: string; managed: boolean; devices: PhoneDevice[
 class PhoneState {
   status = $state<PhoneStatus | null>(null);
   loading = $state(false);
-  /** 从左上角图标打开设置时，设置里滚到「安卓手机」 */
-  focus = $state(false);
+  /** 设置里滚到哪一组（从左上角的手机图标、或「+」菜单进来） */
+  focus = $state<'' | 'phone' | 'mail'>('');
+  /** 还没装 adb / 没接邮箱时，组默认不显示；从「+」菜单选了才显示 */
+  showPhone = $state(false);
+  showMail = $state(false);
   /** 可以用的手机（已授权） */
   ready = $derived(this.status?.devices.filter((d) => d.state === 'device') ?? []);
   /** 连着但还没在手机上点「允许」 */
   pending = $derived(this.status?.devices.filter((d) => d.state === 'unauthorized') ?? []);
 }
 export const phone = new PhoneState();
+
+/** 「+」菜单里选「安卓手机」/「邮箱验证码」：显示那一组、展开、滚过去。 */
+export function showPhoneGroup(which: 'phone' | 'mail') {
+  if (which === 'phone') phone.showPhone = true; else phone.showMail = true;
+  phone.focus = which;
+}
 
 export async function loadPhone() {
   if (phone.loading) return;

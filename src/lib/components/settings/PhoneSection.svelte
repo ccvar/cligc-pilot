@@ -1,7 +1,10 @@
 <script lang="ts">
-  // 安卓手机：AI 在对话里操作手机 app、截取真实截图（给教程文章配图）。这里装 adb、看连了哪些手机。
+  // 「连接」里的两组：安卓手机（AI 在对话里操作手机 app、截真实截图；这里装 adb、看连了哪些手机）
+  // 和邮箱（注册时 Pilot 去邮箱取验证码填进手机）。没装 adb / 没接邮箱时默认不显示，从设置右上角的 + 加。
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
+  import { setFolded } from '$lib/state/connFold.svelte.js';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import { say } from '$lib/state/app.svelte.js';
@@ -12,13 +15,20 @@
   import { loadOauthClient } from '$lib/state/oauth.svelte.js';
 
   let installing = $state(false);
-  let el: HTMLDivElement | undefined = $state();
+  let phoneEl: HTMLDivElement | undefined = $state();
+  let mailEl: HTMLDivElement | undefined = $state();
   const st = $derived(phone.status);
   const load = loadPhone;
-  onMount(() => {
-    void load();
-    // 从左上角的手机图标进来：滚到这一节
-    if (phone.focus) { phone.focus = false; setTimeout(() => el?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120); }
+  onMount(() => { void load(); });
+  // 从左上角的手机图标、或 + 菜单进来：展开那一组并滚过去
+  $effect(() => {
+    const f = phone.focus;
+    if (!f) return;
+    untrack(() => {
+      phone.focus = '';
+      setFolded(f, false);
+      setTimeout(() => (f === 'phone' ? phoneEl : mailEl)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120);
+    });
   });
   async function install() {
     installing = true;
@@ -83,130 +93,127 @@
   const hhmm = (ts: number) => { const d = new Date(ts * 1000); const today = new Date().toDateString() === d.toDateString(); return (today ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + d.toTimeString().slice(0, 5); };
 </script>
 
-<div class="sec-head">
-  <span class="sec-title">安卓手机<InfoTip text={'连上之后，在对话里说「打开 XX app，每一步截一张图」就行。\n登录、密码、短信验证码、支付这些 AI 会停下来交给你；接上邮箱后，注册时的邮箱验证码 Pilot 会自己取来填好。'} label="手机怎么用" /></span>
-  {#if st?.adb}<button class="icon-btn" onclick={load} aria-label="重新检测" data-tip="重新检测连接的手机"><RefreshIcon spinning={phone.loading} /></button>{/if}
-</div>
+{#snippet phoneIcon()}<AndroidMark size={14} />{/snippet}
+{#snippet phoneActs()}
+  <InfoTip text={'连上之后，在对话里说「打开 XX app，每一步截一张图」就行。\n登录、密码、短信验证码、支付这些 AI 会停下来交给你；接上邮箱后，注册时的邮箱验证码 Pilot 会自己取来填好。'} label="手机怎么用" />
+  {#if st?.adb}<button class="cg-btn" onclick={load} aria-label="重新检测" data-tip="重新检测连接的手机"><RefreshIcon spinning={phone.loading} /></button>{/if}
+{/snippet}
 
-{#if st && !st.adb}
-  <div class="row">
-    <span class="ic"><AndroidMark size={20} /></span>
-    <span class="main"><b>还没装 adb</b><small>让 AI 操作手机 app、截取真实截图要用它（Google 官方工具，约 10MB）</small></span>
-    <button class="bind" onclick={install} disabled={installing}>{installing ? '安装中…' : '安装'}</button>
-  </div>
-{:else if st}
-  {#if st.devices.length}
-    <div class="list">
-      {#each st.devices as d (d.serial)}
-        <div class="row">
-          <span class="ic"><AndroidMark size={20} /></span>
-          <span class="main"><b>{d.model || d.serial}</b><small>{d.serial}</small></span>
-          <span class="used" class:ok={d.state === 'device'} class:warn={d.state !== 'device'}>{STATE[d.state] ?? d.state}</span>
+{#if st && (st.adb || phone.showPhone)}
+  <div bind:this={phoneEl}>
+    <ConnGroup kind="phone" label="安卓手机" n={st.devices.length} icon={phoneIcon} actions={phoneActs}>
+      {#if !st.adb}
+        <div class="conn-row static">
+          <b class="cr-name">还没装 adb</b><small class="cr-sub">AI 操作手机要用它（Google 官方工具，约 10MB）</small>
+          <button class="bind" onclick={install} disabled={installing}>{installing ? '安装中…' : '安装'}</button>
         </div>
-      {/each}
-    </div>
-  {:else}
-    <div class="row">
-      <span class="ic"><AndroidMark size={20} /></span>
-      <span class="main"><b>没有连上手机</b><small>{st.error || '用 USB 线连接手机，再点右上角重新检测'}</small></span>
-      <button class="how" onclick={() => (howOpen = !howOpen)} aria-expanded={howOpen}>{howOpen ? '收起' : '怎么连接？'}</button>
-    </div>
-    {#if howOpen}
-      <ol class="steps">
-        <li>手机「设置 → 关于手机」，连点「版本号」7 次，打开开发者选项</li>
-        <li>在「开发者选项」里打开「USB 调试」</li>
-        <li>用 USB 线连上电脑，在手机弹窗里点「允许」，再点右上角重新检测</li>
-      </ol>
-    {/if}
-  {/if}
+      {:else if st.devices.length}
+        {#each st.devices as d (d.serial)}
+          <div class="conn-row static">
+            <b class="cr-name">{d.model || d.serial}</b><small class="cr-sub">{d.model ? d.serial : ''}</small>
+            <span class="used" class:ok={d.state === 'device'} class:warn={d.state !== 'device'}>{STATE[d.state] ?? d.state}</span>
+          </div>
+        {/each}
+      {:else}
+        <div class="conn-row static">
+          <b class="cr-name">没有连上手机</b><small class="cr-sub" data-tip={st.error || undefined}>{st.error || '用 USB 线连接手机，再点上面的刷新'}</small>
+          <button class="how" onclick={() => (howOpen = !howOpen)} aria-expanded={howOpen}>{howOpen ? '收起' : '怎么连接？'}</button>
+        </div>
+        {#if howOpen}
+          <ol class="steps">
+            <li>手机「设置 → 关于手机」，连点「版本号」7 次，打开开发者选项</li>
+            <li>在「开发者选项」里打开「USB 调试」</li>
+            <li>用 USB 线连上电脑，在手机弹窗里点「允许」，再点上面的刷新</li>
+          </ol>
+        {/if}
+      {/if}
+    </ConnGroup>
+  </div>
 {/if}
 
-{#if st?.adb && mail}
-  <div class="row mail-row">
-    <span class="ic">{#if isGmail}<GmailMark size={18} />{:else}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3.5 6.5 8.5 6.5 8.5-6.5" /></svg>{/if}</span>
-    <span class="main">
-      <b>邮箱验证码<InfoTip text={'AI 在手机上注册时，Pilot 去这个邮箱里找网站刚发来的验证码，直接填进手机。\nAI 只知道「填好了」，读不到你的邮件；谷歌、苹果、微软账号的验证码不代取。\n短信验证码、密码还是交给你。'} label="邮箱验证码怎么用" /></b>
-      <small>{mail.configured ? `${mail.email} · 注册时自动取验证码` : googleBusy ? '在浏览器里选你的 Gmail 账号，点「继续」和「允许」…' : '注册时自动取验证码填进手机'}</small>
-    </span>
-    {#if mail.configured}
-      <button class="how" onclick={removeMail}>断开</button>
-    {:else if googleBusy}
-      <button class="how" onclick={cancelGoogle}>取消</button>
-    {:else}
-      <button class="how" onclick={() => { mailOpen = !mailOpen; clientOpen = false; mailErr = ''; }} aria-expanded={mailOpen}>{mailOpen ? '收起' : '其他邮箱'}</button>
-      <button class="bind g-btn" onclick={connectGoogle} aria-expanded={clientOpen}><GmailMark size={12} />用 Google 登录</button>
-    {/if}
-  </div>
-  {#if !mail.configured && !mailOpen && !clientOpen && mailErr}<p class="err row-err">{mailErr}</p>{/if}
-  {#if !mail.configured && clientOpen}
-    <div class="mail-form">
-      <p class="hint">第一次用要填一次 Google 登录凭证：在 Google Cloud 建一个「桌面应用」类型的 OAuth 客户端，并启用 Gmail API（<button class="lnk" onclick={() => openUrl('https://console.cloud.google.com/apis/credentials')}>打开 Google Cloud 凭据页</button>）。和网站数据（GA4 / Search Console）共用这一份，只存在钥匙串里。</p>
-      <input class="mi" placeholder="客户端 ID（….apps.googleusercontent.com）" bind:value={clientId} autocomplete="off" spellcheck="false" />
-      <input class="mi" type="password" placeholder="客户端密钥（GOCSPX-…）" bind:value={clientSecret} autocomplete="off"
-        onkeydown={(e) => { if (e.key === 'Enter' && clientId && clientSecret && !mailBusy) void saveClientAndConnect(); }} />
-      {#if mailErr}<p class="err">{mailErr}</p>{/if}
-      <div class="mail-act"><button class="bind" onclick={saveClientAndConnect} disabled={mailBusy || !clientId.trim() || !clientSecret.trim()}>{mailBusy ? '保存中…' : '保存并登录'}</button></div>
-    </div>
-  {/if}
-  {#if !mail.configured && mailOpen}
-    <div class="mail-form">
-      <input class="mi" type="email" placeholder="你的邮箱，如 name@gmail.com" bind:value={mailEmail} autocomplete="off" spellcheck="false" />
-      <input class="mi" type="password" placeholder={formGmail ? '应用专用密码（16 位）' : '应用专用密码 / 授权码'} bind:value={mailPass} autocomplete="off"
-        onkeydown={(e) => { if (e.key === 'Enter' && mailEmail && mailPass && !mailBusy) void connectMail(); }} />
-      <p class="hint">
-        {#if formGmail}
-          不是 Gmail 的登录密码：在 Google 账号里打开两步验证，再到 <button class="lnk" onclick={() => openUrl('https://myaccount.google.com/apppasswords')}>应用专用密码</button> 生成一个。密码只存在这台电脑的钥匙串里，随时可以在 Google 那边作废。
-        {:else}
-          QQ / 163 邮箱在网页版「设置 → 账户」里开启 IMAP，生成授权码填在这里。密码只存在这台电脑的钥匙串里。
+{#snippet mailIcon()}{#if isGmail}<GmailMark size={14} />{:else}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3.5 6.5 8.5 6.5 8.5-6.5" /></svg>{/if}{/snippet}
+{#snippet mailActs()}
+  <InfoTip text={'AI 在手机上注册时，Pilot 去这个邮箱里找网站刚发来的验证码，直接填进手机。\nAI 只知道「填好了」，读不到你的邮件；谷歌、苹果、微软账号的验证码不代取。\n短信验证码、密码还是交给你。'} label="邮箱验证码怎么用" />
+{/snippet}
+
+{#if mail && (mail.configured || st?.adb || phone.showMail)}
+  <div bind:this={mailEl}>
+    <ConnGroup kind="mail" label="邮箱" n={mail.configured ? 1 : 0} icon={mailIcon} actions={mailActs}>
+      {#if mail.configured}
+        <div class="conn-row static">
+          <b class="cr-name">{mail.email}</b><small class="cr-sub">注册时自动取验证码</small>
+          <button class="how" onclick={removeMail}>断开</button>
+        </div>
+        {#if mail.log.length}
+          <ul class="mail-log">
+            {#each mail.log.slice(0, 3) as l (l.ts + l.from)}
+              <li class:bad={!l.ok}><span class="t">{hhmm(l.ts)}</span>{l.from} · {l.kind === 'link' ? '激活链接' : '验证码'} · {l.ok ? (l.kind === 'link' ? '已在手机上打开' : '已填到手机') : l.note || '没取到'}</li>
+            {/each}
+          </ul>
         {/if}
-      </p>
-      {#if mailErr}<p class="err">{mailErr}</p>{/if}
-      <div class="mail-act"><button class="bind" onclick={connectMail} disabled={mailBusy || !mailEmail.trim() || !mailPass.trim()}>{mailBusy ? '连接中…' : '连接'}</button></div>
-    </div>
-  {/if}
-  {#if mail.configured && mail.log.length}
-    <ul class="mail-log">
-      {#each mail.log.slice(0, 3) as l (l.ts + l.from)}
-        <li class:bad={!l.ok}><span class="t">{hhmm(l.ts)}</span>{l.from} · {l.kind === 'link' ? '激活链接' : '验证码'} · {l.ok ? (l.kind === 'link' ? '已在手机上打开' : '已填到手机') : l.note || '没取到'}</li>
-      {/each}
-    </ul>
-  {/if}
+      {:else}
+        <div class="conn-row static">
+          <small class="cr-sub">{googleBusy ? '在浏览器里选你的 Gmail 账号，点「继续」和「允许」…' : '注册时自动取验证码填进手机'}</small>
+          {#if googleBusy}
+            <button class="how" onclick={cancelGoogle}>取消</button>
+          {:else}
+            <button class="how" onclick={() => { mailOpen = !mailOpen; clientOpen = false; mailErr = ''; }} aria-expanded={mailOpen}>{mailOpen ? '收起' : '其他邮箱'}</button>
+            <button class="bind g-btn" onclick={connectGoogle} aria-expanded={clientOpen}><GmailMark size={12} />用 Google 登录</button>
+          {/if}
+        </div>
+        {#if !mailOpen && !clientOpen && mailErr}<p class="err row-err">{mailErr}</p>{/if}
+        {#if clientOpen}
+          <div class="mail-form">
+            <p class="hint">第一次用要填一次 Google 登录凭证：在 Google Cloud 建一个「桌面应用」类型的 OAuth 客户端，并启用 Gmail API（<button class="lnk" onclick={() => openUrl('https://console.cloud.google.com/apis/credentials')}>打开 Google Cloud 凭据页</button>）。和网站数据（GA4 / Search Console）共用这一份，只存在钥匙串里。</p>
+            <input class="mi" placeholder="客户端 ID（….apps.googleusercontent.com）" bind:value={clientId} autocomplete="off" spellcheck="false" />
+            <input class="mi" type="password" placeholder="客户端密钥（GOCSPX-…）" bind:value={clientSecret} autocomplete="off"
+              onkeydown={(e) => { if (e.key === 'Enter' && clientId && clientSecret && !mailBusy) void saveClientAndConnect(); }} />
+            {#if mailErr}<p class="err">{mailErr}</p>{/if}
+            <div class="mail-act"><button class="bind" onclick={saveClientAndConnect} disabled={mailBusy || !clientId.trim() || !clientSecret.trim()}>{mailBusy ? '保存中…' : '保存并登录'}</button></div>
+          </div>
+        {/if}
+        {#if mailOpen}
+          <div class="mail-form">
+            <input class="mi" type="email" placeholder="你的邮箱，如 name@qq.com" bind:value={mailEmail} autocomplete="off" spellcheck="false" />
+            <input class="mi" type="password" placeholder={formGmail ? '应用专用密码（16 位）' : '应用专用密码 / 授权码'} bind:value={mailPass} autocomplete="off"
+              onkeydown={(e) => { if (e.key === 'Enter' && mailEmail && mailPass && !mailBusy) void connectMail(); }} />
+            <p class="hint">
+              {#if formGmail}
+                不是 Gmail 的登录密码：在 Google 账号里打开两步验证，再到 <button class="lnk" onclick={() => openUrl('https://myaccount.google.com/apppasswords')}>应用专用密码</button> 生成一个。密码只存在这台电脑的钥匙串里，随时可以在 Google 那边作废。
+              {:else}
+                QQ / 163 邮箱在网页版「设置 → 账户」里开启 IMAP，生成授权码填在这里。密码只存在这台电脑的钥匙串里。
+              {/if}
+            </p>
+            {#if mailErr}<p class="err">{mailErr}</p>{/if}
+            <div class="mail-act"><button class="bind" onclick={connectMail} disabled={mailBusy || !mailEmail.trim() || !mailPass.trim()}>{mailBusy ? '连接中…' : '连接'}</button></div>
+          </div>
+        {/if}
+      {/if}
+    </ConnGroup>
+  </div>
 {/if}
 
 <style>
-  .sec-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin: 18px 0 4px; min-height: 27px; }
-  .icon-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 8px; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; }
-  .icon-btn:hover { background: #f1efe9; color: var(--text); }
-  .sec-title { display: inline-flex; align-items: center; }
   .how { flex: none; border: none; background: none; padding: 3px 6px; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--dim); cursor: pointer; white-space: nowrap; }
-  .how:hover { background: #f5f4f1; color: var(--text); }
-  .steps { margin: 6px 2px 0; padding-left: 18px; color: var(--dim); font-size: 11.5px; line-height: 1.7; }
-  .list { display: flex; flex-direction: column; gap: 5px; }
-  .row { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 10px; border: 1px solid var(--border); border-radius: 11px; }
-  .ic { display: inline-flex; flex: none; width: 22px; justify-content: center; }
-  .main { flex: 1; min-width: 0; }
-  .main b { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .main small { display: block; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .used { flex: none; font-size: 11px; color: var(--faint); }
+  .how:hover { background: #f1efe9; color: var(--text); }
+  .steps { margin: 0; padding: 2px 12px 8px 49px; color: var(--dim); font-size: 11.5px; line-height: 1.7; }
+  .used { flex: none; font-size: 11px; color: var(--faint); padding-right: 4px; }
   .used.ok { color: #12805c; }
   .used.warn { color: #b45309; }
-  .bind { flex: none; border: 1px solid var(--border2); background: #fff; border-radius: 7px; padding: 3px 10px; font: inherit; font-size: 11.5px; color: var(--text); cursor: pointer; white-space: nowrap; }
+  .bind { flex: none; border: 1px solid var(--border2); background: #fff; border-radius: 7px; padding: 2px 9px; font: inherit; font-size: 11.5px; color: var(--text); cursor: pointer; white-space: nowrap; }
   .bind:hover { background: #f6f5f1; }
   .bind:disabled { opacity: .5; cursor: default; }
-  .mail-row { margin-top: 5px; }
-  .mail-row .main b { display: inline-flex; align-items: center; }
-  .mail-row .ic { color: var(--dim); }
-  .mail-form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 11px; }
+  .g-btn { display: inline-flex; align-items: center; gap: 5px; }
+  .mail-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px 31px; border-top: 1px solid #f1f0ec; }
   .mi { height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--border2); border-radius: 7px; outline: none; background: #fff; color: var(--text); font: inherit; font-size: 12.5px; }
   .mi:focus { border-color: #c7a599; box-shadow: 0 0 0 2px rgb(160 60 43 / 8%); }
   .hint { margin: 0; color: var(--dim); font-size: 11.5px; line-height: 1.6; }
   .lnk { border: none; background: none; padding: 0; font: inherit; color: #1a73e8; cursor: pointer; }
   .lnk:hover { text-decoration: underline; }
   .err { margin: 0; color: #b42318; font-size: 11.5px; line-height: 1.5; }
+  .row-err { padding: 0 10px 8px 31px; }
   .mail-act { display: flex; justify-content: flex-end; }
-  .g-btn { display: inline-flex; align-items: center; gap: 5px; }
-  .row-err { margin: 4px 4px 0 42px; }
-  .mail-log { list-style: none; margin: 4px 0 0; padding: 0 4px 0 42px; color: var(--dim); font-size: 11px; line-height: 1.7; }
+  .mail-log { list-style: none; margin: 0; padding: 0 10px 7px 31px; color: var(--dim); font-size: 11px; line-height: 1.7; }
   .mail-log li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mail-log li.bad { color: #b45309; }
   .mail-log .t { color: var(--faint); margin-right: 6px; font-variant-numeric: tabular-nums; }
