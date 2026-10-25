@@ -39,6 +39,8 @@
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
   const kindLabel = (k: string) => st?.kinds.find((x) => x.kind === k)?.label ?? k;
   const MODE: Record<string, string> = { manual: '手动', review: '先给我看', draft: '存成草稿', auto: '自动发布' };
+  // 卡片上的发布方式标签：颜色按自动程度从灰到绿（手动 → 先给我看 → 草稿 → 自动发布）
+  const MODE_TIP: Record<string, string> = { manual: '后台不自动写也不自动发', review: '新文章上线后自动写好摘要，等你点「发布」', draft: '自动写好存成草稿，不会公开', auto: '新文章上线后自动写摘要并公开发布' };
 
   // ── 渠道：新建 / 修改（同一时间只开一个编辑器）──
   let edit = $state<Channel | null>(null);
@@ -261,7 +263,7 @@
               <span class="nm"><small>{kindLabel(c.kind)}</small><b data-tip={c.target_url || undefined}>{c.target_name || c.target_id}</b></span>
               {#if c.target_url}<button class="btn tiny quiet ext" onclick={() => openUrl(c.target_url)} data-tip="打开 {c.target_url}" aria-label="打开博客"><Icon name="external" size={12} /></button>{/if}
             </div>
-            <p class="ch-meta">{MODE[c.mode] ?? c.mode}{#if c.mode !== 'manual'} · 每天最多 {c.daily_limit} 篇{#if c.backfill} · 补发旧文章{/if}{/if}</p>
+            <p class="ch-meta"><span class="mode m-{c.mode || 'review'}" data-tip={MODE_TIP[c.mode || 'review']}>{MODE[c.mode || 'review'] ?? c.mode}</span>{#if c.mode !== 'manual'}<span>每天最多 {c.daily_limit} 篇{#if c.backfill}&nbsp;· 补发旧文章{/if}</span>{/if}</p>
             <div class="ch-foot">
               <span class="sent">已发 <b>{sentCount(c)}</b>{#if !c.enabled} · 已停用{/if}</span>
               <button class="btn tiny quiet" onclick={() => toggleChannel(c)}>{c.enabled ? '停用' : '启用'}</button>
@@ -371,7 +373,13 @@
   .ch .nm small { font-size: 11px; color: var(--faint); }
   .ch .nm b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ch .ext { flex: none; align-self: flex-start; }
-  .ch-meta { margin: 0; font-size: 11.5px; color: var(--dim); }
+  .ch-meta { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--dim); }
+  .mode { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 550; cursor: help; }
+  .mode::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .m-manual { color: #77726a; background: #f1f0ec; }
+  .m-review { color: #b45309; background: #fdf1e2; }
+  .m-draft { color: #2f5bd3; background: #edf1fc; }
+  .m-auto { color: var(--ok, #12805c); background: var(--su-ok-soft, #e8f5ee); }
   .ch-foot { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
   .ch-foot .sent { flex: 1; font-size: 11.5px; color: var(--faint); }
   .ch-foot .sent b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
