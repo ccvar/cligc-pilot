@@ -174,6 +174,26 @@ pub async fn sites(state: &AppState, conn_id: &str) -> Result<Vec<WpSite>, Strin
         .unwrap_or_default())
 }
 
+/// 站点里已有的文章（含草稿）：(文章 id, 网址, 正文)。对账用，最多看 500 篇。
+pub async fn posts(state: &AppState, conn_id: &str, site_id: &str) -> Result<Vec<(String, String, String)>, String> {
+    if site_id.is_empty() || !site_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("还没选站点".into());
+    }
+    let t = token_of(state, conn_id)?;
+    let mut out = Vec::new();
+    for page in 1..=5 {
+        let v = api(&t, reqwest::Method::GET, &format!("{API}/sites/{site_id}/posts?number=100&page={page}&status=publish,draft,pending,future&fields=ID,URL,content"), None).await?;
+        let list = v["posts"].as_array().cloned().unwrap_or_default();
+        for p in &list {
+            out.push((p["ID"].as_u64().map(|i| i.to_string()).unwrap_or_default(), p["URL"].as_str().unwrap_or("").to_string(), p["content"].as_str().unwrap_or("").to_string()));
+        }
+        if list.len() < 100 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// 发一篇：返回 (文章 id, 网址)。`draft` 为真时存成草稿。
 pub async fn publish(state: &AppState, conn_id: &str, site_id: &str, title: &str, html: &str, labels: &[String], draft: bool) -> Result<(String, String), String> {
     if site_id.is_empty() || !site_id.chars().all(|c| c.is_ascii_digit()) {

@@ -4569,6 +4569,7 @@ pub fn run() {
             syndicate::syndication_skip,
             syndicate::syndication_cancel,
             syndicate::syndication_pending,
+            syndicate::syndication_reconcile,
             phone_stay_awake,
             install_claude,
             verify_cf_token,

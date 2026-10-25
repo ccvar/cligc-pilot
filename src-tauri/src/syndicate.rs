@@ -83,6 +83,9 @@ pub struct Summary {
 pub struct Delivery {
     pub path: String,
     pub channel_id: String,
+    /// 发到的目标（`类型:目标 id`，如 `blogger:123`）：删掉渠道再加回同一个博客时，记录据此接回去，不会重复发
+    #[serde(default)]
+    pub target: String,
     /// published | draft（已存成平台草稿）| failed
     pub status: String,
     #[serde(default)]
@@ -152,7 +155,17 @@ fn file_path(site_dir: &Path) -> PathBuf {
 fn load(site_dir: &Path) -> File {
     let mut f: File = std::fs::read(file_path(site_dir)).ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
     migrate(&mut f);
+    // 老记录没有 target：按渠道补上
+    for d in f.deliveries.iter_mut().filter(|d| d.target.is_empty()) {
+        if let Some(c) = f.channels.iter().find(|c| c.id == d.channel_id) {
+            d.target = target_key(c);
+        }
+    }
     f
+}
+
+fn target_key(c: &Channel) -> String {
+    format!("{}:{}", c.kind, c.target_id)
 }
 
 /// 第一版（config + posts）→ 渠道 + 摘要 + 发布记录。
@@ -182,7 +195,7 @@ fn migrate(f: &mut File) {
         }
         f.summaries.push(Summary { path: p.path.clone(), title: p.title, summary: p.summary, labels: p.labels, skipped: p.status == "skipped", updated_at: p.updated_at, generated_at: p.updated_at, gen_failed_at: 0 });
         if !cid.is_empty() && matches!(p.status.as_str(), "published" | "draft" | "failed") {
-            f.deliveries.push(Delivery { path: p.path, channel_id: cid.clone(), status: p.status, post_id: p.post_id, post_url: p.post_url, error: p.error, updated_at: p.updated_at });
+            f.deliveries.push(Delivery { path: p.path, channel_id: cid.clone(), target: String::new(), status: p.status, post_id: p.post_id, post_url: p.post_url, error: p.error, updated_at: p.updated_at });
         }
     }
 }
@@ -433,19 +446,72 @@ pub fn syndication_save_channel(state: tauri::State<'_, AppState>, site_id: Stri
             c
         }
     };
+    // 删掉过再加回同一个目标：以前的发布记录接到新渠道上
+    let key = target_key(&out);
+    for d in f.deliveries.iter_mut().filter(|d| d.target == key) {
+        d.channel_id = out.id.clone();
+    }
     save(&dir, &f)?;
     Ok(out)
 }
 
-/// 删除渠道（它的发布记录一起删；已经发出去的文章留在平台上）。
+/// 删除渠道。发布记录保留（按目标记着）：以后加回同一个博客 / 站点会接上，已经发过的不会再发一遍。
 #[tauri::command]
 pub fn syndication_remove_channel(state: tauri::State<'_, AppState>, site_id: String, channel_id: String) -> Result<(), String> {
     state.sites.get(&site_id)?;
     let dir = state.sites.data_dir(&site_id);
     let mut f = load(&dir);
     f.channels.retain(|c| c.id != channel_id);
-    f.deliveries.retain(|d| d.channel_id != channel_id);
+    // 失败的记录没用，删掉；成功的留着
+    f.deliveries.retain(|d| d.channel_id != channel_id || d.status != "failed");
     save(&dir, &f)
+}
+
+/// 对账：读目标上已有的文章，正文里链到本站某篇文章的，就记成已发布（加渠道时、发布前都做一遍，防止重复发）。
+/// 返回新记上的篇数。
+async fn reconcile(state: &AppState, site: &crate::sites::Site, c: &Channel) -> Result<usize, String> {
+    let posts = match c.kind.as_str() {
+        "blogger" => crate::blogger::posts(state, &c.conn_id, &c.target_id).await?,
+        "wordpress" => crate::wpcom::posts(state, &c.conn_id, &c.target_id).await?,
+        _ => return Ok(0),
+    };
+    let dir = state.sites.data_dir(&site.id);
+    let f = load(&dir);
+    let out = built_out(state, site)?;
+    let articles = tokio::task::spawn_blocking(move || crate::site_make::articles(&out)).await.map_err(|e| e.to_string())?;
+    let domain = site.domain.trim().trim_start_matches("www.").trim_end_matches('/').to_ascii_lowercase();
+    if domain.is_empty() {
+        return Ok(0);
+    }
+    let mut found = Vec::new();
+    for a in &articles {
+        if f.deliveries.iter().any(|d| d.path == a.path && d.channel_id == c.id && d.status != "failed") {
+            continue;
+        }
+        if let Some((id, url, _)) = posts.iter().find(|(_, _, body)| links_to(body, &domain, &a.path)) {
+            found.push(Delivery { path: a.path.clone(), channel_id: c.id.clone(), target: target_key(c), status: if url.is_empty() { "draft".into() } else { "published".into() }, post_id: id.clone(), post_url: url.clone(), error: String::new(), updated_at: now() });
+        }
+    }
+    let n = found.len();
+    if n > 0 {
+        record(&dir, found)?;
+    }
+    Ok(n)
+}
+
+/// 正文里有没有链到本站这篇文章（`域名/路径"`，带不带末尾斜杠、带不带 www 都算；`/a` 不会误认 `/ab`）。
+fn links_to(body: &str, domain: &str, path: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    let bare = path.trim_end_matches('/').to_ascii_lowercase();
+    [format!("{domain}{bare}\""), format!("{domain}{bare}/\""), format!("{domain}{bare}'"), format!("{domain}{bare}/'")].iter().any(|n| b.contains(n.as_str()))
+}
+
+/// 加渠道后对一遍账（前端在「添加」成功后调）。
+#[tauri::command]
+pub async fn syndication_reconcile(state: tauri::State<'_, AppState>, site_id: String, channel_id: String) -> Result<usize, String> {
+    let site = state.sites.get(&site_id)?;
+    let c = load(&state.sites.data_dir(&site_id)).channels.into_iter().find(|c| c.id == channel_id).ok_or("渠道不存在")?;
+    reconcile(&state, &site, &c).await
 }
 
 fn upsert_summary(dir: &Path, path: &str, edit: impl FnOnce(&mut Summary)) -> Result<Summary, String> {
@@ -557,10 +623,19 @@ pub async fn syndication_publish(state: tauri::State<'_, AppState>, site_id: Str
     let dir = state.sites.data_dir(&site_id);
     let f = load(&dir);
     let s = f.summaries.iter().find(|s| s.path == path).cloned().filter(|s| !s.summary.trim().is_empty()).ok_or("先生成摘要")?;
+    let wanted: Vec<Channel> = f.channels.iter().filter(|c| c.enabled && (channel_ids.is_empty() || channel_ids.contains(&c.id))).cloned().collect();
+    if wanted.is_empty() {
+        return Err(if f.channels.is_empty() { "还没有渠道：先在上面「添加渠道」".into() } else { "没有要发的渠道（都停用了）".into() });
+    }
+    // 发之前先对账：目标上已经有链到这篇的文章就记成已发，不再重复发
+    for c in &wanted {
+        let _ = reconcile(&state, &site, c).await;
+    }
+    let f = load(&dir);
     let done = |cid: &str| f.deliveries.iter().any(|d| d.path == path && d.channel_id == cid && d.status != "failed");
-    let targets: Vec<Channel> = f.channels.iter().filter(|c| c.enabled && (channel_ids.is_empty() || channel_ids.contains(&c.id)) && !done(&c.id)).cloned().collect();
+    let targets: Vec<Channel> = wanted.into_iter().filter(|c| !done(&c.id)).collect();
     if targets.is_empty() {
-        return Err(if f.channels.is_empty() { "还没有渠道：先在上面「添加渠道」".into() } else { "没有要发的渠道（都发过了或停用了）".into() });
+        return Ok(f.deliveries.iter().filter(|d| d.path == path).cloned().collect());
     }
     let out = built_out(&state, &site)?;
     let p2 = path.clone();
@@ -576,8 +651,8 @@ pub async fn syndication_publish(state: tauri::State<'_, AppState>, site_id: Str
 
 async fn deliver(state: &AppState, c: &Channel, s: &Summary, html: &str, path: &str) -> Delivery {
     match publish_to(state, c, s, html).await {
-        Ok((id, url, draft)) => Delivery { path: path.to_string(), channel_id: c.id.clone(), status: if draft { "draft".into() } else { "published".into() }, post_id: id, post_url: url, error: String::new(), updated_at: now() },
-        Err(e) => Delivery { path: path.to_string(), channel_id: c.id.clone(), status: "failed".into(), error: e.chars().take(200).collect(), updated_at: now(), ..Default::default() },
+        Ok((id, url, draft)) => Delivery { path: path.to_string(), channel_id: c.id.clone(), target: target_key(c), status: if draft { "draft".into() } else { "published".into() }, post_id: id, post_url: url, error: String::new(), updated_at: now() },
+        Err(e) => Delivery { path: path.to_string(), channel_id: c.id.clone(), target: target_key(c), status: "failed".into(), error: e.chars().take(200).collect(), updated_at: now(), ..Default::default() },
     }
 }
 
@@ -676,7 +751,10 @@ pub async fn tick(state: &AppState, site_id: &str) -> Result<usize, String> {
             }
             continue;
         }
-        // 存成草稿 / 自动发布
+        // 存成草稿 / 自动发布：先对账，目标上已经有的不再发
+        if !todo.is_empty() && reconcile(state, &site, c).await.unwrap_or(0) > 0 {
+            continue; // 记录变了，下一轮再按新的记录挑
+        }
         let sent_today = f.deliveries.iter().filter(|d| d.channel_id == c.id && d.status != "failed" && d.updated_at >= t0).count();
         let mut budget = (c.daily_limit as usize).saturating_sub(sent_today);
         for a in &todo {
@@ -789,6 +867,15 @@ mod tests {
         assert!(!raw.contains("\"config\"") && !raw.contains("\"posts\""), "旧字段不再写回");
         assert_eq!(load(&t).channels.len(), 1, "再读一次不会重复迁移");
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn finds_posts_linking_to_an_article() {
+        let body = r#"<p>导读</p><p>阅读全文：<a href="https://www.biannex.com/guides/avax/">AVAX</a></p>"#;
+        assert!(links_to(body, "biannex.com", "/guides/avax/"));
+        assert!(links_to(body, "biannex.com", "/guides/avax"));
+        assert!(!links_to(body, "biannex.com", "/guides/ava"), "前缀不能误认");
+        assert!(!links_to(body, "other.com", "/guides/avax/"));
     }
 
     #[test]

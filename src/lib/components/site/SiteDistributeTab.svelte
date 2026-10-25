@@ -1,3 +1,7 @@
+<script lang="ts" module>
+  const reconciledChannels = new Set<string>();
+</script>
+
 <script lang="ts">
   // 站点「分发」：把站点文章的摘要同步到站外渠道（Blogger 博客，之后是 WordPress.com、Telegram 频道……）。
   // 上面是渠道（发到哪儿、发布方式），下面一篇文章一行：生成摘要 → 预览 / 修改 → 发到各渠道，每个渠道一个状态标记。
@@ -18,6 +22,8 @@
   import { synd, loadSyndPending } from '$lib/state/syndication.svelte.js';
 
   let { site }: { site: Site } = $props();
+  // 本次启动已经对过账的渠道（模块级：切走再回来不重复对）
+  const reconciled = reconciledChannels;
 
   type Channel = { id: string; kind: string; conn_id: string; target_id: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; backfill: boolean; created_at: number };
   type Summary = { path: string; title: string; summary: string; labels: string[]; skipped: boolean; updated_at: number };
@@ -100,12 +106,18 @@
   async function saveChannel() {
     if (!edit) return;
     saving = true;
-    try { await invoke('syndication_save_channel', { siteId: site.id, channel: edit }); edit = null; await load(); say('渠道已保存'); }
+    try {
+      const isNew = !edit.id;
+      const saved = await invoke<Channel>('syndication_save_channel', { siteId: site.id, channel: edit });
+      edit = null; await load(); say('渠道已保存');
+      // 新加的渠道：去目标上对一遍账，以前发过的标成已发布，免得重复发
+      if (isNew) void reconcileChannel(saved, true);
+    }
     catch (e) { say(String(e), 'err'); }
     finally { saving = false; }
   }
   async function removeChannel(c: Channel) {
-    const ok = await confirmDialog(`删除渠道「${kindLabel(c.kind)} · ${c.target_name || c.target_id}」？它在 Pilot 里的发布记录会一起删掉；已经发出去的文章还留在平台上，不受影响。`, { title: '删除渠道', kind: 'danger', confirmText: '删除' });
+    const ok = await confirmDialog(`删除渠道「${kindLabel(c.kind)} · ${c.target_name || c.target_id}」？以后不会再往这里发。已经发出去的文章留在平台上；发布记录 Pilot 会留着，以后加回同一个${PLAT[c.kind]?.target ?? '目标'}会接上，不会重复发。`, { title: '删除渠道', kind: 'danger', confirmText: '删除' });
     if (!ok) return;
     try { await invoke('syndication_remove_channel', { siteId: site.id, channelId: c.id }); edit = null; await load(); say('已删除渠道（已经发出去的文章还在平台上）'); }
     catch (e) { say(String(e), 'err'); }
@@ -114,6 +126,16 @@
     try { await invoke('syndication_save_channel', { siteId: site.id, channel: { ...c, enabled: !c.enabled } }); await load(); }
     catch (e) { say(String(e), 'err'); }
   }
+  // 对账：读目标上已有的文章，链到本站文章的记成已发布。每个渠道每次启动 Pilot 后打开分发页时做一次，加渠道后再做一次
+  async function reconcileChannel(c: Channel, announce = false) {
+    reconciled.add(c.id);
+    try {
+      const n = await invoke<number>('syndication_reconcile', { siteId: site.id, channelId: c.id });
+      if (n) { await load(); say(`在 ${kindLabel(c.kind)} · ${c.target_name} 上找到 ${n} 篇以前发过的文章，已标成已发布`); }
+      else if (announce) { /* 没找到就不打扰 */ }
+    } catch { /* 读不到就算了，发布前还会再对一次 */ }
+  }
+  $effect(() => { const cs = st?.channels ?? []; untrack(() => { for (const c of cs) if (c.enabled && !reconciled.has(c.id)) void reconcileChannel(c); }); });
   const sentCount = (c: Channel) => (st?.articles ?? []).filter((r) => r.deliveries.some((d) => d.channel_id === c.id && d.status !== 'failed')).length;
 
   // ── 文章 ──

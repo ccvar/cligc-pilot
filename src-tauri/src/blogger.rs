@@ -79,6 +79,32 @@ pub async fn publish(state: &AppState, conn_id: &str, blog_id: &str, title: &str
     })
 }
 
+/// 博客里已有的文章：(文章 id, 网址, 正文)。对账用（找出哪些文章已经发过，免得重复发），最多看 500 篇。
+pub async fn posts(state: &AppState, conn_id: &str, blog_id: &str) -> Result<Vec<(String, String, String)>, String> {
+    if blog_id.is_empty() || !blog_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("还没选博客".into());
+    }
+    let t = token(state, conn_id).await?;
+    let mut out = Vec::new();
+    let mut page = String::new();
+    for _ in 0..10 {
+        let mut url = reqwest::Url::parse(&format!("{API}/blogs/{blog_id}/posts")).map_err(|e| e.to_string())?;
+        url.query_pairs_mut().append_pair("maxResults", "50").append_pair("view", "ADMIN").append_pair("status", "live").append_pair("status", "draft").append_pair("fields", "nextPageToken,items(id,url,content)");
+        if !page.is_empty() {
+            url.query_pairs_mut().append_pair("pageToken", &page);
+        }
+        let v = google::api(&t, reqwest::Method::GET, url.as_str(), None).await?;
+        for p in v["items"].as_array().cloned().unwrap_or_default() {
+            out.push((p["id"].as_str().unwrap_or("").to_string(), p["url"].as_str().unwrap_or("").to_string(), p["content"].as_str().unwrap_or("").to_string()));
+        }
+        match v["nextPageToken"].as_str() {
+            Some(n) if !n.is_empty() => page = n.to_string(),
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------------------------
 
 /// 授权一个 Blogger 账号：新账号新建连接；`update_id` 非空时重新授权那一条（必须选同一个账号）。
