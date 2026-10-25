@@ -9,6 +9,7 @@
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import GmailMark from '$lib/components/icons/GmailMark.svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
+  import { loadOauthClient } from '$lib/state/oauth.svelte.js';
 
   let installing = $state(false);
   let el: HTMLDivElement | undefined = $state();
@@ -31,7 +32,7 @@
 
   // 邮箱验证码：注册时 Pilot 去这个邮箱里取验证码、直接填进手机（密码只进钥匙串，AI 读不到邮件）
   type MailLog = { ts: number; from: string; kind: string; ok: boolean; note: string };
-  type MailStatus = { configured: boolean; email: string; host: string; plus_alias: boolean; log: MailLog[] };
+  type MailStatus = { configured: boolean; email: string; host: string; plus_alias: boolean; auth: string; google_ready: boolean; log: MailLog[] };
   let mail = $state<MailStatus | null>(null);
   let mailOpen = $state(false);
   let mailEmail = $state('');
@@ -48,10 +49,37 @@
     } catch (e) { mailErr = String(e); }
     finally { mailBusy = false; }
   }
+  // 用 Google 登录：系统浏览器里选账号、点允许，Pilot 这边一直等到浏览器跳回来（或点取消）。
+  // 还没有 OAuth 客户端时先填一次客户端 ID / 密钥（和网站数据 GA4 / Search Console 共用）。
+  let googleBusy = $state(false);
+  let clientOpen = $state(false);
+  let clientId = $state('');
+  let clientSecret = $state('');
+  async function connectGoogle() {
+    if (!mail?.google_ready) { clientOpen = !clientOpen; mailOpen = false; mailErr = ''; return; }
+    googleBusy = true; mailErr = ''; mailOpen = false; clientOpen = false;
+    try { mail = await invoke<MailStatus>('mail_google_connect'); say('Gmail 已接上'); }
+    catch (e) { if (!String(e).startsWith('已取消')) mailErr = String(e); }
+    finally { googleBusy = false; }
+  }
+  async function saveClientAndConnect() {
+    mailBusy = true; mailErr = '';
+    try {
+      await invoke('save_google_oauth_client', { clientId, clientSecret });
+      clientSecret = '';
+      if (mail) mail.google_ready = true;
+      void loadOauthClient();
+    } catch (e) { mailErr = String(e); return; }
+    finally { mailBusy = false; }
+    await connectGoogle();
+  }
+  function cancelGoogle() { void invoke('google_oauth_cancel'); }
   async function removeMail() {
     try { await invoke('mail_remove'); await loadMail(); say('已断开邮箱'); } catch (e) { say(String(e), 'err'); }
   }
   const isGmail = $derived(/@(gmail|googlemail)\.com$/i.test(mail?.configured ? mail.email : mailEmail.trim()) || !(mail?.configured || mailEmail.trim()));
+  // 表单里的说明：能用 Google 登录时，「其他邮箱」默认说 QQ / 163 的授权码
+  const formGmail = $derived(mailEmail.trim() ? /@(gmail|googlemail)\.com$/i.test(mailEmail.trim()) : !mail?.google_ready);
   const hhmm = (ts: number) => { const d = new Date(ts * 1000); const today = new Date().toDateString() === d.toDateString(); return (today ? '' : `${d.getMonth() + 1}/${d.getDate()} `) + d.toTimeString().slice(0, 5); };
 </script>
 
@@ -98,21 +126,35 @@
     <span class="ic">{#if isGmail}<GmailMark size={18} />{:else}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3.5 6.5 8.5 6.5 8.5-6.5" /></svg>{/if}</span>
     <span class="main">
       <b>邮箱验证码<InfoTip text={'AI 在手机上注册时，Pilot 去这个邮箱里找网站刚发来的验证码，直接填进手机。\nAI 只知道「填好了」，读不到你的邮件；谷歌、苹果、微软账号的验证码不代取。\n短信验证码、密码还是交给你。'} label="邮箱验证码怎么用" /></b>
-      <small>{mail.configured ? `${mail.email} · 注册时自动取验证码` : '注册时让 Pilot 从你的邮箱取验证码，填进手机'}</small>
+      <small>{mail.configured ? `${mail.email} · 注册时自动取验证码` : googleBusy ? '在浏览器里选你的 Gmail 账号，点「继续」和「允许」…' : '注册时自动取验证码填进手机'}</small>
     </span>
     {#if mail.configured}
       <button class="how" onclick={removeMail}>断开</button>
+    {:else if googleBusy}
+      <button class="how" onclick={cancelGoogle}>取消</button>
     {:else}
-      <button class="bind" onclick={() => { mailOpen = !mailOpen; mailErr = ''; }} aria-expanded={mailOpen}>{mailOpen ? '收起' : '接上'}</button>
+      <button class="how" onclick={() => { mailOpen = !mailOpen; clientOpen = false; mailErr = ''; }} aria-expanded={mailOpen}>{mailOpen ? '收起' : '其他邮箱'}</button>
+      <button class="bind g-btn" onclick={connectGoogle} aria-expanded={clientOpen}><GmailMark size={12} />用 Google 登录</button>
     {/if}
   </div>
+  {#if !mail.configured && !mailOpen && !clientOpen && mailErr}<p class="err row-err">{mailErr}</p>{/if}
+  {#if !mail.configured && clientOpen}
+    <div class="mail-form">
+      <p class="hint">第一次用要填一次 Google 登录凭证：在 Google Cloud 建一个「桌面应用」类型的 OAuth 客户端，并启用 Gmail API（<button class="lnk" onclick={() => openUrl('https://console.cloud.google.com/apis/credentials')}>打开 Google Cloud 凭据页</button>）。和网站数据（GA4 / Search Console）共用这一份，只存在钥匙串里。</p>
+      <input class="mi" placeholder="客户端 ID（….apps.googleusercontent.com）" bind:value={clientId} autocomplete="off" spellcheck="false" />
+      <input class="mi" type="password" placeholder="客户端密钥（GOCSPX-…）" bind:value={clientSecret} autocomplete="off"
+        onkeydown={(e) => { if (e.key === 'Enter' && clientId && clientSecret && !mailBusy) void saveClientAndConnect(); }} />
+      {#if mailErr}<p class="err">{mailErr}</p>{/if}
+      <div class="mail-act"><button class="bind" onclick={saveClientAndConnect} disabled={mailBusy || !clientId.trim() || !clientSecret.trim()}>{mailBusy ? '保存中…' : '保存并登录'}</button></div>
+    </div>
+  {/if}
   {#if !mail.configured && mailOpen}
     <div class="mail-form">
       <input class="mi" type="email" placeholder="你的邮箱，如 name@gmail.com" bind:value={mailEmail} autocomplete="off" spellcheck="false" />
-      <input class="mi" type="password" placeholder={isGmail ? '应用专用密码（16 位）' : '应用专用密码 / 授权码'} bind:value={mailPass} autocomplete="off"
+      <input class="mi" type="password" placeholder={formGmail ? '应用专用密码（16 位）' : '应用专用密码 / 授权码'} bind:value={mailPass} autocomplete="off"
         onkeydown={(e) => { if (e.key === 'Enter' && mailEmail && mailPass && !mailBusy) void connectMail(); }} />
       <p class="hint">
-        {#if isGmail}
+        {#if formGmail}
           不是 Gmail 的登录密码：在 Google 账号里打开两步验证，再到 <button class="lnk" onclick={() => openUrl('https://myaccount.google.com/apppasswords')}>应用专用密码</button> 生成一个。密码只存在这台电脑的钥匙串里，随时可以在 Google 那边作废。
         {:else}
           QQ / 163 邮箱在网页版「设置 → 账户」里开启 IMAP，生成授权码填在这里。密码只存在这台电脑的钥匙串里。
@@ -162,6 +204,8 @@
   .lnk:hover { text-decoration: underline; }
   .err { margin: 0; color: #b42318; font-size: 11.5px; line-height: 1.5; }
   .mail-act { display: flex; justify-content: flex-end; }
+  .g-btn { display: inline-flex; align-items: center; gap: 5px; }
+  .row-err { margin: 4px 4px 0 42px; }
   .mail-log { list-style: none; margin: 4px 0 0; padding: 0 4px 0 42px; color: var(--dim); font-size: 11px; line-height: 1.7; }
   .mail-log li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mail-log li.bad { color: #b45309; }

@@ -59,6 +59,9 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # 「用 Google 登录」接 Gmail 的 OAuth 客户端（桌面应用类型）；没设就只能用应用专用密码接
+          PILOT_GOOGLE_CLIENT_ID: ${{ secrets.PILOT_GOOGLE_CLIENT_ID }}
+          PILOT_GOOGLE_CLIENT_SECRET: ${{ secrets.PILOT_GOOGLE_CLIENT_SECRET }}
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: 收集产物 + 平台片段

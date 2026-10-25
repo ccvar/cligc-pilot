@@ -377,6 +377,15 @@ fn load_client(state: &AppState) -> Option<OAuthClient> {
     Some(adopted)
 }
 
+/// 「用 Google 登录」接 Gmail 用的 OAuth 客户端：打包时编进去的（`PILOT_GOOGLE_CLIENT_ID` / `PILOT_GOOGLE_CLIENT_SECRET`）优先，
+/// 没有就用这里配的全局客户端（和网站数据共用）。
+pub fn gmail_client(state: &AppState) -> Option<(String, String)> {
+    if let Some(id) = option_env!("PILOT_GOOGLE_CLIENT_ID").map(str::trim).filter(|s| !s.is_empty()) {
+        return Some((id.into(), option_env!("PILOT_GOOGLE_CLIENT_SECRET").unwrap_or("").trim().into()));
+    }
+    load_client(state).map(|c| (c.client_id, c.client_secret))
+}
+
 pub fn valid_client_id(id: &str) -> bool {
     let id = id.trim();
     id.ends_with(".apps.googleusercontent.com") && id.len() > ".apps.googleusercontent.com".len() && !id.contains(char::is_whitespace)

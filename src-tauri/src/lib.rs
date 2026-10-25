@@ -2951,18 +2951,32 @@ async fn install_adb(state: tauri::State<'_, AppState>) -> Result<String, String
 /// 邮箱验证码：接了哪个邮箱、最近取过哪些网站的验证码。
 #[tauri::command]
 fn mail_status(state: tauri::State<'_, AppState>) -> mail::MailStatus {
-    mail::status(&state.data_dir)
+    mail::MailStatus { google_ready: data_cmds::gmail_client(&state).is_some(), ..mail::status(&state.data_dir) }
 }
 
 /// 接邮箱：用应用专用密码真登录一次，成功才保存（密码只进钥匙串）。
 #[tauri::command]
 async fn mail_connect(state: tauri::State<'_, AppState>, email: String, password: String) -> Result<mail::MailStatus, String> {
-    mail::connect(&state.data_dir, &email, &password).await
+    let st = mail::connect(&state.data_dir, &email, &password).await?;
+    Ok(mail::MailStatus { google_ready: data_cmds::gmail_client(&state).is_some(), ..st })
 }
 
 #[tauri::command]
 fn mail_remove(state: tauri::State<'_, AppState>) -> Result<(), String> {
     mail::remove(&state.data_dir)
+}
+
+/// 用 Google 登录接 Gmail：打开系统浏览器，等用户点「允许」（最多 5 分钟），成功后把窗口拉回前面。
+/// 取消用网站数据那边同一个 `google_oauth_cancel`（一次只等一个浏览器授权）。
+#[tauri::command]
+async fn mail_google_connect(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<mail::MailStatus, String> {
+    use tauri_plugin_opener::OpenerExt;
+    let client = data_cmds::gmail_client(&state).ok_or("还没有配置 Google OAuth 客户端")?;
+    let st = mail::google_connect(&state.data_dir, client, |url| app.opener().open_url(url, None::<&str>).map_err(|e| format!("打开浏览器失败：{e}"))).await?;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_focus();
+    }
+    Ok(mail::MailStatus { google_ready: true, ..st })
 }
 
 #[tauri::command]
@@ -4513,6 +4527,7 @@ pub fn run() {
             mail_status,
             mail_connect,
             mail_remove,
+            mail_google_connect,
             install_claude,
             verify_cf_token,
             connect_cloudflare,

@@ -100,18 +100,44 @@ async fn respond(stream: &mut tokio::net::TcpStream, html: &str) {
     let _ = stream.shutdown().await;
 }
 
-/// 完整登录流程：开本机端口 → 打开浏览器 → 等回调 → 换令牌 → 取邮箱。`open` 负责打开浏览器。
+/// 浏览器授权拿到的令牌。
+pub struct Tokens {
+    pub refresh: String,
+    pub access: String,
+    /// Google 实际给了的权限（用户可以在授权页取消勾选某几项）
+    pub granted: Vec<String>,
+}
+
+/// 网站数据（GA4 / Search Console）的登录：授权 → 检查勾了读取权限 → 取邮箱。
 pub async fn login(client_id: &str, client_secret: &str, manage: bool, open: impl Fn(&str) -> Result<(), String>) -> Result<OAuthCred, String> {
+    let (client_id, client_secret) = (client_id.trim(), client_secret.trim());
+    let t = authorize(client_id, client_secret, &scopes(manage).join(" "), open).await?;
+    for need in [google::SCOPE_ANALYTICS_RO, google::SCOPE_WEBMASTERS_RO] {
+        if !t.granted.iter().any(|g| g == need) {
+            return Err("授权时没有勾选 GA4 / Search Console 的读取权限，请重新登录并勾选".into());
+        }
+    }
+    let email = google::api(&t.access, reqwest::Method::GET, "https://openidconnect.googleapis.com/v1/userinfo", None)
+        .await
+        .ok()
+        .and_then(|u| u["email"].as_str().map(str::to_string))
+        .unwrap_or_default();
+    Ok(OAuthCred { client_id: client_id.into(), client_secret: client_secret.into(), refresh_token: t.refresh, scopes: t.granted, email })
+}
+
+/// 浏览器授权的完整流程（网站数据和 Gmail 共用）：开本机端口 → 打开浏览器 → 等回调 → 换令牌。
+/// `open` 负责打开浏览器；同一时间只等一个授权，`cancel()` 结束它。
+pub async fn authorize(client_id: &str, client_secret: &str, scope: &str, open: impl Fn(&str) -> Result<(), String>) -> Result<Tokens, String> {
     if BUSY.swap(true, Ordering::SeqCst) {
         return Err("已经有一个登录在等待浏览器授权".into());
     }
     CANCEL.store(false, Ordering::SeqCst);
-    let r = login_inner(client_id.trim(), client_secret.trim(), manage, open).await;
+    let r = authorize_inner(client_id.trim(), client_secret.trim(), scope, open).await;
     BUSY.store(false, Ordering::SeqCst);
     r
 }
 
-async fn login_inner(client_id: &str, client_secret: &str, manage: bool, open: impl Fn(&str) -> Result<(), String>) -> Result<OAuthCred, String> {
+async fn authorize_inner(client_id: &str, client_secret: &str, scope: &str, open: impl Fn(&str) -> Result<(), String>) -> Result<Tokens, String> {
     if !client_id.ends_with(".apps.googleusercontent.com") {
         return Err("客户端 ID 应以 .apps.googleusercontent.com 结尾（在 Google Cloud 的凭据页复制）".into());
     }
@@ -120,12 +146,11 @@ async fn login_inner(client_id: &str, client_secret: &str, manage: bool, open: i
     let redirect = format!("http://127.0.0.1:{port}");
     let verifier = random_token(64);
     let state = random_token(24);
-    let scope = scopes(manage).join(" ");
     let url = format!(
         "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}&access_type=offline&prompt=consent",
         esc(client_id),
         esc(&redirect),
-        esc(&scope),
+        esc(scope),
         pkce_challenge(&verifier),
         state
     );
@@ -189,18 +214,8 @@ async fn login_inner(client_id: &str, client_secret: &str, manage: bool, open: i
     }
     let refresh = v["refresh_token"].as_str().ok_or("Google 没有返回刷新令牌（请在授权页重新同意全部权限）")?.to_string();
     let access = v["access_token"].as_str().unwrap_or_default().to_string();
-    let granted: Vec<String> = v["scope"].as_str().unwrap_or(&scope).split_whitespace().map(str::to_string).collect();
-    for need in [google::SCOPE_ANALYTICS_RO, google::SCOPE_WEBMASTERS_RO] {
-        if !granted.iter().any(|g| g == need) {
-            return Err("授权时没有勾选 GA4 / Search Console 的读取权限，请重新登录并勾选".into());
-        }
-    }
-    let email = google::api(&access, reqwest::Method::GET, "https://openidconnect.googleapis.com/v1/userinfo", None)
-        .await
-        .ok()
-        .and_then(|u| u["email"].as_str().map(str::to_string))
-        .unwrap_or_default();
-    Ok(OAuthCred { client_id: client_id.into(), client_secret: client_secret.into(), refresh_token: refresh, scopes: granted, email })
+    let granted: Vec<String> = v["scope"].as_str().unwrap_or(scope).split_whitespace().map(str::to_string).collect();
+    Ok(Tokens { refresh, access, granted })
 }
 
 pub fn can_manage(cred: &OAuthCred) -> bool {

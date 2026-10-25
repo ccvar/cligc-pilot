@@ -5,15 +5,16 @@
 //!    → Pilot（本模块）用 IMAP 搜「okx.com 最近几分钟的邮件」→ 取出验证码 → adb 填进手机 → 只回「已填好」
 //! ```
 //!
-//! - 邮箱走 IMAP + 应用专用密码（Gmail 的「应用专用密码」，QQ / 163 的「授权码」）。密码只在钥匙串里，
-//!   地址和服务器在 `<数据目录>/mail.json`。
+//! - Gmail 走「用 Google 登录」（OAuth：桌面应用 + PKCE + 本机回调，只要「只读邮件」权限），用 Gmail API 搜邮件；
+//!   其他邮箱走 IMAP + 应用专用密码（QQ / 163 的「授权码」，Gmail 也能这样接）。
+//!   登录凭证 / 密码只在钥匙串里，地址和接法在 `<数据目录>/mail.json`。
 //! - **AI 读不到邮箱**：回给 AI 的只有「填好了、几位、多久前收到」，不回标题和正文 ——
 //!   谁都能给你发邮件，邮件里的话不能有机会带偏 AI。
-//! - 只读：EXAMINE + BODY.PEEK，不标已读、不删不移。
+//! - 只读：IMAP 用 EXAMINE + BODY.PEEK，Gmail API 只申请 gmail.readonly；不标已读、不删不移。
 //! - 不取谷歌 / 苹果 / 微软和邮箱所在域发来的邮件：那是接管邮箱本身和这些账号的钥匙。
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
@@ -34,6 +35,9 @@ pub struct MailConfig {
     pub email: String,
     pub host: String,
     pub port: u16,
+    /// 空＝IMAP + 应用专用密码；google＝用 Google 登录（Gmail API）
+    #[serde(default)]
+    pub auth: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -53,6 +57,10 @@ pub struct MailStatus {
     pub email: String,
     pub host: String,
     pub plus_alias: bool,
+    /// 空 | google
+    pub auth: String,
+    /// 有可用的 Google OAuth 客户端（打包时编进去的，或在 Pilot 里配过的），可以直接「用 Google 登录」；由调用方填
+    pub google_ready: bool,
     pub log: Vec<LogEntry>,
 }
 
@@ -83,7 +91,7 @@ fn push_log(data_dir: &Path, e: LogEntry) {
 
 pub fn status(data_dir: &Path) -> MailStatus {
     match load_config(data_dir) {
-        Some(c) => MailStatus { configured: true, plus_alias: plus_alias(&c.email), email: c.email, host: c.host, log: load_log(data_dir) },
+        Some(c) => MailStatus { configured: true, plus_alias: plus_alias(&c.email), email: c.email, host: c.host, auth: c.auth, log: load_log(data_dir), ..Default::default() },
         None => MailStatus::default(),
     }
 }
@@ -507,16 +515,200 @@ pub async fn connect(data_dir: &Path, email: &str, password: &str) -> Result<Mai
     im.run("EXAMINE \"INBOX\"").await.map_err(|e| format!("打不开收件箱：{e}"))?;
     im.logout().await;
     crate::keychain::set_named_secret(SECRET, &pass)?;
-    let cfg = MailConfig { email, host, port };
-    std::fs::write(config_path(data_dir), serde_json::to_vec_pretty(&cfg).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let _ = crate::keychain::delete_named_secret(GOOGLE_SECRET);
+    save_config(data_dir, &MailConfig { email, host, port, auth: String::new() })?;
     Ok(status(data_dir))
+}
+
+fn save_config(data_dir: &Path, cfg: &MailConfig) -> Result<(), String> {
+    std::fs::write(config_path(data_dir), serde_json::to_vec_pretty(cfg).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 pub fn remove(data_dir: &Path) -> Result<(), String> {
     let _ = crate::keychain::delete_named_secret(SECRET);
+    let _ = crate::keychain::delete_named_secret(GOOGLE_SECRET);
     let _ = std::fs::remove_file(config_path(data_dir));
     let _ = std::fs::remove_file(log_path(data_dir));
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// 用 Google 登录（Gmail）：浏览器授权走 `google_oauth`（和网站数据共用同一个 OAuth 客户端），
+// 长期凭证进钥匙串。之后每次取验证码先换一个 1 小时的访问令牌，走 Gmail API。
+
+const GOOGLE_SECRET: &str = "mail-google";
+const GMAIL_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
+const GMAIL_HOST: &str = "gmail.googleapis.com";
+const GMAIL_API: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+/// 钥匙串里存的 Gmail 登录凭证：连同用的是哪个 OAuth 客户端一起存（换访问令牌要用），
+/// 之后全局客户端换了也不影响已经接上的邮箱。
+#[derive(Serialize, Deserialize)]
+struct GoogleCred {
+    client_id: String,
+    client_secret: String,
+    refresh_token: String,
+}
+
+/// Google 接口返回的错误 → 一句话。
+async fn google_error(r: reqwest::Response) -> String {
+    let code = r.status();
+    let v: serde_json::Value = r.json().await.unwrap_or_default();
+    let e = &v["error"];
+    let msg = e["message"].as_str().or(v["error_description"].as_str()).or(e.as_str()).unwrap_or("");
+    if msg.contains("has not been used") || msg.contains("is disabled") {
+        return "Google Cloud 项目里还没启用 Gmail API：在 Google Cloud 控制台「API 和服务 → 库」里搜 Gmail API，点「启用」".into();
+    }
+    if msg.is_empty() {
+        format!("Google 返回 {code}")
+    } else {
+        format!("Google 返回 {code}：{}", msg.chars().take(160).collect::<String>())
+    }
+}
+
+/// 用 Google 登录：浏览器里授权（只要「只读邮件」）→ 查邮箱地址 → 凭证进钥匙串。
+/// `client` 是 OAuth 客户端（桌面应用类型），`open` 负责打开浏览器。
+pub async fn google_connect(data_dir: &Path, client: (String, String), open: impl Fn(&str) -> Result<(), String>) -> Result<MailStatus, String> {
+    let (client_id, client_secret) = client;
+    let t = crate::google_oauth::authorize(&client_id, &client_secret, GMAIL_SCOPE, open).await?;
+    if !t.granted.iter().any(|s| s == GMAIL_SCOPE) {
+        return Err("授权时要勾上「查看你的电子邮件」那一项，再点一次「用 Google 登录」".into());
+    }
+    let p = reqwest::Client::new()
+        .get(format!("{GMAIL_API}/profile"))
+        .bearer_auth(&t.access)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("连不上 Gmail：{e}"))?;
+    if !p.status().is_success() {
+        return Err(google_error(p).await);
+    }
+    let email = p.json::<serde_json::Value>().await.ok().and_then(|v| v["emailAddress"].as_str().map(String::from)).ok_or("Gmail 没返回邮箱地址")?;
+    let cred = GoogleCred { client_id: client_id.trim().into(), client_secret: client_secret.trim().into(), refresh_token: t.refresh };
+    crate::keychain::set_named_secret(GOOGLE_SECRET, &serde_json::to_string(&cred).map_err(|e| e.to_string())?)?;
+    let _ = crate::keychain::delete_named_secret(SECRET);
+    save_config(data_dir, &MailConfig { email, host: GMAIL_HOST.into(), port: 443, auth: "google".into() })?;
+    Ok(status(data_dir))
+}
+
+#[derive(Deserialize)]
+struct Tok {
+    access_token: String,
+}
+
+/// 用长期凭证换一个访问令牌（1 小时有效，每次取验证码换一次）。
+async fn gmail_token(http: &reqwest::Client) -> Result<String, String> {
+    let raw = crate::keychain::get_named_secret(GOOGLE_SECRET).map_err(|_| "钥匙串里没有 Google 登录凭证：请用户在设置里重新用 Google 登录".to_string())?;
+    let c: GoogleCred = serde_json::from_str(&raw).map_err(|_| "Google 登录凭证坏了：请用户在设置里断开后重新用 Google 登录".to_string())?;
+    let r = http
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[("client_id", c.client_id.as_str()), ("client_secret", &c.client_secret), ("refresh_token", &c.refresh_token), ("grant_type", "refresh_token")])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("连不上 Google：{e}"))?;
+    if r.status() == reqwest::StatusCode::BAD_REQUEST || r.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Google 登录已失效（可能在 Google 账号里撤销了授权）：请用户在「设置 → 安卓手机 → 邮箱验证码」里断开后重新用 Google 登录".into());
+    }
+    if !r.status().is_success() {
+        return Err(google_error(r).await);
+    }
+    Ok(r.json::<Tok>().await.map_err(|e| format!("Google 返回的内容看不懂：{e}"))?.access_token)
+}
+
+struct Gmail {
+    http: reqwest::Client,
+    token: String,
+    /// 轮询时同一封邮件不重复下载：id → (收到时间, 原文)
+    cache: HashMap<String, (i64, Vec<u8>)>,
+}
+
+impl Gmail {
+    async fn get(&self, url: reqwest::Url) -> Result<serde_json::Value, String> {
+        let r = self.http.get(url).bearer_auth(&self.token).timeout(Duration::from_secs(30)).send().await.map_err(|e| format!("连不上 Gmail：{e}"))?;
+        if !r.status().is_success() {
+            return Err(google_error(r).await);
+        }
+        r.json().await.map_err(|e| format!("Gmail 返回的内容看不懂：{e}"))
+    }
+
+    /// 最近一天 domain 发来的邮件（含垃圾邮件，最新几封）：(gmail|id, 收到时间, 原文)。
+    async fn recent(&mut self, domain: &str, since_ts: i64) -> Result<Vec<(String, i64, Vec<u8>)>, String> {
+        use base64::Engine;
+        let b64 = base64::engine::GeneralPurpose::new(
+            &base64::alphabet::URL_SAFE,
+            base64::engine::GeneralPurposeConfig::new().with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+        );
+        let q = format!("from:{domain} newer_than:1d");
+        let list = self
+            .get(reqwest::Url::parse_with_params(&format!("{GMAIL_API}/messages"), &[("q", q.as_str()), ("maxResults", "5"), ("includeSpamTrash", "true")]).map_err(|e| e.to_string())?)
+            .await?;
+        let ids: Vec<String> = list["messages"].as_array().map(|a| a.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default();
+        let mut out = Vec::new();
+        for id in ids {
+            if !self.cache.contains_key(&id) {
+                let m = self.get(reqwest::Url::parse_with_params(&format!("{GMAIL_API}/messages/{id}"), &[("format", "raw")]).map_err(|e| e.to_string())?).await?;
+                let ts = m["internalDate"].as_str().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0) / 1000;
+                let mut raw = m["raw"].as_str().and_then(|s| b64.decode(s).ok()).unwrap_or_default();
+                raw.truncate(FETCH_CAP);
+                self.cache.insert(id.clone(), (ts, raw));
+            }
+            let (ts, raw) = &self.cache[&id];
+            if *ts >= since_ts && !raw.is_empty() {
+                out.push((format!("gmail|{id}"), *ts, raw.clone()));
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// 取邮件的两种接法。
+enum Source {
+    Imap(Imap, Vec<String>),
+    Gmail(Gmail),
+}
+
+impl Source {
+    async fn open(cfg: &MailConfig) -> Result<Self, serde_json::Value> {
+        if cfg.auth == "google" {
+            let http = reqwest::Client::new();
+            let token = gmail_token(&http).await.map_err(|e| err("mail_login", e))?;
+            return Ok(Source::Gmail(Gmail { http, token, cache: HashMap::new() }));
+        }
+        let pass = crate::keychain::get_named_secret(SECRET)
+            .map_err(|_| err("not_configured", "钥匙串里没有邮箱的应用专用密码：请用户在设置里重新接一下邮箱。"))?;
+        let mut im = Imap::login(&cfg.host, cfg.port, &cfg.email, &pass).await.map_err(|e| err("mail_login", e))?;
+        let mut boxes = vec!["INBOX".to_string()];
+        if let Some(j) = im.junk().await {
+            boxes.push(j);
+        }
+        Ok(Source::Imap(im, boxes))
+    }
+
+    /// 收件箱读不了算失败；垃圾邮件文件夹读不了就跳过。
+    async fn recent(&mut self, domain: &str, since_ts: i64) -> Result<Vec<(String, i64, Vec<u8>)>, String> {
+        match self {
+            Source::Gmail(g) => g.recent(domain, since_ts).await,
+            Source::Imap(im, boxes) => {
+                let mut msgs = Vec::new();
+                for mb in boxes.iter() {
+                    match im.recent(mb, domain, since_ts).await {
+                        Ok(m) => msgs.extend(m),
+                        Err(e) if mb == "INBOX" => return Err(e),
+                        Err(_) => {}
+                    }
+                }
+                Ok(msgs)
+            }
+        }
+    }
+
+    async fn close(self) {
+        if let Source::Imap(im, _) = self {
+            im.logout().await;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -627,12 +819,8 @@ async fn dispatch(data_dir: &Path, req: Req) -> serde_json::Value {
     if !req.serial.is_empty() && !req.serial.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')) {
         return err("bad_args", "--serial 不对");
     }
-    let pass = match crate::keychain::get_named_secret(SECRET) {
-        Ok(p) => p,
-        Err(_) => return err("not_configured", "钥匙串里没有邮箱的应用专用密码：请用户在设置里重新接一下邮箱。"),
-    };
     let wait = if req.wait == 0 { WAIT_DEFAULT } else { req.wait.clamp(10, WAIT_MAX) };
-    let res = fetch_and_fill(data_dir, &cfg, &pass, &domain, kind, &req.serial, wait, req.reuse).await;
+    let res = fetch_and_fill(data_dir, &cfg, &domain, kind, &req.serial, wait, req.reuse).await;
     let (ok, note) = match &res {
         Ok(v) => (true, v.get("note").and_then(|n| n.as_str()).unwrap_or("").to_string()),
         Err(e) => (false, e.get("detail").and_then(|n| n.as_str()).unwrap_or("").chars().take(120).collect()),
@@ -653,7 +841,6 @@ async fn dispatch(data_dir: &Path, req: Req) -> serde_json::Value {
 async fn fetch_and_fill(
     data_dir: &Path,
     cfg: &MailConfig,
-    pass: &str,
     domain: &str,
     kind: &str,
     serial: &str,
@@ -662,25 +849,17 @@ async fn fetch_and_fill(
 ) -> Result<serde_json::Value, serde_json::Value> {
     let since = now() - LOOK_BACK_SECS;
     let deadline = std::time::Instant::now() + Duration::from_secs(wait);
-    let mut im = Imap::login(&cfg.host, cfg.port, &cfg.email, pass).await.map_err(|e| err("mail_login", e))?;
-    let mut boxes = vec!["INBOX".to_string()];
-    if let Some(j) = im.junk().await {
-        boxes.push(j);
-    }
+    let mut src = Source::open(cfg).await?;
     let parser = mail_parser::MessageParser::default();
     let mut saw_mail = false;
     let found = 'poll: loop {
-        let mut msgs = Vec::new();
-        for mb in &boxes {
-            match im.recent(mb, domain, since).await {
-                Ok(m) => msgs.extend(m),
-                Err(e) if mb == "INBOX" => {
-                    im.logout().await;
-                    return Err(err("mail_failed", format!("读收件箱失败：{e}")));
-                }
-                Err(_) => {}
+        let mut msgs = match src.recent(domain, since).await {
+            Ok(m) => m,
+            Err(e) => {
+                src.close().await;
+                return Err(err("mail_failed", format!("读收件箱失败：{e}")));
             }
-        }
+        };
         msgs.sort_by_key(|m| std::cmp::Reverse(m.1));
         for (key, ts, raw) in msgs {
             let key = format!("{}|{key}", cfg.email);
@@ -707,7 +886,7 @@ async fn fetch_and_fill(
             }
         }
         if std::time::Instant::now() + POLL > deadline {
-            im.logout().await;
+            src.close().await;
             return Err(if saw_mail && kind == "code" {
                 err("no_code_in_mail", format!("收到了 {domain} 的邮件，但没认出验证码：可能是激活链接（改用 mail-link），否则请用户看一下邮件。"))
             } else if saw_mail {
@@ -718,7 +897,7 @@ async fn fetch_and_fill(
         }
         tokio::time::sleep(POLL).await;
     };
-    im.logout().await;
+    src.close().await;
     let (key, ts, value) = found;
     let age = (now() - ts).max(0);
     if kind == "code" {
@@ -816,6 +995,15 @@ mod tests {
     async fn live_gmail_rejects_bad_password() {
         let e = Imap::login("imap.gmail.com", 993, "pilot-test-nonexistent@gmail.com", "abcdabcdabcdabcd").await.err().unwrap();
         assert!(e.contains("不对") || e.contains("应用专用密码"), "{e}");
+    }
+
+    #[test]
+    fn old_config_means_app_password() {
+        let d = std::env::temp_dir().join(format!("mail-g-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("mail.json"), r#"{"email":"a@qq.com","host":"imap.qq.com","port":993}"#).unwrap();
+        assert_eq!(load_config(&d).unwrap().auth, "");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// 本机端口：令牌对才办事；没接邮箱时 info 说 configured=false、code 说 not_configured。
