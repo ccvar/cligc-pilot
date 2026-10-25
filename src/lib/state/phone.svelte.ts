@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { untrack } from 'svelte';
 
-export type PhoneDevice = { serial: string; state: string; model: string };
+export type PhoneDevice = { serial: string; state: string; model: string; stay_on: boolean };
 export type PhoneStatus = { adb: string; managed: boolean; devices: PhoneDevice[]; error: string };
 
 class PhoneState {

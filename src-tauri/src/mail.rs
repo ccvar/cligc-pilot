@@ -463,7 +463,9 @@ impl Imap {
     async fn recent(&mut self, mailbox: &str, domain: &str, since_ts: i64) -> Result<Vec<(String, i64, Vec<u8>)>, String> {
         self.run(&format!("EXAMINE {}", quote(mailbox))).await?;
         let day = chrono::DateTime::from_timestamp(since_ts - 86_400, 0).unwrap_or_default().format("%d-%b-%Y").to_string();
-        let found = self.run(&format!("UID SEARCH SINCE {day} FROM {}", quote(domain))).await?;
+        // domain 为空：不限发件人（「填验证码」按钮，用户没说是哪个网站）
+        let search = if domain.is_empty() { format!("UID SEARCH SINCE {day}") } else { format!("UID SEARCH SINCE {day} FROM {}", quote(domain)) };
+        let found = self.run(&search).await?;
         let mut uids: Vec<u32> = found
             .iter()
             .filter_map(|r| r.text.strip_prefix("* SEARCH"))
@@ -640,7 +642,7 @@ impl Gmail {
             &base64::alphabet::URL_SAFE,
             base64::engine::GeneralPurposeConfig::new().with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
         );
-        let q = format!("from:{domain} newer_than:1d");
+        let q = if domain.is_empty() { "newer_than:1d".to_string() } else { format!("from:{domain} newer_than:1d") };
         let list = self
             .get(reqwest::Url::parse_with_params(&format!("{GMAIL_API}/messages"), &[("q", q.as_str()), ("maxResults", "5"), ("includeSpamTrash", "true")]).map_err(|e| e.to_string())?)
             .await?;
@@ -729,6 +731,9 @@ struct Req {
     reuse: bool,
 }
 
+/// 一次只办一件（AI 的命令和设置里的「填验证码」按钮共用）：同时取会抢同一封邮件。
+static ONE_AT_A_TIME: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 /// 已经填过的邮件，下次取新的（重新发送验证码时不会把旧的再填一遍）。
 static USED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
@@ -765,11 +770,9 @@ pub async fn serve(data_dir: PathBuf) {
     }
     let token = Arc::new(token);
     let data_dir = Arc::new(data_dir);
-    // 一次只办一件：两条命令同时取同一个网站的邮件会抢同一封
-    let lock = Arc::new(tokio::sync::Mutex::new(()));
     loop {
         let Ok((stream, _)) = listener.accept().await else { continue };
-        let (token, data_dir, lock) = (token.clone(), data_dir.clone(), lock.clone());
+        let (token, data_dir) = (token.clone(), data_dir.clone());
         tokio::spawn(async move {
             let (rd, mut wr) = stream.into_split();
             let mut r = BufReader::new(rd.take(16_384));
@@ -777,7 +780,7 @@ pub async fn serve(data_dir: PathBuf) {
             let reply = match tokio::time::timeout(Duration::from_secs(10), r.read_line(&mut line)).await {
                 Ok(Ok(_)) => match serde_json::from_str::<Req>(&line) {
                     Ok(req) if req.token == *token => {
-                        let _g = lock.lock().await;
+                        let _g = ONE_AT_A_TIME.lock().await;
                         dispatch(&data_dir, req).await
                     }
                     Ok(_) => err("bad_token", "令牌不对"),
@@ -849,6 +852,8 @@ async fn fetch_and_fill(
 ) -> Result<serde_json::Value, serde_json::Value> {
     let since = now() - LOOK_BACK_SECS;
     let deadline = std::time::Instant::now() + Duration::from_secs(wait);
+    // domain 为空＝不限网站（「填验证码」按钮）：取最新的一封有验证码的，屏蔽的发件方照样跳过
+    let who = if domain.is_empty() { "网站".to_string() } else { domain.to_string() };
     let mut src = Source::open(cfg).await?;
     let parser = mail_parser::MessageParser::default();
     let mut saw_mail = false;
@@ -869,7 +874,12 @@ async fn fetch_and_fill(
             }
             let Some(msg) = parser.parse(&raw) else { continue };
             let from = msg.from().and_then(|a| a.first()).and_then(|a| a.address()).unwrap_or("");
-            if !sender_matches(from, domain) {
+            let from_dom = email_domain(from);
+            if domain.is_empty() {
+                if from_dom.is_empty() || blocked_sender(&from_dom, &cfg.email) {
+                    continue;
+                }
+            } else if !sender_matches(from, domain) {
                 continue;
             }
             saw_mail = true;
@@ -879,33 +889,33 @@ async fn fetch_and_fill(
                 extract_code(subject, &text)
             } else {
                 let html = msg.body_html(0).map(|t| t.into_owned()).unwrap_or_default();
-                extract_link(&html, &text, domain)
+                extract_link(&html, &text, if domain.is_empty() { &from_dom } else { domain })
             };
             if let Some(v) = hit {
-                break 'poll (key, ts, v);
+                break 'poll (key, ts, v, from_dom);
             }
         }
         if std::time::Instant::now() + POLL > deadline {
             src.close().await;
             return Err(if saw_mail && kind == "code" {
-                err("no_code_in_mail", format!("收到了 {domain} 的邮件，但没认出验证码：可能是激活链接（改用 mail-link），否则请用户看一下邮件。"))
+                err("no_code_in_mail", format!("收到了 {who} 的邮件，但没认出验证码：可能是激活链接（改用 mail-link），否则请用户看一下邮件。"))
             } else if saw_mail {
-                err("no_link_in_mail", format!("收到了 {domain} 的邮件，但里面没有 {domain} 的验证 / 激活链接：请用户看一下邮件。"))
+                err("no_link_in_mail", format!("收到了 {who} 的邮件，但里面没有 {who} 的验证 / 激活链接：请用户看一下邮件。"))
             } else {
-                err("no_mail", format!("{wait} 秒内没收到 {domain} 的邮件（也查了垃圾邮件）：确认已经点了「发送」、邮箱填的是 {}，可以再点一次「重新发送」后重试。", cfg.email))
+                err("no_mail", format!("{wait} 秒内没收到 {who} 的邮件（也查了垃圾邮件）：确认已经点了「发送」、邮箱填的是 {}，可以再点一次「重新发送」后重试。", cfg.email))
             });
         }
         tokio::time::sleep(POLL).await;
     };
     src.close().await;
-    let (key, ts, value) = found;
+    let (key, ts, value, from_dom) = found;
     let age = (now() - ts).max(0);
     if kind == "code" {
         adb(data_dir, serial, &["shell", "input", "text", &value]).await.map_err(|e| err("fill_failed", e))?;
         if let Ok(mut u) = USED.lock() {
             u.insert(key);
         }
-        Ok(serde_json::json!({ "ok": true, "filled": true, "digits": value.len(), "from": domain, "received_secs_ago": age, "note": "验证码已填到手机" }))
+        Ok(serde_json::json!({ "ok": true, "filled": true, "digits": value.len(), "from": from_dom, "received_secs_ago": age, "note": "验证码已填到手机" }))
     } else {
         let host = url_host(&value).unwrap_or_default();
         let out = adb(data_dir, serial, &["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", &format!("'{value}'")])
@@ -917,7 +927,46 @@ async fn fetch_and_fill(
         if let Ok(mut u) = USED.lock() {
             u.insert(key);
         }
-        Ok(serde_json::json!({ "ok": true, "opened": true, "host": host, "from": domain, "received_secs_ago": age, "note": format!("在手机上打开了 {host} 的链接") }))
+        Ok(serde_json::json!({ "ok": true, "opened": true, "host": host, "from": from_dom, "received_secs_ago": age, "note": format!("在手机上打开了 {host} 的链接") }))
+    }
+}
+
+/// 手机上现在聚焦的输入框（uiautomator）：(有没有聚焦的输入框, 是不是密码框)。读不到屏幕时返回 None。
+async fn focused_field(data_dir: &Path, serial: &str) -> Option<(bool, bool)> {
+    adb(data_dir, serial, &["shell", "uiautomator", "dump", "/sdcard/pilot_ui.xml"]).await.ok()?;
+    let xml = adb(data_dir, serial, &["exec-out", "cat", "/sdcard/pilot_ui.xml"]).await.ok()?;
+    Some(focus_of(&xml))
+}
+
+fn focus_of(xml: &str) -> (bool, bool) {
+    let node = xml.split("<node ").skip(1).map(|n| n.split('>').next().unwrap_or("")).find(|n| n.contains("focused=\"true\"") && n.contains("EditText"));
+    match node {
+        Some(n) => (true, n.contains("password=\"true\"")),
+        None => (false, false),
+    }
+}
+
+/// 设置里的「填验证码」按钮：用户自己在手机上点了「获取验证码」、点进了验证码输入框，
+/// Pilot 去邮箱取最新的一封验证码邮件（不限网站，屏蔽的发件方照样不取），填进手机。不经过 AI。
+pub async fn fill_code_manual(data_dir: &Path, serial: &str) -> Result<String, String> {
+    let cfg = load_config(data_dir).ok_or("还没接邮箱")?;
+    match focused_field(data_dir, serial).await {
+        Some((_, true)) => return Err("手机上点中的是密码框：先点一下验证码输入框".into()),
+        Some((false, _)) => return Err("先在手机上点一下验证码输入框，再点「填验证码」".into()),
+        _ => {}
+    }
+    let _g = ONE_AT_A_TIME.lock().await;
+    let res = fetch_and_fill(data_dir, &cfg, "", "code", serial, 60, false).await;
+    let detail = |v: &serde_json::Value| v.get("detail").and_then(|n| n.as_str()).unwrap_or("").to_string();
+    let from = res.as_ref().ok().and_then(|v| v["from"].as_str().map(String::from)).unwrap_or_else(|| "手动".into());
+    let (ok, note) = match &res {
+        Ok(_) => (true, "验证码已填到手机".to_string()),
+        Err(e) => (false, detail(e).chars().take(120).collect()),
+    };
+    push_log(data_dir, LogEntry { ts: now(), from: from.clone(), kind: "code".into(), ok, note });
+    match res {
+        Ok(v) => Ok(format!("已把 {from} 的 {} 位验证码填进手机", v["digits"].as_u64().unwrap_or(0))),
+        Err(e) => Err(detail(&e)),
     }
 }
 
@@ -995,6 +1044,15 @@ mod tests {
     async fn live_gmail_rejects_bad_password() {
         let e = Imap::login("imap.gmail.com", 993, "pilot-test-nonexistent@gmail.com", "abcdabcdabcdabcd").await.err().unwrap();
         assert!(e.contains("不对") || e.contains("应用专用密码"), "{e}");
+    }
+
+    #[test]
+    fn focused_input() {
+        let x = |attrs: &str| format!(r#"<hierarchy><node index="0" class="android.widget.FrameLayout" focused="false"><node index="1" {attrs} /></node></hierarchy>"#);
+        assert_eq!(focus_of(&x(r#"class="android.widget.EditText" focused="true" password="false""#)), (true, false));
+        assert_eq!(focus_of(&x(r#"class="android.widget.EditText" focused="true" password="true""#)), (true, true));
+        assert_eq!(focus_of(&x(r#"class="android.widget.EditText" focused="false" password="false""#)), (false, false));
+        assert_eq!(focus_of(&x(r#"class="android.widget.Button" focused="true""#)), (false, false));
     }
 
     #[test]

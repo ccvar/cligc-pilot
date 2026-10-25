@@ -85,6 +85,23 @@
     await connectGoogle();
   }
   function cancelGoogle() { void invoke('google_oauth_cancel'); }
+  // 屏幕常亮：手机开发者选项「不锁定屏幕」——连着电脑时不熄屏，AI 操作到一半就不会锁住
+  let awakeBusy = $state('');
+  async function toggleAwake(serial: string, on: boolean) {
+    awakeBusy = serial;
+    try { await invoke('phone_stay_awake', { serial, on }); await load(); say(on ? '已打开屏幕常亮：连着电脑时手机不会熄屏' : '已关闭屏幕常亮'); }
+    catch (e) { say(String(e), 'err'); }
+    finally { awakeBusy = ''; }
+  }
+  // 填验证码（兜底，不经过 AI）：用户在手机上点了「获取验证码」、点进输入框后点这里
+  let fillBusy = $state(false);
+  async function fillCode() {
+    const serial = phone.ready[0]?.serial ?? '';
+    fillBusy = true;
+    try { say(await invoke<string>('mail_fill_code', { serial })); }
+    catch (e) { say(String(e), 'err'); }
+    finally { fillBusy = false; await loadMail(); }
+  }
   async function removeMail() {
     try { await invoke('mail_remove'); await loadMail(); say('已断开邮箱'); } catch (e) { say(String(e), 'err'); }
   }
@@ -112,6 +129,10 @@
         {#each st.devices as d (d.serial)}
           <div class="conn-row static">
             <b class="cr-name" data-tip={d.model ? undefined : maskTip(d.serial, maskId(d.serial))}>{d.model || maskId(d.serial)}</b><small class="cr-sub" data-tip={d.model ? maskTip(d.serial, maskId(d.serial)) : undefined}>{d.model ? maskId(d.serial) : ''}</small>
+            {#if d.state === 'device'}
+              <button class="how" class:on={d.stay_on} onclick={() => toggleAwake(d.serial, !d.stay_on)} disabled={awakeBusy === d.serial}
+                data-tip={d.stay_on ? '连着电脑时屏幕常亮（手机开发者选项「不锁定屏幕」已打开）。点一下关闭' : '连着电脑时让手机屏幕常亮，AI 操作到一半不会熄屏锁住（就是手机开发者选项里的「不锁定屏幕」）'}>{d.stay_on ? '屏幕常亮 ✓' : '屏幕常亮'}</button>
+            {/if}
             <span class="used" class:ok={d.state === 'device'} class:warn={d.state !== 'device'}>{STATE[d.state] ?? d.state}</span>
           </div>
         {/each}
@@ -143,6 +164,10 @@
       {#if mail.configured}
         <div class="conn-row static">
           <b class="cr-name" data-tip={maskTip(mail.email, mask(mail.email))}>{mask(mail.email)}</b><small class="cr-sub">注册时自动取验证码</small>
+          {#if phone.ready.length}
+            <button class="bind" onclick={fillCode} disabled={fillBusy}
+              data-tip={'自己在手机上注册时用：点完「获取验证码」、点进验证码输入框，再点这里。\nPilot 去邮箱取最新的验证码填进去（最多等 60 秒），不经过 AI。'}>{fillBusy ? '取验证码中…' : '填验证码'}</button>
+          {/if}
           <button class="how" onclick={removeMail}>断开</button>
         </div>
         {#if mail.log.length}
@@ -197,6 +222,8 @@
 <style>
   .how { flex: none; border: none; background: none; padding: 3px 6px; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--dim); cursor: pointer; white-space: nowrap; }
   .how:hover { background: #f1efe9; color: var(--text); }
+  .how.on { color: #12805c; }
+  .how:disabled { opacity: .5; cursor: default; }
   .steps { margin: 0; padding: 2px 12px 8px 49px; color: var(--dim); font-size: 11.5px; line-height: 1.7; }
   .used { flex: none; font-size: 11px; color: var(--faint); padding-right: 4px; }
   .used.ok { color: #12805c; }

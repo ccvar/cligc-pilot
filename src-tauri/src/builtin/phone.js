@@ -151,6 +151,31 @@ function pilotMail(req, timeoutMs) {
 }
 const serialOpt = () => { const s = opt('serial', process.env.ANDROID_SERIAL || ''); return s === true ? '' : String(s); };
 
+// ---- 熄屏 / 锁屏：操作前先点亮屏幕；锁屏没设密码就直接解开，设了密码就停下来请用户解锁 ----
+const sleepMs = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function keyguard() {
+  // dumpsys window policy 里的 KeyguardServiceDelegate：showing / occluded（锁屏上盖着 app，比如相机）/ secure（有密码）
+  const w = sh('dumpsys window policy | grep -A8 KeyguardServiceDelegate');
+  const flag = (k) => new RegExp(`\\b${k}=true`).test(w);
+  return { locked: flag('showing') && !flag('occluded'), secure: flag('secure') };
+}
+function ensureUnlocked() {
+  if (!/mWakefulness=Awake/.test(sh('dumpsys power | grep -m1 mWakefulness=')) ) {
+    sh('input keyevent KEYCODE_WAKEUP');
+    sleepMs(600);
+  }
+  let k = keyguard();
+  if (!k.locked) return;
+  if (!k.secure) {
+    sh('wm dismiss-keyguard');
+    sleepMs(600);
+    k = keyguard();
+    if (!k.locked) return;
+  }
+  fail('phone_locked', '手机锁着屏（有锁屏密码）：请用户解锁手机后再继续。可以在 Pilot「设置 → 安卓手机」里打开「屏幕常亮」，连着电脑时就不会再熄屏锁住。');
+}
+if (['shot', 'ui', 'tap', 'swipe', 'type', 'key', 'launch', 'open', 'mail-code', 'mail-link'].includes(cmd)) ensureUnlocked();
+
 switch (cmd) {
   case 'help':
     out({ ok: true, usage: 'devices | shot --out <png> | ui [--all] | tap --text <文字> [--index n] | tap --x <x> --y <y> | swipe up|down|left|right | type --text <ASCII 文字> | key back|home|enter|recent|tab|delete | apps [--search 关键词] | launch <包名> | open --url <链接> | wait <毫秒> | mail-info | mail-code --from <网站域名> [--wait 秒] | mail-link --from <网站域名>（都可加 --serial）' });

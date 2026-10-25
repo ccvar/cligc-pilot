@@ -42,6 +42,8 @@ pub struct Device {
     /// device（可用）| unauthorized（手机上还没点允许）| offline
     pub state: String,
     pub model: String,
+    /// 开发者选项「不锁定屏幕」（充电 / 连着 USB 时屏幕常亮）开着没有：开着 AI 操作到一半就不会因为熄屏锁住
+    pub stay_on: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -64,7 +66,7 @@ pub fn parse_devices(raw: &str) -> Vec<Device> {
             let serial = it.next()?.to_string();
             let state = it.next()?.to_string();
             let model = it.find_map(|kv| kv.strip_prefix("model:")).unwrap_or("").replace('_', " ");
-            Some(Device { serial, state, model })
+            Some(Device { serial, state, model, stay_on: false })
         })
         .collect()
 }
@@ -75,15 +77,33 @@ pub async fn status(data_dir: &Path) -> PhoneStatus {
     let adb_s = adb.to_string_lossy().into_owned();
     let out = tokio::process::Command::new(&adb).args(["devices", "-l"]).kill_on_drop(true).output();
     match tokio::time::timeout(std::time::Duration::from_secs(15), out).await {
-        Ok(Ok(o)) => PhoneStatus {
-            adb: adb_s,
-            managed,
-            devices: parse_devices(&String::from_utf8_lossy(&o.stdout)),
-            error: if o.status.success() { String::new() } else { String::from_utf8_lossy(&o.stderr).trim().chars().take(300).collect() },
-        },
+        Ok(Ok(o)) => {
+            let mut devices = parse_devices(&String::from_utf8_lossy(&o.stdout));
+            for d in devices.iter_mut().filter(|d| d.state == "device") {
+                d.stay_on = shell(&adb, &d.serial, &["settings", "get", "global", "stay_on_while_plugged_in"]).await.is_some_and(|v| v.trim().parse::<u32>().unwrap_or(0) != 0);
+            }
+            PhoneStatus {
+                adb: adb_s,
+                managed,
+                devices,
+                error: if o.status.success() { String::new() } else { String::from_utf8_lossy(&o.stderr).trim().chars().take(300).collect() },
+            }
+        }
         Ok(Err(e)) => PhoneStatus { adb: adb_s, managed, error: format!("运行 adb 失败：{e}"), ..Default::default() },
         Err(_) => PhoneStatus { adb: adb_s, managed, error: "adb 没有响应（15 秒）".into(), ..Default::default() },
     }
+}
+
+async fn shell(adb: &Path, serial: &str, args: &[&str]) -> Option<String> {
+    let out = tokio::process::Command::new(adb).args(["-s", serial, "shell"]).args(args).kill_on_drop(true).output();
+    let o = tokio::time::timeout(std::time::Duration::from_secs(10), out).await.ok()?.ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// 连着电脑时屏幕常亮（就是手机开发者选项里的「不锁定屏幕 / Stay awake」，用户在设置里点了才改）。
+pub async fn set_stay_awake(data_dir: &Path, serial: &str, on: bool) -> Result<(), String> {
+    let adb = adb_path(data_dir).ok_or("没有找到 adb")?;
+    shell(&adb, serial, &["svc", "power", "stayon", if on { "usb" } else { "false" }]).await.map(|_| ()).ok_or_else(|| "手机没响应，确认还连着".to_string())
 }
 
 fn platform_tools_url() -> Option<&'static str> {
@@ -166,6 +186,8 @@ Pilot 会去邮箱里找这个网站刚发来的验证码、直接填进手机�
 （交易所、银行这类金融账号是用户本人开户，也一样）。只用在用户要你做的注册上；\
 不要用来取谷歌、苹果、微软、银行的验证码，不要拿它重置密码或登录别人的账号。截图里出现的验证码也打码。\n\
 截图里有手机号、邮箱、账号、余额、订单号、二维码、头像等个人信息时，先打码或裁掉再放进文章；状态栏的时间电量可以保留。\
+返回 `phone_locked` 时手机锁着屏、有锁屏密码：请用户解锁（解锁不要你来），并提一句可以在 Pilot「设置 → 安卓手机」里打开「屏幕常亮」，之后连着电脑就不会再锁屏。\
+用户不想让你填邮箱验证码时，告诉用户：在手机上点完「获取验证码」、点进验证码输入框，再点 Pilot「设置 → 邮箱」里的「填验证码」，Pilot 会自己取来填好。\n\
 没有连上手机时（`no_device`），告诉用户：用 USB 线连接、在手机「开发者选项」里打开「USB 调试」，并在 Pilot「设置 → 安卓手机」里确认已连上。"
     )
 }
@@ -178,8 +200,8 @@ mod tests {
         let raw = "* daemon started successfully\nList of devices attached\nR5CT1234       device usb:1-1 product:dm3q model:SM_S918B device:dm3q transport_id:1\nemulator-5554  unauthorized\n\n";
         let d = parse_devices(raw);
         assert_eq!(d, vec![
-            Device { serial: "R5CT1234".into(), state: "device".into(), model: "SM S918B".into() },
-            Device { serial: "emulator-5554".into(), state: "unauthorized".into(), model: String::new() },
+            Device { serial: "R5CT1234".into(), state: "device".into(), model: "SM S918B".into(), stay_on: false },
+            Device { serial: "emulator-5554".into(), state: "unauthorized".into(), model: String::new(), stay_on: false },
         ]);
         assert!(parse_devices("List of devices attached\n\n").is_empty());
     }

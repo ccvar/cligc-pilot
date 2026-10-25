@@ -2966,6 +2966,18 @@ fn mail_remove(state: tauri::State<'_, AppState>) -> Result<(), String> {
     mail::remove(&state.data_dir)
 }
 
+/// 设置里的「填验证码」：用户自己在手机上点了获取验证码、点进了输入框，Pilot 取最新的邮箱验证码填进去（不经过 AI）。
+#[tauri::command]
+async fn mail_fill_code(state: tauri::State<'_, AppState>, serial: String) -> Result<String, String> {
+    mail::fill_code_manual(&state.data_dir, &serial).await
+}
+
+/// 手机连着电脑时屏幕常亮（开发者选项「不锁定屏幕」）。
+#[tauri::command]
+async fn phone_stay_awake(state: tauri::State<'_, AppState>, serial: String, on: bool) -> Result<(), String> {
+    phone::set_stay_awake(&state.data_dir, &serial, on).await
+}
+
 /// 用 Google 登录接 Gmail：打开系统浏览器，等用户点「允许」（最多 5 分钟），成功后把窗口拉回前面。
 /// 取消用网站数据那边同一个 `google_oauth_cancel`（一次只等一个浏览器授权）。
 #[tauri::command]
@@ -4528,6 +4540,8 @@ pub fn run() {
             mail_connect,
             mail_remove,
             mail_google_connect,
+            mail_fill_code,
+            phone_stay_awake,
             install_claude,
             verify_cf_token,
             connect_cloudflare,
