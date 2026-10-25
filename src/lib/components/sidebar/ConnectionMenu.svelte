@@ -4,7 +4,7 @@
   import { openSshEdit } from '$lib/state/ssh.svelte.js';
   import { openCfUpdate } from '$lib/state/cloudflare.svelte.js';
   import { openGhUpdate } from '$lib/state/github.svelte.js';
-  import { openDataUpdate, isDataConn } from '$lib/state/datasrc.svelte.js';
+  import { openDataUpdate, isDataConn, autoBindSites, datasrc } from '$lib/state/datasrc.svelte.js';
 </script>
 
 {#if connections.connCtx}
@@ -27,6 +27,9 @@
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
     {:else if isDataConn(c)}
+      <button class="ctx-item" role="menuitem" disabled={!!datasrc.binding} data-tip={c.kind === 'google' ? '按域名在这个账号里找 GA4 媒体资源和 Search Console 资源，自动填到还没绑定的站点上' : '按域名在这个账号里找 Bing 站点，自动填到还没绑定的站点上'}
+        onclick={() => void autoBindSites(c.id)}>匹配站点</button>
+      <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       {#if c.kind === 'google' && c.key_kind === 'oauth'}
         <button class="ctx-item" role="menuitem" onclick={() => openDataUpdate(c, { manage: true })}>重新授权…</button>

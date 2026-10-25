@@ -1,33 +1,22 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import type { DataSourceRow, BindReport } from '$lib/types';
+  import type { DataSourceRow } from '$lib/types';
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
   import SettingsIcon from '$lib/SettingsIcon.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
-  import { openDataConnect } from '$lib/state/datasrc.svelte.js';
+  import { openDataConnect, datasrc, autoBindSites } from '$lib/state/datasrc.svelte.js';
   import { connections, toggleConnCtx, openConnCtx } from '$lib/state/connections.svelte.js';
-  import { refreshSites } from '$lib/state/sites.svelte.js';
-  import { loadFleet } from '$lib/state/fleet.svelte.js';
   import { oauth, loadOauthClient } from '$lib/state/oauth.svelte.js';
 
   // 网站数据的账号（Google / Bing）是全局的：一个账号可以服务任意多个站点；站点里只选用哪个资源。
   // 在「连接」里各是一组（ConnGroup），和 Cloudflare / GitHub 一样一行一条；添加走组头的 + 或设置右上角的 +。
   let rows = $state<DataSourceRow[]>([]);
-  let busy = $state('');
-  let report = $state<{ conn: string; r: BindReport } | null>(null);
+  // 「匹配站点」在每行 ⚙ 的菜单里（ConnectionMenu），结果显示在那一行下面
+  const report = $derived(datasrc.bindReport);
   async function load() {
     try { const v = await invoke<DataSourceRow[]>('data_sources_overview'); rows = v; } catch (e) { say(String(e), 'err'); }
   }
-  $effect(() => { void app.conns.length; void load(); void loadOauthClient(); });
-  async function bind(connId: string, overwrite: boolean) {
-    busy = connId;
-    try {
-      const r = await invoke<BindReport>('auto_bind_sites', { connId, overwrite });
-      report = { conn: connId, r };
-      await refreshSites(); await load(); void loadFleet();
-    } catch (e) { say(String(e), 'err'); }
-    finally { busy = ''; }
-  }
+  $effect(() => { void app.conns.length; void datasrc.rowsVer; void load(); void loadOauthClient(); });
   const changeClient = () => openDataConnect('google', 'oauth', { editClient: true });
   const groups = $derived([
     { kind: 'google' as const, label: 'Google', rows: rows.filter((d) => d.conn.kind === 'google') },
@@ -51,8 +40,7 @@
       <div class="conn-row static" class:on={connections.connCtx?.conn.id === d.conn.id} role="group" oncontextmenu={(e) => openConnCtx(e, d.conn)}>
         <b class="cr-name">{rowName(d)}</b>
         <small class="cr-sub">{rowSub(d)}</small>
-        <span class="used" data-tip={d.sites.length ? d.sites.join('\n') : undefined}>{d.sites.length ? `${d.sites.length} 个站点` : '未使用'}</span>
-        <button class="bind" onclick={() => bind(d.conn.id, false)} disabled={!!busy} data-tip={d.conn.kind === 'google' ? '按域名在这个账号里找 GA4 媒体资源和 Search Console 资源，自动填到还没绑定的站点上' : '按域名在这个账号里找 Bing 站点，自动填到还没绑定的站点上'}>{busy === d.conn.id ? '匹配中…' : '匹配站点'}</button>
+        <span class="used" data-tip={d.sites.length ? d.sites.join('\n') : undefined}>{datasrc.binding === d.conn.id ? '匹配站点中…' : d.sites.length ? `${d.sites.length} 个站点` : '未使用'}</span>
         <button class="icon-btn sm cr-gear" class:active={connections.connCtx?.conn.id === d.conn.id} title="连接设置" aria-label="连接设置" onclick={(e) => toggleConnCtx(e, d.conn)}><SettingsIcon /></button>
       </div>
       {#if report && report.conn === d.conn.id}
@@ -63,8 +51,8 @@
           {#each report.r.errors as e (e)}<p class="warn">{e}</p>{/each}
           {#if !report.r.bound.length && !report.r.unmatched.length && !report.r.kept}<p class="dim">没有填写了域名的站点。</p>{/if}
           <span class="report-acts">
-            <button onclick={() => bind(d.conn.id, true)} disabled={!!busy}>全部重新绑定</button>
-            <button onclick={() => (report = null)}>收起</button>
+            <button onclick={() => void autoBindSites(d.conn.id, true)} disabled={!!datasrc.binding}>全部重新绑定</button>
+            <button onclick={() => (datasrc.bindReport = null)}>收起</button>
           </span>
         </div>
       {/if}
@@ -77,9 +65,6 @@
   .icon-btn:hover { background: #f1efe9; color: var(--text); }
   .icon-btn.sm { padding: 4px; border-radius: 6px; }
   .used { flex: none; font-size: 11px; color: var(--faint); }
-  .bind { flex: none; border: 1px solid var(--border2); background: #fff; border-radius: 7px; padding: 2px 8px; font: inherit; font-size: 11.5px; color: var(--text); cursor: pointer; white-space: nowrap; }
-  .bind:hover { background: #f6f5f1; }
-  .bind:disabled { opacity: .5; cursor: default; }
   .report { margin: 0 8px 6px 31px; padding: 7px 10px; border-radius: 9px; background: var(--rail); font-size: 11.5px; line-height: 1.55; color: var(--text); }
   .report p { margin: 0 0 2px; }
   .report .dim { color: var(--dim); }

@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { untrack } from 'svelte';
 import { open } from '@tauri-apps/plugin-dialog';
-import type { Connection } from '$lib/types';
+import type { Connection, BindReport } from '$lib/types';
 import { app, say, refreshConns } from './app.svelte.js';
 import { connections } from './connections.svelte.js';
+import { refreshSites } from './sites.svelte.js';
+import { loadFleet } from './fleet.svelte.js';
 
 export const DATA_KINDS = ['google', 'bing'];
 export const isDataConn = (c: Connection | null | undefined) => !!c && DATA_KINDS.includes(c.kind);
@@ -40,6 +42,12 @@ class DataSrcState {
   googleErr = $state<Record<string, string>>({});
   bingSites = $state<Record<string, BingSite[]>>({});
   bingErr = $state<Record<string, string>>({});
+  /** 正在「匹配站点」的连接 id */
+  binding = $state('');
+  /** 上一次「匹配站点」的结果（显示在那一行下面） */
+  bindReport = $state<{ conn: string; r: BindReport } | null>(null);
+  /** 匹配完加一，设置里的账号列表（各自用到几个站点）据此重新查 */
+  rowsVer = $state(0);
 }
 
 export const datasrc = new DataSrcState();
@@ -50,6 +58,19 @@ export function openDataConnect(kind: 'google' | 'bing', mode: 'service_account'
   // oauth.svelte.ts 反过来依赖本文件，这里按需加载避免循环引用
   if (kind === 'google') void import('./oauth.svelte.js').then(async (m) => { await m.loadOauthClient(); m.editOauthClient(!!opts.editClient); });
 }
+/** 匹配站点：按域名在这个账号里找 GA4 / Search Console（或 Bing）资源，填到还没绑定的站点上；overwrite 时全部重新绑定。 */
+export async function autoBindSites(connId: string, overwrite = false) {
+  connections.connCtx = null;
+  if (datasrc.binding) return;
+  datasrc.binding = connId;
+  try {
+    const r = await invoke<BindReport>('auto_bind_sites', { connId, overwrite });
+    datasrc.bindReport = { conn: connId, r };
+    await refreshSites(); datasrc.rowsVer++; void loadFleet();
+  } catch (e) { say(String(e), 'err'); }
+  finally { datasrc.binding = ''; }
+}
+
 /** 更新数据源凭据；Google 账号（OAuth）就是在浏览器里重新授权，默认勾上管理权限。 */
 export function openDataUpdate(c: Connection, opts: { manage?: boolean } = {}) {
   connections.connCtx = null;
@@ -105,6 +126,8 @@ export async function confirmData() {
     delete datasrc.googleRes[conn.id]; delete datasrc.bingSites[conn.id];
     await refreshConns();
     say(f.updateId ? `已更新「${conn.name}」` : `已连接「${conn.name}」`);
+    // 接上就按域名把还没绑定的站点匹配一遍，不用再手动点「匹配站点」
+    void autoBindSites(conn.id);
   } catch (e) { f.err = String(e); f.busy = false; }
 }
 

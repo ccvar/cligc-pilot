@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Connection } from '$lib/types';
 import { app, say, refreshConns } from './app.svelte.js';
-import { datasrc } from './datasrc.svelte.js';
+import { datasrc, autoBindSites } from './datasrc.svelte.js';
 
 // Google OAuth 客户端是全局的（整个 Pilot 配一次）；「在浏览器中登录」只是再授权一个账号。
 export interface OAuthClientInfo { configured: boolean; client_id: string }
@@ -55,6 +55,8 @@ export async function oauthLogin() {
     delete datasrc.googleRes[conn.id];
     await refreshConns();
     say(before.has(conn.id) ? `已重新授权 ${conn.login || conn.name}` : `已添加 Google 账号 ${conn.login || ''}`);
+    // 接上就按域名把还没绑定的站点匹配一遍（只填空着的）
+    void autoBindSites(conn.id);
   } catch (e) {
     const msg = String(e);
     if (!msg.includes('已取消')) oauth.err = msg;
