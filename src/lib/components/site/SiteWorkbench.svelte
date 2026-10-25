@@ -33,7 +33,7 @@
     { key: 'data', label: '数据', icon: 'chart' },
     { key: 'queue', label: '待处理', icon: 'inbox' },
     { key: 'deploy', label: '部署', icon: 'rocket' },
-    { key: 'distribute', label: '分发', icon: 'external' },
+    { key: 'distribute', label: '分发', icon: 'share' },
     { key: 'settings', label: '设置', icon: 'sliders' },
   ];
   $effect(() => { if (site) { void loadSiteStatus(site.id); void loadQueue(site.id); } });

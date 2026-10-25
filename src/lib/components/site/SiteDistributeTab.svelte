@@ -101,6 +101,11 @@
   const fmtDay = (ts: number) => { const d = new Date(ts * 1000); return `${d.getMonth() + 1}/${d.getDate()}`; };
 </script>
 
+{#snippet blogFoot(close: () => void)}
+  <button onclick={() => { close(); if (cfg) void loadBlogs(cfg.blogger_conn_id, true); }} disabled={!cfg?.blogger_conn_id}><Icon name="refresh" size={13} />刷新博客列表</button>
+  <button onclick={() => { close(); void openUrl('https://www.blogger.com/'); }} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建好，回来点「刷新博客列表」"><Icon name="plus" size={13} />去 Blogger 新建博客</button>
+{/snippet}
+
 <div class="dist">
   <div class="card">
     <h3><BloggerMark size={15} />Blogger<span class="grow"></span>{#if cfg?.blog_url}<button class="btn tiny quiet" onclick={() => openUrl(cfg.blog_url)}><Icon name="external" size={11} />打开博客</button>{/if}</h3>
@@ -113,13 +118,9 @@
         <Dropdown value={cfg.blogger_conn_id} placeholder="选一个 Blogger 账号" ariaLabel="Blogger 账号"
           options={accounts.map((a) => ({ value: a.id, label: mask(a.remark?.trim() || a.login || a.name) }))} onchange={pickAccount} />
         <span class="lbl">博客</span>
-        <div class="row">
-          <div class="blog-dd"><Dropdown value={cfg.blog_id} disabled={!cfg.blogger_conn_id || !blogs?.length} ariaLabel="博客"
+        <Dropdown value={cfg.blog_id} disabled={!cfg.blogger_conn_id} ariaLabel="博客" emptyText={blogsErr ? '读不到博客' : !blogs ? '读取中…' : '这个账号下还没有博客'} footer={blogFoot}
             placeholder={!cfg.blogger_conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : !blogs.length ? '这个账号下还没有博客' : freeBlogs.length ? '选一个博客' : '博客都给别的站用了：在 Blogger 再建一个'}
-            options={(blogs ?? []).map((b) => ({ value: b.id, label: b.name || b.url, sub: st?.used_blogs[b.id] ? `已用于 ${st.used_blogs[b.id]}` : b.url.replace(/^https?:\/\//, '').replace(/\/$/, ''), disabled: !!st?.used_blogs[b.id] }))} onchange={pickBlog} /></div>
-          <button class="btn small" onclick={() => loadBlogs(cfg.blogger_conn_id, true)} disabled={!cfg.blogger_conn_id} data-tip="在 Blogger 新建博客后点这里刷新"><Icon name="refresh" size={12} />刷新</button>
-          <button class="btn small" onclick={() => openUrl('https://www.blogger.com/')} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建一个，回来点刷新"><Icon name="external" size={12} />去 Blogger 新建</button>
-        </div>
+            options={(blogs ?? []).map((b) => ({ value: b.id, label: b.name || b.url, sub: st?.used_blogs[b.id] ? `已用于 ${st.used_blogs[b.id]}` : b.url.replace(/^https?:\/\//, '').replace(/\/$/, ''), disabled: !!st?.used_blogs[b.id] }))} onchange={pickBlog} />
         <span class="lbl">发布方式</span>
         <Dropdown value={cfg.mode || 'review'} ariaLabel="发布方式" onchange={(v) => saveConfig({ mode: v })}
           options={[{ value: 'review', label: '先给我看', sub: '我点「发布」才发' }, { value: 'draft', label: '存成 Blogger 草稿', sub: '我去 Blogger 后台发' }]} />
@@ -185,7 +186,6 @@
   .dist { display: flex; flex-direction: column; gap: 12px; }
   .grid { display: grid; grid-template-columns: 72px 1fr; gap: 8px 12px; align-items: center; margin: 4px 0 8px; max-width: 620px; }
   .grid .lbl { font-size: 12.5px; color: var(--dim); }
-  .grid .blog-dd { flex: 1; min-width: 0; }
   .hint.warn { color: var(--warn); }
   .cnt-n { font-size: 12px; color: var(--faint); font-weight: 500; margin-left: 2px; }
   .sub { font-size: 11.5px; color: var(--dim); font-weight: 400; margin-left: 8px; }

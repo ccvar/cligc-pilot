@@ -1,5 +1,6 @@
 <script lang="ts">
   import BrainIcon from './BrainIcon.svelte';
+  import type { Snippet } from 'svelte';
   // tip：选项的长说明，挂 data-tip 交给全局 fixed 浮层（+page.svelte 的 onTipHover 用
   // closest('[title],[data-tip]') 代理，共享 .ui-tip 会按真实尺寸避让视口并保留 \n）—— 比塞进
   // sub 强：菜单 compact 时才 240px 宽，长文案会把那一行撑成七八行。
@@ -20,8 +21,16 @@
     bare = false,
     tip = '',
     ariaLabel = '',
+    emptyText = '无匹配站点',
+    footer,
     onchange,
-  }: { value: string; options: Opt[]; placeholder?: string; disabled?: boolean; compact?: boolean; menuCompact?: boolean; searchable?: boolean; keepOpenOnSelect?: boolean; tone?: string; bare?: boolean; tip?: string; ariaLabel?: string; onchange?: (value: string) => void } = $props();
+  }: { value: string; options: Opt[]; placeholder?: string; disabled?: boolean; compact?: boolean; menuCompact?: boolean; searchable?: boolean; keepOpenOnSelect?: boolean; tone?: string; bare?: boolean; tip?: string; ariaLabel?: string;
+    /** 一个选项都没有时菜单里显示的话 */
+    emptyText?: string;
+    /** 菜单底部、分隔线下面的操作（如「刷新」「去新建」）；参数是关菜单的函数 */
+    footer?: Snippet<[() => void]>;
+    onchange?: (value: string) => void } = $props();
+  function closeMenu() { open = false; hideTipBubble(); }
 
   let open = $state(false);
   let root: HTMLDivElement | undefined = $state();
@@ -171,7 +180,8 @@
           {#if o.value === value}<span class="dd-check" aria-hidden="true">✓</span>{/if}
         </button>
       {/each}
-      {#if filtered.length === 0}<div class="dd-empty">无匹配站点</div>{/if}
+      {#if filtered.length === 0}<div class="dd-empty">{emptyText}</div>{/if}
+      {#if footer}<div class="dd-foot">{@render footer(closeMenu)}</div>{/if}
     </div>
   {/if}
 </div>
@@ -233,6 +243,10 @@
     color: var(--text, #26241f);
   }
   .dd-opt:hover { background: #f4f3ef; }
+  .dd-foot { border-top: 1px solid var(--border, #ecebe6); margin: 4px -5px -5px; padding: 4px 5px 5px; }
+  .dd-foot :global(button) { width: 100%; display: flex; align-items: center; gap: 8px; background: none; border: none; border-radius: 8px; padding: 7px 10px; cursor: pointer; text-align: left; font: inherit; font-size: 13px; color: var(--dim, #6f6a60); }
+  .dd-foot :global(button:hover:not(:disabled)) { background: #f4f3ef; color: var(--text, #26241f); }
+  .dd-foot :global(button:disabled) { opacity: .5; cursor: default; }
   .dd-opt.sel { background: #efeee9; }
   .dd-opt.disabled { opacity: .4; cursor: default; }
   .dd-opt.disabled:hover { background: none; }
