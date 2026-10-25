@@ -24,6 +24,7 @@ mod node_boot;
 mod ops_cmds;
 mod path_env;
 mod permit;
+mod mail;
 mod phone;
 mod ssh;
 mod sftp_transfer;
@@ -2947,6 +2948,23 @@ async fn install_adb(state: tauri::State<'_, AppState>) -> Result<String, String
     phone::install(&state.data_dir).await
 }
 
+/// 邮箱验证码：接了哪个邮箱、最近取过哪些网站的验证码。
+#[tauri::command]
+fn mail_status(state: tauri::State<'_, AppState>) -> mail::MailStatus {
+    mail::status(&state.data_dir)
+}
+
+/// 接邮箱：用应用专用密码真登录一次，成功才保存（密码只进钥匙串）。
+#[tauri::command]
+async fn mail_connect(state: tauri::State<'_, AppState>, email: String, password: String) -> Result<mail::MailStatus, String> {
+    mail::connect(&state.data_dir, &email, &password).await
+}
+
+#[tauri::command]
+fn mail_remove(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    mail::remove(&state.data_dir)
+}
+
 #[tauri::command]
 async fn install_wrangler() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -4432,6 +4450,8 @@ pub fn run() {
             });
             setup_tray(app.handle())?;
             site_runner::start_scheduler(app.handle().clone());
+            // 邮箱验证码的本机端口（phone.cjs 的 mail-* 命令从这里取）
+            tauri::async_runtime::spawn(mail::serve(data_dir.clone()));
             // 先恢复上次的窗口大小 / 位置，再显示
             if let Some(w) = app.get_webview_window("main") {
                 window_memory::restore(&w, &data_dir);
@@ -4490,6 +4510,9 @@ pub fn run() {
             install_wrangler,
             phone_status,
             install_adb,
+            mail_status,
+            mail_connect,
+            mail_remove,
             install_claude,
             verify_cf_token,
             connect_cloudflare,

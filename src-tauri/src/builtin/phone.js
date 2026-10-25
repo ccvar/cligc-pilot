@@ -34,7 +34,7 @@ function findAdb() {
   return cands.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
 }
 const ADB = findAdb();
-if (!ADB && cmd !== 'help') fail('adb_missing', '没有找到 adb。请在 Pilot「设置 → 安卓手机」里一键安装。');
+if (!ADB && cmd !== 'help' && cmd !== 'mail-info') fail('adb_missing', '没有找到 adb。请在 Pilot「设置 → 安卓手机」里一键安装。');
 
 function adb(a, opts = {}) {
   const serial = opt('serial', process.env.ANDROID_SERIAL || '');
@@ -127,9 +127,33 @@ function shellText(t) {
   return t.replace(/ /g, '%s').replace(/([\\'"`$&|;<>(){}\[\]*?!~#])/g, '\\$1');
 }
 
+// ---- 邮箱验证码：交给 Pilot 去邮箱里取、直接填进手机（脚本和 AI 都拿不到邮件内容）----
+function pilotMail(req, timeoutMs) {
+  let bridge;
+  try { bridge = JSON.parse(fs.readFileSync(path.join(__dirname, 'mail-bridge.json'), 'utf8')); }
+  catch { fail('pilot_not_running', 'Pilot 没在运行（邮箱验证码要 Pilot 开着）。'); }
+  const net = require('net');
+  const sock = net.createConnection({ host: '127.0.0.1', port: bridge.port });
+  let buf = '';
+  const timer = setTimeout(() => { sock.destroy(); fail('timeout', 'Pilot 没有响应'); }, timeoutMs);
+  sock.on('connect', () => sock.write(JSON.stringify({ ...req, token: bridge.token }) + '\n'));
+  sock.on('data', (d) => {
+    buf += d;
+    const i = buf.indexOf('\n');
+    if (i === -1) return;
+    clearTimeout(timer);
+    sock.destroy();
+    let r;
+    try { r = JSON.parse(buf.slice(0, i)); } catch { fail('bad_reply', 'Pilot 的回复看不懂'); }
+    out(r);
+  });
+  sock.on('error', (e) => { clearTimeout(timer); fail('pilot_not_running', 'Pilot 没在运行（邮箱验证码要 Pilot 开着）：' + e.message); });
+}
+const serialOpt = () => { const s = opt('serial', process.env.ANDROID_SERIAL || ''); return s === true ? '' : String(s); };
+
 switch (cmd) {
   case 'help':
-    out({ ok: true, usage: 'devices | shot --out <png> | ui [--all] | tap --text <文字> [--index n] | tap --x <x> --y <y> | swipe up|down|left|right | type --text <ASCII 文字> | key back|home|enter|recent|tab|delete | apps [--search 关键词] | launch <包名> | open --url <链接> | wait <毫秒>（都可加 --serial）' });
+    out({ ok: true, usage: 'devices | shot --out <png> | ui [--all] | tap --text <文字> [--index n] | tap --x <x> --y <y> | swipe up|down|left|right | type --text <ASCII 文字> | key back|home|enter|recent|tab|delete | apps [--search 关键词] | launch <包名> | open --url <链接> | wait <毫秒> | mail-info | mail-code --from <网站域名> [--wait 秒] | mail-link --from <网站域名>（都可加 --serial）' });
     break;
   case 'devices': {
     const raw = adb(['devices', '-l']);
@@ -236,6 +260,23 @@ switch (cmd) {
     const ms = Math.min(Number(positional[0]) || 1000, 30000);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
     out({ ok: true, waited: ms });
+    break;
+  }
+  case 'mail-info':
+    pilotMail({ op: 'info' }, 10000);
+    break;
+  case 'mail-code':
+  case 'mail-link': {
+    const from = opt('from');
+    if (!from || from === true) fail('bad_args', '缺 --from <发邮件的网站域名>，比如 --from okx.com');
+    const wait = Math.min(Math.max(Number(opt('wait', 90)) || 90, 10), 180);
+    if (cmd === 'mail-code' && !opt('force', false)) {
+      // 先确认光标在输入框里（不是密码框），否则验证码会填到别处去
+      const focused = uiNodes().find((n) => n.focused && n.editable);
+      if (focused && focused.password) fail('password_field', '当前是密码输入框，不能往里填验证码。');
+      if (!focused) fail('no_input_focused', '先点一下验证码输入框（tap），再取验证码；确实是输入框但认不出时加 --force。');
+    }
+    pilotMail({ op: cmd === 'mail-code' ? 'code' : 'link', from: String(from), serial: serialOpt(), wait, reuse: !!opt('reuse', false) }, (wait + 60) * 1000);
     break;
   }
   default:
