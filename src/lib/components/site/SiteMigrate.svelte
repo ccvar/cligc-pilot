@@ -8,6 +8,7 @@
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import MigrateSurvey from './MigrateSurvey.svelte';
+  import SiteTodos from './SiteTodos.svelte';
   import type { Site } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -17,7 +18,7 @@
   import type { MStage } from '$lib/state/migrate.svelte.js';
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
-  import { makingConv } from '$lib/state/siteMake.svelte.js';
+  import { makingConv, siteMake, loadMake, migrateTodos } from '$lib/state/siteMake.svelte.js';
   import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
@@ -49,7 +50,10 @@
   $effect(() => { if (v?.stage === 'track') trackIfStale(site.id); });
   // AI 这一轮做完：刷新一下（重做阶段的按钮跟着变）
   let wasRunning = false;
-  $effect(() => { const r = aiRunning; if (wasRunning && !r) void loadMigrate(site.id); wasRunning = r; });
+  $effect(() => { const r = aiRunning; if (wasRunning && !r) { void loadMigrate(site.id); void loadMake(site.id, false); } wasRunning = r; });
+  // AI 重做时写进 .pilot/todo.json 的「需要我处理的事」：迁移期间看板别的卡片都不显示，就放在这里
+  $effect(() => { void loadMake(site.id, false); });
+  const todos = $derived(migrateTodos(siteMake.state[site.id]?.todos));
 
   /** 只建 Pages 项目、不绑域名（站点的 domain 迁移期间是空的） */
   async function setupPreview() {
@@ -227,11 +231,19 @@
             <p class="hint">做完后这里会出现「核对」。可以先去忙别的。</p>
           {:else}
             {#if aiStop}<div class="failed"><span class="lv block">!</span><span class="rt"><b>上一轮停下了</b><small>{aiStop}</small></span></div>{/if}
-            <div class="act"><span class="grow">{aiStop ? '点「继续重做」会接着原来的对话做，已经做过的不会重来。' : 'AI 停下了。做完了就核对；没做完的话让它继续。'}</span>
-              {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
-              <button class="btn small" onclick={() => startRebuild(site)}><Icon name="play" size={12} />继续重做</button>
-              <button class="btn small primary" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />核对</button>
-            </div>
+            {#if aiStop}
+              <div class="act"><span class="grow">点「继续重做」会接着原来的对话做，已经做过的不会重来。</span>
+                {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
+                <button class="btn small" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />先核对看看</button>
+                <button class="btn small primary" onclick={() => startRebuild(site)}><Icon name="play" size={12} />继续重做</button>
+              </div>
+            {:else}
+              <div class="act"><span class="grow">AI 做完了{todos.length ? `，还留了 ${todos.length} 件事给你（见下面，不处理也能先核对）` : ''}。下一步核对：新站逐条对照旧站，有问题会列出来，可以再让 AI 修。</span>
+                {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
+                <button class="btn small" onclick={() => startRebuild(site)} data-tip="没做完、或者想再改点什么：接着原来的对话做"><Icon name="play" size={12} />让 AI 接着做</button>
+                <button class="btn small primary" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />核对</button>
+              </div>
+            {/if}
           {/if}
         {:else if conv}
           <div class="act sub"><span class="grow faint">重做对话里有 AI 做了什么、改了哪些文件。</span><button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />打开重做对话</button></div>
@@ -420,6 +432,13 @@
         </ul>
         <p class="hint">接下来的内容更新可以交给托管运营：在下面的「托管」里加入一个托管方案。</p>
       {/if}
+
+      {#if todos.length && !aiRunning && ['rebuild', 'verify', 'cutover'].includes(shown)}
+        <div class="todo-box">
+          <b>需要你处理 <small>{todos.length} 件 · AI 重做时留下的</small></b>
+          <SiteTodos {site} {todos} />
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -447,6 +466,9 @@
   .act .grow { line-height: 1.55; }
   .act.sub { padding: 0; background: none; }
   .req { display: flex; flex-direction: column; gap: 6px; }
+  .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .todo-box > b { font-size: 12.5px; font-weight: 600; }
+  .todo-box > b small { margin-left: 6px; font-weight: 400; color: var(--faint); }
   .req > b { font-size: 12.5px; font-weight: 600; }
   .link-btn.sm { font-size: 12px; }
   .link-btn.al { align-self: flex-start; }

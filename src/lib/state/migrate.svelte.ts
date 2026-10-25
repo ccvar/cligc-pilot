@@ -11,7 +11,7 @@ import { connections } from './connections.svelte.js';
 import { sites, refreshSites, openSite, deploySite } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM, openMaking } from './siteCreate.svelte.js';
 import { startBackgroundChat, continueInBackground } from './turns.svelte.js';
-import { makingConv } from './siteMake.svelte.js';
+import { makingConv, siteMake, migrateTodos } from './siteMake.svelte.js';
 import { brainUsable } from './models';
 import { launcher } from './launcher.svelte.js';
 import type { Dynamic } from './dynamic.svelte.js';
@@ -239,6 +239,12 @@ function aiStopped(siteId: string): boolean {
   return !!last && last.role !== 'user' && !!last.error;
 }
 
+/** AI 留下的待办（站点概览的迁移卡片里处理） */
+function todoNote(siteId: string): string {
+  const n = migrateTodos(siteMake.state[siteId]?.todos).length;
+  return n ? ` · ${n} 件事要你处理` : '';
+}
+
 /** 站点制作列表的迁移卡片：现在走到哪、点「继续」做什么。要你做选择的步骤（确认方案、配置部署、切换）只打开站点。 */
 export function migrateNext(site: Site): MNext {
   const v = migrate.view[site.id];
@@ -258,7 +264,7 @@ export function migrateNext(site: Site): MNext {
     case 'rebuild':
       if (!v.meta.rebuild_at) return { text: '内容已抓好，等 AI 重做', tone: '', label: '开始重做', icon: 'wand', run: () => void startRebuild(site) };
       if (aiStopped(site.id)) return { text: 'AI 停下了，可以继续', tone: 'warn', label: '继续重做', icon: 'play', run: () => void startRebuild(site) };
-      return { text: 'AI 做完了，等核对', tone: '', label: '核对', icon: 'checks', run: () => void verify(site.id) };
+      return { text: `AI 做完了，等核对${todoNote(site.id)}`, tone: '', label: '核对', icon: 'checks', run: () => void verify(site.id) };
     case 'verify': {
       const blocks = v.meta.parity.some((p) => p.level === 'block');
       if (blocks || v.meta.live.bad.length) return { text: '核对有问题要修', tone: 'warn', label: '让 AI 修', icon: 'wand', run: () => void startRebuild(site) };

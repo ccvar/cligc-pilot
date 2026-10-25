@@ -9,7 +9,9 @@ import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
 import { openConv } from './conversations.js';
 import { persistThreadPerm } from './thread.svelte.js';
 import { composer } from './composer.svelte.js';
-import { send } from './turns.svelte.js';
+import { send, startBackgroundChat, continueInBackground } from './turns.svelte.js';
+import { brainUsable } from './models';
+import { launcher } from './launcher.svelte.js';
 
 const HIDE_KEY = 'cligc.pilot.conventionsHintHidden';
 function loadHidden(): string[] { try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch { return []; } }
@@ -65,6 +67,15 @@ export async function continueMaking(site: Site, issues: MakeCheck[] = []) {
 /** 发到这个站点的制作对话里（全自动）；找不到或正在跑就开一条新的。 */
 export async function sendToMaking(site: Site, text: string) {
   const conv = makingConv(site.id);
+  // 迁移中：和「继续重做」一样在后台接着那条重做对话做，不跳走（进度看迁移卡片的那一步）
+  if (site.origin === 'migrating') {
+    const reuse = !!conv && conv.status !== 'running' && !app.running[conv.id];
+    if (!reuse && !brainUsable(launcher.lBrain)) { await startSiteChat(site.id, text, undefined, MAKING_PERM); return; }
+    say('交给 AI 在后台处理了，做完这里会刷新', 'ok');
+    const run = reuse ? continueInBackground(conv!.id, text) : startBackgroundChat({ siteId: site.id, siteName: site.name, text, perm: MAKING_PERM });
+    void run.finally(() => void loadMake(site.id, false));
+    return;
+  }
   if (!conv || conv.status === 'running' || app.running[conv.id]) {
     await startSiteChat(site.id, text, undefined, MAKING_PERM);
     return;
@@ -77,6 +88,11 @@ export async function sendToMaking(site: Site, text: string) {
 }
 
 // ───────── 需要我处理的事（AI 写在 .pilot/todo.json 里） ─────────
+
+/** 迁移中的站点：正式域名就是旧站域名、切换时才指过来，AI 万一还是写了「确认正式域名」也不显示 */
+export function migrateTodos(todos: SiteTodo[] | null | undefined): SiteTodo[] {
+  return (todos ?? []).filter((t) => t.id !== 'domain');
+}
 
 
 /** 一起交给 AI：看板上填好的值、勾选要 AI 做的事，合成一条消息，AI 一轮处理完。
@@ -109,6 +125,7 @@ export async function submitTodos(site: Site, batch: { todo: SiteTodo; values: R
     await loadMake(site.id, isFull(site.id));
     const forAi = [...filled.map((f) => f.t), ...tasks, ...confirms];
     if (!forAi.length) {
+      if (site.origin === 'migrating') { say(`已存成配置变量：${envSet.map(([k]) => k).join('、')}。核对和上线预览时会用上`, 'ok'); return; }
       say(`已存成配置变量：${envSet.map(([k]) => k).join('、')}。正在重新构建，构建好刷新预览就能看到`);
       await checkSite(site.id);
       return;

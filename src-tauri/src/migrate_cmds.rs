@@ -1213,6 +1213,7 @@ pub async fn migrate_extract(app: tauri::AppHandle, state: tauri::State<'_, AppS
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let plan: Plan = read_json(&dir.join("plan.json")).filter(|p: &Plan| p.confirmed_at > 0).ok_or("先确认迁移方案")?;
+    seed_ga(&state, &id, &inv)?;
     let job = state.site_jobs.start(Some(app), &id, "migrate:extract", "抓取旧站内容", EXTRACT_STEPS)?;
     let job_id = job.id.clone();
     tauri::async_runtime::spawn(async move {
@@ -1220,6 +1221,21 @@ pub async fn migrate_extract(app: tauri::AppHandle, state: tauri::State<'_, AppS
         job.finish(&r);
     });
     Ok(job_id)
+}
+
+/// 旧站的 GA4 衡量 ID 直接存成配置变量 `PUBLIC_GA_ID`：新站沿用同一个统计，不用 AI 写死、也不用再问我。
+/// 已经有值（我自己填过）就不动。
+fn seed_ga(state: &AppState, id: &str, inv: &Inventory) -> Result<(), String> {
+    let Some(ga) = inv.analytics.iter().find(|a| a.starts_with("G-")) else { return Ok(()) };
+    if crate::sites::load_env(id).iter().any(|(k, _)| k == "PUBLIC_GA_ID") {
+        return Ok(());
+    }
+    let keys = crate::sites::save_env(id, &[("PUBLIC_GA_ID".into(), ga.clone())], &[])?;
+    state.sites.update(id, now(), |s| {
+        s.build.env_keys = keys;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: &Job) -> Result<(), String> {
@@ -1463,7 +1479,7 @@ fn survey_md(inv: &Inventory, plan: &Plan, map: &mx::UrlMap, st: &ExtractStats) 
         s.push_str(&format!("- 旧站程序：{}\n", inv.generator));
     }
     if !inv.analytics.is_empty() {
-        s.push_str(&format!("- 统计 ID：{}（GA4 的 G- 开头的放进 PUBLIC_GA_ID）\n", inv.analytics.join("、")));
+        s.push_str(&format!("- 统计 ID：{}（GA4 已由 Pilot 存进配置变量 PUBLIC_GA_ID，代码从它读）\n", inv.analytics.join("、")));
     }
     let keep = map.entries.iter().filter(|e| e.action == "keep").count();
     let redirect = map.entries.iter().filter(|e| e.action == "redirect").count();
@@ -1533,11 +1549,13 @@ pub async fn migrate_rebuild_message(state: tauri::State<'_, AppState>, id: Stri
         return Err("先抓取旧站内容".into());
     }
     let again = meta.rebuild_at > 0;
+    // 抓取早于这个功能的站点也补上
+    seed_ga(&state, &id, &inv)?;
     save_meta(&dir, |m| m.rebuild_at = now())?;
-    Ok(rebuild_message(&site, &inv, &plan, &meta, again))
+    Ok(rebuild_message(&site.name, &inv, &plan, &meta, again))
 }
 
-fn rebuild_message(site: &Site, inv: &Inventory, plan: &Plan, meta: &Meta, again: bool) -> String {
+fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, again: bool) -> String {
     let visual = if plan.visual == "fresh" {
         "全新视觉：不沿用旧站的样子，按定位重新定设计方向。品牌名称照旧。".to_string()
     } else {
@@ -1595,15 +1613,23 @@ fn rebuild_message(site: &Site, inv: &Inventory, plan: &Plan, meta: &Meta, again
 - 安装依赖、构建通过；本地预览，在 375、768、1280 宽度截图首页、一篇内容页、一个列表页，按视觉标准逐项评估、改完复查；\n\
 - 自己抽查：urls.json 里随便挑 20 个 keep 地址，确认构建产物里都有对应文件（结尾斜杠也对）；\n\
 - 需要我处理的事写进 `.pilot/todo.json`，`git add -A && git commit -m \"迁移重做\"`，简要汇报。{issues}\n\n\
+【迁移里已经定好的，不用问我】\n\
+- 正式域名就是 {origin_host}：切换那一步由 Pilot 把域名指过来，不要把正式域名写进待办（没有 `domain` 这一条）。\n\
+- {ga}\n\
+- 旧站页面上已经有的运营信息（邀请链接 / 邀请码、联系邮箱、社交账号……）照旧沿用：作为配置变量的默认值，并写进 `.env.example` 的示例。只有旧站上没有、或者明显已经失效的，才写进待办。\n\n\
 {dynamic}{visual_std}\n\n{config}\n\n{todo}\n\n\
 不要部署——上线和核对由 Pilot 负责。",
-        name = site.name,
+        name = site_name,
         origin_host = Url::parse(&inv.origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(inv.domain.clone()),
         dynamic = if meta.extract.features.is_empty() {
             String::new()
         } else {
             let d = crate::site_dynamic::Dynamic { features: meta.extract.features.clone(), large: meta.extract.large.clone(), ..Default::default() };
             format!("{}\n\n", crate::site_dynamic::ai_contract(&d, meta.extract.comments > 0, plan.deploy == "vps"))
+        },
+        ga = match inv.analytics.iter().find(|a| a.starts_with("G-")) {
+            Some(g) => format!("统计：旧站的 GA4（{g}）Pilot 已经存成配置变量 `PUBLIC_GA_ID`，代码按【配置变量】从它读就行。"),
+            None => "统计：旧站没有 GA4，`PUBLIC_GA_ID` 留空即可，Pilot 会在看板上帮我创建。".into(),
         },
         visual_std = crate::site_make::VISUAL_STANDARD,
         config = crate::site_make::CONFIG_SPEC,
@@ -1617,12 +1643,15 @@ const VERIFY_STEPS: &[(&str, &str)] = &[("install", "安装依赖"), ("build", "
 
 #[tauri::command]
 pub async fn migrate_verify(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
-    let site = state.sites.get(&id)?;
+    state.sites.get(&id)?;
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     if load_meta(&dir).extracted_at == 0 {
         return Err("先抓取旧站内容".into());
     }
+    seed_ga(&state, &id, &inv)?;
+    // seed_ga 可能刚改了配置变量的键：之后再取站点
+    let site = state.sites.get(&id)?;
     let job = state.site_jobs.start(Some(app), &id, "migrate:verify", "核对新站", VERIFY_STEPS)?;
     let job_id = job.id.clone();
     let conns = state.conns.clone();
@@ -2322,6 +2351,17 @@ async fn run_track(site: Site, dir: PathBuf, meta: Meta, conns: crate::conns::Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebuild_message_says_the_domain_and_ga_are_settled() {
+        let inv = Inventory { domain: "old.example".into(), origin: "https://www.old.example/".into(), analytics: vec!["UA-1".into(), "G-ABC123".into()], ..Default::default() };
+        let m = rebuild_message("旧站", &inv, &Plan::default(), &Meta::default(), false);
+        assert!(m.contains("正式域名就是 www.old.example"));
+        assert!(m.contains("不要把正式域名写进待办"));
+        assert!(m.contains("GA4（G-ABC123）Pilot 已经存成配置变量 `PUBLIC_GA_ID`"));
+        let m = rebuild_message("旧站", &Inventory { domain: "old.example".into(), ..Default::default() }, &Plan::default(), &Meta::default(), false);
+        assert!(m.contains("正式域名就是 old.example") && m.contains("旧站没有 GA4"));
+    }
 
     #[test]
     fn apex() {
