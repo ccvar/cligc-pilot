@@ -61,14 +61,21 @@
     wordpress: { target: '站点', newUrl: 'https://wordpress.com/start', newLabel: '去 WordPress.com 新建站点', draft: '存成 WordPress 草稿' },
   };
   function accountsOf(kind: string) { return kind === 'blogger' ? bloggerAccounts() : kind === 'wordpress' ? wpAccounts() : []; }
-  function loadTargets(kind: string, conn: string, force = false) { if (kind === 'blogger') void loadBlogs(conn, force); else if (kind === 'wordpress') void loadWpSites(conn, force); }
+  async function loadTargets(kind: string, conn: string, force = false) { if (kind === 'blogger') await loadBlogs(conn, force); else if (kind === 'wordpress') await loadWpSites(conn, force); }
+  // 下拉里的「刷新」：不关下拉，读完就地更新列表
+  let refreshing = $state(false);
+  async function refreshTargets() {
+    if (!edit || refreshing) return;
+    refreshing = true;
+    try { await loadTargets(edit.kind, edit.conn_id, true); } finally { refreshing = false; }
+  }
   function connectAccount(kind: string) {
     if (kind === 'blogger') void bloggerLogin('');
     else if (kind === 'wordpress') { settings.setupOpen = true; void startWpConnect(); }
   }
   const plat = $derived(edit ? PLAT[edit.kind] : undefined);
   const accounts = $derived(edit ? accountsOf(edit.kind) : []);
-  $effect(() => { if (edit?.conn_id) { const k = edit.kind, c = edit.conn_id; untrack(() => loadTargets(k, c)); } });
+  $effect(() => { if (edit?.conn_id) { const k = edit.kind, c = edit.conn_id; untrack(() => void loadTargets(k, c)); } });
   const blogs = $derived(!edit?.conn_id ? null : edit.kind === 'blogger' ? blogger.blogs[edit.conn_id] ?? null : edit.kind === 'wordpress' ? wp.sites[edit.conn_id] ?? null : null);
   const blogsErr = $derived(!edit?.conn_id ? '' : edit.kind === 'blogger' ? blogger.blogsErr[edit.conn_id] ?? '' : wp.sitesErr[edit.conn_id] ?? '');
   const acctBusy = $derived(edit?.kind === 'wordpress' ? wp.busy : blogger.busy);
@@ -180,7 +187,7 @@
 </script>
 
 {#snippet blogFoot(close: () => void)}
-  <button onclick={() => { close(); if (edit) loadTargets(edit.kind, edit.conn_id, true); }} disabled={!edit?.conn_id}><Icon name="refresh" size={13} />刷新{plat?.target}列表</button>
+  <button onclick={refreshTargets} disabled={!edit?.conn_id || refreshing}>{#if refreshing}<span class="spin"></span>刷新中…{:else}<Icon name="refresh" size={13} />刷新{plat?.target}列表{/if}</button>
   <button onclick={() => { close(); if (plat) void openUrl(plat.newUrl); }} data-tip="接口不能新建{plat?.target}：在平台上建好，回来点「刷新{plat?.target}列表」"><Icon name="plus" size={13} />{plat?.newLabel}</button>
 {/snippet}
 
