@@ -16,7 +16,7 @@
   import { fleet, loadFleet } from '$lib/state/fleet.svelte.js';
   import { launch, checkDomain } from '$lib/state/launch.svelte.js';
   import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
-  import { migrate, loadMigrate, openMigrate, STAGES, batch, setBatchAuto, confirmAllDefault, migratingSites } from '$lib/state/migrate.svelte.js';
+  import { migrate, loadMigrate, openMigrate, STAGES, batch, setBatchAuto, confirmAllDefault, migratingSites, migrateNext } from '$lib/state/migrate.svelte.js';
 
   // 卡片右上角「…」菜单
   let menu = $state('');
@@ -52,17 +52,11 @@
     untrack(() => { for (const id of ids) { const s = done.find((x) => x.id === id); if (s && !launch.domainCheck[id]) void checkDomain(s, true); } });
   });
   $effect(() => { for (const s of list) void (s.origin === 'migrating' ? loadMigrate(s.id) : loadMake(s.id)); });
-  const MIG_TEXT: Record<string, string> = { survey: '正在盘点旧站', plan: '盘点好了，等你确认方案', extract: '等待抓取内容', rebuild: '内容已抓好，等 AI 重做', verify: '核对中：有问题要修', cutover: '核对通过，可以切换了', track: '已切换，跟踪中', done: '迁移完成' };
   const migIdx = (id: string) => { const st = migrate.view[id]?.stage; return st ? Math.max(0, STAGES.findIndex((x) => x.key === st)) : 0; };
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {
-    if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: s.origin === 'migrating' ? 'AI 正在重做…' : 'AI 正在制作…', tone: 'live' };
-    if (s.origin === 'migrating') {
-      const j = sites.jobs[s.id];
-      if (j?.status === 'running' && j.kind.startsWith('migrate:')) return { text: `正在${j.title}…`, tone: 'live' };
-      const st = migrate.view[s.id]?.stage;
-      return { text: st ? `迁移：${MIG_TEXT[st] ?? st}` : '读取中…', tone: st === 'cutover' ? 'ok' : st === 'verify' ? 'warn' : '' };
-    }
+    if (s.origin === 'migrating') { const n = migrateNext(s); return { text: `迁移：${n.text}`, tone: n.tone }; }
+    if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: 'AI 正在制作…', tone: 'live' };
     const ms = siteMake.state[s.id];
     if (!ms) return { text: '读取中…', tone: '' };
     const left = ms.steps.filter((x) => !x.done);
@@ -159,7 +153,10 @@
               </div>
               <div class="st {st.tone}">{#if st.tone === 'live'}<span class="spin"></span>{/if}{st.text}</div>
               <div class="acts">
-                {#if pending}<button class="btn tiny primary" onclick={() => continueMaking(s)}><Icon name="play" size={11} />继续制作</button>{/if}
+                {#if s.origin === 'migrating'}
+                  {@const nx = migrateNext(s)}
+                  {#if nx.run}<button class="btn tiny primary" onclick={nx.run}><Icon name={nx.icon ?? 'play'} size={11} />{nx.label}</button>{/if}
+                {:else if pending}<button class="btn tiny primary" onclick={() => continueMaking(s)}><Icon name="play" size={11} />继续制作</button>{/if}
                 <button class="btn tiny" onclick={() => openSite(s.id, 'overview')}><Icon name="checks" size={11} />查看进度</button>
                 {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />制作对话</button>{/if}
                 {#if ms?.built_at}<button class="btn tiny" onclick={() => previewSite(s)}><Icon name="external" size={11} />预览</button>{/if}

@@ -220,6 +220,62 @@ export async function rollback(id: string, host: string) {
 
 export const track = (id: string) => run(id, 'track', () => invoke('migrate_track', { id }));
 
+// ───────── 列表卡片上的「继续」：当前这一步的主操作 ─────────
+
+export interface MNext {
+  /** 状态一句话 */
+  text: string;
+  tone: '' | 'live' | 'warn' | 'ok';
+  /** 主按钮（没有＝正在跑，或者没什么可做） */
+  label?: string;
+  icon?: string;
+  run?: () => void;
+}
+
+/** 上一轮是不是出错停下的（卡住、连续失败、网络……） */
+function aiStopped(siteId: string): boolean {
+  const conv = makingConv(siteId);
+  const last = conv?.messages?.[conv.messages.length - 1];
+  return !!last && last.role !== 'user' && !!last.error;
+}
+
+/** 站点制作列表的迁移卡片：现在走到哪、点「继续」做什么。要你做选择的步骤（确认方案、配置部署、切换）只打开站点。 */
+export function migrateNext(site: Site): MNext {
+  const v = migrate.view[site.id];
+  const job = sites.jobs[site.id];
+  const open = (label: string): Pick<MNext, 'label' | 'icon' | 'run'> => ({ label, icon: 'checks', run: () => openSite(site.id, 'overview') });
+  if (!v) return { text: '读取中…', tone: '' };
+  if (job?.status === 'running') return { text: `正在${job.title}…`, tone: 'live' };
+  if (aiRunningFor(site.id)) return { text: 'AI 正在重做…', tone: 'live' };
+  const failed = job?.status === 'failed' && job.finished_at > Date.now() / 1000 - 3600;
+  switch (v.stage) {
+    case 'survey':
+      return { text: failed ? `盘点没完成：${job!.error.split('\n')[0]}` : '还没盘点', tone: failed ? 'warn' : '', label: '开始盘点', icon: 'play', run: () => void resurvey(site.id) };
+    case 'plan':
+      return { text: '盘点好了，等你确认方案', tone: '', ...open('去确认方案') };
+    case 'extract':
+      return { text: failed ? '抓取没完成，可以再试一次' : '方案已确认，等抓取内容', tone: failed ? 'warn' : '', label: '开始抓取', icon: 'play', run: () => void extract(site.id) };
+    case 'rebuild':
+      if (!v.meta.rebuild_at) return { text: '内容已抓好，等 AI 重做', tone: '', label: '开始重做', icon: 'wand', run: () => void startRebuild(site) };
+      if (aiStopped(site.id)) return { text: 'AI 停下了，可以继续', tone: 'warn', label: '继续重做', icon: 'play', run: () => void startRebuild(site) };
+      return { text: 'AI 做完了，等核对', tone: '', label: '核对', icon: 'checks', run: () => void verify(site.id) };
+    case 'verify': {
+      const blocks = v.meta.parity.some((p) => p.level === 'block');
+      if (blocks || v.meta.live.bad.length) return { text: '核对有问题要修', tone: 'warn', label: '让 AI 修', icon: 'wand', run: () => void startRebuild(site) };
+      if (!v.deploy_ready) return { text: `核对通过，等你配置${v.plan?.deploy === 'vps' ? '服务器' : '预览地址'}`, tone: '', ...open('去配置') };
+      if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') return { text: '等你配置动态功能', tone: '', ...open('去配置') };
+      if (!v.meta.live.at) return { text: `等${v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览地址'}实测`, tone: '', label: v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览', icon: 'rocket', run: () => void deploySite(site.id) };
+      return { text: '核对中', tone: '', ...open('查看') };
+    }
+    case 'cutover':
+      return { text: '核对通过，可以切换了', tone: 'ok', ...open('去切换') };
+    case 'track':
+      return { text: '已切换，跟踪中', tone: 'ok' };
+    default:
+      return { text: '迁移完成', tone: 'ok' };
+  }
+}
+
 // ───────── 批量迁移：按默认方案确认、自动推进 ─────────
 
 /** 自动推进：抓取 → AI 重做（后台对话，一次 aiMax 个）→ 核对 → 发布到预览（部署已配好的）→ 再核对。
