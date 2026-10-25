@@ -72,6 +72,15 @@ pub struct ExtractStats {
     /// 正文可能没抓全的页面
     pub low_coverage: Vec<String>,
     pub collections: BTreeMap<String, usize>,
+    /// 超过 25 MB、放到 R2 的文件（站点路径）
+    #[serde(default)]
+    pub large: Vec<String>,
+    /// 抓下来的旧评论条数
+    #[serde(default)]
+    pub comments: usize,
+    /// 要开的动态功能：form / comments / files
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 /// 在预览地址（pages.dev）上把每个旧路径请求一遍的结果。
@@ -276,6 +285,10 @@ pub struct View {
     pub preview: String,
     /// 部署方式配好了（Cloudflare 连接 + Pages 项目）
     pub deploy_ready: bool,
+    /// 动态功能（表单、评论、大文件）的配置
+    pub dynamic: Option<crate::site_dynamic::Dynamic>,
+    /// 按确认的方案算出的部署去向（方案里去掉的功能不算）；还没确认方案时是盘点的结论
+    pub hosting: Option<sm::Hosting>,
 }
 
 #[tauri::command]
@@ -291,11 +304,20 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
         stage: stage(inv.as_ref(), plan.as_ref(), &meta).into(),
         domain: if site.migrate_from.is_empty() { site.domain.clone() } else { site.migrate_from.clone() },
         survey: inv.as_ref().map(summarize),
-        plan,
         meta,
         preview,
         deploy_ready,
+        dynamic: crate::site_dynamic::load(&state.sites.data_dir(&id)),
+        hosting: inv.as_ref().map(|i| sm::hosting_for(i, &plan.as_ref().map(|p| p.features.clone()).unwrap_or_default())),
+        plan,
     })
+}
+
+/// 确认方案前预览：按选的「保留 / 去掉」重新判断部署去向。
+#[tauri::command]
+pub async fn migrate_hosting(state: tauri::State<'_, AppState>, id: String, features: BTreeMap<String, String>) -> Result<sm::Hosting, String> {
+    let inv: Inventory = read_json(&mdir(&state, &id).join("inventory.json")).ok_or("还没盘点")?;
+    Ok(sm::hosting_for(&inv, &features))
 }
 
 // ───────────────────────── 抓取工具 ─────────────────────────
@@ -1093,10 +1115,13 @@ async fn run_survey(site: Site, job: &Job) -> Result<(), String> {
 pub async fn migrate_save_plan(state: tauri::State<'_, AppState>, id: String, plan: Plan) -> Result<Plan, String> {
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
-    if !inv.hosting.supported {
-        return Err(format!("盘点建议{}：这一版先只支持 Cloudflare 纯静态站，这部分下一步支持", inv.hosting.label));
+    let features: BTreeMap<String, String> = plan.features.into_iter().filter(|(k, v)| inv.features.iter().any(|f| &f.key == k) && matches!(v.as_str(), "keep" | "drop")).collect();
+    let hosting = sm::hosting_for(&inv, &features);
+    if !hosting.supported {
+        return Err(format!("按这个方案要{}：{}。部署到 VPS 还不支持；登录、购物车这类功能可以在方案里选「去掉」再试", hosting.label, hosting.reasons.join("；")));
     }
     let plan = Plan {
+        features,
         stack: "astro".into(),
         deploy: "direct".into(),
         visual: if plan.visual == "fresh" { "fresh".into() } else { "keep_brand".into() },
@@ -1233,21 +1258,25 @@ async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: 
         }
         let mut set = tokio::task::JoinSet::new();
         for (url, local) in chunk {
-            let (c, url, local, public) = (c.clone(), url.clone(), local.clone(), public.clone());
+            let (c, url, local, public, large) = (c.clone(), url.clone(), local.clone(), public.clone(), dir.join("large"));
             set.spawn(async move {
                 let dest = public.join(mx::pct_decode(local.trim_start_matches('/')));
                 if dest.is_file() {
-                    return (local, Ok(()));
+                    return (local, Ok::<bool, String>(false));
+                }
+                if large.join(mx::pct_decode(local.trim_start_matches('/'))).is_file() {
+                    return (local, Ok(true));
                 }
                 let r = async {
                     let (_, f) = fetch_follow_bytes(&c, &url).await?;
-                    if f.len() as u64 > sm::CF_MAX_FILE {
-                        return Err("超过 25 MB".to_string());
-                    }
+                    // 超过 25 MB 的 Pages 放不下：先存在站点数据里，配置动态功能时传到 R2
+                    let big = f.len() as u64 > sm::CF_MAX_FILE;
+                    let dest = if big { large.join(mx::pct_decode(local.trim_start_matches('/'))) } else { dest };
                     if let Some(d) = dest.parent() {
                         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
                     }
-                    std::fs::write(&dest, &f).map_err(|e| e.to_string())
+                    std::fs::write(&dest, &f).map_err(|e| e.to_string())?;
+                    Ok(big)
                 }
                 .await;
                 (local, r)
@@ -1256,7 +1285,12 @@ async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: 
         while let Some(r) = set.join_next().await {
             let Ok((local, r)) = r else { continue };
             match r {
-                Ok(()) => stats.assets += 1,
+                Ok(big) => {
+                    stats.assets += 1;
+                    if big {
+                        stats.large.push(local);
+                    }
+                }
                 Err(e) => {
                     if !local.starts_with("/favicon") && !local.starts_with("/apple-touch") {
                         stats.assets_failed.push(format!("{local}（{e}）"));
@@ -1269,8 +1303,50 @@ async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: 
     }
     job.step("assets", "ok", &format!("{} 个，失败 {} 个", stats.assets, stats.assets_failed.len()));
 
-    // 对应表、资源清单、给 AI 的盘点摘要
+    // 动态功能：按方案保留表单 / 评论，有大文件就用 R2。旧评论抓下来静态保留，Functions 代码写进项目
     job.step("files", "running", "");
+    let has_feature = |k: &str| inv.features.iter().any(|f| f.key == k) && plan.keeps_feature(k);
+    if has_feature("form") {
+        stats.features.push("form".into());
+    }
+    if has_feature("comments") {
+        stats.features.push("comments".into());
+        let mut all: BTreeMap<String, Vec<mx::OldComment>> = BTreeMap::new();
+        for p in inv.html_pages().filter(|p| plan.keeps(p) && !p.snapshot.is_empty() && p.features.iter().any(|f| f == "comments")) {
+            if let Some(h) = gz_read(&snap.join(&p.snapshot)) {
+                let cs = mx::extract_comments(&h);
+                if !cs.is_empty() {
+                    stats.comments += cs.len();
+                    all.insert(p.path.clone(), cs);
+                }
+            }
+        }
+        let f = code.join("src/data/comments.json");
+        if all.is_empty() {
+            let _ = std::fs::remove_file(&f);
+        } else {
+            write_json(&f, &all)?;
+        }
+    }
+    if !stats.large.is_empty() {
+        stats.features.push("files".into());
+    }
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.clone());
+    if !stats.features.is_empty() {
+        let mut d = crate::site_dynamic::load(&site_dir).unwrap_or_default();
+        d.features = stats.features.clone();
+        d.large = stats.large.clone();
+        crate::site_dynamic::write_code(&site.app_dir(&code), &d)?;
+        crate::site_dynamic::save(&site_dir, &d)?;
+    } else if let Some(mut d) = crate::site_dynamic::load(&site_dir) {
+        // 方案改成都不要了：去掉代码
+        d.features.clear();
+        d.large.clear();
+        crate::site_dynamic::write_code(&site.app_dir(&code), &d)?;
+        crate::site_dynamic::save(&site_dir, &d)?;
+    }
+
+    // 对应表、资源清单、给 AI 的盘点摘要
     let map = mx::build_url_map(&inv, &plan, &files);
     let mig = code.join(".pilot/migrate");
     write_json(&mig.join("urls.json"), &map)?;
@@ -1340,7 +1416,22 @@ fn survey_md(inv: &Inventory, plan: &Plan, map: &mx::UrlMap, st: &ExtractStats) 
     if !inv.features.is_empty() {
         s.push_str("\n## 动态功能\n\n");
         for f in &inv.features {
-            s.push_str(&format!("- {}（{} 页，如 `{}`）：{}\n", f.label, f.pages, f.samples.first().cloned().unwrap_or_default(), f.plan));
+            let how = match f.key.as_str() {
+                "search" => "改成 Pagefind 静态搜索".to_string(),
+                "form" | "comments" if st.features.contains(&f.key) => "保留：接口见重做要求里的【动态功能】".to_string(),
+                "form" | "comments" => "方案里选了去掉：页面上去掉入口".to_string(),
+                _ => f.plan.clone(),
+            };
+            s.push_str(&format!("- {}（{} 页，如 `{}`）：{how}\n", f.label, f.pages, f.samples.first().cloned().unwrap_or_default()));
+        }
+        if st.comments > 0 {
+            s.push_str(&format!("- 旧评论 {} 条已抓到 `src/data/comments.json`\n", st.comments));
+        }
+    }
+    if !st.large.is_empty() {
+        s.push_str("\n## 放在 R2 的大文件（超过 25 MB，地址不变，不要放进 public/）\n\n");
+        for l in st.large.iter().take(100) {
+            s.push_str(&format!("- `{l}`\n"));
         }
     }
     let lists: Vec<&mx::UrlEntry> = map.entries.iter().filter(|e| e.action == "keep" && matches!(e.kind.as_str(), "list" | "home")).collect();
@@ -1434,7 +1525,7 @@ fn rebuild_message(site: &Site, inv: &Inventory, plan: &Plan, meta: &Meta, again
 4. 旧站在跳转的地址（urls.json 里 action=redirect）写进 `public/_redirects`：`旧路径 新路径 301`，每行一条。\n\
 5. RSS / Atom 地址不变（survey.md 里列着）：用 @astrojs/rss 生成；地址不以 .xml 结尾的（比如 /feed/），生成到 feed.xml 再在 `_redirects` 里写 `/feed/ /feed.xml 200` 改写。\n\
 6. sitemap 要包含所有保留的页面（@astrojs/sitemap 即可）。\n\
-7. 动态功能：站内搜索改成 Pagefind 静态索引；表单、评论这一版先不做，在页面上去掉入口，写进 `.pilot/todo.json` 说明。\n\
+7. 动态功能：站内搜索改成 Pagefind 静态索引；survey.md 里写「去掉」的功能，在页面上去掉入口；保留的按下面的【动态功能】接。\n\
 8. survey.md 里列出「正文可能没抓全」的页面：对照旧站线上页面（可以用截图工具截）把缺的正文补上，补的内容必须来自旧页面本身。\n\n\
 【视觉】{visual}{style}\n\n\
 【做完之前】\n\
@@ -1442,10 +1533,16 @@ fn rebuild_message(site: &Site, inv: &Inventory, plan: &Plan, meta: &Meta, again
 - 安装依赖、构建通过；本地预览，在 375、768、1280 宽度截图首页、一篇内容页、一个列表页，按视觉标准逐项评估、改完复查；\n\
 - 自己抽查：urls.json 里随便挑 20 个 keep 地址，确认构建产物里都有对应文件（结尾斜杠也对）；\n\
 - 需要我处理的事写进 `.pilot/todo.json`，`git add -A && git commit -m \"迁移重做\"`，简要汇报。{issues}\n\n\
-{visual_std}\n\n{config}\n\n{todo}\n\n\
+{dynamic}{visual_std}\n\n{config}\n\n{todo}\n\n\
 不要部署——上线和核对由 Pilot 负责。",
         name = site.name,
         origin_host = Url::parse(&inv.origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(inv.domain.clone()),
+        dynamic = if meta.extract.features.is_empty() {
+            String::new()
+        } else {
+            let d = crate::site_dynamic::Dynamic { features: meta.extract.features.clone(), large: meta.extract.large.clone(), ..Default::default() };
+            format!("{}\n\n", crate::site_dynamic::ai_contract(&d, meta.extract.comments > 0))
+        },
         visual_std = crate::site_make::VISUAL_STANDARD,
         config = crate::site_make::CONFIG_SPEC,
         todo = crate::site_make::TODO_SPEC,
@@ -1476,6 +1573,12 @@ pub async fn migrate_verify(app: tauri::AppHandle, state: tauri::State<'_, AppSt
 
 async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conns::ConnStore, job: &Job) -> Result<(), String> {
     let code = PathBuf::from(&site.local_dir);
+    // Functions 代码由 Pilot 维护：构建前恢复成标准版本（AI 改过也以这份为准）
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.clone());
+    let dynamic = crate::site_dynamic::load(&site_dir).filter(|d| !d.features.is_empty());
+    if let Some(d) = &dynamic {
+        crate::site_dynamic::write_code(&site.app_dir(&code), d)?;
+    }
     let built = crate::site_deploy::build_and_check(&site, &code, None, job).await;
     let built = match built {
         Ok(b) => b,
@@ -1493,7 +1596,18 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
     let out = built.out.clone();
     let refs = dir.join("ref");
     let (map2, inv2) = (map.clone(), inv.clone());
-    let checks = tokio::task::spawn_blocking(move || mx::parity(&out, &map2, &inv2, &refs, &assets)).await.map_err(|e| e.to_string())?;
+    let in_r2: Vec<String> = dynamic.as_ref().map(|d| d.large.clone()).unwrap_or_default();
+    let routes_ok = dynamic.is_none() || built.out.join("_routes.json").is_file();
+    let mut checks = tokio::task::spawn_blocking(move || mx::parity(&out, &map2, &inv2, &refs, &assets, &in_r2)).await.map_err(|e| e.to_string())?;
+    if !routes_ok {
+        checks.push(mx::ParityCheck {
+            key: "routes".into(),
+            label: "动态功能路由".into(),
+            level: "block".into(),
+            detail: "构建产物里没有 _routes.json（应该从 public/_routes.json 复制过去），表单、评论的接口会不通".into(),
+            items: Vec::new(),
+        });
+    }
     let blocks = checks.iter().filter(|c| c.level == "block").count();
     let warns = checks.iter().filter(|c| c.level == "warn").count();
     save_meta(&dir, |m| {
@@ -1517,7 +1631,13 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
         },
         Err(_) => format!("https://{}.pages.dev", site.deploy.project),
     };
-    let live = live_check(&base, &map, job).await;
+    let health = dynamic.as_ref().is_some_and(|d| d.needs_db() || d.needs_r2());
+    if health && dynamic.as_ref().is_some_and(|d| d.setup_at == 0) {
+        job.step("live", "failed", "动态功能还没配置：先点「配置动态功能」建数据库，再上线到预览地址");
+        save_meta(&dir, |m| m.live = LiveCheck { at: now(), base: base.clone(), checked: 0, bad: vec!["动态功能还没配置（数据库、人机验证），表单和评论的接口不通".into()] })?;
+        return Err("动态功能还没配置".into());
+    }
+    let live = live_check(&base, &map, health, job).await;
     let bad = live.bad.len();
     save_meta(&dir, |m| m.live = live)?;
     job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
@@ -1528,9 +1648,19 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
 }
 
 /// 在某个地址上把对应表里的旧路径都请求一遍：keep 要 200，redirect 要 301/308 到新地址。
-async fn live_check(base: &str, map: &mx::UrlMap, job: &Job) -> LiveCheck {
+async fn live_check(base: &str, map: &mx::UrlMap, health: bool, job: &Job) -> LiveCheck {
     let c = client();
     let mut out = LiveCheck { at: now(), base: base.to_string(), ..Default::default() };
+    // 动态功能：/api/health 要 200 且数据库连得上
+    if health {
+        let url = format!("{}/api/health", base.trim_end_matches('/'));
+        match fetch(&c, &url, false).await {
+            Ok(f) if f.status == 200 && f.body.contains("\"db\":true") => {}
+            Ok(f) => out.bad.push(format!("/api/health：返回 {}（动态功能没生效：配置后要再上线一次）", f.status)),
+            Err(e) => out.bad.push(format!("/api/health：打不开（{e}）")),
+        }
+        out.checked += 1;
+    }
     let entries: Vec<mx::UrlEntry> = map.entries.iter().filter(|e| e.action != "drop").cloned().collect();
     let total = entries.len();
     for chunk in entries.chunks(6) {
@@ -1763,6 +1893,9 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     cut.notes.push(format!("{host} 已指向新站（{target}）。DNS 和证书生效一般要几分钟"));
     cut.notes.push(format!("另一个写法 {other} 还按原来的记录走：如果原来是跳到 {host} 的，停掉旧主机前要在 Cloudflare 里加一条跳转规则"));
     cut.notes.push("旧主机先别停：确认新站稳定（建议跟踪满 2 周）再停".into());
+    if crate::site_dynamic::load(&state.sites.data_dir(&id)).is_some_and(|d| d.setup_at > 0 && d.needs_db()) {
+        cut.notes.push("表单和评论在正式域名上照常可用（人机验证一开始就加了这个域名）；提交和评论在概览的「表单和评论」里看".into());
+    }
     save_meta(&dir, |m| m.cutover = cut.clone())?;
     // 生效检查 + 补上 IndexNow 验证文件：上线一次（这次带着正式域名）
     let _ = crate::site_cmds::start_deploy(app, &state, site.id.clone());
@@ -1836,7 +1969,8 @@ async fn run_track(site: Site, dir: PathBuf, meta: Meta, conns: crate::conns::Co
     let mut t = meta.track.clone();
     t.notes.clear();
     job.step("urls", "running", "");
-    let live = live_check(&format!("https://{}", site.domain), &map, job).await;
+    let health = crate::site_dynamic::load(&dir.parent().map(Path::to_path_buf).unwrap_or_default()).is_some_and(|d| d.setup_at > 0 && (d.needs_db() || d.needs_r2()));
+    let live = live_check(&format!("https://{}", site.domain), &map, health, job).await;
     t.checked = live.checked;
     t.bad = live.bad;
     job.step("urls", if t.bad.is_empty() { "ok" } else { "failed" }, &format!("{} 个地址，{} 个不对", t.checked, t.bad.len()));
@@ -1987,7 +2121,9 @@ mod tests {
             let h = gz_read(&tmp.path().join(&p.snapshot)).unwrap();
             let u = Url::parse(&format!("{}{}", origin.as_str().trim_end_matches('/'), p.path)).unwrap();
             let ct = mx::extract_content(&h, &u, &domain, &boiler);
-            println!("  {:.2} {:5}w {} -> {:?}", ct.coverage, sm::word_count(&ct.text), p.path, mx::content_path(&p.path));
+            let cm = mx::extract_comments(&h);
+            println!("  {:.2} {:5}w {} -> {:?}  comments {}", ct.coverage, sm::word_count(&ct.text), p.path, mx::content_path(&p.path), cm.len());
+            if std::env::var("MIGRATE_COMMENTS").is_ok() { for c in cm.iter().take(4) { println!("      #{} ^{} {} @{} :: {}", c.id, c.parent, c.author, c.date, c.content.chars().take(80).collect::<String>()); } }
             let want = std::env::var("MIGRATE_SHOW").unwrap_or_default();
             if (want.is_empty() && shown < 1 && ct.markdown.len() > 200) || (!want.is_empty() && p.path == want) {
                 shown += 1;
@@ -2063,7 +2199,7 @@ mod tests {
         let _ = copy_dir(&code.join("public"), &out);
         if let Ok((_, f)) = fetch_follow(&c, &cr.url_of("/sitemap.xml")).await { std::fs::write(out.join("sitemap.xml"), f.body).unwrap(); }
         let assets: Vec<String> = read_json(&code.join(".pilot/migrate/assets.json")).unwrap_or_default();
-        for chk in mx::parity(&out, &map, &inv, &data.join("ref"), &assets) {
+        for chk in mx::parity(&out, &map, &inv, &data.join("ref"), &assets, &[]) {
             println!("parity {:5} {:20} {}", chk.level, chk.label, chk.detail);
             for i in chk.items.iter().take(5) { println!("        {i}"); }
         }

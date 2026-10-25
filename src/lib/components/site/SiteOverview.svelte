@@ -9,6 +9,8 @@
   import SiteManagedCard from './SiteManagedCard.svelte';
   import SiteMakeCard from './SiteMakeCard.svelte';
   import SiteMigrate from './SiteMigrate.svelte';
+  import SiteInbox from './SiteInbox.svelte';
+  import { dyn, loadDynamic } from '$lib/state/dynamic.svelte.js';
   import { showMigrateCard } from '$lib/state/migrate.svelte.js';
   import SiteTodos from './SiteTodos.svelte';
   import SiteDomainLive from './SiteDomainLive.svelte';
@@ -29,6 +31,7 @@
   // 家目录缩写成 ~，路径太长时在中间省略交给 CSS
   const shortPath = (p: string) => p.replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~');
   const making = $derived(isMaking(site.id));
+  $effect(() => { void loadDynamic(site.id); });
   // 老站点：没有站点约定就提示补一份（托管运营和 AI 加内容都按它来）
   $effect(() => { if (!isMaking(site.id)) void loadMake(site.id, false); });
   const needConventions = $derived(!making && siteMake.state[site.id]?.conventions === false && !siteMake.hidden.includes(site.id));
@@ -53,6 +56,8 @@
   {/if}
 
   <SiteManagedCard {site} />
+
+  {#if dyn.conf[site.id]?.d1_id}<SiteInbox {site} />{/if}
 
   {#if !making && siteMake.state[site.id]?.todos?.length}
     <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} todos={siteMake.state[site.id]?.todos ?? []} /></div>

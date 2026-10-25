@@ -425,6 +425,100 @@ pub fn extract_content(html: &str, url: &Url, domain: &str, boiler: &HashSet<u64
     Content { markdown: out.trim().to_string() + "\n", text, coverage: (s.words as f32 / page_words as f32).min(1.0), assets: s.assets }
 }
 
+// ───────────────────────── 旧评论 ─────────────────────────
+
+/// 旧站页面上的一条评论（迁过去在页面里静态渲染，搜索引擎照样能看到）。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct OldComment {
+    pub id: String,
+    /// 回复的是哪条（id），顶层为空
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
+    pub author: String,
+    #[serde(default)]
+    pub date: String,
+    /// 纯文本，段落之间空一行
+    pub content: String,
+}
+
+fn first_text(el: ElementRef, sels: &[&str]) -> String {
+    for s in sels {
+        if let Some(x) = el.select(&sel(s)).next() {
+            let t = sm::visible_text(x);
+            if !t.is_empty() {
+                return t;
+            }
+        }
+    }
+    String::new()
+}
+
+/// 评论正文：按段落取纯文字，去掉「回复」链接之类。
+fn comment_body(el: ElementRef) -> String {
+    let content = ["div.comment-content", ".comment-content", ".comment-text", ".comment-body-text", ".comment_text"].iter().find_map(|s| el.select(&sel(s)).next());
+    let scope = content.unwrap_or(el);
+    let paras: Vec<String> = scope
+        .select(&sel("p"))
+        .filter(|p| !p.ancestors().filter_map(ElementRef::wrap).any(|a| a.value().attr("class").is_some_and(|c| c.contains("reply") || c.contains("comment-meta") || c.contains("comment-author"))))
+        .filter(|p| p.ancestors().filter_map(ElementRef::wrap).find(|a| is_comment_node(*a)).map(|a| a.id()) == Some(el.id()))
+        .map(sm::visible_text)
+        .filter(|t| !t.is_empty())
+        .collect();
+    if !paras.is_empty() {
+        return paras.join("\n\n");
+    }
+    content.map(sm::visible_text).unwrap_or_default()
+}
+
+fn is_comment_node(el: ElementRef) -> bool {
+    let v = el.value();
+    let id = v.attr("id").unwrap_or("");
+    let class = v.attr("class").unwrap_or("");
+    let idish = id.strip_prefix("comment-").or_else(|| id.strip_prefix("li-comment-")).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    (matches!(v.name(), "li" | "div" | "article") && (idish || class.split_whitespace().any(|c| c == "comment"))) && !class.contains("pingback") && !class.contains("trackback")
+}
+
+/// 从旧页面里取出评论（WordPress 及常见主题的写法：li.comment / #comment-123、.fn、time[datetime]、.comment-content）。
+/// Disqus 这类用脚本加载的评论页面里没有，取不到。
+pub fn extract_comments(html: &str) -> Vec<OldComment> {
+    let doc = Html::parse_document(html);
+    let mut out: Vec<OldComment> = Vec::new();
+    let mut seen = HashSet::new();
+    for el in doc.select(&sel("li, div, article")) {
+        if !is_comment_node(el) {
+            continue;
+        }
+        // 同一条评论外层 li 和内层 article 都可能命中：只取最外层
+        if el.ancestors().filter_map(ElementRef::wrap).take_while(|a| a.value().name() != "ol" && a.value().name() != "ul").any(is_comment_node) {
+            continue;
+        }
+        let raw_id = el.value().attr("id").unwrap_or("").trim_start_matches("li-").trim_start_matches("comment-").to_string();
+        let author = first_text(el, &[".comment-author .fn", ".fn", ".comment-author", ".comment-author-name", ".author"]);
+        let content = comment_body(el);
+        if author.is_empty() || content.chars().count() < 2 {
+            continue;
+        }
+        let id = if raw_id.is_empty() { format!("c{}", out.len() + 1) } else { raw_id };
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let date = el
+            .select(&sel("time[datetime]"))
+            .next()
+            .and_then(|t| t.value().attr("datetime").map(String::from))
+            .unwrap_or_else(|| first_text(el, &[".comment-metadata", ".comment-meta", ".comment-date"]));
+        let parent = el
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .find(|a| is_comment_node(*a))
+            .and_then(|a| a.value().attr("id"))
+            .map(|i| i.trim_start_matches("li-").trim_start_matches("comment-").to_string())
+            .unwrap_or_default();
+        out.push(OldComment { id, parent, author: author.chars().take(80).collect(), date: date.chars().take(40).collect(), content });
+    }
+    out
+}
+
 // ───────────────────────── 写进 Astro 项目 ─────────────────────────
 
 fn slug_seg(s: &str) -> String {
@@ -697,8 +791,9 @@ fn norm_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// 构建产物逐条对照旧站。`refs`：参考正文目录；`assets`：抓取时下载的图片和附件（新站路径）。
-pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[String]) -> Vec<ParityCheck> {
+/// 构建产物逐条对照旧站。`refs`：参考正文目录；`assets`：抓取时下载的图片和附件（新站路径）；
+/// `in_r2`：放在 R2 里的大文件（不在构建产物里，由 Functions 按原路径回应）。
+pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[String], in_r2: &[String]) -> Vec<ParityCheck> {
     let pages: HashMap<&str, &Page> = inv.pages.iter().map(|p| (p.path.as_str(), p)).collect();
     let rules = std::fs::read_to_string(out.join("_redirects")).map(|t| parse_redirects(&t)).unwrap_or_default();
     let (mut missing, mut slash, mut files_missing, mut redirects_bad) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -708,7 +803,7 @@ pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[
         match e.action.as_str() {
             "keep" if e.kind == "feed" || e.kind == "file" => {
                 let (f, _) = out_file_for(out, &e.old);
-                if f.is_none() && redirect_match(&rules, &e.old).is_none() {
+                if f.is_none() && redirect_match(&rules, &e.old).is_none() && !in_r2.contains(&e.old) {
                     files_missing.push(e.old.clone());
                 }
             }
@@ -763,7 +858,7 @@ pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[
             _ => {}
         }
     }
-    let assets_missing: Vec<String> = assets.iter().filter(|a| !out.join(pct_decode(a.trim_start_matches('/'))).is_file()).cloned().collect();
+    let assets_missing: Vec<String> = assets.iter().filter(|a| !in_r2.contains(a) && !out.join(pct_decode(a.trim_start_matches('/'))).is_file()).cloned().collect();
     let keep_pages: BTreeSet<&str> = map.entries.iter().filter(|e| e.action == "keep" && !matches!(e.kind.as_str(), "feed" | "file")).map(|e| e.old.as_str()).collect();
     let in_sitemap = sitemap_paths(out);
     let not_in_sitemap: Vec<String> = if in_sitemap.is_empty() {
@@ -890,6 +985,28 @@ mod tests {
     }
 
     #[test]
+    fn extracts_wordpress_comments() {
+        let html = r##"<body><article><p>post</p></article><div id="comments"><h2>3 条评论</h2><ol class="comment-list">
+<li id="comment-11" class="comment even thread-even depth-1"><article id="div-comment-11" class="comment-body">
+<footer class="comment-meta"><div class="comment-author vcard"><b class="fn">Alice</b> <span class="says">says:</span></div>
+<div class="comment-metadata"><a href="#comment-11"><time datetime="2015-05-03T10:00:00+00:00">May 3</time></a></div></footer>
+<div class="comment-content"><p>Great post!</p><p>Second line.</p></div>
+<div class="reply"><a class="comment-reply-link" href="#">Reply</a></div></article>
+<ol class="children"><li id="comment-12" class="comment byuser odd alt depth-2"><article class="comment-body">
+<footer class="comment-meta"><div class="comment-author vcard"><b class="fn"><a href="https://bob.example">Bob</a></b></div></footer>
+<div class="comment-content"><p>Thanks Alice</p></div></article></li></ol></li>
+<li id="comment-13" class="pingback"><div class="comment-body">Pingback: <a href="#">x</a></div></li>
+</ol></div></body>"##;
+        let c = extract_comments(html);
+        assert_eq!(c.len(), 2, "{c:?}");
+        assert_eq!(c[0], OldComment { id: "11".into(), parent: String::new(), author: "Alice".into(), date: "2015-05-03T10:00:00+00:00".into(), content: "Great post!\n\nSecond line.".into() });
+        assert_eq!(c[1].id, "12");
+        assert_eq!(c[1].parent, "11");
+        assert_eq!(c[1].author, "Bob");
+        assert_eq!(c[1].content, "Thanks Alice");
+    }
+
+    #[test]
     fn finds_boilerplate() {
         let a = block_sigs("<body><nav>Menu A B</nav><p>Unique one</p></body>");
         let b = block_sigs("<body><nav>Menu A B</nav><p>Unique two</p></body>");
@@ -942,7 +1059,7 @@ mod tests {
         let inv = Inventory { domain: "example.com".into(), pages: vec![page("/a/", "Old title"), page("/b/", "B"), page("/c", "C")], ..Default::default() };
         let e = |old: &str, action: &str, new: &str| UrlEntry { old: old.into(), new: new.into(), action: action.into(), kind: "article".into(), ..Default::default() };
         let map = UrlMap { domain: "example.com".into(), trailing_slash: "mixed".into(), entries: vec![e("/a/", "keep", "/a/"), e("/b/", "keep", "/b/"), e("/c", "keep", "/c"), e("/old", "redirect", "/a/")] };
-        let r = parity(&out, &map, &inv, &refs, &[]);
+        let r = parity(&out, &map, &inv, &refs, &[], &[]);
         let lv = |k: &str| r.iter().find(|c| c.key == k).map(|c| c.level.clone()).unwrap_or_default();
         assert_eq!(lv("missing"), "block");
         assert_eq!(lv("slash"), "block");

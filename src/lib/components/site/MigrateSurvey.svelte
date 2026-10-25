@@ -4,7 +4,8 @@
   import './site.css';
   import Icon from './Icon.svelte';
   import type { MView } from '$lib/state/migrate.svelte.js';
-  import { migrate, confirmPlan, resurvey } from '$lib/state/migrate.svelte.js';
+  import { migrate, confirmPlan, resurvey, previewHosting } from '$lib/state/migrate.svelte.js';
+  import type { MHosting } from '$lib/state/migrate.svelte.js';
 
   let { id, v, editable }: { id: string; v: MView; editable: boolean } = $props();
   const s = $derived(v.survey!);
@@ -13,6 +14,8 @@
   let dropped = $state<Set<string>>(new Set());
   let visual = $state<'keep_brand' | 'fresh'>('keep_brand');
   let style = $state('');
+  /** 动态功能保留 / 去掉（站内搜索固定改成静态，不用选） */
+  let feats = $state<Record<string, 'keep' | 'drop'>>({});
   let inited = '';
   $effect(() => {
     const k = `${id}:${v.plan?.confirmed_at ?? 0}`;
@@ -21,7 +24,17 @@
     dropped = new Set(v.plan?.drop_groups ?? []);
     visual = v.plan?.visual ?? 'keep_brand';
     style = v.plan?.style ?? '';
+    // 默认保留表单、评论；登录、购物车做不了，默认去掉（不去掉就要 VPS）
+    feats = Object.fromEntries(s.features.filter((f) => f.key !== 'search').map((f) => [f.key, v.plan?.features?.[f.key] ?? (f.key === 'login' || f.key === 'cart' ? 'drop' : 'keep')]));
   });
+  // 选择变了就重新判断部署去向
+  let hosting = $state<MHosting | null>(null);
+  $effect(() => {
+    const f = { ...feats };
+    if (!editable) { hosting = v.hosting; return; }
+    void previewHosting(id, f).then((h) => { hosting = h; });
+  });
+  const host = $derived(hosting ?? v.hosting ?? s.hosting);
   function toggle(g: string) { const n = new Set(dropped); if (n.has(g)) n.delete(g); else n.add(g); dropped = n; }
   const keepN = $derived(s.groups.filter((g) => !dropped.has(g.key)).reduce((a, g) => a + g.count, 0));
   const PTYPE: Record<string, string> = { home: '首页', article: '文章', list: '列表', page: '单页' };
@@ -48,15 +61,29 @@
     {#if s.gsc_used} · 已用 Search Console 补漏{/if}
   </p>
 
-  <div class="host" class:ok={s.hosting.supported}>
-    <div class="hh"><b>部署去向：{s.hosting.label}</b>{#if s.hosting.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !s.hosting.supported}<span class="pill warn">下一步支持</span>{/if}</div>
-    <ul>{#each s.hosting.reasons as r (r)}<li>{r}</li>{/each}</ul>
-    {#if !s.hosting.supported}<small>这一版先支持 Cloudflare 纯静态站。{s.hosting.target === 'cf_workers' ? '表单、评论这类动态功能用 Workers 实现，下一步支持。' : '部署到 VPS 下一步支持。'}</small>{/if}
+  <div class="host" class:ok={host.supported}>
+    <div class="hh"><b>部署去向：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
+    <ul>{#each host.reasons as r (r)}<li>{r}</li>{/each}</ul>
+    {#if !host.supported}<small>部署到 VPS 还不支持。{s.features.some((f) => f.key === 'login' || f.key === 'cart') ? '登录、购物车这类功能可以在下面选「去掉」，就能放到 Cloudflare。' : ''}</small>{/if}
   </div>
 
   {#if s.features.length}
-    <div class="blk"><b class="bt">动态功能</b>
-      <ul class="feats">{#each s.features as f (f.key)}<li><span class="pill {f.static_ok ? 'ok' : 'warn'}">{f.label} · {f.pages} 页</span><small>{f.plan}</small></li>{/each}</ul>
+    <div class="blk"><b class="bt">动态功能{#if editable}<small>选保留还是去掉</small>{/if}</b>
+      <ul class="feats">
+        {#each s.features as f (f.key)}
+          <li>
+            <span class="pill {f.static_ok ? 'ok' : feats[f.key] === 'drop' ? '' : 'warn'}">{f.label} · {f.pages} 页</span>
+            <small>{f.key === 'search' ? f.plan : feats[f.key] === 'drop' ? '去掉：新站上不放这个功能的入口' : f.plan}</small>
+            {#if editable && f.key !== 'search'}
+              <span class="grow"></span>
+              <div class="seg mini" role="tablist">
+                <button class:on={feats[f.key] !== 'drop'} onclick={() => (feats = { ...feats, [f.key]: 'keep' })}>保留</button>
+                <button class:on={feats[f.key] === 'drop'} onclick={() => (feats = { ...feats, [f.key]: 'drop' })}>去掉</button>
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
     </div>
   {/if}
 
@@ -101,9 +128,9 @@
       <small class="faint">{visual === 'keep_brand' ? '沿用 logo、站名和主色，排版、版式和细节按获奖级网站的标准重做。' : '只保留站名，设计方向重新定。'} 正文一字不改写，URL 一个不变。</small>
       <textarea class="tin" rows="2" bind:value={style} placeholder="补充要求（可选）：比如「更简洁，参考 Stripe 文档的排版」"></textarea>
       <div class="row">
-        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style })} disabled={!!busy || !s.hosting.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
+        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
         <button class="btn small quiet" onclick={() => resurvey(id)} disabled={!!busy}>重新盘点</button>
-        <small class="faint">技术栈 Astro · 部署到 Cloudflare Pages</small>
+        <small class="faint">技术栈 Astro · 部署到 Cloudflare Pages{host.target === 'cf_workers' ? ' + Functions' : ''}</small>
       </div>
     </div>
   {/if}
@@ -121,7 +148,9 @@
   .bt { font-size: 12.5px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
   .bt small { font-weight: 400; color: var(--faint); font-size: 11.5px; }
   .feats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
-  .feats li { display: flex; align-items: baseline; gap: 8px; font-size: 12px; }
+  .feats li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .feats .grow { flex: 1; }
+  .seg.mini button { padding: 2px 9px; font-size: 11.5px; }
   .feats small { color: var(--dim); line-height: 1.5; }
   .notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .notes li { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; color: var(--dim); line-height: 1.5; }

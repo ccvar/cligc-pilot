@@ -11,6 +11,7 @@ import { connections } from './connections.svelte.js';
 import { sites, refreshSites, openSite } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM } from './siteCreate.svelte.js';
 import { sendToMaking } from './siteMake.svelte.js';
+import type { Dynamic } from './dynamic.svelte.js';
 
 export interface MGroup { key: string; count: number; ptype: string; clicks: number; samples: string[] }
 export interface MFeature { key: string; label: string; pages: number; samples: string[]; plan: string; static_ok: boolean }
@@ -22,13 +23,13 @@ export interface MSummary {
   groups: MGroup[]; top: { path: string; title: string; clicks: number; impressions: number }[]; features: MFeature[]; hosting: MHosting;
   analytics: string[]; generator: string; gsc_used: boolean; cn_share: number | null; ownership: MOwnership; notes: string[];
 }
-export interface MPlan { drop_groups: string[]; drop_paths: string[]; stack: string; deploy: string; visual: 'keep_brand' | 'fresh'; style: string; confirmed_at: number }
+export interface MPlan { drop_groups: string[]; drop_paths: string[]; stack: string; deploy: string; visual: 'keep_brand' | 'fresh'; style: string; features: Record<string, 'keep' | 'drop'>; confirmed_at: number }
 export interface MParity { key: string; label: string; level: 'ok' | 'warn' | 'block'; detail: string; items: string[] }
 export interface MRec { kind: string; name: string; content: string; proxied: boolean; priority?: number | null; ttl: number }
 export interface MDns { at: number; cf_conn: string; zone_id: string; created_zone: boolean; ns: string[]; current_ns: string[]; zone_status: string; snapshot: MRec[]; missing: MRec[] }
 export interface MMeta {
   surveyed_at: number; extracted_at: number; rebuild_at: number; parity_at: number;
-  extract: { pages: number; lists: number; assets: number; assets_failed: string[]; low_coverage: string[]; collections: Record<string, number> };
+  extract: { pages: number; lists: number; assets: number; assets_failed: string[]; low_coverage: string[]; collections: Record<string, number>; large: string[]; comments: number; features: string[] };
   parity: MParity[];
   live: { at: number; base: string; checked: number; bad: string[] };
   dns: MDns;
@@ -36,7 +37,7 @@ export interface MMeta {
   track: { at: number; checked: number; bad: string[]; base_clicks: number; after_clicks: number; after_days: number; sitemap_submitted: boolean; indexnow_submitted: boolean; notes: string[] };
 }
 export type MStage = 'survey' | 'plan' | 'extract' | 'rebuild' | 'verify' | 'cutover' | 'track' | 'done';
-export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean }
+export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean; dynamic: Dynamic | null; hosting: MHosting | null }
 
 export const STAGES: { key: MStage; label: string }[] = [
   { key: 'survey', label: '盘点' },
@@ -118,12 +119,20 @@ async function run(id: string, busy: string, f: () => Promise<unknown>, ok?: str
 export const resurvey = (id: string) => run(id, 'survey', () => invoke('migrate_survey', { id }));
 
 /** 确认方案并直接开始抓取。 */
-export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style'>) {
+export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style' | 'features'>) {
   await run(id, 'plan', async () => {
     await invoke('migrate_save_plan', { id, plan: { ...plan, stack: 'astro', deploy: 'direct', confirmed_at: 0 } });
     await invoke('migrate_extract', { id });
   });
 }
+/** 按「保留 / 去掉」预览部署去向（确认方案前）。 */
+export async function previewHosting(id: string, features: Record<string, string>): Promise<MHosting | null> {
+  try { return await invoke<MHosting>('migrate_hosting', { id, features }); } catch { return null; }
+}
+
+/** 建动态功能的资源（数据库、人机验证、R2 大文件、绑定到 Pages 项目）。 */
+export const setupDynamic = (id: string) => run(id, 'dynamic', () => invoke('site_dynamic_setup', { id }));
+
 export const extract = (id: string) => run(id, 'extract', () => invoke('migrate_extract', { id }));
 
 /** 重做：第一次开一条新的制作对话；之后（继续重做、修核对出的问题）接在原来那条里。

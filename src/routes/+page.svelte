@@ -30,6 +30,7 @@
   import { initSites } from '$lib/state/sites.svelte.js';
   import { initOps } from '$lib/state/ops.svelte.js';
   import { initMigrate } from '$lib/state/migrate.svelte.js';
+  import { initDynamic } from '$lib/state/dynamic.svelte.js';
   import SiteMigrateDialog from '$lib/components/site/SiteMigrateDialog.svelte';
   import { initFleet } from '$lib/state/fleet.svelte.js';
   import SitesOverview from '$lib/components/site/SitesOverview.svelte';
@@ -87,6 +88,7 @@
   initSites();
   initOps();
   initMigrate();
+  initDynamic();
   initFleet();
   initManaged();
   initPhone();

@@ -53,6 +53,7 @@ mod site_make;
 mod site_migrate;
 mod migrate_extract;
 mod migrate_cmds;
+mod site_dynamic;
 mod site_ops;
 mod site_runner;
 mod site_verify;
@@ -4673,6 +4674,13 @@ pub fn run() {
             migrate_cmds::migrate_cutover,
             migrate_cmds::migrate_rollback,
             migrate_cmds::migrate_track,
+            migrate_cmds::migrate_hosting,
+            site_dynamic::site_dynamic_state,
+            site_dynamic::site_dynamic_features,
+            site_dynamic::site_dynamic_setup,
+            site_dynamic::site_inbox,
+            site_dynamic::site_inbox_act,
+            site_dynamic::site_dynamic_message,
             site_cmds::site_make_state,
             site_cmds::site_continue_message,
             site_cmds::discard_made_site,

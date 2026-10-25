@@ -628,3 +628,95 @@ pub async fn pages_subdomain(token: &str, account_id: &str, project: &str) -> Re
     let p = get_pages_project(token, account_id, project).await?.ok_or("Pages 项目还没建")?;
     Ok(if p.subdomain.is_empty() { format!("{project}.pages.dev") } else { p.subdomain })
 }
+
+// ───────────────────────── 动态功能：D1 / Turnstile / R2 / Pages 绑定 ─────────────────────────
+
+/// 按名字找 D1 数据库，返回 id。
+pub async fn d1_find(token: &str, account_id: &str, name: &str) -> Result<Option<String>, String> {
+    let b = cf_get_query(token, &format!("/accounts/{account_id}/d1/database"), &[("name", name)]).await?;
+    Ok(b["result"].as_array().into_iter().flatten().find(|d| d["name"].as_str() == Some(name)).and_then(|d| d["uuid"].as_str().map(String::from)))
+}
+
+/// 建 D1 数据库，返回 id。
+pub async fn d1_create(token: &str, account_id: &str, name: &str) -> Result<String, String> {
+    let b = cf_send(token, reqwest::Method::POST, &format!("/accounts/{account_id}/d1/database"), Some(serde_json::json!({ "name": name }))).await?;
+    b["result"]["uuid"].as_str().map(String::from).ok_or_else(|| "Cloudflare 没有返回数据库 id".into())
+}
+
+/// 在 D1 上执行一条 SQL（参数用 ? 占位），返回结果行。
+pub async fn d1_query(token: &str, account_id: &str, db: &str, sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
+    let b = cf_send(token, reqwest::Method::POST, &format!("/accounts/{account_id}/d1/database/{db}/query"), Some(serde_json::json!({ "sql": sql, "params": params }))).await?;
+    Ok(b["result"].as_array().and_then(|a| a.first()).and_then(|r| r["results"].as_array().cloned()).unwrap_or_default())
+}
+
+/// 建 Turnstile 组件（人机验证），返回 (sitekey, secret)。
+pub async fn turnstile_create(token: &str, account_id: &str, name: &str, domains: &[String]) -> Result<(String, String), String> {
+    let b = cf_send(
+        token,
+        reqwest::Method::POST,
+        &format!("/accounts/{account_id}/challenges/widgets"),
+        Some(serde_json::json!({ "name": name, "domains": domains, "mode": "managed" })),
+    )
+    .await?;
+    let s = |k: &str| b["result"][k].as_str().unwrap_or_default().to_string();
+    if s("sitekey").is_empty() {
+        return Err("Cloudflare 没有返回 Turnstile 的 sitekey".into());
+    }
+    Ok((s("sitekey"), s("secret")))
+}
+
+/// 改 Turnstile 组件允许的域名（切换域名时补上正式域名）。
+pub async fn turnstile_set_domains(token: &str, account_id: &str, sitekey: &str, name: &str, domains: &[String]) -> Result<(), String> {
+    cf_send(
+        token,
+        reqwest::Method::PUT,
+        &format!("/accounts/{account_id}/challenges/widgets/{sitekey}"),
+        Some(serde_json::json!({ "name": name, "domains": domains, "mode": "managed" })),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// 建 R2 存储桶；已经有了就算成功。
+pub async fn r2_bucket_ensure(token: &str, account_id: &str, name: &str) -> Result<(), String> {
+    match cf_send(token, reqwest::Method::POST, &format!("/accounts/{account_id}/r2/buckets"), Some(serde_json::json!({ "name": name }))).await {
+        Err(e) if e.contains("already exists") || e.contains("10004") || e.contains("409") => Ok(()),
+        r => r.map(|_| ()),
+    }
+}
+
+/// 往 R2 里放一个对象（key 按段编码）。
+pub async fn r2_put(token: &str, account_id: &str, bucket: &str, key: &str, bytes: Vec<u8>, content_type: &str) -> Result<(), String> {
+    let enc: Vec<String> = key.split('/').map(|s| s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()).collect();
+    let url = format!("{API}/accounts/{account_id}/r2/buckets/{bucket}/objects/{}", enc.join("/"));
+    let r = reqwest::Client::new()
+        .put(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("content-type", if content_type.is_empty() { "application/octet-stream" } else { content_type })
+        .timeout(Duration::from_secs(600))
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| format!("上传到 R2 失败: {e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("上传到 R2 失败：Cloudflare {}", r.status()));
+    }
+    Ok(())
+}
+
+/// 给 Pages 项目绑定 D1（DB）和 R2（FILES），生产和预览都绑。只动这两个绑定。
+pub async fn set_pages_bindings(token: &str, account_id: &str, project: &str, d1: Option<&str>, r2: Option<&str>) -> Result<(), String> {
+    let mut cfg = serde_json::Map::new();
+    if let Some(id) = d1 {
+        cfg.insert("d1_databases".into(), serde_json::json!({ "DB": { "id": id } }));
+    }
+    if let Some(name) = r2 {
+        cfg.insert("r2_buckets".into(), serde_json::json!({ "FILES": { "name": name } }));
+    }
+    if cfg.is_empty() {
+        return Ok(());
+    }
+    let cfg = Value::Object(cfg);
+    let body = serde_json::json!({ "deployment_configs": { "production": cfg.clone(), "preview": cfg } });
+    cf_send(token, reqwest::Method::PATCH, &format!("/accounts/{account_id}/pages/projects/{project}"), Some(body)).await.map(|_| ())
+}

@@ -1,7 +1,8 @@
 //! 站点迁移：把一个线上站点搬进 Pilot 重做，保留原来的 URL 和内容，换新的视觉和技术栈。
 //!
 //! 七个阶段：盘点 → 确认方案 → 抓取 → 重做 → 核对 → 切换 → 跟踪（命令在 migrate_cmds）。
-//! 第一步只支持 Astro + Cloudflare 纯静态；第二档（Workers 动态功能）和 VPS 先给出结论，不往下做。
+//! 支持 Astro + Cloudflare：纯静态，以及表单、评论、大文件这类动态功能（Pages Functions + D1 / R2，见 site_dynamic）；
+//! 需要 VPS 的站先给出结论，不往下做。
 //!
 //! 这里只放纯函数：URL 规范化、robots / sitemap 解析、页面信息提取、分组、动态功能识别、部署去向判断。
 //! 正文提取、URL 对应表和核对规则在 migrate_extract。
@@ -213,11 +214,18 @@ pub struct Plan {
     /// 视觉风格的补充要求
     #[serde(default)]
     pub style: String,
+    /// 动态功能怎么处理：form / comments → keep（用 Pages Functions + D1 实现）| drop（去掉）
+    #[serde(default)]
+    pub features: BTreeMap<String, String>,
     #[serde(default)]
     pub confirmed_at: u64,
 }
 
 impl Plan {
+    /// 动态功能保留（默认保留）。
+    pub fn keeps_feature(&self, f: &str) -> bool {
+        self.features.get(f).map(|v| v != "drop").unwrap_or(true)
+    }
     pub fn keeps(&self, p: &Page) -> bool {
         !self.drop_groups.iter().any(|g| g == &p.group) && !self.drop_paths.iter().any(|x| x == &p.path)
     }
@@ -933,8 +941,8 @@ pub fn tidy_titles(pages: &mut [Page]) -> String {
 pub fn summarize_features(pages: &[Page]) -> Vec<Feature> {
     const DEFS: &[(&str, &str, &str, bool)] = &[
         ("search", "站内搜索", "改成静态搜索索引（Pagefind），构建时生成，不需要服务器", true),
-        ("form", "表单（留言 / 联系 / 订阅）", "用 Cloudflare Workers 接收（下一步支持）；也可以先换成邮箱链接或第三方表单", false),
-        ("comments", "评论", "接第三方评论（如 Giscus），或者用 Workers + D1 自己存（下一步支持）；也可以去掉", false),
+        ("form", "表单（留言 / 联系 / 订阅）", "用 Cloudflare Pages Functions + D1 接收，Pilot 自动建好；提交在 Pilot 里看", false),
+        ("comments", "评论", "旧评论抓下来静态保留；新评论存 D1、在 Pilot 里审核后显示", false),
         ("login", "登录 / 会员", "静态站做不了，需要服务端：建议部署到 VPS（后续支持），或者迁移时去掉", false),
         ("cart", "购物车 / 下单", "静态站做不了，需要服务端：建议部署到 VPS（后续支持），或者改用第三方商店", false),
     ];
@@ -995,12 +1003,12 @@ pub fn decide_hosting(i: &HostingInput) -> Hosting {
     }
     if i.largest_file > CF_MAX_FILE {
         workers = true;
-        reasons.push(format!("有超过 25 MB 的文件（最大约 {} MB），Pages 放不下，要放到 R2", i.largest_file / 1024 / 1024));
+        reasons.push(format!("有超过 25 MB 的文件（最大约 {} MB），Pages 放不下，放到 R2（Pilot 自动上传，地址不变）", i.largest_file / 1024 / 1024));
     }
     for k in ["form", "comments"] {
         if let Some(f) = has(k) {
             workers = true;
-            reasons.push(format!("检测到{}（{} 页），可以用 Cloudflare Workers 实现", f.label, f.pages));
+            reasons.push(format!("检测到{}（{} 页），用 Cloudflare Pages Functions + D1 实现，仍然是同一个 Pages 项目", f.label, f.pages));
         }
     }
     if let Some(f) = has("search") {
@@ -1009,14 +1017,21 @@ pub fn decide_hosting(i: &HostingInput) -> Hosting {
     let (target, label) = if vps {
         ("vps", "部署到 VPS")
     } else if workers {
-        ("cf_workers", "Cloudflare Workers（静态 + 动态功能）")
+        ("cf_workers", "Cloudflare Pages + Functions（静态 + 动态功能）")
     } else {
         ("cf_static", "Cloudflare Pages（纯静态）")
     };
     if target == "cf_static" && reasons.is_empty() {
         reasons.push("没有发现需要服务端的功能，整站可以做成静态页面：速度快、免费额度够用、不用维护服务器".into());
     }
-    Hosting { target: target.into(), label: label.into(), reasons, paid, supported: target == "cf_static" }
+    Hosting { target: target.into(), label: label.into(), reasons, paid, supported: target != "vps" }
+}
+
+/// 按方案重新判断部署去向：方案里去掉的动态功能不再算（比如去掉登录 / 购物车后就能放 Cloudflare）。
+pub fn hosting_for(inv: &Inventory, features: &BTreeMap<String, String>) -> Hosting {
+    let kept: Vec<Feature> = inv.features.iter().filter(|f| features.get(&f.key).map(|v| v != "drop").unwrap_or(true)).cloned().collect();
+    let largest = inv.pages.iter().filter(|p| p.kind == "file").map(|p| p.bytes).max().unwrap_or(0);
+    decide_hosting(&HostingInput { pages: inv.html_pages().count(), assets: inv.assets.len(), largest_file: largest, features: &kept, cn_share: inv.cn_share })
 }
 
 #[cfg(test)]
@@ -1136,9 +1151,14 @@ mod tests {
         let f = vec![Feature { key: "form".into(), label: "表单".into(), pages: 2, ..Default::default() }];
         let h = decide_hosting(&HostingInput { pages: 100, assets: 300, largest_file: 1000, features: &f, cn_share: Some(0.1) });
         assert_eq!(h.target, "cf_workers");
-        assert!(!h.supported);
+        assert!(h.supported);
         let h = decide_hosting(&HostingInput { pages: 100, assets: 30_000, largest_file: 1000, features: &none, cn_share: Some(0.8) });
         assert_eq!(h.target, "vps");
         assert!(h.paid);
+        // 有购物车 → VPS；方案里去掉购物车 → 回到 Cloudflare
+        let inv = Inventory { features: vec![Feature { key: "cart".into(), label: "购物车".into(), pages: 3, ..Default::default() }], ..Default::default() };
+        assert_eq!(hosting_for(&inv, &BTreeMap::new()).target, "vps");
+        let drop: BTreeMap<String, String> = [("cart".to_string(), "drop".to_string())].into();
+        assert_eq!(hosting_for(&inv, &drop).target, "cf_static");
     }
 }

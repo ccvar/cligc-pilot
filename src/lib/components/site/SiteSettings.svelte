@@ -6,6 +6,7 @@
   import SiteDataSettings from './SiteDataSettings.svelte';
   import VpsAuth from './VpsAuth.svelte';
   import SiteConfigCard from './SiteConfigCard.svelte';
+  import SiteDynamicSettings from './SiteDynamicSettings.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { sites, editSite, saveSiteDraft, removeSite } from '$lib/state/sites.svelte.js';
@@ -112,6 +113,8 @@
     {/if}
 
     <SiteDataSettings draft={d} {site} />
+
+    <SiteDynamicSettings {site} />
 
     {#if dirty}
       <div class="savebar">

@@ -14,7 +14,8 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic } from '$lib/state/migrate.svelte.js';
+  import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
   const v = $derived(migrate.view[site.id]);
@@ -59,6 +60,10 @@
     } catch (e) { say(String(e), 'err'); }
     finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
   }
+  const featNames = (fs: string[]) => ['form', 'comments', 'files'].filter((f) => fs.includes(f)).map((f) => FEATURE_LABEL[f]).join('、');
+  const dynNeed = $derived(!!v?.dynamic && v.dynamic.features.length > 0);
+  const dynReady = $derived(!dynNeed || !!v?.dynamic?.setup_at);
+  const dynSetting = $derived(busy === 'dynamic' || (jobRunning && job.kind === 'dynamic:setup'));
   const OWN_BY: Record<string, string> = { cloudflare: '域名在你的 Cloudflare 账号里', gsc: 'Search Console 里已验证这个站', txt: 'DNS 里有验证记录' };
 </script>
 
@@ -92,7 +97,7 @@
     <MigrateSurvey id={site.id} {v} editable={!jobRunning} />
   {:else}
     {#if v.survey}
-      <div class="sec first"><b>盘点报告</b><small>{v.survey.pages} 个网页 · {v.survey.hosting.label} · <span data-tip={full(v.survey.finished_at)}>{ago(v.survey.finished_at)}</span></small><span class="grow"></span><button class="fold" onclick={() => (showSurvey = !showSurvey)}>{showSurvey ? '收起' : '展开'}</button></div>
+      <div class="sec first"><b>盘点报告</b><small>{v.survey.pages} 个网页 · {(v.hosting ?? v.survey.hosting).label} · <span data-tip={full(v.survey.finished_at)}>{ago(v.survey.finished_at)}</span></small><span class="grow"></span><button class="fold" onclick={() => (showSurvey = !showSurvey)}>{showSurvey ? '收起' : '展开'}</button></div>
       {#if showSurvey}<MigrateSurvey id={site.id} {v} editable={false} />{/if}
     {/if}
 
@@ -102,7 +107,7 @@
 
     {#if v.meta.extracted_at}
       {@const ex = v.meta.extract}
-      <div class="sec"><b>抓取</b><small>{ex.pages} 篇内容 · {ex.lists} 个列表页和首页 · {ex.assets} 个图片和附件 · <span data-tip={full(v.meta.extracted_at)}>{ago(v.meta.extracted_at)}</span></small><span class="grow"></span>{#if v.stage === 'rebuild' || v.stage === 'verify'}<button class="btn tiny quiet" onclick={() => extract(site.id)} disabled={!!busy || jobRunning} data-tip="按确认的方案重新抓一遍（会覆盖抓下来的内容文件）">重新抓取</button>{/if}</div>
+      <div class="sec"><b>抓取</b><small>{ex.pages} 篇内容 · {ex.lists} 个列表页和首页 · {ex.assets} 个图片和附件{ex.comments ? ` · ${ex.comments} 条旧评论` : ''}{ex.large?.length ? ` · ${ex.large.length} 个大文件放 R2` : ''}{ex.features?.length ? ` · 动态功能：${featNames(ex.features)}` : ''} · <span data-tip={full(v.meta.extracted_at)}>{ago(v.meta.extracted_at)}</span></small><span class="grow"></span>{#if v.stage === 'rebuild' || v.stage === 'verify'}<button class="btn tiny quiet" onclick={() => extract(site.id)} disabled={!!busy || jobRunning} data-tip="按确认的方案重新抓一遍（会覆盖抓下来的内容文件）">重新抓取</button>{/if}</div>
       <!-- 抓取时的问题只在重做、核对阶段有用；核对通过以后不再提 -->
       {#if (v.stage === 'rebuild' || v.stage === 'verify') && (ex.low_coverage.length || ex.assets_failed.length)}
         <ul class="mini">
@@ -154,7 +159,12 @@
               <button class="btn small" onclick={setupPreview} disabled={!!busy || !cfConn || !project.trim()}>{busy === 'pages' ? '创建中…' : '创建 Pages 项目'}</button>
             </div>
           {:else}<p class="hint warn-text">还没有 Cloudflare 连接：先在设置里连接 Cloudflare。</p>{/if}
+        {:else if dynNeed && !dynReady}
+          <p class="hint">保留了{featNames(v.dynamic?.features ?? [])}：还要在 Cloudflare 上建数据库（D1）{v.dynamic?.features.includes('form') || v.dynamic?.features.includes('comments') ? '和人机验证（Turnstile）' : ''}{v.dynamic?.large.length ? `，把 ${v.dynamic.large.length} 个大文件传到 R2` : ''}，绑到这个 Pages 项目。</p>
+          <div class="row"><button class="btn small primary" onclick={() => setupDynamic(site.id)} disabled={jobRunning || !!busy}>{dynSetting ? '配置中…' : '配置动态功能'}</button><small class="faint">令牌要有 D1、Turnstile{v.dynamic?.large.length ? '、R2' : ''} 的编辑权限</small></div>
         {:else if !v.meta.live.at}
+          {#if dynNeed}<p class="dyn-ok"><Icon name="check" size={12} />动态功能已配置{v.dynamic?.turnstile_sitekey ? '' : '（没开人机验证）'} <button class="link-btn" onclick={() => setupDynamic(site.id)} disabled={jobRunning || !!busy}>重新配置</button></p>{/if}
+          {#each v.dynamic?.notes ?? [] as n (n)}<p class="hint">{n}</p>{/each}
           <div class="row"><span class="hint grow">上线到 <code>{v.preview.replace(/^https?:\/\//, '')}</code>，然后点「重新核对」。</span><button class="btn small" onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? '上线中…' : '上线到预览地址'}</button></div>
           {#if blocks.length}<p class="hint">先把上面必须修的问题修好再上线。</p>{/if}
         {:else}
@@ -299,6 +309,7 @@
   .txt code { font-size: 12px; user-select: all; }
   .ns { display: flex; gap: 8px; flex-wrap: wrap; }
   .ns code { font-size: 12px; padding: 2px 6px; user-select: all; }
+  .dyn-ok { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--ok); }
   .bars { display: flex; flex-direction: column; gap: 8px; }
   .bars i { display: block; height: 10px; border-radius: 6px; background: #f1efe9; }
 </style>
