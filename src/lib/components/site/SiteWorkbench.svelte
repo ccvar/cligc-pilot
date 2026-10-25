@@ -1,6 +1,7 @@
 <script lang="ts">
   import './site.css';
   import Icon from './Icon.svelte';
+  import { untrack } from 'svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { openUrl, revealItemInDir } from '@tauri-apps/plugin-opener';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
@@ -28,7 +29,7 @@
   const needCount = $derived(queue.filter((q) => ['proposed', 'failed'].includes(q.status) || (q.status === 'deployed' && !!q.attention)).length + (inPlan ? 0 : queue.filter((q) => q.status === 'open').length));
   // 分发：摘要写好、等你确认发布的篇数也算「要你处理」
   const syndPending = $derived(site ? synd.pending[site.id] ?? 0 : 0);
-  $effect(() => { listenSyndication(); if (site) void loadSyndPending(site.id); });
+  $effect(() => { const id = site?.id; untrack(() => { listenSyndication(); if (id) void loadSyndPending(id); }); });
   const queuedCount = $derived(inPlan ? queue.filter((q) => q.status === 'open').length : 0);
   // 代码文件夹显示成 ~/work/xxx 这样的短路径
   const shortPath = (p: string) => (p || '').replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~').replace(/^[A-Za-z]:\\Users\\[^\\]+/, '~');

@@ -10,8 +10,13 @@ class SyndState {
 }
 export const synd = new SyndState();
 
+// 先 await 再展开：`{ ...synd.pending, [k]: await f() }` 会在 await 之前同步读 synd.pending，
+// 在 $effect 里调用时 effect 就订阅了它，写回又触发 effect，无限循环（客户端卡住）
 export async function loadSyndPending(siteId: string) {
-  try { synd.pending = { ...synd.pending, [siteId]: await invoke<number>('syndication_pending', { siteId }) }; } catch { /* 读不到就不显示 */ }
+  try {
+    const n = await invoke<number>('syndication_pending', { siteId });
+    synd.pending = { ...synd.pending, [siteId]: n };
+  } catch { /* 读不到就不显示 */ }
 }
 
 let listening = false;

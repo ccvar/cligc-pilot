@@ -30,8 +30,8 @@
     try { st = await invoke<State>('syndication_state', { siteId: site.id }); loadErr = ''; } catch (e) { loadErr = String(e); }
   }
   // 后台自动处理完（site-syndication 事件）也重新读
-  $effect(() => { void site.id; void synd.ver[site.id]; void load(); });
-  $effect(() => { void st; void loadSyndPending(site.id); });
+  $effect(() => { void site.id; void synd.ver[site.id]; untrack(() => void load()); });
+  $effect(() => { void st; const id = site.id; untrack(() => void loadSyndPending(id)); });
 
   const brainOk = $derived(!!st && (st.brain === 'claude' || st.brain.startsWith('api:')));
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
