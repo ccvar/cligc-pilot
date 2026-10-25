@@ -65,10 +65,10 @@ export function openSiteCreate() {
 }
 export function closeSiteCreate() { if (!siteCreate.busy) Object.assign(siteCreate, blank()); }
 
-/** 在 Pilot 里新建、还没配部署的站点：列表里标「制作中」。 */
+/** 在 Pilot 里新建、还没配部署的站点，以及还没切换的迁移站点：列表里标「制作中」。 */
 export function isMaking(id: string): boolean {
   const s = sites.list.find((x) => x.id === id);
-  return !!s && s.origin === 'created' && s.deploy.mode === 'none';
+  return !!s && ((s.origin === 'created' && s.deploy.mode === 'none') || s.origin === 'migrating');
 }
 
 /** 类型交给 AI 判断时，先按描述里的字眼猜一个，只用来在第二步标「推荐」的技术栈。 */

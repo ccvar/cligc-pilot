@@ -16,6 +16,7 @@
   import { fleet, loadFleet } from '$lib/state/fleet.svelte.js';
   import { launch, checkDomain } from '$lib/state/launch.svelte.js';
   import { siteMake, loadMake, makingConv, continueMaking, previewSite, removeMade, discardMade } from '$lib/state/siteMake.svelte.js';
+  import { migrate, loadMigrate, openMigrate, STAGES } from '$lib/state/migrate.svelte.js';
 
   // 卡片右上角「…」菜单
   let menu = $state('');
@@ -50,10 +51,18 @@
     const ids = done.filter((s) => pagesMode(s) && s.domain && fleet.rows.find((r) => r.id === s.id)?.last_deploy_ok).map((s) => s.id);
     untrack(() => { for (const id of ids) { const s = done.find((x) => x.id === id); if (s && !launch.domainCheck[id]) void checkDomain(s, true); } });
   });
-  $effect(() => { for (const s of list) void loadMake(s.id); });
+  $effect(() => { for (const s of list) void (s.origin === 'migrating' ? loadMigrate(s.id) : loadMake(s.id)); });
+  const MIG_TEXT: Record<string, string> = { survey: '正在盘点旧站', plan: '盘点好了，等你确认方案', extract: '等待抓取内容', rebuild: '内容已抓好，等 AI 重做', verify: '核对中：有问题要修', cutover: '核对通过，可以切换了', track: '已切换，跟踪中', done: '迁移完成' };
+  const migIdx = (id: string) => { const st = migrate.view[id]?.stage; return st ? Math.max(0, STAGES.findIndex((x) => x.key === st)) : 0; };
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {
-    if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: 'AI 正在制作…', tone: 'live' };
+    if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: s.origin === 'migrating' ? 'AI 正在重做…' : 'AI 正在制作…', tone: 'live' };
+    if (s.origin === 'migrating') {
+      const j = sites.jobs[s.id];
+      if (j?.status === 'running' && j.kind.startsWith('migrate:')) return { text: `正在${j.title}…`, tone: 'live' };
+      const st = migrate.view[s.id]?.stage;
+      return { text: st ? `迁移：${MIG_TEXT[st] ?? st}` : '读取中…', tone: st === 'cutover' ? 'ok' : st === 'verify' ? 'warn' : '' };
+    }
     const ms = siteMake.state[s.id];
     if (!ms) return { text: '读取中…', tone: '' };
     const left = ms.steps.filter((x) => !x.done);
@@ -78,19 +87,20 @@
       <p class="hint">{list.length ? `${list.length} 个制作中` : '从零做一个新站点'}</p>
     </div>
     <div class="row">
+      <button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />迁移已有站点</button>
       <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button>
     </div>
   </header>
 
   <div class="page-body">
     <div class="pane">
-      <p class="hint lead">说清楚要做什么站，AI 从空仓库做出第一版：规划栏目、写首批内容页、配好 SEO、按获奖级的视觉标准自检。做好并配置上线后，站点会移到「全部站点」。</p>
+      <p class="hint lead">说清楚要做什么站，AI 从空仓库做出第一版：规划栏目、写首批内容页、配好 SEO、按获奖级的视觉标准自检。做好并配置上线后，站点会移到「全部站点」。已经有线上站点的，可以「迁移已有站点」：保留原来的 URL 和内容，用新的视觉重做。</p>
       {#if !list.length}
         <div class="card empty">
           <Icon name="sparkles" size={20} />
           <b>还没有制作中的站点</b>
           <small>填一段定位、选好技术栈，剩下的交给 AI。</small>
-          <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button>
+          <div class="row"><button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />迁移已有站点</button><button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button></div>
         </div>
       {:else}
         <div class="grid">
@@ -104,7 +114,7 @@
               <div class="top-row">
                 <button class="top" onclick={() => openSite(s.id, 'overview')}>
                   <SiteIcon id={s.id} size={18} />
-                  <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
+                  <span class="nm"><b>{s.name}</b><small>{s.origin === 'migrating' ? `迁移自 ${s.migrate_from}` : s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
                 </button>
                 <div class="more">
                   <button class="more-btn" class:on={menu === s.id} aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === s.id} onclick={() => (menu = menu === s.id ? '' : s.id)}>
@@ -114,7 +124,7 @@
                     <div class="menu" role="menu">
                       {#if ms?.built_at}<button role="menuitem" onclick={() => { menu = ''; void previewSite(s); }}><Icon name="external" size={13} />本地预览</button>{/if}
                       {#if pending}<button role="menuitem" onclick={() => { menu = ''; void continueMaking(s); }}><Icon name="play" size={13} />继续制作</button>{/if}
-                      <button role="menuitem" onclick={() => { menu = ''; void finishMaking(s); }}><Icon name="check" size={13} />标记做完，移到全部站点</button>
+                      {#if s.origin !== 'migrating'}<button role="menuitem" onclick={() => { menu = ''; void finishMaking(s); }}><Icon name="check" size={13} />标记做完，移到全部站点</button>{/if}
                       <div class="sep"></div>
                       <button role="menuitem" onclick={() => { menu = ''; void removeMade(s); }}><Icon name="x" size={13} />从 Pilot 移除（保留文件夹）</button>
                       <button role="menuitem" class="danger" onclick={() => { menu = ''; void discardMade(s); }}><Icon name="trash" size={13} />删除站点和文件夹…</button>
@@ -123,8 +133,13 @@
                 </div>
               </div>
               <div class="prog">
-                <span class="meter"><i style="width:{ms ? (done / Math.max(ms.steps.length, 1)) * 100 : 0}%"></i></span>
-                <span class="n">{ms ? `${done}/${ms.steps.length}` : ''}</span>
+                {#if s.origin === 'migrating'}
+                  <span class="meter"><i style="width:{(migIdx(s.id) / STAGES.length) * 100}%"></i></span>
+                  <span class="n">{migIdx(s.id)}/{STAGES.length}</span>
+                {:else}
+                  <span class="meter"><i style="width:{ms ? (done / Math.max(ms.steps.length, 1)) * 100 : 0}%"></i></span>
+                  <span class="n">{ms ? `${done}/${ms.steps.length}` : ''}</span>
+                {/if}
               </div>
               <div class="st {st.tone}">{#if st.tone === 'live'}<span class="spin"></span>{/if}{st.text}</div>
               <div class="acts">

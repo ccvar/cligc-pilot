@@ -27,7 +27,7 @@ pub fn stack_build(stack: &str) -> Option<BuildConfig> {
     })
 }
 
-fn stack_guide(stack: &str) -> &'static str {
+pub(crate) fn stack_guide(stack: &str) -> &'static str {
     match stack {
         "astro" => "用 Astro，静态输出（不加 SSR 适配器）。可以手写最小配置（package.json、astro.config.mjs），也可以用官方脚手架的最小模板起步，但别装用不到的集成。\
 内容页用 Markdown / MDX 放在 `src/content/`，用 content collections 管理并校验开头元数据；package.json 的 build 脚本是 `astro build`，产物目录 `dist`。",
@@ -149,7 +149,7 @@ const CONTENT_STANDARD: &str = "【内容标准】\n\
 4. 真实截图：讲操作步骤、界面或对比时，能截到的就用随附的截图工具截真实网页（官方站点、公开页面），不用占位图、示意图或 AI 生成的界面图。截完打开检查不是错误页、验证码或 Cookie 弹窗，个人信息打码；图片压缩成适合网页的大小，写清 alt 和图注。需要登录或截不到的，正文先不放图，写进 `.pilot/todo.json`。";
 
 /// 视觉标准：以获奖级网站为品质标准，但服务于内容——靠搜索带流量的站，可读性和速度是底线。
-const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby Awards、FWA 获奖网站的品质为标准，同时服务于内容：这是靠搜索带流量的站，可读性和加载速度是底线。\n\
+pub(crate) const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby Awards、FWA 获奖网站的品质为标准，同时服务于内容：这是靠搜索带流量的站，可读性和加载速度是底线。\n\
 - 原创：先按定位定一个设计方向（气质、配色从哪来、字体组合、一个让人记住的视觉点），写进 `.pilot/site.md`；不套通用模板，不做千篇一律的渐变大图加三栏卡片。\n\
 - 排版：清楚的字号刻度和行高；正文 16–18px，行宽适中（中文每行约 30–40 字）；标题有张力，长文读起来不累。\n\
 - 留白与网格：统一的间距刻度和栅格，区块之间有松有紧的节奏。\n\

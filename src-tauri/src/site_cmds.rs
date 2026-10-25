@@ -187,7 +187,7 @@ pub struct ImportRequest {
     pub indexnow_key: String,
 }
 
-fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
+pub(crate) fn validate(site: &mut Site, state: &AppState) -> Result<(), String> {
     site.name = site.name.trim().to_string();
     if site.name.is_empty() {
         return Err("请填写站点名称".into());
@@ -308,6 +308,7 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
         pinned: false,
         tags: Vec::new(),
         origin: String::new(),
+        migrate_from: String::new(),
         created_at: t,
         updated_at: t,
     };
@@ -383,6 +384,7 @@ pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_mak
         pinned: false,
         tags: Vec::new(),
         origin: "created".into(),
+        migrate_from: String::new(),
         created_at: t,
         updated_at: t,
     };
@@ -554,6 +556,14 @@ pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, 
     next.repo = if current.source == "github" { current.repo.clone() } else { next.repo };
     next.local_dir = current.local_dir.clone();
     next.build.env_keys = current.build.env_keys.clone();
+    // 迁移状态只由迁移流程改（切换 / 回退），设置里存不动；迁移中不能填正式域名，不然预览上线会把线上域名切过来
+    if matches!(current.origin.as_str(), "migrating" | "migrated") {
+        next.origin = current.origin.clone();
+        next.migrate_from = current.migrate_from.clone();
+        if current.origin == "migrating" && !next.domain.trim().is_empty() {
+            return Err("这个站点还在迁移：正式域名会在「切换到新站」时自动填上，现在先留空".into());
+        }
+    }
     validate(&mut next, &state)?;
     state.sites.update(&current.id, now(), move |s| {
         *s = next;

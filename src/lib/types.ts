@@ -224,8 +224,10 @@ export interface Site {
   ops: SiteOps;
   pinned: boolean;
   tags: string[];
-  /** created：在 Pilot 里从零制作的；空＝导入的 */
+  /** created：在 Pilot 里从零制作的；migrating / migrated：从线上站点迁移来的；空＝导入的 */
   origin?: string;
+  /** 迁移中：旧站域名（迁移期间 domain 留空，切换时才填上） */
+  migrate_from?: string;
   created_at: number;
   updated_at: number;
 }

@@ -509,6 +509,17 @@ pub fn ensure_site_data(data_dir: &Path) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
+/// 站点迁移用的渲染工具：浏览器打开一批网页，存下渲染后的 HTML（JS 渲染站）。见 migrate_cmds。
+pub const RENDER_JS: &str = include_str!("builtin/render.js");
+
+pub fn ensure_render(data_dir: &Path) -> std::io::Result<PathBuf> {
+    let dir = data_dir.join("tools");
+    fs::create_dir_all(&dir)?;
+    let p = dir.join("render.cjs");
+    fs::write(&p, RENDER_JS)?;
+    Ok(p)
+}
+
 /// 安卓手机工具（adb）：截图、读屏幕元素、点击、滑动、输入、打开 app。见 phone::phone_prompt。
 pub const PHONE_JS: &str = include_str!("builtin/phone.js");
 

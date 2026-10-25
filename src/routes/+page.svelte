@@ -29,6 +29,8 @@
   import SiteWorkbench from '$lib/components/site/SiteWorkbench.svelte';
   import { initSites } from '$lib/state/sites.svelte.js';
   import { initOps } from '$lib/state/ops.svelte.js';
+  import { initMigrate } from '$lib/state/migrate.svelte.js';
+  import SiteMigrateDialog from '$lib/components/site/SiteMigrateDialog.svelte';
   import { initFleet } from '$lib/state/fleet.svelte.js';
   import SitesOverview from '$lib/components/site/SitesOverview.svelte';
   import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
@@ -84,6 +86,7 @@
   initTurns();
   initSites();
   initOps();
+  initMigrate();
   initFleet();
   initManaged();
   initPhone();
@@ -251,6 +254,7 @@
 <GithubConnectDialog />
 <SiteImportDialog />
 <SiteCreateDialog />
+<SiteMigrateDialog />
 <DataConnectDialog />
 <TemplateSaveDialog />
 <TemplateUseDialog />

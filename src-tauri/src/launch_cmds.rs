@@ -54,6 +54,7 @@ pub async fn import_cf_project(state: tauri::State<'_, AppState>, conn_id: Strin
         pinned: false,
         tags: Vec::new(),
         origin: String::new(),
+        migrate_from: String::new(),
         created_at: t,
         updated_at: t,
     };
@@ -152,7 +153,10 @@ fn update_cache(state: &AppState, id: &str, f: impl FnOnce(&mut LaunchCache)) {
 /// 站点还没绑 Search Console / Bing 时，到已连接的账号里按域名找一遍，唯一命中就直接绑上。
 /// 规则和「按域名绑定」一致；Google 只在站点已用的那个账号里找（一个站点的 GA4 和 Search Console 共用一条连接），
 /// 站点还没选 Google 连接时才在所有账号里找。
-async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
+/// 迁移中的站点还没填正式域名（`migrate_from` 是旧站域名）：按旧站域名找 GA4 / Search Console，不碰 Bing（等切换后再接）。
+pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
+    let migrating = site.domain.is_empty() && !site.migrate_from.is_empty();
+    let site = &if migrating { Site { domain: site.migrate_from.clone(), ..site.clone() } } else { site.clone() };
     let (mut bound, mut errs) = (Vec::new(), Vec::new());
     // Pilot 自己加到 Bing 的站点（有 bing_auth）每次都核对一下验证状态
     if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty() && site.data.bing_auth.is_empty()) {
@@ -202,7 +206,7 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
         }
     }
     // Search Console 那段要基于最新的绑定（上面可能刚改了 GA4 的账号）
-    let site = &state.sites.get(&site.id).unwrap_or_else(|_| site.clone());
+    let site = &state.sites.get(&site.id).map(|x| Site { domain: site.domain.clone(), ..x }).unwrap_or_else(|_| site.clone());
     if site.data.gsc_site.is_empty() {
         // 先找站点已经在用的账号，再找其它 Google 账号（Search Console 可以和 GA4 在不同账号下）
         let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
@@ -233,6 +237,9 @@ async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<Stri
                 Err(e) => errs.push(format!("Search Console（{}）：{e}", c.remark.trim().is_empty().then(|| c.name.clone()).unwrap_or_else(|| c.remark.clone()))),
             }
         }
+    }
+    if migrating {
+        return (bound, errs);
     }
     // 绑着但 Bing 里其实没验证（以前的自动绑定不看验证状态）：先解绑，下面接着自动验证
     let mut site = site.clone();

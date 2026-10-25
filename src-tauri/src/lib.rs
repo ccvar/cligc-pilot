@@ -50,6 +50,9 @@ mod window_memory;
 mod site_github;
 mod site_jobs;
 mod site_make;
+mod site_migrate;
+mod migrate_extract;
+mod migrate_cmds;
 mod site_ops;
 mod site_runner;
 mod site_verify;
@@ -4657,6 +4660,19 @@ pub fn run() {
             site_cmds::list_sites,
             site_cmds::import_site,
             site_cmds::create_site,
+            migrate_cmds::create_migration,
+            migrate_cmds::migrate_state,
+            migrate_cmds::migrate_survey,
+            migrate_cmds::migrate_save_plan,
+            migrate_cmds::migrate_extract,
+            migrate_cmds::migrate_rebuild_message,
+            migrate_cmds::migrate_verify,
+            migrate_cmds::migrate_ownership,
+            migrate_cmds::migrate_dns_prepare,
+            migrate_cmds::migrate_dns_fix,
+            migrate_cmds::migrate_cutover,
+            migrate_cmds::migrate_rollback,
+            migrate_cmds::migrate_track,
             site_cmds::site_make_state,
             site_cmds::site_continue_message,
             site_cmds::discard_made_site,

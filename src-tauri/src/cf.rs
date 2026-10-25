@@ -557,3 +557,74 @@ mod tests {
     }
 
 }
+
+/// 一条完整的 DNS 记录（迁移时对照、回退时原样恢复）。
+#[derive(Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct FullRec {
+    #[serde(default)]
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub content: String,
+    #[serde(default)]
+    pub proxied: bool,
+    #[serde(default)]
+    pub priority: Option<u16>,
+    #[serde(default)]
+    pub ttl: u32,
+}
+
+/// Zone 里的全部 DNS 记录（分页读完）。
+pub async fn all_dns_records(token: &str, zone_id: &str) -> Result<Vec<FullRec>, String> {
+    let mut out = Vec::new();
+    for page in 1..=20 {
+        let p = page.to_string();
+        let body = cf_get_query(token, &format!("/zones/{zone_id}/dns_records"), &[("per_page", "500"), ("page", p.as_str())]).await?;
+        let arr = body["result"].as_array().cloned().unwrap_or_default();
+        let n = arr.len();
+        out.extend(arr.iter().map(|r| FullRec {
+            id: r["id"].as_str().unwrap_or_default().into(),
+            kind: r["type"].as_str().unwrap_or_default().into(),
+            name: r["name"].as_str().unwrap_or_default().into(),
+            content: r["content"].as_str().unwrap_or_default().into(),
+            proxied: r["proxied"].as_bool().unwrap_or(false),
+            priority: r["priority"].as_u64().map(|v| v as u16),
+            ttl: r["ttl"].as_u64().unwrap_or(1) as u32,
+        }));
+        if n < 500 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// 按给定内容建一条 DNS 记录（不查重，调用方先对照过）。
+pub async fn create_dns_record(token: &str, zone_id: &str, r: &FullRec) -> Result<(), String> {
+    let mut body = serde_json::json!({ "type": r.kind, "name": r.name, "content": r.content, "ttl": if r.ttl == 0 { 1 } else { r.ttl } });
+    if matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME") {
+        body["proxied"] = Value::Bool(r.proxied);
+    }
+    if let Some(p) = r.priority {
+        body["priority"] = Value::from(p);
+    }
+    cf_send(token, reqwest::Method::POST, &format!("/zones/{zone_id}/dns_records"), Some(body)).await.map(|_| ())
+}
+
+/// 把域名加进 Cloudflare 账号（完整接入）：Cloudflare 会自动扫一遍现有的 DNS 记录。返回 Zone 和要改成的名称服务器。
+pub async fn create_zone(token: &str, account_id: &str, name: &str) -> Result<(CfZone, Vec<String>), String> {
+    let b = cf_send(
+        token,
+        reqwest::Method::POST,
+        "/zones",
+        Some(serde_json::json!({ "name": name, "account": { "id": account_id }, "type": "full", "jump_start": true })),
+    )
+    .await?;
+    let ns = b["result"]["name_servers"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+    Ok((CfZone { id: b["result"]["id"].as_str().unwrap_or_default().into(), name: b["result"]["name"].as_str().unwrap_or(name).into() }, ns))
+}
+
+/// Pages 项目的 pages.dev 子域名（没有就按项目名拼）。
+pub async fn pages_subdomain(token: &str, account_id: &str, project: &str) -> Result<String, String> {
+    let p = get_pages_project(token, account_id, project).await?.ok_or("Pages 项目还没建")?;
+    Ok(if p.subdomain.is_empty() { format!("{project}.pages.dev") } else { p.subdomain })
+}

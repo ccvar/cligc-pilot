@@ -39,10 +39,10 @@ export async function loadMake(id: string, full = true) {
   finally { siteMake.loading[id] = false; }
 }
 
-/** 制作对话：最近一条「从零搭建 / 继续制作」的对话；都没有就用这个站点最早的那条。 */
+/** 制作对话：最近一条「从零搭建 / 继续制作 / 迁移重做」的对话；都没有就用这个站点最早的那条。 */
 export function makingConv(siteId: string): Conversation | undefined {
   const all = app.convos.filter((c) => c.conn_id === SITE_PREFIX + siteId).sort((a, b) => a.created_at - b.created_at);
-  const mk = all.filter((c) => /^(请从零搭建|继续制作)/.test(c.title));
+  const mk = all.filter((c) => /^(请从零搭建|继续制作|请迁移重做|继续迁移重做)/.test(c.title));
   return mk[mk.length - 1] ?? all[0];
 }
 
@@ -63,7 +63,7 @@ export async function continueMaking(site: Site, issues: MakeCheck[] = []) {
 }
 
 /** 发到这个站点的制作对话里（全自动）；找不到或正在跑就开一条新的。 */
-async function sendToMaking(site: Site, text: string) {
+export async function sendToMaking(site: Site, text: string) {
   const conv = makingConv(site.id);
   if (!conv || conv.status === 'running' || app.running[conv.id]) {
     await startSiteChat(site.id, text, undefined, MAKING_PERM);

@@ -8,6 +8,8 @@
   import SiteLaunch from './SiteLaunch.svelte';
   import SiteManagedCard from './SiteManagedCard.svelte';
   import SiteMakeCard from './SiteMakeCard.svelte';
+  import SiteMigrate from './SiteMigrate.svelte';
+  import { showMigrateCard } from '$lib/state/migrate.svelte.js';
   import SiteTodos from './SiteTodos.svelte';
   import SiteDomainLive from './SiteDomainLive.svelte';
   import { launch } from '$lib/state/launch.svelte.js';
@@ -41,8 +43,10 @@
 </script>
 
 <div class="ov">
-  {#if making}<SiteMakeCard {site} />{/if}
-  <SiteLaunch {site} />
+  {#if showMigrateCard(site)}<SiteMigrate {site} />{/if}
+  {#if making && site.origin !== 'migrating'}<SiteMakeCard {site} />{/if}
+  <!-- 迁移中不显示上线向导：预览部署在迁移卡片里配（只建 Pages 项目、不绑域名），域名到切换时才指过来 -->
+  {#if site.origin !== 'migrating'}<SiteLaunch {site} />{/if}
 
   {#if job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
     <div class="card"><SiteJobPanel {job} /></div>

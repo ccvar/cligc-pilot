@@ -274,6 +274,9 @@ pub struct Site {
     /// created：在 Pilot 里从零制作的；空＝导入的。还没配部署的新站在列表里标「制作中」。
     #[serde(default)]
     pub origin: String,
+    /// 迁移中的站点：旧站的域名。迁移期间 `domain` 留空（预览部署不碰线上域名），切换时才填上。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub migrate_from: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -1238,6 +1241,7 @@ mod tests {
             pinned: false,
             tags: Vec::new(),
             origin: String::new(),
+            migrate_from: String::new(),
             created_at: 1,
             updated_at: 1,
         };
