@@ -22,7 +22,7 @@
   import { openSiteCreate, makingSites } from '$lib/state/siteCreate.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN, GITHUBS_CONN } from '$lib/state/env';
-  import { isDataConn } from '$lib/state/datasrc.svelte.js';
+  import { isServiceConn } from '$lib/state/datasrc.svelte.js';
   import { mask, maskTip } from '$lib/mask';
   const footName = $derived(app.activeConn ? connectionDisplayName(app.activeConn) : '未连接');
   // 制作中的站点单独计数，不算进「N 个站点」（和全部站点页一致）
@@ -69,7 +69,7 @@
           </button>
         {/if}
         <!-- 其它类型的连接（如果有）还是一条一行 -->
-        {#each app.conns.filter((c) => !isDataConn(c) && !['ssh', 'cloudflare', 'github'].includes(c.kind)) as c (c.id)}
+        {#each app.conns.filter((c) => !isServiceConn(c) && !['ssh', 'cloudflare', 'github'].includes(c.kind)) as c (c.id)}
           <button class="cs-item {app.activeConnId === c.id ? 'on' : ''}" role="menuitemradio" aria-checked={app.activeConnId === c.id} onclick={() => { selectConn(c.id); connections.switcherOpen = false; }}
             oncontextmenu={(e) => openConnCtx(e, c)}>
             <ConnectionMark kind={c.kind} size={18} />

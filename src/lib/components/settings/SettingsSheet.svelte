@@ -17,7 +17,10 @@
   import { SHEET_WIDTH, CLAUDE_INSTALL_CMD, GROK_INSTALL_CMD, keystoreName, isMainWindow } from '$lib/state/env';
   import { openCfConnect } from '$lib/state/cloudflare.svelte.js';
   import { openGhConnect } from '$lib/state/github.svelte.js';
-  import { isDataConn, openDataConnect } from '$lib/state/datasrc.svelte.js';
+  import { isServiceConn, openDataConnect } from '$lib/state/datasrc.svelte.js';
+  import BloggerSection from '$lib/components/settings/BloggerSection.svelte';
+  import BloggerMark from '$lib/components/icons/BloggerMark.svelte';
+  import { bloggerLogin } from '$lib/state/blogger.svelte.js';
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
   import PhoneSection from '$lib/components/settings/PhoneSection.svelte';
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
@@ -45,7 +48,7 @@
     { kind: 'ssh', label: '远程机器', add: openSshConnect },
   ];
   const connGroups = $derived.by(() => {
-    const list = app.conns.filter((c) => !isDataConn(c));
+    const list = app.conns.filter((c) => !isServiceConn(c));
     const known = new Set(CONN_GROUPS.map((g) => g.kind));
     const groups = CONN_GROUPS.map((g) => ({ ...g, items: list.filter((c) => c.kind === g.kind) }));
     const other = list.filter((c) => !known.has(c.kind));
@@ -99,6 +102,9 @@
               <button role="menuitem" onclick={() => addFromMenu(() => openDataConnect('bing'))}>
                 <BingMark size={15} /><span>Bing Webmaster<small>API Key</small></span>
               </button>
+              <button role="menuitem" onclick={() => addFromMenu(() => void bloggerLogin(''))}>
+                <BloggerMark size={15} /><span>Blogger 账号<small>「分发」把新文章摘要发到你的博客</small></span>
+              </button>
               <div class="menu-sep"></div>
               <button role="menuitem" onclick={() => addFromMenu(() => showPhoneGroup('phone'))}>
                 <AndroidMark size={15} /><span>安卓手机<small>让 AI 操作手机 app、截图</small></span>
@@ -142,6 +148,7 @@
           </ConnGroup>
         {/each}
         <DataSourcesSection />
+        <BloggerSection />
         <PhoneSection />
       </div>
 

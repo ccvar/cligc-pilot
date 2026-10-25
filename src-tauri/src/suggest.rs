@@ -52,84 +52,17 @@ pub fn clean(raw: &str) -> String {
     t.to_string()
 }
 
-fn small_model(models: &[String], fallback: &str) -> String {
-    const SMALL: [&str; 6] = ["haiku", "mini", "flash", "nano", "lite", "small"];
-    models.iter().find(|m| SMALL.iter().any(|s| m.to_ascii_lowercase().contains(s))).cloned().unwrap_or_else(|| fallback.to_string())
-}
-
-async fn via_api(data_dir: &Path, profile_id: &str, model: &str, prompt: &str) -> Result<String, String> {
-    let loaded = crate::api_profiles::load_enabled(data_dir, profile_id)?;
-    let p = &loaded.profile;
-    let model = small_model(&p.models, if model.is_empty() { &p.default_model } else { model });
-    let client = crate::api_profiles::http_client()?;
-    let (route, body) = match p.protocol.as_str() {
-        "anthropic_messages" => ("messages", serde_json::json!({ "model": model, "max_tokens": 80, "messages": [{ "role": "user", "content": prompt }] })),
-        "openai_responses" => ("responses", serde_json::json!({ "model": model, "input": prompt, "max_output_tokens": 400 })),
-        _ => ("chat/completions", serde_json::json!({ "model": model, "max_tokens": 80, "messages": [{ "role": "user", "content": prompt }] })),
-    };
-    let req = client.post(crate::api_profiles::endpoint(p, route)?).json(&body).timeout(Duration::from_secs(30));
-    let req = if p.protocol == "anthropic_messages" {
-        req.header("x-api-key", &loaded.api_key).header("anthropic-version", "2023-06-01")
-    } else {
-        req.bearer_auth(&loaded.api_key)
-    };
-    let r = req.send().await.map_err(|e| format!("建议回复：请求失败 {e}"))?;
-    if !r.status().is_success() {
-        return Err(format!("建议回复：HTTP {}", r.status().as_u16()));
-    }
-    let v: serde_json::Value = r.json().await.map_err(|_| "建议回复：响应看不懂".to_string())?;
-    let text = match p.protocol.as_str() {
-        "anthropic_messages" => v["content"].as_array().and_then(|a| a.iter().find_map(|c| c["text"].as_str())).unwrap_or("").to_string(),
-        "openai_responses" => v["output"]
-            .as_array()
-            .map(|o| o.iter().flat_map(|i| i["content"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["text"].as_str().map(String::from)).collect::<String>())
-            .unwrap_or_default(),
-        _ => v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string(),
-    };
-    Ok(text)
-}
-
-async fn via_claude(prompt: &str) -> Result<String, String> {
-    let path = crate::brains::resolve_bin("claude");
-    if path.is_empty() {
-        return Err("没有 claude".into());
-    }
-    let mut cmd = tokio::process::Command::new(&path);
-    if let Ok(Some(token)) = crate::keychain::claude_oauth_token() {
-        cmd.env_remove("ANTHROPIC_AUTH_TOKEN").env_remove("ANTHROPIC_API_KEY").env("CLAUDE_CODE_OAUTH_TOKEN", token);
-    }
-    // 在临时目录里跑：不读任何项目的 CLAUDE.md / 设置
-    cmd.args(["-p", prompt, "--model", "haiku"])
-        .current_dir(std::env::temp_dir())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000);
-    }
-    let out = tokio::time::timeout(Duration::from_secs(40), cmd.output()).await.map_err(|_| "建议回复：claude 超时".to_string())?.map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err("建议回复：claude 失败".into());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// 猜一句。拿不到（这家不支持、没配好、网络）就返回空建议，不报错打扰用户。
 pub async fn suggest(data_dir: &Path, conv: &crate::convo::Conversation) -> Suggestion {
     let visible: Vec<&crate::convo::Message> = conv.messages.iter().filter(|m| !m.hidden).collect();
     let Some(ai) = visible.last().filter(|m| m.role == "assistant" && !m.error && !m.text.trim().is_empty()) else { return Suggestion::default() };
     let user = visible.iter().rev().find(|m| m.role == "user").map(|m| m.text.as_str()).unwrap_or("");
     let p = prompt(user, &ai.text);
-    let raw = if let Some(id) = conv.brain.strip_prefix("api:") {
-        via_api(data_dir, id, &conv.model, &p).await
-    } else if conv.brain == "claude" {
-        via_claude(&p).await
-    } else {
+    if !(conv.brain.starts_with("api:") || conv.brain == "claude") {
         return Suggestion { ts: ai.ts, text: String::new() };
-    };
+    }
+    let ask = crate::oneshot::Ask { brain: &conv.brain, model: &conv.model, prompt: &p, max_tokens: 80, small: true, timeout: Duration::from_secs(40) };
+    let raw = crate::oneshot::complete(data_dir, &ask).await;
     Suggestion { ts: ai.ts, text: raw.map(|r| clean(&r)).unwrap_or_default() }
 }
 
@@ -145,14 +78,6 @@ mod tests {
         assert_eq!(clean("none."), "none.");
         assert_eq!(clean(""), "");
         assert_eq!(clean(&"很长".repeat(30)), "");
-    }
-
-    #[test]
-    fn picks_small_model() {
-        let ms = vec!["claude-opus-5-5".to_string(), "claude-haiku-5-5".to_string()];
-        assert_eq!(small_model(&ms, "claude-opus-5-5"), "claude-haiku-5-5");
-        assert_eq!(small_model(&["gpt-5".to_string()], "gpt-5"), "gpt-5");
-        assert_eq!(small_model(&[], "x"), "x");
     }
 
     #[test]

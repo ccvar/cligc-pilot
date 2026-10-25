@@ -17,7 +17,7 @@ export function siteConnection(s: Site): Connection {
   return { id: SITE_PREFIX + s.id, name: s.name, kind: 'site', skill_dir: '', key_prefix: '', key_kind: '', account_id: '', created_at: '' };
 }
 
-export type SiteTab = 'overview' | 'data' | 'queue' | 'deploy' | 'settings';
+export type SiteTab = 'overview' | 'data' | 'queue' | 'deploy' | 'distribute' | 'settings';
 
 type ImportForm = {
   open: boolean;

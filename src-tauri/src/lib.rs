@@ -26,6 +26,9 @@ mod path_env;
 mod permit;
 mod mail;
 mod suggest;
+mod oneshot;
+mod blogger;
+mod syndicate;
 mod phone;
 mod ssh;
 mod sftp_transfer;
@@ -4550,6 +4553,14 @@ pub fn run() {
             mail_google_connect,
             mail_fill_code,
             suggest_reply,
+            blogger::blogger_login,
+            blogger::blogger_blogs,
+            syndicate::syndication_state,
+            syndicate::syndication_save_config,
+            syndicate::syndication_generate,
+            syndicate::syndication_edit,
+            syndicate::syndication_publish,
+            syndicate::syndication_skip,
             phone_stay_awake,
             install_claude,
             verify_cf_token,

@@ -626,6 +626,80 @@ fn is_external(h: &str) -> bool {
     l.is_empty() || l.starts_with('#') || l.contains("://") || l.starts_with("//") || ["mailto:", "tel:", "javascript:", "data:", "sms:"].iter().any(|p| l.starts_with(p))
 }
 
+/// 站点上的一篇文章（「分发」用）：结构化数据里是 Article / BlogPosting / HowTo 这类的页面。
+#[derive(Serialize, Clone, Debug)]
+pub struct Article {
+    /// 网址路径，如 `/guides/buy-usdt`
+    pub path: String,
+    pub title: String,
+    pub description: String,
+    /// 结构化数据里的发布日期（没有就空）
+    pub date: String,
+    /// 正文（去掉导航页头页脚，最多 8000 字）
+    #[serde(skip)]
+    pub text: String,
+}
+
+const ARTICLE_TYPES: &[&str] = &["Article", "BlogPosting", "NewsArticle", "TechArticle", "HowTo"];
+
+/// 构建产物里的文章，按发布日期新的在前（没日期的排后面）。
+pub fn articles(out: &Path) -> Vec<Article> {
+    let mut list = Vec::new();
+    for (f, html) in real_pages(out) {
+        let low = html.to_ascii_lowercase();
+        let path = page_url(out, &f);
+        let mut is_article = false;
+        let mut date = String::new();
+        let mut from = 0;
+        while let Some(i) = low[from..].find("<script") {
+            let a = from + i;
+            let Some(j) = low[a..].find('>') else { break };
+            let start = a + j + 1;
+            let end = low[start..].find("</script>").map(|k| start + k).unwrap_or(low.len());
+            from = end;
+            if !low[a..start].contains("ld+json") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(html[start..end].trim()) else { continue };
+            let mut nodes: Vec<serde_json::Value> = match v {
+                serde_json::Value::Array(a) => a,
+                other => vec![other],
+            };
+            if let Some(g) = nodes.iter().find_map(|n| n.get("@graph").and_then(|g| g.as_array()).cloned()) {
+                nodes.extend(g);
+            }
+            for n in &nodes {
+                let types: Vec<String> = match &n["@type"] {
+                    serde_json::Value::String(t) => vec![t.clone()],
+                    serde_json::Value::Array(a) => a.iter().filter_map(|t| t.as_str().map(String::from)).collect(),
+                    _ => vec![],
+                };
+                if types.iter().any(|t| ARTICLE_TYPES.contains(&t.as_str())) {
+                    is_article = true;
+                    if date.is_empty() {
+                        date = n["datePublished"].as_str().unwrap_or("").chars().take(10).collect();
+                    }
+                }
+            }
+        }
+        if !is_article || path == "/" {
+            continue;
+        }
+        let title = inner(&html, &low, "h1").map(|t| strip_tags(t).trim().to_string()).filter(|t| !t.is_empty()).or_else(|| inner(&html, &low, "title").map(|t| strip_tags(t).trim().to_string())).unwrap_or_default();
+        let description = tags(&html, &low, "meta")
+            .into_iter()
+            .find(|m| attr(m, "name").is_some_and(|n| n.eq_ignore_ascii_case("description")))
+            .and_then(|m| attr(m, "content"))
+            .unwrap_or_default();
+        let body = inner(&html, &low, "article").or_else(|| inner(&html, &low, "main")).or_else(|| inner(&html, &low, "body")).unwrap_or(&html);
+        let text = strip_tags(&drop_blocks(body, &["script", "style", "nav", "header", "footer", "aside", "noscript", "svg", "template", "form"]));
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(8000).collect();
+        list.push(Article { path, title, description, date, text });
+    }
+    list.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
+    list
+}
+
 const REQUIRED: &[(&str, &[&str])] = &[("关于", &["about", "关于"]), ("联系", &["contact", "联系"]), ("隐私政策", &["privacy", "隐私"])];
 const LISTING: &[&str] = &["tag", "categor", "page/", "archive", "search", "blog/index", "posts/index"];
 const EXTRA_PLACEHOLDERS: &[&str] = &["敬请期待", "coming soon", "待补", "your-email", "example@example.com", "xxx-xxxx"];
@@ -908,6 +982,9 @@ mod live_check {
         let out = std::path::PathBuf::from(std::env::var("PILOT_CHECK_OUT").unwrap());
         for c in super::readiness(&out) {
             println!("{} [{}] {} {:?}", c.label, c.level, c.detail, c.items.iter().take(5).collect::<Vec<_>>());
+        }
+        for a in super::articles(&out) {
+            println!("article {} | {} | {} | {} 字", a.path, a.date, a.title, a.text.chars().count());
         }
     }
 }

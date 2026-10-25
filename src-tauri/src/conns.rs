@@ -222,7 +222,7 @@ impl ConnStore {
         account_id: &str,
         dedupe: &str,
     ) -> Result<Connection, String> {
-        if !matches!(kind, "google" | "bing") {
+        if !matches!(kind, "google" | "bing" | "blogger") {
             return Err("不支持的数据源".into());
         }
         let secret = secret.trim();
@@ -272,7 +272,7 @@ impl ConnStore {
         let Some(i) = conns.iter().position(|c| c.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
-        if !matches!(conns[i].kind.as_str(), "google" | "bing") {
+        if !matches!(conns[i].kind.as_str(), "google" | "bing" | "blogger") {
             return Err("连接类型不匹配".into());
         }
         let previous = keychain::get_key(id).ok();

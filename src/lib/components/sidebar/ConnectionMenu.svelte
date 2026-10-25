@@ -4,14 +4,15 @@
   import { openSshEdit } from '$lib/state/ssh.svelte.js';
   import { openCfUpdate } from '$lib/state/cloudflare.svelte.js';
   import { openGhUpdate } from '$lib/state/github.svelte.js';
-  import { openDataUpdate, isDataConn, autoBindSites, datasrc } from '$lib/state/datasrc.svelte.js';
+  import { openDataUpdate, isDataConn, isServiceConn, autoBindSites, datasrc } from '$lib/state/datasrc.svelte.js';
+  import { bloggerLogin } from '$lib/state/blogger.svelte.js';
 </script>
 
 {#if connections.connCtx}
   <!-- 连接切换器的右键菜单。菜单项按连接类型给：能做的才列，做不了的不摆在那儿灰着。 -->
   {@const c = connections.connCtx.conn}
   <div bind:this={connections.connCtxMenuEl} class="ctx-menu fctx conn-ctx-menu" class:ready={connections.connCtx.ready} style="left:{connections.connCtx.x}px; top:{connections.connCtx.y}px" role="menu" tabindex="-1">
-    {#if !isDataConn(c)}<button class="ctx-item" role="menuitem" onclick={() => openConnWindow(c.id)}>新窗口打开</button>{/if}
+    {#if !isServiceConn(c)}<button class="ctx-item" role="menuitem" onclick={() => openConnWindow(c.id)}>新窗口打开</button>{/if}
     {#if c.kind === 'workspace' || c.kind === 'sites' || c.kind === 'remotes' || c.kind === 'cloudflares' || c.kind === 'githubs'}
       <!-- 合并的入口（本地对话 / 站点 / 远程连接 / Cloudflare / GitHub）：只有「新窗口打开」，没有可编辑、可删除的东西 -->
     {:else if c.kind === 'ssh'}
@@ -26,6 +27,9 @@
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
+    {:else if c.kind === 'blogger'}
+      <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void bloggerLogin(c.id); }}>重新授权…</button>
     {:else if isDataConn(c)}
       <button class="ctx-item" role="menuitem" disabled={!!datasrc.binding} data-tip={c.kind === 'google' ? '按域名在这个账号里找 GA4 媒体资源和 Search Console 资源，自动填到还没绑定的站点上' : '按域名在这个账号里找 Bing 站点，自动填到还没绑定的站点上'}
         onclick={() => void autoBindSites(c.id)}>匹配站点</button>
