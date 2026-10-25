@@ -28,6 +28,7 @@ mod mail;
 mod suggest;
 mod oneshot;
 mod blogger;
+mod wpcom;
 mod syndicate;
 mod phone;
 mod ssh;
@@ -4555,6 +4556,10 @@ pub fn run() {
             suggest_reply,
             blogger::blogger_login,
             blogger::blogger_blogs,
+            wpcom::wpcom_client_info,
+            wpcom::wpcom_save_client,
+            wpcom::wpcom_login,
+            wpcom::wpcom_sites,
             syndicate::syndication_state,
             syndicate::syndication_save_channel,
             syndicate::syndication_remove_channel,

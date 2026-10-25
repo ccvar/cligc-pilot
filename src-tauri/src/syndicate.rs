@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::AppState;
 
 /// 渠道类型：(类型, 名称, 已支持)
-pub const KINDS: &[(&str, &str, bool)] = &[("blogger", "Blogger", true), ("wordpress", "WordPress.com", false), ("telegram", "Telegram 频道", false)];
+pub const KINDS: &[(&str, &str, bool)] = &[("blogger", "Blogger", true), ("wordpress", "WordPress.com", true), ("telegram", "Telegram 频道", false)];
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Channel {
@@ -545,6 +545,7 @@ async fn publish_to(state: &AppState, c: &Channel, s: &Summary, html: &str) -> R
     let draft = c.mode == "draft";
     match c.kind.as_str() {
         "blogger" => crate::blogger::publish(state, &c.conn_id, &c.target_id, &s.title, html, &s.labels, draft).await.map(|r| (r.id, r.url, draft)),
+        "wordpress" => crate::wpcom::publish(state, &c.conn_id, &c.target_id, &s.title, html, &s.labels, draft).await.map(|(id, url)| (id, url, draft)),
         k => Err(format!("还不支持发到 {k}")),
     }
 }

@@ -10,7 +10,7 @@ import { loadFleet } from './fleet.svelte.js';
 export const DATA_KINDS = ['google', 'bing'];
 export const isDataConn = (c: Connection | null | undefined) => !!c && DATA_KINDS.includes(c.kind);
 /** 只给 Pilot 调接口用的账号（网站数据、Blogger）：不是能进去干活的连接，不进连接切换器 */
-export const isServiceConn = (c: Connection | null | undefined) => !!c && (DATA_KINDS.includes(c.kind) || c.kind === 'blogger');
+export const isServiceConn = (c: Connection | null | undefined) => !!c && (DATA_KINDS.includes(c.kind) || c.kind === 'blogger' || c.kind === 'wordpress');
 
 export interface Ga4Property { property: string; name: string; account: string }
 export interface GscSite { url: string; permission: string }

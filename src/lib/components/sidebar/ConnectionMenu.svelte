@@ -6,6 +6,7 @@
   import { openGhUpdate } from '$lib/state/github.svelte.js';
   import { openDataUpdate, isDataConn, isServiceConn, autoBindSites, datasrc } from '$lib/state/datasrc.svelte.js';
   import { bloggerLogin } from '$lib/state/blogger.svelte.js';
+  import { wpLogin } from '$lib/state/wordpress.svelte.js';
 </script>
 
 {#if connections.connCtx}
@@ -27,6 +28,9 @@
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
+    {:else if c.kind === 'wordpress'}
+      <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void wpLogin(c.id); }}>重新授权…</button>
     {:else if c.kind === 'blogger'}
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
       <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void bloggerLogin(c.id); }}>重新授权…</button>

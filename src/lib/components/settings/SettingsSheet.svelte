@@ -19,6 +19,9 @@
   import { openGhConnect } from '$lib/state/github.svelte.js';
   import { isServiceConn, openDataConnect } from '$lib/state/datasrc.svelte.js';
   import BloggerSection from '$lib/components/settings/BloggerSection.svelte';
+  import WordpressSection from '$lib/components/settings/WordpressSection.svelte';
+  import WordpressMark from '$lib/components/icons/WordpressMark.svelte';
+  import { startWpConnect } from '$lib/state/wordpress.svelte.js';
   import BloggerMark from '$lib/components/icons/BloggerMark.svelte';
   import { bloggerLogin } from '$lib/state/blogger.svelte.js';
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
@@ -105,6 +108,9 @@
               <button role="menuitem" onclick={() => addFromMenu(() => void bloggerLogin(''))}>
                 <BloggerMark size={15} /><span>Blogger 账号<small>「分发」把新文章摘要发到你的博客</small></span>
               </button>
+              <button role="menuitem" onclick={() => addFromMenu(() => void startWpConnect())}>
+                <WordpressMark size={15} /><span>WordPress.com 账号<small>「分发」把新文章摘要发到你的站点</small></span>
+              </button>
               <div class="menu-sep"></div>
               <button role="menuitem" onclick={() => addFromMenu(() => showPhoneGroup('phone'))}>
                 <AndroidMark size={15} /><span>安卓手机<small>让 AI 操作手机 app、截图</small></span>
@@ -149,6 +155,7 @@
         {/each}
         <DataSourcesSection />
         <BloggerSection />
+        <WordpressSection />
         <PhoneSection />
       </div>
 

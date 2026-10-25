@@ -12,6 +12,8 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { say } from '$lib/state/app.svelte.js';
   import { blogger, bloggerAccounts, bloggerLogin, loadBlogs } from '$lib/state/blogger.svelte.js';
+  import { wp, wpAccounts, startWpConnect, loadWpSites } from '$lib/state/wordpress.svelte.js';
+  import { settings } from '$lib/state/settings.svelte.js';
   import { mask } from '$lib/mask';
   import { synd, loadSyndPending } from '$lib/state/syndication.svelte.js';
 
@@ -50,13 +52,26 @@
   });
   function newChannel(kind: string) {
     addOpen = false;
-    const accts = kind === 'blogger' ? bloggerAccounts() : [];
+    const accts = accountsOf(kind);
     edit = { id: '', kind, conn_id: accts.length === 1 ? accts[0].id : '', target_id: '', target_name: '', target_url: '', mode: 'review', daily_limit: 2, enabled: true, backfill: false, created_at: 0 };
   }
-  const accounts = $derived(edit?.kind === 'blogger' ? bloggerAccounts() : []);
-  $effect(() => { if (edit?.kind === 'blogger' && edit.conn_id) void loadBlogs(edit.conn_id); });
-  const blogs = $derived(edit?.kind === 'blogger' && edit.conn_id ? blogger.blogs[edit.conn_id] ?? null : null);
-  const blogsErr = $derived(edit?.conn_id ? blogger.blogsErr[edit.conn_id] ?? '' : '');
+  // 各渠道类型：账号从哪来、目标（博客 / 站点）从哪读、怎么去平台上新建
+  const PLAT: Record<string, { target: string; newUrl: string; newLabel: string; draft: string }> = {
+    blogger: { target: '博客', newUrl: 'https://www.blogger.com/', newLabel: '去 Blogger 新建博客', draft: '存成 Blogger 草稿' },
+    wordpress: { target: '站点', newUrl: 'https://wordpress.com/start', newLabel: '去 WordPress.com 新建站点', draft: '存成 WordPress 草稿' },
+  };
+  function accountsOf(kind: string) { return kind === 'blogger' ? bloggerAccounts() : kind === 'wordpress' ? wpAccounts() : []; }
+  function loadTargets(kind: string, conn: string, force = false) { if (kind === 'blogger') void loadBlogs(conn, force); else if (kind === 'wordpress') void loadWpSites(conn, force); }
+  function connectAccount(kind: string) {
+    if (kind === 'blogger') void bloggerLogin('');
+    else if (kind === 'wordpress') { settings.setupOpen = true; void startWpConnect(); }
+  }
+  const plat = $derived(edit ? PLAT[edit.kind] : undefined);
+  const accounts = $derived(edit ? accountsOf(edit.kind) : []);
+  $effect(() => { if (edit?.conn_id) { const k = edit.kind, c = edit.conn_id; untrack(() => loadTargets(k, c)); } });
+  const blogs = $derived(!edit?.conn_id ? null : edit.kind === 'blogger' ? blogger.blogs[edit.conn_id] ?? null : edit.kind === 'wordpress' ? wp.sites[edit.conn_id] ?? null : null);
+  const blogsErr = $derived(!edit?.conn_id ? '' : edit.kind === 'blogger' ? blogger.blogsErr[edit.conn_id] ?? '' : wp.sitesErr[edit.conn_id] ?? '');
+  const acctBusy = $derived(edit?.kind === 'wordpress' ? wp.busy : blogger.busy);
   /** 这个目标被谁占了：别的站名 / 'this'（这个站已经加过）/ undefined */
   function takenBy(id: string): string | undefined {
     if (!edit) return undefined;
@@ -151,6 +166,7 @@
     const d = deliveryOf(r, c);
     if (d?.status === 'published' && d.post_url) void openUrl(d.post_url);
     else if (d?.status === 'draft' && c.kind === 'blogger') void openUrl(`https://www.blogger.com/blog/posts/${c.target_id}`);
+    else if (d?.status === 'draft' && c.kind === 'wordpress' && c.target_url) void openUrl(`${c.target_url.replace(/\/$/, '')}/wp-admin/edit.php?post_status=draft`);
     else if (d?.status === 'failed' && r.summary?.summary) void publish(r, [c.id]);
   }
   function chipTip(r: Row, c: Channel) {
@@ -164,31 +180,31 @@
 </script>
 
 {#snippet blogFoot(close: () => void)}
-  <button onclick={() => { close(); if (edit) void loadBlogs(edit.conn_id, true); }} disabled={!edit?.conn_id}><Icon name="refresh" size={13} />刷新博客列表</button>
-  <button onclick={() => { close(); void openUrl('https://www.blogger.com/'); }} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建好，回来点「刷新博客列表」"><Icon name="plus" size={13} />去 Blogger 新建博客</button>
+  <button onclick={() => { close(); if (edit) loadTargets(edit.kind, edit.conn_id, true); }} disabled={!edit?.conn_id}><Icon name="refresh" size={13} />刷新{plat?.target}列表</button>
+  <button onclick={() => { close(); if (plat) void openUrl(plat.newUrl); }} data-tip="接口不能新建{plat?.target}：在平台上建好，回来点「刷新{plat?.target}列表」"><Icon name="plus" size={13} />{plat?.newLabel}</button>
 {/snippet}
 
 {#snippet editor(c: Channel)}
   <div class="ed">
-    {#if c.kind === 'blogger'}
+    {#if plat}
       {#if !accounts.length}
-        <p class="hint">还没有 Blogger 账号。建议用一个单独的 Google 账号，只给它 Blogger 权限，和看网站数据的账号分开。</p>
-        <div class="row"><button class="btn small primary" onclick={() => bloggerLogin('')} disabled={blogger.busy}>{blogger.busy ? '在浏览器里授权…' : '接上 Blogger 账号'}</button></div>
+        <p class="hint">{c.kind === 'blogger' ? '还没有 Blogger 账号。建议用一个单独的 Google 账号，只给它 Blogger 权限，和看网站数据的账号分开。' : '还没有 WordPress.com 账号：在「连接」里接上（第一次要先填你注册的应用信息）。'}</p>
+        <div class="row"><button class="btn small primary" onclick={() => connectAccount(c.kind)} disabled={acctBusy}>{acctBusy ? '在浏览器里授权…' : `接上 ${kindLabel(c.kind)} 账号`}</button></div>
       {:else}
         <div class="grid">
           <span class="lbl">账号</span>
-          <Dropdown value={c.conn_id} placeholder="选一个 Blogger 账号" ariaLabel="Blogger 账号"
+          <Dropdown value={c.conn_id} placeholder="选一个账号" ariaLabel="{kindLabel(c.kind)} 账号"
             options={accounts.map((a) => ({ value: a.id, label: mask(a.remark?.trim() || a.login || a.name) }))}
             onchange={(v) => { if (edit) edit = { ...edit, conn_id: v, target_id: '', target_name: '', target_url: '' }; }} />
-          <span class="lbl">博客</span>
-          <Dropdown value={c.target_id} disabled={!c.conn_id} ariaLabel="博客" footer={blogFoot}
-            emptyText={blogsErr ? '读不到博客' : !blogs ? '读取中…' : '这个账号下还没有博客'}
-            placeholder={!c.conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : !blogs.length ? '这个账号下还没有博客' : freeBlogs.length ? '选一个博客' : '博客都给别的站用了：在 Blogger 再建一个'}
+          <span class="lbl">{plat.target}</span>
+          <Dropdown value={c.target_id} disabled={!c.conn_id} ariaLabel={plat.target} footer={blogFoot}
+            emptyText={blogsErr ? `读不到${plat.target}` : !blogs ? '读取中…' : `这个账号下还没有${plat.target}`}
+            placeholder={!c.conn_id ? '先选账号' : !blogs ? (blogsErr ? `读不到${plat.target}` : '读取中…') : !blogs.length ? `这个账号下还没有${plat.target}` : freeBlogs.length ? `选一个${plat.target}` : `${plat.target}都给别的站用了：再建一个`}
             options={(blogs ?? []).map((b) => { const t = takenBy(b.id); return { value: b.id, label: b.name || b.url, sub: t ? (t === 'this' ? '这个站已经加过了' : `已用于 ${t}`) : b.url.replace(/^https?:\/\//, '').replace(/\/$/, ''), disabled: !!t }; })}
             onchange={pickBlog} />
           <span class="lbl">发布方式</span>
           <Dropdown value={c.mode || 'review'} ariaLabel="发布方式" onchange={(v) => { if (edit) edit = { ...edit, mode: v }; }}
-            options={[{ value: 'review', label: '先给我看', sub: '新文章上线后 AI 先写好摘要，我点「发布」才发' }, { value: 'draft', label: '存成 Blogger 草稿', sub: '自动写好存成草稿，我去 Blogger 后台发' }, { value: 'auto', label: '自动发布', sub: '新文章上线后自动写摘要并发布' }]} />
+            options={[{ value: 'review', label: '先给我看', sub: '新文章上线后 AI 先写好摘要，我点「发布」才发' }, { value: 'draft', label: plat.draft, sub: '自动写好存成草稿，我去后台发' }, { value: 'auto', label: '自动发布', sub: '新文章上线后自动写摘要并发布' }]} />
           <span class="lbl">每天最多</span>
           <div class="row">
             <input class="tin num" type="number" min="1" max="20" value={c.daily_limit} oninput={(e) => { if (edit) edit = { ...edit, daily_limit: Math.max(1, Math.min(20, Number(e.currentTarget.value) || 1)) }; }} />
@@ -223,7 +239,7 @@
       </span>
     </h3>
     {#if st && !st.channels.length && !edit}
-      <p class="hint">还没有渠道。添加一个 Blogger 博客，站上的文章就能把导读同步过去。每个渠道只对应一个站；只发 AI 写的导读（三五百字）和原文链接，不发全文。</p>
+      <p class="hint">还没有渠道。添加一个 Blogger 博客或 WordPress.com 站点，站上的文章就能把导读同步过去。每个渠道只对应一个站；只发 AI 写的导读（三五百字）和原文链接，不发全文。</p>
     {/if}
     {#if st?.channels.length || (edit && !edit.id)}
       <div class="chs">
