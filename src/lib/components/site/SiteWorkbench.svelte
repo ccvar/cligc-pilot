@@ -11,6 +11,7 @@
   import SiteDataTab from './SiteDataTab.svelte';
   import SiteQueue from './SiteQueue.svelte';
   import SiteDistributeTab from './SiteDistributeTab.svelte';
+  import { synd, loadSyndPending, listenSyndication } from '$lib/state/syndication.svelte.js';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { sites, loadSiteStatus, deploySite, pilotDeploys, type SiteTab } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
@@ -25,6 +26,9 @@
   const queue = $derived(site ? ops.queue[site.id] ?? [] : []);
   const inPlan = $derived(!!site && !!managed.overview?.groups.some((g) => g.sites.includes(site.id)));
   const needCount = $derived(queue.filter((q) => ['proposed', 'failed'].includes(q.status) || (q.status === 'deployed' && !!q.attention)).length + (inPlan ? 0 : queue.filter((q) => q.status === 'open').length));
+  // 分发：摘要写好、等你确认发布的篇数也算「要你处理」
+  const syndPending = $derived(site ? synd.pending[site.id] ?? 0 : 0);
+  $effect(() => { listenSyndication(); if (site) void loadSyndPending(site.id); });
   const queuedCount = $derived(inPlan ? queue.filter((q) => q.status === 'open').length : 0);
   // 代码文件夹显示成 ~/work/xxx 这样的短路径
   const shortPath = (p: string) => (p || '').replace(/^\/Users\/[^/]+/, '~').replace(/^\/home\/[^/]+/, '~').replace(/^[A-Za-z]:\\Users\\[^\\]+/, '~');
@@ -63,7 +67,7 @@
     </header>
     <nav class="tabs">
       {#each TABS as t (t.key)}
-        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && needCount}<span class="cnt" data-tip="{needCount} 条要你处理">{needCount}</span>{:else if t.key === 'queue' && queuedCount}<span class="cnt soft" data-tip="{queuedCount} 条排着等 AI 处理，不用你动手">{queuedCount}</span>{/if}</button>
+        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && needCount + syndPending}<span class="cnt" data-tip={syndPending ? `${needCount + syndPending} 条要你处理（含分发 ${syndPending} 篇等你确认发布）` : `${needCount} 条要你处理`}>{needCount + syndPending}</span>{:else if t.key === 'queue' && queuedCount}<span class="cnt soft" data-tip="{queuedCount} 条排着等 AI 处理，不用你动手">{queuedCount}</span>{/if}</button>
       {/each}
     </nav>
     <div class="page-body">

@@ -9,6 +9,7 @@
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
+  import { synd } from '$lib/state/syndication.svelte.js';
   import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
 
@@ -88,6 +89,10 @@
   </div>
 
   {#if job && job.kind.startsWith('ops:') && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 300)}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
+
+  {#if synd.pending[site.id]}
+    <div class="qnote"><Icon name="share" size={13} /><span>分发：{synd.pending[site.id]} 篇文章的摘要已经写好，等你确认发布。</span><button class="link-btn" onclick={() => (sites.tab = 'distribute')}>去分发</button></div>
+  {/if}
 
   {#if full && counts.open && (filter === 'open' || filter === 'todo')}
     <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>

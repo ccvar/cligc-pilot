@@ -13,10 +13,11 @@
   import { say } from '$lib/state/app.svelte.js';
   import { blogger, bloggerAccounts, bloggerLogin, loadBlogs } from '$lib/state/blogger.svelte.js';
   import { mask } from '$lib/mask';
+  import { synd, loadSyndPending } from '$lib/state/syndication.svelte.js';
 
   let { site }: { site: Site } = $props();
 
-  type Channel = { id: string; kind: string; conn_id: string; target_id: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; created_at: number };
+  type Channel = { id: string; kind: string; conn_id: string; target_id: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; backfill: boolean; created_at: number };
   type Summary = { path: string; title: string; summary: string; labels: string[]; skipped: boolean; updated_at: number };
   type Delivery = { path: string; channel_id: string; status: string; post_id: string; post_url: string; error: string; updated_at: number };
   type Row = { path: string; url: string; title: string; date: string; summary: Summary | null; deliveries: Delivery[] };
@@ -28,7 +29,9 @@
   async function load() {
     try { st = await invoke<State>('syndication_state', { siteId: site.id }); loadErr = ''; } catch (e) { loadErr = String(e); }
   }
-  $effect(() => { void site.id; void load(); });
+  // 后台自动处理完（site-syndication 事件）也重新读
+  $effect(() => { void site.id; void synd.ver[site.id]; void load(); });
+  $effect(() => { void st; void loadSyndPending(site.id); });
 
   const brainOk = $derived(!!st && (st.brain === 'claude' || st.brain.startsWith('api:')));
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
@@ -48,7 +51,7 @@
   function newChannel(kind: string) {
     addOpen = false;
     const accts = kind === 'blogger' ? bloggerAccounts() : [];
-    edit = { id: '', kind, conn_id: accts.length === 1 ? accts[0].id : '', target_id: '', target_name: '', target_url: '', mode: 'review', daily_limit: 2, enabled: true, created_at: 0 };
+    edit = { id: '', kind, conn_id: accts.length === 1 ? accts[0].id : '', target_id: '', target_name: '', target_url: '', mode: 'review', daily_limit: 2, enabled: true, backfill: false, created_at: 0 };
   }
   const accounts = $derived(edit?.kind === 'blogger' ? bloggerAccounts() : []);
   $effect(() => { if (edit?.kind === 'blogger' && edit.conn_id) void loadBlogs(edit.conn_id); });
@@ -185,7 +188,14 @@
             onchange={pickBlog} />
           <span class="lbl">发布方式</span>
           <Dropdown value={c.mode || 'review'} ariaLabel="发布方式" onchange={(v) => { if (edit) edit = { ...edit, mode: v }; }}
-            options={[{ value: 'review', label: '先给我看', sub: '我点「发布」才发' }, { value: 'draft', label: '存成 Blogger 草稿', sub: '我去 Blogger 后台发' }, { value: 'auto', label: '自动发布', sub: '下一期支持', disabled: true }]} />
+            options={[{ value: 'review', label: '先给我看', sub: '新文章上线后 AI 先写好摘要，我点「发布」才发' }, { value: 'draft', label: '存成 Blogger 草稿', sub: '自动写好存成草稿，我去 Blogger 后台发' }, { value: 'auto', label: '自动发布', sub: '新文章上线后自动写摘要并发布' }]} />
+          <span class="lbl">每天最多</span>
+          <div class="row">
+            <input class="tin num" type="number" min="1" max="20" value={c.daily_limit} oninput={(e) => { if (edit) edit = { ...edit, daily_limit: Math.max(1, Math.min(20, Number(e.currentTarget.value) || 1)) }; }} />
+            <span class="hint">{(c.mode || 'review') === 'review' ? '篇（每天最多提前写几篇摘要）' : '篇（多的第二天接着发；短时间连发看起来像刷外链）'}</span>
+          </div>
+          <span class="lbl"></span>
+          <label class="ck"><input type="checkbox" checked={c.backfill} onchange={(e) => { if (edit) edit = { ...edit, backfill: e.currentTarget.checked }; }} />补发以前的旧文章<small>不勾只处理加渠道以后发布的新文章</small></label>
         </div>
         {#if blogsErr}<p class="hint warn">{blogsErr}</p>{/if}
       {/if}
@@ -215,23 +225,32 @@
     {#if st && !st.channels.length && !edit}
       <p class="hint">还没有渠道。添加一个 Blogger 博客，站上的文章就能把导读同步过去。每个渠道只对应一个站；只发 AI 写的导读（三五百字）和原文链接，不发全文。</p>
     {/if}
-    <ul class="chs">
-      {#each st?.channels ?? [] as c (c.id)}
-        <li>
-          <div class="ch" class:off={!c.enabled}>
-            <span class="ic"><ConnectionMark kind={c.kind} size={16} /></span>
-            <span class="nm"><b>{kindLabel(c.kind)} · {c.target_name || c.target_id}</b><small>{MODE[c.mode] ?? c.mode} · 已发 {sentCount(c)}{#if !c.enabled} · 已停用{/if}</small></span>
-            {#if c.target_url}<button class="btn tiny quiet" onclick={() => openUrl(c.target_url)} data-tip={c.target_url}><Icon name="external" size={11} /></button>{/if}
-            <button class="btn tiny quiet" onclick={() => toggleChannel(c)}>{c.enabled ? '停用' : '启用'}</button>
-            <button class="btn tiny quiet" onclick={() => (edit = edit?.id === c.id ? null : { ...c })} aria-expanded={edit?.id === c.id}>{edit?.id === c.id ? '收起' : '设置'}</button>
+    {#if st?.channels.length || (edit && !edit.id)}
+      <div class="chs">
+        {#each st?.channels ?? [] as c (c.id)}
+          <div class="ch" class:off={!c.enabled} class:editing={edit?.id === c.id}>
+            <div class="ch-top">
+              <span class="ic"><ConnectionMark kind={c.kind} size={18} /></span>
+              <span class="nm"><small>{kindLabel(c.kind)}</small><b data-tip={c.target_url || undefined}>{c.target_name || c.target_id}</b></span>
+              {#if c.target_url}<button class="btn tiny quiet ext" onclick={() => openUrl(c.target_url)} data-tip="打开 {c.target_url}" aria-label="打开博客"><Icon name="external" size={12} /></button>{/if}
+            </div>
+            <p class="ch-meta">{MODE[c.mode] ?? c.mode} · 每天最多 {c.daily_limit} 篇{#if c.backfill} · 补发旧文章{/if}</p>
+            <div class="ch-foot">
+              <span class="sent">已发 <b>{sentCount(c)}</b>{#if !c.enabled} · 已停用{/if}</span>
+              <button class="btn tiny quiet" onclick={() => toggleChannel(c)}>{c.enabled ? '停用' : '启用'}</button>
+              <button class="btn tiny quiet" onclick={() => (edit = edit?.id === c.id ? null : { ...c })} aria-expanded={edit?.id === c.id}>{edit?.id === c.id ? '收起' : '设置'}</button>
+            </div>
           </div>
-          {#if edit && edit.id === c.id}{@render editor(edit)}{/if}
-        </li>
-      {/each}
-      {#if edit && !edit.id}
-        <li><div class="ch"><span class="ic"><ConnectionMark kind={edit.kind} size={16} /></span><span class="nm"><b>新渠道 · {kindLabel(edit.kind)}</b></span></div>{@render editor(edit)}</li>
-      {/if}
-    </ul>
+        {/each}
+        {#if edit && !edit.id}
+          <div class="ch editing new">
+            <div class="ch-top"><span class="ic"><ConnectionMark kind={edit.kind} size={18} /></span><span class="nm"><small>{kindLabel(edit.kind)}</small><b>新渠道</b></span></div>
+            <p class="ch-meta">在下面选账号和发到哪儿</p>
+          </div>
+        {/if}
+      </div>
+      {#if edit}<div class="ed-box">{@render editor(edit)}</div>{/if}
+    {/if}
     {#if st && !brainOk}<p class="hint warn">写摘要用站点「设置 → 运营」里的模型服务，现在是 {st.brain || '未设置'}，不支持：请改成 Claude Code 或 API 连接。</p>{/if}
   </div>
 
@@ -262,7 +281,7 @@
                 <span class="chips">
                   {#each live as c (c.id)}
                     {@const d = deliveryOf(r, c)}
-                    <button class="chip st-{d?.status ?? 'none'}" onclick={() => chipClick(r, c)} data-tip={chipTip(r, c)}><ConnectionMark kind={c.kind} size={11} />{d?.status === 'published' ? '✓' : d?.status === 'draft' ? '草稿' : d?.status === 'failed' ? '!' : '—'}</button>
+                    <button class="chip st-{d?.status ?? 'none'}" onclick={() => chipClick(r, c)} disabled={!d} data-tip={chipTip(r, c)} aria-label={chipTip(r, c)}><ConnectionMark kind={c.kind} size={13} />{#if d?.status === 'published'}<Icon name="external" size={11} />{:else if d?.status === 'draft'}<em>草稿</em>{:else if d?.status === 'failed'}<em>!</em>{/if}</button>
                   {/each}
                 </span>
               {/if}
@@ -313,17 +332,29 @@
   .add-menu button:disabled { opacity: .5; cursor: default; }
   .add-menu span { display: flex; flex-direction: column; line-height: 1.3; }
   .add-menu small { font-size: 10.5px; color: var(--faint); }
-  .chs { list-style: none; margin: 4px 0 0; padding: 0; }
-  .chs li + li { border-top: 1px solid #f1f0ec; }
-  .ch { display: flex; align-items: center; gap: 10px; min-height: 42px; }
-  .ch.off .nm { opacity: .5; }
-  .ch .ic { flex: none; display: inline-flex; width: 18px; justify-content: center; }
-  .ch .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
-  .ch .nm b { font-size: 13px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ch .nm small { font-size: 11.5px; color: var(--dim); }
-  .ed { padding: 2px 0 12px 28px; }
+  /* 渠道一个一张小卡片，排成一行（窄了自动换行）；设置展开在卡片下面 */
+  .chs { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin: 6px 0 0; }
+  .ch { border: 1px solid var(--border); border-radius: 10px; padding: 10px 10px 6px 12px; background: #fff; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .ch.editing { border-color: #cfccc3; box-shadow: 0 0 0 2px rgb(0 0 0 / 3%); }
+  .ch.new { border-style: dashed; }
+  .ch.off .ch-top, .ch.off .ch-meta { opacity: .5; }
+  .ch-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .ch .ic { flex: none; display: inline-flex; }
+  .ch .nm { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
+  .ch .nm small { font-size: 11px; color: var(--faint); }
+  .ch .nm b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch .ext { flex: none; align-self: flex-start; }
+  .ch-meta { margin: 0; font-size: 11.5px; color: var(--dim); }
+  .ch-foot { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
+  .ch-foot .sent { flex: 1; font-size: 11.5px; color: var(--faint); }
+  .ch-foot .sent b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ed-box { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px 4px; background: #fcfbf9; }
+  .ed { padding: 2px 0 10px; }
   .grid { display: grid; grid-template-columns: 72px 1fr; gap: 8px 12px; align-items: center; margin: 4px 0 8px; max-width: 620px; }
   .grid .lbl { font-size: 12.5px; color: var(--dim); }
+  .num { width: 64px; flex: none; }
+  .ck { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+  .ck small { color: var(--faint); font-size: 11.5px; margin-left: 4px; }
   .ed .row-end .grow { flex: 1; }
   .seg { display: inline-flex; gap: 2px; background: #f3f2ee; border-radius: 8px; padding: 2px; margin-right: 6px; }
   .seg button { border: 0; background: none; font: inherit; font-size: 12px; color: var(--dim); padding: 3px 9px; border-radius: 6px; cursor: pointer; display: inline-flex; gap: 4px; align-items: baseline; }
@@ -338,11 +369,14 @@
   .t .link-btn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 13px; color: var(--text); }
   .t small { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
   .chips { flex: none; display: inline-flex; gap: 4px; }
-  .chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 1px 6px; font: inherit; font-size: 11px; color: var(--faint); cursor: pointer; }
-  .chip.st-published { color: var(--ok); border-color: var(--su-ok-line, #cfe7d8); }
-  .chip.st-draft { color: #b45309; }
-  .chip.st-failed { color: var(--err); border-color: var(--err-border, #f0c9c9); }
+  /* 每个渠道一个标记：发了的亮（后面跟 ↗，点开那篇）；没发的灰；草稿 / 失败带一个字 */
+  .chip { display: inline-flex; align-items: center; gap: 2px; border: 0; background: none; border-radius: 6px; padding: 3px 4px; font: inherit; font-size: 11px; color: var(--dim); cursor: pointer; }
+  .chip:hover:not(:disabled) { background: #f4f3ef; }
+  .chip em { font-style: normal; font-weight: 600; }
   .chip.st-none { cursor: default; }
+  .chip.st-none :global(svg) { filter: grayscale(1); opacity: .35; }
+  .chip.st-draft em { color: #b45309; }
+  .chip.st-failed em { color: var(--err); }
   .acts { flex: none; display: inline-flex; gap: 4px; align-items: center; }
   .busy { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }
   .pv { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 12px; }

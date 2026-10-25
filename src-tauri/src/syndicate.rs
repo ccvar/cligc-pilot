@@ -40,6 +40,9 @@ pub struct Channel {
     pub daily_limit: u32,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// 自动处理时也补发加渠道以前的旧文章（按每日上限慢慢发）
+    #[serde(default)]
+    pub backfill: bool,
     #[serde(default)]
     pub created_at: u64,
 }
@@ -67,6 +70,12 @@ pub struct Summary {
     pub skipped: bool,
     #[serde(default)]
     pub updated_at: u64,
+    /// AI 写这份摘要的时间（每日上限按它数）
+    #[serde(default)]
+    pub generated_at: u64,
+    /// 自动写摘要失败的时间：当天不再自动重试（免得每小时白花一次模型调用）
+    #[serde(default)]
+    pub gen_failed_at: u64,
 }
 
 /// 一篇文章在一个渠道的发布记录。
@@ -163,6 +172,7 @@ fn migrate(f: &mut File) {
             mode: if legacy.mode == "draft" { "draft".into() } else { "review".into() },
             daily_limit: default_daily(),
             enabled: true,
+            backfill: false,
             created_at: now(),
         });
     }
@@ -170,7 +180,7 @@ fn migrate(f: &mut File) {
         if f.summaries.iter().any(|s| s.path == p.path) {
             continue;
         }
-        f.summaries.push(Summary { path: p.path.clone(), title: p.title, summary: p.summary, labels: p.labels, skipped: p.status == "skipped", updated_at: p.updated_at });
+        f.summaries.push(Summary { path: p.path.clone(), title: p.title, summary: p.summary, labels: p.labels, skipped: p.status == "skipped", updated_at: p.updated_at, generated_at: p.updated_at, gen_failed_at: 0 });
         if !cid.is_empty() && matches!(p.status.as_str(), "published" | "draft" | "failed") {
             f.deliveries.push(Delivery { path: p.path, channel_id: cid.clone(), status: p.status, post_id: p.post_id, post_url: p.post_url, error: p.error, updated_at: p.updated_at });
         }
@@ -470,12 +480,17 @@ pub fn syndication_cancel(site_id: String, path: String) {
 #[tauri::command]
 pub async fn syndication_generate(state: tauri::State<'_, AppState>, site_id: String, path: String) -> Result<Summary, String> {
     let site = state.sites.get(&site_id)?;
-    let dir = state.sites.data_dir(&site_id);
     let out = built_out(&state, &site)?;
     let p2 = path.clone();
     let a = tokio::task::spawn_blocking(move || crate::site_make::articles(&out).into_iter().find(|a| a.path == p2)).await.map_err(|e| e.to_string())?.ok_or("构建产物里没找到这篇文章：先构建一次")?;
-    let url = article_url(&site, &a.path);
-    let p = prompt(&a, &url);
+    generate_summary(&state, &site, &a).await
+}
+
+async fn generate_summary(state: &AppState, site: &crate::sites::Site, a: &crate::site_make::Article) -> Result<Summary, String> {
+    let (site_id, path) = (site.id.clone(), a.path.clone());
+    let dir = state.sites.data_dir(&site_id);
+    let url = article_url(site, &a.path);
+    let p = prompt(a, &url);
     let ask = crate::oneshot::Ask { brain: &site.ops.brain, model: &site.ops.model, prompt: &p, max_tokens: 1500, small: false, timeout: Duration::from_secs(180) };
     let key = format!("{site_id}|{path}");
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -499,6 +514,8 @@ pub async fn syndication_generate(state: tauri::State<'_, AppState>, site_id: St
         s.summary = summary;
         s.labels = labels;
         s.skipped = false;
+        s.generated_at = now();
+        s.gen_failed_at = 0;
     })
 }
 
@@ -550,19 +567,179 @@ pub async fn syndication_publish(state: tauri::State<'_, AppState>, site_id: Str
     let html = post_html(&s.summary, &article_title, &article_url(&site, &path));
     let mut results = Vec::new();
     for c in &targets {
-        let d = match publish_to(&state, c, &s, &html).await {
-            Ok((id, url, draft)) => Delivery { path: path.clone(), channel_id: c.id.clone(), status: if draft { "draft".into() } else { "published".into() }, post_id: id, post_url: url, error: String::new(), updated_at: now() },
-            Err(e) => Delivery { path: path.clone(), channel_id: c.id.clone(), status: "failed".into(), error: e.chars().take(200).collect(), updated_at: now(), ..Default::default() },
-        };
-        results.push(d);
+        results.push(deliver(&state, c, &s, &html, &path).await);
     }
-    let mut f = load(&dir);
+    record(&dir, results)?;
+    Ok(load(&dir).deliveries.into_iter().filter(|d| d.path == path).collect())
+}
+
+async fn deliver(state: &AppState, c: &Channel, s: &Summary, html: &str, path: &str) -> Delivery {
+    match publish_to(state, c, s, html).await {
+        Ok((id, url, draft)) => Delivery { path: path.to_string(), channel_id: c.id.clone(), status: if draft { "draft".into() } else { "published".into() }, post_id: id, post_url: url, error: String::new(), updated_at: now() },
+        Err(e) => Delivery { path: path.to_string(), channel_id: c.id.clone(), status: "failed".into(), error: e.chars().take(200).collect(), updated_at: now(), ..Default::default() },
+    }
+}
+
+fn record(dir: &Path, results: Vec<Delivery>) -> Result<(), String> {
+    let mut f = load(dir);
     for d in results {
         f.deliveries.retain(|x| !(x.path == d.path && x.channel_id == d.channel_id));
         f.deliveries.push(d);
     }
-    save(&dir, &f)?;
-    Ok(f.deliveries.into_iter().filter(|d| d.path == path).collect())
+    save(dir, &f)
+}
+
+/// 「待处理」里的数：摘要写好了、有「先给我看」的渠道还没发的文章篇数（不扫构建产物，只看记录）。
+pub fn pending_review(site_dir: &Path) -> usize {
+    let f = load(site_dir);
+    let review: Vec<&Channel> = f.channels.iter().filter(|c| c.enabled && (c.mode == "review" || c.mode.is_empty())).collect();
+    f.summaries
+        .iter()
+        .filter(|s| !s.skipped && !s.summary.trim().is_empty())
+        .filter(|s| review.iter().any(|c| !f.deliveries.iter().any(|d| d.path == s.path && d.channel_id == c.id && d.status != "failed")))
+        .count()
+}
+
+#[tauri::command]
+pub fn syndication_pending(state: tauri::State<'_, AppState>, site_id: String) -> usize {
+    pending_review(&state.sites.data_dir(&site_id))
+}
+
+// ───────────────────────── 自动处理（第二期）─────────────────────────
+//
+// 定时器每 10 分钟看一次（site_runner::start_scheduler）：站点有新的成功上线就马上处理，否则每小时一次。
+// - 先给我看：新文章提前把摘要写好，等用户点发布（每天最多写「每日上限」篇）。
+// - 存成草稿 / 自动发布：写摘要 → 确认文章网址能打开 → 发到渠道，每个渠道每天最多「每日上限」篇，多的第二天接着发。
+// 「新文章」= 发布日期不早于加渠道那天；勾了「补发旧文章」就连以前的也发。失败的不自动重试（点状态标记重试）。
+
+static TICKING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
+/// 站点 id → (上次处理时间, 那时最近一次成功上线的时间)
+static LAST_TICK: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (u64, u64)>>> = std::sync::LazyLock::new(Default::default);
+
+fn today_start() -> u64 {
+    chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|d| d.and_local_timezone(chrono::Local).single()).map(|d| d.timestamp().max(0) as u64).unwrap_or(0)
+}
+
+fn day_of(ts: u64) -> String {
+    chrono::DateTime::from_timestamp(ts as i64, 0).map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string()).unwrap_or_default()
+}
+
+/// 这个渠道要自动处理的文章（新的在前）：没跳过、还没有发布记录（失败的也不算，等用户手动重试）。
+fn eligible<'a>(c: &Channel, f: &File, articles: &'a [crate::site_make::Article]) -> Vec<&'a crate::site_make::Article> {
+    let since = day_of(c.created_at);
+    articles
+        .iter()
+        .filter(|a| !f.summaries.iter().any(|s| s.path == a.path && s.skipped))
+        .filter(|a| c.backfill || (!a.date.is_empty() && a.date >= since))
+        .filter(|a| !f.deliveries.iter().any(|d| d.path == a.path && d.channel_id == c.id))
+        .collect()
+}
+
+async fn is_live(url: &str) -> bool {
+    match reqwest::Client::new().get(url).timeout(Duration::from_secs(20)).send().await {
+        Ok(r) => r.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+/// 处理一个站点的所有渠道。返回这次做了几件事（写摘要 + 发布）。
+pub async fn tick(state: &AppState, site_id: &str) -> Result<usize, String> {
+    let site = state.sites.get(site_id)?;
+    let dir = state.sites.data_dir(site_id);
+    let f = load(&dir);
+    let channels: Vec<Channel> = f.channels.iter().filter(|c| c.enabled).cloned().collect();
+    if channels.is_empty() || site.domain.trim().is_empty() {
+        return Ok(0);
+    }
+    let out = built_out(state, &site)?;
+    let articles = tokio::task::spawn_blocking(move || crate::site_make::articles(&out)).await.map_err(|e| e.to_string())?;
+    let t0 = today_start();
+    let mut done = 0;
+    for c in &channels {
+        let f = load(&dir);
+        let todo: Vec<crate::site_make::Article> = eligible(c, &f, &articles).into_iter().cloned().collect();
+        if c.mode == "review" || c.mode.is_empty() {
+            // 先给我看：提前写好摘要，每天最多「每日上限」篇
+            let mut budget = (c.daily_limit as usize).saturating_sub(f.summaries.iter().filter(|s| s.generated_at >= t0).count());
+            for a in todo.iter().filter(|a| !f.summaries.iter().any(|s| s.path == a.path && (!s.summary.is_empty() || s.gen_failed_at >= t0))) {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                match generate_summary(state, &site, a).await {
+                    Ok(_) => done += 1,
+                    Err(_) => {
+                        let _ = upsert_summary(&dir, &a.path, |s| s.gen_failed_at = now());
+                    }
+                }
+            }
+            continue;
+        }
+        // 存成草稿 / 自动发布
+        let sent_today = f.deliveries.iter().filter(|d| d.channel_id == c.id && d.status != "failed" && d.updated_at >= t0).count();
+        let mut budget = (c.daily_limit as usize).saturating_sub(sent_today);
+        for a in &todo {
+            if budget == 0 {
+                break;
+            }
+            let url = article_url(&site, &a.path);
+            if !is_live(&url).await {
+                continue; // 还没上线（只构建了），下一轮再看
+            }
+            let cur = load(&dir);
+            let s = match cur.summaries.iter().find(|s| s.path == a.path && !s.summary.trim().is_empty()) {
+                Some(s) => s.clone(),
+                None if cur.summaries.iter().any(|s| s.path == a.path && s.gen_failed_at >= t0) => continue,
+                None => match generate_summary(state, &site, a).await {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let _ = upsert_summary(&dir, &a.path, |s| s.gen_failed_at = now());
+                        continue;
+                    }
+                },
+            };
+            let html = post_html(&s.summary, &a.title, &url);
+            record(&dir, vec![deliver(state, c, &s, &html, &a.path).await])?;
+            budget -= 1;
+            done += 1;
+        }
+    }
+    Ok(done)
+}
+
+/// 定时器调：挑出该处理的站点，后台跑 `tick`，跑完发 `site-syndication` 事件让开着的「分发」分页刷新。
+pub fn schedule(app: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+    let st = app.state::<AppState>();
+    for site in st.sites.list() {
+        let dir = st.sites.data_dir(&site.id);
+        if !load(&dir).channels.iter().any(|c| c.enabled) {
+            continue;
+        }
+        let deployed = crate::site_deploy::load_history(&dir).iter().find(|r| r.ok).map(|r| r.ts).unwrap_or(0);
+        let (at, seen) = LAST_TICK.lock().ok().and_then(|m| m.get(&site.id).copied()).unwrap_or((0, 0));
+        if now().saturating_sub(at) < 3600 && deployed == seen {
+            continue;
+        }
+        if !TICKING.lock().map(|mut t| t.insert(site.id.clone())).unwrap_or(false) {
+            continue;
+        }
+        if let Ok(mut m) = LAST_TICK.lock() {
+            m.insert(site.id.clone(), (now(), deployed));
+        }
+        let app2 = app.clone();
+        let id = site.id.clone();
+        tauri::async_runtime::spawn(async move {
+            let st = app2.state::<AppState>();
+            let n = tick(&st, &id).await.unwrap_or(0);
+            if let Ok(mut t) = TICKING.lock() {
+                t.remove(&id);
+            }
+            if n > 0 {
+                let _ = app2.emit("site-syndication", serde_json::json!({ "site_id": id }));
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -611,6 +788,22 @@ mod tests {
         assert!(!raw.contains("\"config\"") && !raw.contains("\"posts\""), "旧字段不再写回");
         assert_eq!(load(&t).channels.len(), 1, "再读一次不会重复迁移");
         let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
+    fn eligible_is_new_articles_unless_backfill() {
+        let a = |p: &str, d: &str| crate::site_make::Article { path: p.into(), title: p.into(), description: String::new(), date: d.into(), text: String::new() };
+        let arts = vec![a("/new/", "2099-01-02"), a("/old/", "2000-01-01"), a("/nodate/", ""), a("/done/", "2099-01-01"), a("/skip/", "2099-01-01")];
+        let mut c = Channel { id: "c".into(), created_at: now(), daily_limit: 2, enabled: true, ..Default::default() };
+        let f = File {
+            deliveries: vec![Delivery { path: "/done/".into(), channel_id: "c".into(), status: "failed".into(), ..Default::default() }],
+            summaries: vec![Summary { path: "/skip/".into(), skipped: true, ..Default::default() }],
+            ..Default::default()
+        };
+        let paths = |v: Vec<&crate::site_make::Article>| v.into_iter().map(|a| a.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(eligible(&c, &f, &arts)), vec!["/new/".to_string()]);
+        c.backfill = true;
+        assert_eq!(paths(eligible(&c, &f, &arts)), vec!["/new/".to_string(), "/old/".to_string(), "/nodate/".to_string()]);
     }
 
     #[test]

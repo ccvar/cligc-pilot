@@ -2074,6 +2074,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 set_last_data_sync(&st.data_dir, &today());
                 daily_data_sync(ctx.clone()).await;
             }
+            // 内容分发：新上线的文章写摘要、按渠道的发布方式发出去（见 syndicate）
+            crate::syndicate::schedule(&app);
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;
