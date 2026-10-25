@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { mask, maskTip } from '$lib/mask';
   import type { Snippet } from 'svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
@@ -26,11 +27,12 @@
 <div class="cr">
   {#each list as c (c.id)}
     {@const on = c.id === app.activeConnId}
+    {@const nm = kind === 'github' && c.login ? c.login : connectionDisplayName(c)}
     <div class="acct" class:on={on && (app.view === 'launcher' || app.view === 'thread')} class:menu={connections.connCtx?.conn.id === c.id}
       role="button" tabindex="0" title={c.key_prefix ? `脱敏 Token：${c.key_prefix}` : undefined}
       onclick={() => selectConn(c.id)} onkeydown={(e) => e.key === 'Enter' && selectConn(c.id)} oncontextmenu={(e) => openConnCtx(e, c)}>
       <span class="ic">{#if kind === 'github'}<GhMark size={14} />{:else}<CfMark size={14} />{/if}</span>
-      <span class="main"><b>{kind === 'github' && c.login ? c.login : connectionDisplayName(c)}</b><small>{sub(c, on)}</small></span>
+      <span class="main"><b data-tip={maskTip(nm, mask(nm))}>{mask(nm)}</b><small>{sub(c, on)}</small></span>
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}
     </div>
     {#if on && sidebar.grouped.length}<div class="convs">{@render current()}</div>{/if}

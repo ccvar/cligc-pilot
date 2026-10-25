@@ -2,6 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { DataSourceRow } from '$lib/types';
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
+  import { mask, maskTip } from '$lib/mask';
   import SettingsIcon from '$lib/SettingsIcon.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { openDataConnect, datasrc, autoBindSites } from '$lib/state/datasrc.svelte.js';
@@ -38,8 +39,8 @@
     actions={g.kind === 'google' && oauth.client?.configured ? clientBtn : undefined}>
     {#each g.rows as d (d.conn.id)}
       <div class="conn-row static" class:on={connections.connCtx?.conn.id === d.conn.id} role="group" oncontextmenu={(e) => openConnCtx(e, d.conn)}>
-        <b class="cr-name">{rowName(d)}</b>
-        <small class="cr-sub">{rowSub(d)}</small>
+        <b class="cr-name" data-tip={maskTip(rowName(d), mask(rowName(d)))}>{mask(rowName(d))}</b>
+        <small class="cr-sub">{mask(rowSub(d))}</small>
         <span class="used" data-tip={d.sites.length ? d.sites.join('\n') : undefined}>{datasrc.binding === d.conn.id ? '匹配站点中…' : d.sites.length ? `${d.sites.length} 个站点` : '未使用'}</span>
         <button class="icon-btn sm cr-gear" class:active={connections.connCtx?.conn.id === d.conn.id} title="连接设置" aria-label="连接设置" onclick={(e) => toggleConnCtx(e, d.conn)}><SettingsIcon /></button>
       </div>

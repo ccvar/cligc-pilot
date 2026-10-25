@@ -2,6 +2,7 @@
   import type { Snippet } from 'svelte';
   import type { Conversation } from '$lib/types';
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
+  import { mask } from '$lib/mask';
   import { app } from '$lib/state/app.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import { connections, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, remoteConns } from '$lib/state/connections.svelte.js';
@@ -22,7 +23,7 @@
       role="button" tabindex="0" title="{c.ssh_user}@{c.ssh_host}{c.ssh_port && c.ssh_port !== 22 ? ':' + c.ssh_port : ''}"
       onpointerdown={(e) => startRemoteDrag(e, c.id)} onclick={() => selectConn(c.id)} onkeydown={(e) => e.key === 'Enter' && selectConn(c.id)} oncontextmenu={(e) => openConnCtx(e, c)}>
       <span class="ic"><DistroMark id={distroOf(c)} size={14} /></span>
-      <span class="main"><b>{connectionDisplayName(c)}</b><small>{sshSub(c)}</small></span>
+      <span class="main"><b>{mask(connectionDisplayName(c))}</b><small>{mask(sshSub(c))}</small></span>
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}
     </div>
     {#if on}

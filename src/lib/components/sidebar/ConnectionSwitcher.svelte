@@ -23,6 +23,8 @@
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { SITES_CONN_ID, SITES_CONN, LOCAL_CONN, REMOTES_CONN, CLOUDFLARES_CONN, GITHUBS_CONN } from '$lib/state/env';
   import { isDataConn } from '$lib/state/datasrc.svelte.js';
+  import { mask, maskTip } from '$lib/mask';
+  const footName = $derived(app.activeConn ? connectionDisplayName(app.activeConn) : '未连接');
   // 制作中的站点单独计数，不算进「N 个站点」（和全部站点页一致）
   const makingN = $derived(makingSites().length);
   const siteCount = $derived(sites.list.length - makingN);
@@ -91,7 +93,7 @@
 <button class="rail-foot" class:open={connections.switcherOpen} onclick={() => { connections.switcherOpen = !connections.switcherOpen; }}>
   {#if app.isSiteConn && sites.active}<SiteIcon id={sites.active.id} size={18} />{:else if app.isSitesMode}<SiteMark size={18} />{:else if app.isCfConn}<CfMark size={18} />{:else if app.isGhConn}<GhMark size={18} />{:else if app.isSshConn}<SshMark size={18} />{:else if app.activeConn}<WorkspaceMark size={18} />{:else}<AppIcon size={18} />{/if}
   <span class="foot-main">
-    <b>{app.activeConn ? connectionDisplayName(app.activeConn) : '未连接'}</b>
+    <b data-tip={maskTip(footName, mask(footName))}>{mask(footName)}</b>
     {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{siteCount} 个站点{makingN ? ` · ${makingN} 个制作中` : ''}{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {siteCount} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
       远程连接：这里放远端系统版本（点一下重探，比如刚 do-release-upgrade 过）。
     --><span class="foot-os" role="button" tabindex="-1" title="远端系统 · 点击重新检测"

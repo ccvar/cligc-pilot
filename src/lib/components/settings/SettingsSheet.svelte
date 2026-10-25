@@ -21,6 +21,7 @@
   import DataSourcesSection from '$lib/components/settings/DataSourcesSection.svelte';
   import PhoneSection from '$lib/components/settings/PhoneSection.svelte';
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
+  import { mask, maskTip } from '$lib/mask';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
@@ -115,16 +116,17 @@
           <ConnGroup kind={g.kind} label={g.label} n={g.items.length} add={g.add}>
             {#snippet icon()}<ConnectionMark kind={g.kind === 'other' ? g.items[0].kind : g.kind} size={14} />{/snippet}
             {#each g.items as c (c.id)}
+              {@const nm = connectionDisplayName(c)}
               <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
                 onclick={() => selectConn(c.id)}
                 onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
                 oncontextmenu={(e) => openConnCtx(e, c)}>
                 {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
-                <b class="cr-name">{connectionDisplayName(c)}</b>
+                <b class="cr-name" data-tip={maskTip(nm, mask(nm))}>{mask(nm)}</b>
                 {#if c.kind === 'ssh'}
-                  <small class="cr-sub">{sshSub(c)}</small>
+                  <small class="cr-sub" data-tip={maskTip(sshSub(c), mask(sshSub(c)))}>{mask(sshSub(c))}</small>
                 {:else if connSub(c)}
-                  <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : undefined}>{connSub(c)}</small>
+                  <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : maskTip(connSub(c), mask(connSub(c)))}>{mask(connSub(c))}</small>
                 {/if}
                 <button
                   class="icon-btn sm cr-gear"
@@ -369,7 +371,8 @@
   .sheet-head > b { min-width: 0; overflow: hidden; font-size: 13.5px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
   /* 弹窗正文统一只允许纵向滚动。只声明 overflow-y:auto 会按 CSS 规则把横向轴
      隐式计算成 auto；贴边 footer 的负边距和 WebView 的浮点取整都会因此冒出横向条。 */
-  .sheet-body { min-width: 0; padding: 16px 18px; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+  /* scrollbar-gutter: stable —— 一直给滚动条留位置：展开 / 收起连接组时滚动条忽有忽无，整页会左右跳一下 */
+  .sheet-body { min-width: 0; padding: 16px 12px 16px 18px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 7px; }
   .about-update-entry { display: inline-flex; align-items: center; gap: 5px; }
   .about-update-entry :global(svg) { flex: none; color: var(--dim); }
   .conn-remark { cursor: help; }

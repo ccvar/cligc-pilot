@@ -4,6 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount, untrack } from 'svelte';
   import ConnGroup from '$lib/components/settings/ConnGroup.svelte';
+  import { mask, maskId, maskTip } from '$lib/mask';
   import { setFolded } from '$lib/state/connFold.svelte.js';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
@@ -110,7 +111,7 @@
       {:else if st.devices.length}
         {#each st.devices as d (d.serial)}
           <div class="conn-row static">
-            <b class="cr-name">{d.model || d.serial}</b><small class="cr-sub">{d.model ? d.serial : ''}</small>
+            <b class="cr-name" data-tip={d.model ? undefined : maskTip(d.serial, maskId(d.serial))}>{d.model || maskId(d.serial)}</b><small class="cr-sub" data-tip={d.model ? maskTip(d.serial, maskId(d.serial)) : undefined}>{d.model ? maskId(d.serial) : ''}</small>
             <span class="used" class:ok={d.state === 'device'} class:warn={d.state !== 'device'}>{STATE[d.state] ?? d.state}</span>
           </div>
         {/each}
@@ -141,7 +142,7 @@
     <ConnGroup kind="mail" label="邮箱" n={mail.configured ? 1 : 0} icon={mailIcon} actions={mailActs}>
       {#if mail.configured}
         <div class="conn-row static">
-          <b class="cr-name">{mail.email}</b><small class="cr-sub">注册时自动取验证码</small>
+          <b class="cr-name" data-tip={maskTip(mail.email, mask(mail.email))}>{mask(mail.email)}</b><small class="cr-sub">注册时自动取验证码</small>
           <button class="how" onclick={removeMail}>断开</button>
         </div>
         {#if mail.log.length}
