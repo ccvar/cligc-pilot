@@ -266,8 +266,8 @@
             <p class="ch-meta"><span class="mode m-{c.mode || 'review'}" data-tip={MODE_TIP[c.mode || 'review']}>{MODE[c.mode || 'review'] ?? c.mode}</span>{#if c.mode !== 'manual'}<span>每天最多 {c.daily_limit} 篇{#if c.backfill}&nbsp;· 补发旧文章{/if}</span>{/if}</p>
             <div class="ch-foot">
               <span class="sent">已发 <b>{sentCount(c)}</b>{#if !c.enabled} · 已停用{/if}</span>
-              <button class="btn tiny quiet" onclick={() => toggleChannel(c)}>{c.enabled ? '停用' : '启用'}</button>
-              <button class="btn tiny quiet" onclick={() => (edit = edit?.id === c.id ? null : { ...c })} aria-expanded={edit?.id === c.id}>{edit?.id === c.id ? '收起' : '设置'}</button>
+              <button class="btn tiny quiet ib" onclick={() => toggleChannel(c)} data-tip={c.enabled ? '停用这个渠道（不再发，可以随时启用）' : '启用这个渠道'} aria-label={c.enabled ? '停用' : '启用'}><Icon name={c.enabled ? 'pause' : 'play'} size={13} /></button>
+              <button class="btn tiny quiet ib" class:on={edit?.id === c.id} onclick={() => (edit = edit?.id === c.id ? null : { ...c })} aria-expanded={edit?.id === c.id} data-tip={edit?.id === c.id ? '收起设置' : '渠道设置'} aria-label="渠道设置"><Icon name="sliders" size={13} /></button>
             </div>
           </div>
         {/each}
@@ -382,6 +382,8 @@
   .m-auto { color: var(--ok, #12805c); background: var(--su-ok-soft, #e8f5ee); }
   .ch-foot { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
   .ch-foot .sent { flex: 1; font-size: 11.5px; color: var(--faint); }
+  .ch-foot .ib { padding: 4px 6px; }
+  .ch-foot .ib.on { background: #efeee9; color: var(--text); }
   .ch-foot .sent b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .ed-box { margin-top: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px 4px; background: #fcfbf9; }
   .ed { padding: 2px 0 10px; }
