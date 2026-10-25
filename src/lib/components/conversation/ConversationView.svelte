@@ -25,6 +25,7 @@
   import { distroOf } from '$lib/state/connections.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
   import WhyChips from '$lib/components/site/WhyChips.svelte';
+  import { suggestReply } from '$lib/suggestReply';
 
   export { splitContent, convPane };
   // 很长的用户消息（比如 Pilot 发给 AI 的整段指令）默认只露前几行，像 Claude 客户端那样
@@ -356,6 +357,8 @@
   {@const cfReady=scoped?panes.paneCfReady[id]??false:legacyComposer().cfReady}
   {@const uploading=scoped?!!panes.paneUploading[id]:composer.attaching}
   {@const messages=context?.messages.filter(m=>!m.hidden)??[]}
+  {@const lastMsg=messages[messages.length-1]}
+  {@const suggestion=!viewBusy&&lastMsg?.role==='assistant'&&!lastMsg.error?suggestReply(lastMsg.text):''}
   <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}>
     <div class="thread-inner" >
       {#each messages as m, i (i)}
@@ -399,10 +402,14 @@
         </div>
       {/if}
       {#if uploading}<span class="attach-loading">上传中…</span>{/if}
-      <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? '输入下一条，回车排队，等这轮结束自动发送' : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
+      <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? '输入下一条，回车排队，等这轮结束自动发送' : suggestion ? `${suggestion}（按 Tab 填入）` : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
         oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
         onpaste={(e)=>onComposerPaste(e,scoped?id:'')}
-        onkeydown={(e) => onComposerKey(e, scoped ? ()=>void splitSubmit(id) : viewBusy ? queueMessage : send)}></textarea>
+        onkeydown={(e) => {
+          // 建议回复：输入框空着时按 Tab 填入（不发送）
+          if (e.key === 'Tab' && !e.shiftKey && suggestion && !draft.trim() && !composer.composing) { e.preventDefault(); if (scoped) setPaneText(id, suggestion); else setLegacyDraft(suggestion); return; }
+          onComposerKey(e, scoped ? ()=>void splitSubmit(id) : viewBusy ? queueMessage : send);
+        }}></textarea>
       <div class="composer-bar">
         <div class="cb-left">
           {#if activeConvIsCf}
