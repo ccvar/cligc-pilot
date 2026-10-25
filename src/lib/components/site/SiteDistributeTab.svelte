@@ -30,7 +30,8 @@
   type Delivery = { path: string; channel_id: string; status: string; post_id: string; post_url: string; error: string; updated_at: number };
   type Row = { path: string; url: string; title: string; date: string; summary: Summary | null; deliveries: Delivery[] };
   type Kind = { kind: string; label: string; available: boolean };
-  type State = { channels: Channel[]; articles: Row[]; built: boolean; brain: string; used_targets: Record<string, string>; kinds: Kind[] };
+  type Settings = { length: string; extra: string; referral_on: boolean; referral_url: string; referral_label: string };
+  type State = { settings: Settings; channels: Channel[]; articles: Row[]; built: boolean; brain: string; used_targets: Record<string, string>; kinds: Kind[] };
 
   let st = $state<State | null>(null);
   let loadErr = $state('');
@@ -41,6 +42,35 @@
   $effect(() => { void site.id; void synd.ver[site.id]; untrack(() => void load()); });
   $effect(() => { void st; const id = site.id; untrack(() => void loadSyndPending(id)); });
 
+  // ── 摘要设置（每个站一份，所有渠道共用）──
+  let sd = $state<Settings>({ length: 'medium', extra: '', referral_on: false, referral_url: '', referral_label: '' });
+  let sdSaving = $state(false);
+  // 页面重新读取时（发布、对账之后）只在你没改过设置时同步，免得冲掉没保存的修改
+  let sdSynced = '';
+  $effect(() => {
+    const v = st?.settings;
+    if (!v) return;
+    const norm = { ...v, length: v.length || 'medium' };
+    untrack(() => {
+      if (!sdSynced || JSON.stringify(sd) === sdSynced) sd = { ...norm };
+      sdSynced = JSON.stringify(norm);
+    });
+  });
+  const sdDirty = $derived(!!st && JSON.stringify({ ...st.settings, length: st.settings.length || 'medium' }) !== JSON.stringify(sd));
+  async function toggleReferral(on: boolean) {
+    if (on) {
+      const ok = await confirmDialog('打开后，发到渠道的每篇导读末尾会多一个你的邀请 / 推广链接（标明「推荐链接」，加 sponsored 标记，不传递权重）。\nWordPress.com、Blogger 对导流到推广链接的站点比较严，被判成垃圾内容的风险会变高，账号和博客可能被封。确定打开？', { title: '在导读里带推广链接', kind: 'warning', confirmText: '打开' });
+      if (!ok) return;
+    }
+    sd = { ...sd, referral_on: on };
+  }
+  async function saveSettings() {
+    sdSaving = true;
+    try { const v = await invoke<Settings>('syndication_save_settings', { siteId: site.id, settings: sd }); sd = { ...v, length: v.length || 'medium' }; sdSynced = JSON.stringify(sd); if (st) st.settings = v; say('摘要设置已保存'); }
+    catch (e) { say(String(e), 'err'); }
+    finally { sdSaving = false; }
+  }
+  const LENGTHS = [['short', '短', '150–250 字'], ['medium', '中', '300–500 字'], ['long', '长', '600–900 字']] as const;
   const brainOk = $derived(!!st && (st.brain === 'claude' || st.brain.startsWith('api:')));
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
   const kindLabel = (k: string) => st?.kinds.find((x) => x.kind === k)?.label ?? k;
@@ -306,6 +336,31 @@
   </div>
 
   <div class="card">
+    <h3><Icon name="wand" />摘要设置<span class="grow"></span>{#if sdDirty}<button class="btn tiny quiet" onclick={() => st && (sd = { ...st.settings, length: st.settings.length || 'medium' })}>取消</button><button class="btn tiny primary" onclick={saveSettings} disabled={sdSaving}>{sdSaving ? '保存中…' : '保存'}</button>{/if}</h3>
+    <div class="grid sg">
+      <span class="lbl">长度</span>
+      <span class="seg">
+        {#each LENGTHS as [k, l, d] (k)}
+          <button class:on={sd.length === k} onclick={() => (sd = { ...sd, length: k })} data-tip={d}>{l}<small>{d}</small></button>
+        {/each}
+      </span>
+      <span class="lbl top">补充要求</span>
+      <textarea class="tin" rows="2" maxlength="300" bind:value={sd.extra} placeholder="可选，例如：语气口语一点；结尾提醒一句投资有风险；多提海外华人的场景"></textarea>
+      <span class="lbl">推广链接</span>
+      <label class="ck"><input type="checkbox" checked={sd.referral_on} onchange={(e) => { const on = e.currentTarget.checked; e.currentTarget.checked = sd.referral_on; void toggleReferral(on); }} />在导读末尾带一个邀请 / 推广链接<small>默认不带</small></label>
+      {#if sd.referral_on}
+        <span class="lbl"></span>
+        <div class="ref">
+          <input class="tin mono" bind:value={sd.referral_url} placeholder="https://… 你的邀请链接" spellcheck="false" />
+          <input class="tin" bind:value={sd.referral_label} placeholder="链接文字（默认「注册链接」）" maxlength="40" />
+          <p class="hint warn">每篇只放这一个，放在「阅读全文」后面，标明「（推荐链接）」并加 sponsored 标记（不传递权重）。平台对推广链接比较严，留意账号状态。</p>
+        </div>
+      {/if}
+    </div>
+    <p class="hint">长度和补充要求只影响之后新写的摘要（已经写好的可以点「重新生成」）；推广链接在发布时加，影响之后发出去的文章。</p>
+  </div>
+
+  <div class="card">
     <h3><Icon name="doc" />文章<span class="grow"></span>
       <span class="seg">
         {#each FILTERS as [k, l, n] (k)}
@@ -412,6 +467,12 @@
   .grid { display: grid; grid-template-columns: 72px 1fr; gap: 8px 12px; align-items: center; margin: 4px 0 8px; max-width: 620px; }
   .grid .lbl { font-size: 12.5px; color: var(--dim); }
   .num { width: 64px; flex: none; }
+  .sg { align-items: start; }
+  .sg .lbl { padding-top: 5px; }
+  .sg textarea { resize: vertical; line-height: 1.6; font-size: 12.5px; }
+  .sg .seg { justify-self: start; margin: 0; }
+  .sg .ck { padding-top: 4px; }
+  .ref { display: flex; flex-direction: column; gap: 6px; }
   .ck { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
   .ck small { color: var(--faint); font-size: 11.5px; margin-left: 4px; }
   .ed .row-end .grow { flex: 1; }

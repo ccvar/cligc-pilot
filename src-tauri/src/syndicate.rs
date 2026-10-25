@@ -134,8 +134,43 @@ struct LegacyPost {
     updated_at: u64,
 }
 
+/// 摘要设置（每个站一份，所有渠道共用）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Settings {
+    /// short | medium（默认）| long
+    #[serde(default)]
+    pub length: String,
+    /// 用户的补充要求（写摘要时照着加），最多 300 字
+    #[serde(default)]
+    pub extra: String,
+    /// 邀请 / 推广链接：默认关；开了才在末尾附一个（rel=sponsored nofollow，写明「推荐链接」）
+    #[serde(default)]
+    pub referral_on: bool,
+    #[serde(default)]
+    pub referral_url: String,
+    #[serde(default)]
+    pub referral_label: String,
+}
+
+impl Settings {
+    /// (中文字数说明, 英文词数说明, 段数, 模型输出上限)
+    fn size(&self) -> (&'static str, &'static str, &'static str, u32) {
+        match self.length.as_str() {
+            "short" => ("150–250 字", "80–150 词", "1–2 段", 900),
+            "long" => ("600–900 字", "300–450 词", "3–5 段", 2600),
+            _ => ("300–500 字", "150–300 词", "2–4 段", 1500),
+        }
+    }
+    fn referral(&self) -> Option<(&str, &str)> {
+        let u = self.referral_url.trim();
+        (self.referral_on && u.starts_with("https://") && !u.contains(char::is_whitespace)).then(|| (u, self.referral_label.trim()))
+    }
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct File {
+    #[serde(default)]
+    settings: Settings,
     #[serde(default)]
     channels: Vec<Channel>,
     #[serde(default)]
@@ -229,20 +264,24 @@ fn article_url(site: &crate::sites::Site, path: &str) -> String {
 
 // ───────────────────────── 摘要 ─────────────────────────
 
-fn prompt(a: &crate::site_make::Article, url: &str) -> String {
+fn prompt(a: &crate::site_make::Article, url: &str, set: &Settings) -> String {
+    let (zh, en, paras, _) = set.size();
+    let extra = set.extra.trim();
+    let extra = if extra.is_empty() { String::new() } else { format!("- 站长的补充要求（和上面不冲突时照做）：{}\n", extra.chars().take(300).collect::<String>()) };
     format!(
-        "你是这个网站的编辑。下面是网站上的一篇文章，为它写一篇发在 Blogger 博客上的导读，帮读者判断要不要去看原文。\n\
+        "你是这个网站的编辑。下面是网站上的一篇文章，为它写一篇发在博客上的导读，帮读者判断要不要去看原文。\n\
 要求：\n\
 - 用原文的语言写；\n\
-- 300–500 字（英文 150–300 词），分 2–4 段；\n\
+- {zh}（英文 {en}），分 {paras}；\n\
 - 用自己的话讲清楚：文章解决什么问题、讲了哪些要点、适合谁看。不要逐段照抄原文，不要编造原文没有的信息、数字或承诺；\n\
 - 不要写任何链接、网址、推荐码、邀请码，不要写「点击这里」；结尾不用写「阅读全文」，会自动附上原文链接；\n\
 - 正文里要用引号时用「」，不要用英文双引号；段落之间在 JSON 字符串里写成 \\n\\n；\n\
 - 标题：重新拟一个，不要和原文标题一字不差，不超过 30 个字（英文 70 个字符）；\n\
 - 标签：3–5 个，用原文的语言。\n\
+{extra}\
 只输出 JSON，不要别的内容：{{\"title\": \"…\", \"summary\": \"第一段\\n\\n第二段\", \"labels\": [\"…\"]}}\n\n\
 原文标题：{}\n原文网址：{}\n原文描述：{}\n正文：\n{}",
-        a.title, url, a.description, a.text
+        a.title, url, a.description, a.text, zh = zh, en = en, paras = paras, extra = extra
     )
 }
 
@@ -333,10 +372,15 @@ fn esc(s: &str) -> String {
 }
 
 /// 发到 Blogger 的正文：摘要段落 + 原文链接（只有这一条链接）。
-pub fn post_html(summary: &str, article_title: &str, url: &str) -> String {
+pub fn post_html(summary: &str, article_title: &str, url: &str, set: &Settings) -> String {
     let cjk = summary.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
     let mut html: String = summary.split("\n\n").map(|p| format!("<p>{}</p>\n", esc(p.trim()))).collect();
     html.push_str(&format!("<p>{}<a href=\"{}\">{}</a></p>\n", if cjk { "阅读全文：" } else { "Read the full article: " }, esc(url), esc(article_title)));
+    // 推广链接：用户自己打开才有；只一个、放最后、不传权重、写明是推荐链接
+    if let Some((r, label)) = set.referral() {
+        let label = if label.is_empty() { if cjk { "注册链接" } else { "Sign-up link" } } else { label };
+        html.push_str(&format!("<p>{}<a href=\"{}\" rel=\"sponsored nofollow\">{}</a></p>\n", if cjk { "（推荐链接）" } else { "(Referral link) " }, esc(r), esc(label)));
+    }
     html
 }
 
@@ -361,6 +405,7 @@ pub struct KindInfo {
 
 #[derive(Serialize)]
 pub struct SyndicationState {
+    pub settings: Settings,
     pub channels: Vec<Channel>,
     pub articles: Vec<ArticleRow>,
     /// 站点还没有构建产物（读不到文章）
@@ -406,6 +451,7 @@ pub async fn syndication_state(state: tauri::State<'_, AppState>, site_id: Strin
         })
         .collect();
     Ok(SyndicationState {
+        settings: f.settings,
         channels: f.channels,
         articles,
         built,
@@ -453,6 +499,27 @@ pub fn syndication_save_channel(state: tauri::State<'_, AppState>, site_id: Stri
     }
     save(&dir, &f)?;
     Ok(out)
+}
+
+/// 保存摘要设置。推广链接只收 https 网址。
+#[tauri::command]
+pub fn syndication_save_settings(state: tauri::State<'_, AppState>, site_id: String, settings: Settings) -> Result<Settings, String> {
+    state.sites.get(&site_id)?;
+    let url = settings.referral_url.trim().to_string();
+    if settings.referral_on && !(url.starts_with("https://") && !url.contains(char::is_whitespace) && url.len() <= 500) {
+        return Err("推广链接要是一个以 https:// 开头的完整网址".into());
+    }
+    let dir = state.sites.data_dir(&site_id);
+    let mut f = load(&dir);
+    f.settings = Settings {
+        length: if matches!(settings.length.as_str(), "short" | "medium" | "long") { settings.length } else { "medium".into() },
+        extra: settings.extra.trim().chars().take(300).collect(),
+        referral_on: settings.referral_on,
+        referral_url: url,
+        referral_label: settings.referral_label.trim().chars().take(40).collect(),
+    };
+    save(&dir, &f)?;
+    Ok(f.settings)
 }
 
 /// 删除渠道。发布记录保留（按目标记着）：以后加回同一个博客 / 站点会接上，已经发过的不会再发一遍。
@@ -556,8 +623,9 @@ async fn generate_summary(state: &AppState, site: &crate::sites::Site, a: &crate
     let (site_id, path) = (site.id.clone(), a.path.clone());
     let dir = state.sites.data_dir(&site_id);
     let url = article_url(site, &a.path);
-    let p = prompt(a, &url);
-    let ask = crate::oneshot::Ask { brain: &site.ops.brain, model: &site.ops.model, prompt: &p, max_tokens: 1500, small: false, timeout: Duration::from_secs(180) };
+    let set = load(&dir).settings;
+    let p = prompt(a, &url, &set);
+    let ask = crate::oneshot::Ask { brain: &site.ops.brain, model: &site.ops.model, prompt: &p, max_tokens: set.size().3, small: false, timeout: Duration::from_secs(180) };
     let key = format!("{site_id}|{path}");
     let (tx, rx) = tokio::sync::oneshot::channel();
     if let Ok(mut m) = RUNNING.lock() {
@@ -640,7 +708,7 @@ pub async fn syndication_publish(state: tauri::State<'_, AppState>, site_id: Str
     let out = built_out(&state, &site)?;
     let p2 = path.clone();
     let article_title = tokio::task::spawn_blocking(move || crate::site_make::articles(&out).into_iter().find(|a| a.path == p2).map(|a| a.title)).await.map_err(|e| e.to_string())?.unwrap_or_else(|| s.title.clone());
-    let html = post_html(&s.summary, &article_title, &article_url(&site, &path));
+    let html = post_html(&s.summary, &article_title, &article_url(&site, &path), &load(&dir).settings);
     let mut results = Vec::new();
     for c in &targets {
         results.push(deliver(&state, c, &s, &html, &path).await);
@@ -777,7 +845,7 @@ pub async fn tick(state: &AppState, site_id: &str) -> Result<usize, String> {
                     }
                 },
             };
-            let html = post_html(&s.summary, &a.title, &url);
+            let html = post_html(&s.summary, &a.title, &url, &cur.settings);
             record(&dir, vec![deliver(state, c, &s, &html, &a.path).await])?;
             budget -= 1;
             done += 1;
@@ -847,7 +915,7 @@ mod tests {
     fn dump_prompt() {
         let out = std::path::PathBuf::from(std::env::var("PILOT_CHECK_OUT").unwrap());
         let a = crate::site_make::articles(&out).into_iter().find(|a| a.path.contains(&std::env::var("PILOT_PROMPT_PAGE").unwrap_or("buy-usdt".into()))).unwrap();
-        std::fs::write(std::env::var("PILOT_PROMPT_OUT").unwrap(), prompt(&a, &format!("https://example.com{}", a.path))).unwrap();
+        std::fs::write(std::env::var("PILOT_PROMPT_OUT").unwrap(), prompt(&a, &format!("https://example.com{}", a.path), &Settings::default())).unwrap();
     }
 
     #[test]
@@ -896,9 +964,15 @@ mod tests {
 
     #[test]
     fn post_html_escapes_and_links_only_the_article() {
-        let h = post_html("第一段 <b>粗</b>\n\n第二段", "原文 & 标题", "https://a.com/p?x=1&y=2");
+        let h = post_html("第一段 <b>粗</b>\n\n第二段", "原文 & 标题", "https://a.com/p?x=1&y=2", &Settings::default());
         assert_eq!(h.matches("<a ").count(), 1);
         assert!(h.contains("&lt;b&gt;") && h.contains("阅读全文：") && h.contains("x=1&amp;y=2") && h.contains("原文 &amp; 标题"));
-        assert!(post_html("English only", "T", "https://a.com/p").contains("Read the full article"));
+        assert!(post_html("English only", "T", "https://a.com/p", &Settings::default()).contains("Read the full article"));
+        // 推广链接：默认没有；打开了才附一个，带 sponsored，写明推荐链接；不是 https 的不附
+        let on = Settings { referral_on: true, referral_url: "https://x.com/join?ref=ABC".into(), ..Default::default() };
+        let h = post_html("中文导读", "T", "https://a.com/p", &on);
+        assert!(h.contains("rel=\"sponsored nofollow\"") && h.contains("（推荐链接）") && h.contains("注册链接") && h.matches("<a ").count() == 2);
+        assert_eq!(post_html("中文导读", "T", "https://a.com/p", &Settings { referral_url: "javascript:x".into(), ..on.clone() }).matches("<a ").count(), 1);
+        assert_eq!(post_html("中文导读", "T", "https://a.com/p", &Settings { referral_on: false, ..on }).matches("<a ").count(), 1);
     }
 }
