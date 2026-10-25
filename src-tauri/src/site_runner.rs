@@ -941,7 +941,16 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes) } else { cls.reasons.clone() };
+    let mut reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes) } else { cls.reasons.clone() };
+    // 新页面要有别的页面链到它，不然上线就是孤立页（搜索引擎很难发现）：AI 漏加了就不自动上线
+    if built.is_ok() && !item.new_pages.is_empty() {
+        let inbound = crate::site_make::inbound_links(&out_dir);
+        let count = |p: &str| inbound.iter().find(|(k, _)| crate::site_make::norm_path(k) == crate::site_make::norm_path(p)).map(|(_, n)| *n);
+        let lonely: Vec<String> = item.new_pages.iter().map(|u| path_of(u)).filter(|p| count(p) == Some(0)).collect();
+        if !lonely.is_empty() {
+            reasons.push(format!("新页面 {} 没有任何站内链接指向它（会成孤立页），留给你确认", lonely.join("、")));
+        }
+    }
     let mut verdict = if let Err(e) = &built {
         format!("检查没通过：{}", e.lines().next().unwrap_or(""))
     } else if reasons.is_empty() {

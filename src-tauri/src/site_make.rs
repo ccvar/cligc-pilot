@@ -246,7 +246,7 @@ pub fn continue_message(pending: &[&str], stack: &str) -> String {
 // ───────────────────────── 第一版进度 + 上线前检查 ─────────────────────────
 //
 // 进度看文件，不看对话：AI 说做完了不算，`.pilot/site.md` 写了、页面有了、构建产物在、提交了才算。
-// 上线前检查扫构建产物里的 HTML：缺页、占位、断链、标题描述、薄内容、sitemap / robots。
+// 上线前检查扫构建产物里的 HTML：缺页、占位、断链、孤立页、标题描述、canonical、结构化数据、薄内容、sitemap / robots。
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -482,9 +482,14 @@ fn tags<'a>(html: &'a str, low: &str, name: &str) -> Vec<&'a str> {
 
 /// 站内链接指向的文件存在吗（`/a/`、`/a`、`/a.html`、相对路径都认）。
 fn link_ok(root: &Path, page: &Path, href: &str) -> bool {
+    href.split(['#', '?']).next().unwrap_or("").trim().is_empty() || resolve_link(root, page, href).is_some()
+}
+
+/// 站内链接指向的那个文件（不存在就是 None）。
+fn resolve_link(root: &Path, page: &Path, href: &str) -> Option<PathBuf> {
     let h = href.split(['#', '?']).next().unwrap_or("").trim();
     if h.is_empty() {
-        return true;
+        return None;
     }
     let base = if h.starts_with('/') { root.to_path_buf() } else { page.parent().unwrap_or(root).to_path_buf() };
     let mut p = base;
@@ -499,7 +504,121 @@ fn link_ok(root: &Path, page: &Path, href: &str) -> bool {
             s => p.push(s),
         }
     }
-    p.is_file() || p.join("index.html").is_file() || p.with_extension("html").is_file() || (h.ends_with('/') && p.join("index.html").is_file())
+    [p.clone(), p.join("index.html"), p.with_extension("html")].into_iter().find(|c| c.is_file())
+}
+
+/// 构建产物里的文件 → 网址路径（`guide/index.html` → `/guide/`）。
+fn page_url(out: &Path, p: &Path) -> String {
+    let r = p.strip_prefix(out).unwrap_or(p).to_string_lossy().replace('\\', "/");
+    let r = r.strip_suffix("index.html").map(|x| x.to_string()).unwrap_or(r);
+    format!("/{r}")
+}
+
+/// 指向本站的绝对网址（`https://本站域名/…`）→ 站内路径；不是本站的返回 None。
+fn own_path(href: &str, hosts: &[String]) -> Option<String> {
+    let rest = href.trim().split_once("://").map(|(_, r)| r).or_else(|| href.trim().strip_prefix("//"))?;
+    let (host, path) = rest.find('/').map(|i| (&rest[..i], &rest[i..])).unwrap_or((rest, "/"));
+    let host = host.to_ascii_lowercase();
+    let bare = host.trim_start_matches("www.");
+    hosts.iter().any(|h| h.trim_start_matches("www.") == bare).then(|| path.to_string())
+}
+
+/// 本站域名：从各页面的 canonical / og:url 里认（构建产物本身不知道站点域名）。
+fn own_hosts(pages: &[(PathBuf, String)]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for (_, html) in pages {
+        let low = html.to_ascii_lowercase();
+        let canon = tags(html, &low, "link").into_iter().filter(|l| attr(l, "rel").is_some_and(|r| r.eq_ignore_ascii_case("canonical"))).filter_map(|l| attr(l, "href"));
+        let og = tags(html, &low, "meta").into_iter().filter(|m| attr(m, "property").is_some_and(|p| p.eq_ignore_ascii_case("og:url"))).filter_map(|m| attr(m, "content"));
+        for u in canon.chain(og) {
+            if let Some(h) = u.split_once("://").map(|(_, r)| r.split('/').next().unwrap_or("").to_ascii_lowercase()).filter(|h| !h.is_empty()) {
+                if !hosts.contains(&h) {
+                    hosts.push(h);
+                }
+            }
+        }
+    }
+    hosts
+}
+
+/// 正经页面（跳过跳转页和 404）：(文件, HTML)。
+fn real_pages(out: &Path) -> Vec<(PathBuf, String)> {
+    let mut files = Vec::new();
+    walk(out, &[], &mut files, &|p| has_ext(p, &["html"]));
+    files.sort();
+    files
+        .into_iter()
+        .filter_map(|f| {
+            let html = std::fs::read_to_string(&f).ok()?;
+            let low = html.to_ascii_lowercase();
+            (!low.contains("http-equiv=\"refresh\"") && !page_url(out, &f).to_ascii_lowercase().contains("404")).then_some((f, html))
+        })
+        .collect()
+}
+
+/// 每个页面（网址路径）被多少个**其他**页面链接到（导航、页脚的链接也算）。
+pub fn inbound_links(out: &Path) -> std::collections::HashMap<String, usize> {
+    let pages = real_pages(out);
+    let hosts = own_hosts(&pages);
+    let mut sources: std::collections::HashMap<String, std::collections::HashSet<String>> = pages.iter().map(|(f, _)| (page_url(out, f), Default::default())).collect();
+    for (f, html) in &pages {
+        let from = page_url(out, f);
+        let low = html.to_ascii_lowercase();
+        for a in tags(html, &low, "a") {
+            let Some(h) = attr(a, "href") else { continue };
+            let h = if is_external(&h) { match own_path(&h, &hosts) { Some(p) => p, None => continue } } else { h };
+            if let Some(target) = resolve_link(out, f, &h).map(|t| page_url(out, &t)) {
+                if target != from {
+                    if let Some(set) = sources.get_mut(&target) {
+                        set.insert(from.clone());
+                    }
+                }
+            }
+        }
+    }
+    sources.into_iter().map(|(k, v)| (k, v.len())).collect()
+}
+
+/// 规范化网址路径用于比较：去掉 index.html / .html 和末尾斜杠。
+pub fn norm_path(p: &str) -> String {
+    let p = p.split(['#', '?']).next().unwrap_or("");
+    let p = p.strip_suffix("index.html").unwrap_or(p);
+    let p = p.strip_suffix(".html").unwrap_or(p);
+    let t = p.trim_end_matches('/');
+    if t.is_empty() { "/".into() } else { t.to_string() }
+}
+
+/// 页面里的结构化数据（JSON-LD）：(块数, 出错说明)。
+fn json_ld(html: &str, low: &str) -> (usize, Vec<String>) {
+    let mut n = 0;
+    let mut errs = Vec::new();
+    let mut from = 0;
+    while let Some(i) = low[from..].find("<script") {
+        let a = from + i;
+        let Some(j) = low[a..].find('>') else { break };
+        let open = &low[a..a + j];
+        let start = a + j + 1;
+        let end = low[start..].find("</script>").map(|k| start + k).unwrap_or(low.len());
+        from = end;
+        if !open.contains("ld+json") {
+            continue;
+        }
+        n += 1;
+        match serde_json::from_str::<serde_json::Value>(html[start..end].trim()) {
+            Err(e) => errs.push(format!("不是合法的 JSON（{e}）")),
+            Ok(v) => {
+                let typed = |x: &serde_json::Value| x.get("@type").is_some() || x.get("@graph").is_some();
+                let ok = match &v {
+                    serde_json::Value::Array(a) => !a.is_empty() && a.iter().all(typed),
+                    other => typed(other),
+                };
+                if !ok {
+                    errs.push("缺 @type".into());
+                }
+            }
+        }
+    }
+    (n, errs)
 }
 
 fn is_external(h: &str) -> bool {
@@ -521,11 +640,9 @@ pub fn readiness(out: &Path) -> Vec<Check> {
     let mut files = Vec::new();
     walk(out, &[], &mut files, &|p| has_ext(p, &["html"]));
     files.sort();
-    let url = |p: &Path| -> String {
-        let r = p.strip_prefix(out).unwrap_or(p).to_string_lossy().replace('\\', "/");
-        let r = r.strip_suffix("index.html").map(|x| x.to_string()).unwrap_or(r);
-        format!("/{r}")
-    };
+    let url = |p: &Path| page_url(out, p);
+    let inbound = inbound_links(out);
+    let (mut orphans, mut no_canon, mut bad_canon, mut ld_err, mut no_ld) = (vec![], vec![], vec![], vec![], vec![]);
     let (mut no_title, mut no_desc, mut no_h1, mut no_lang, mut thin, mut ph, mut broken) = (vec![], vec![], vec![], 0usize, vec![], vec![], vec![]);
     let mut titles: std::collections::HashMap<String, Vec<String>> = Default::default();
     let mut found = [false; 3];
@@ -579,6 +696,27 @@ pub fn readiness(out: &Path) -> Vec<Check> {
         if !special && units < THIN_UNITS {
             thin.push(format!("{u}（约 {units} 字）"));
         }
+        // 孤立页：除了首页，每页至少要有一个别的页面链到它，不然搜索引擎很难发现、也分不到站内权重
+        if u != "/" && inbound.get(&u).copied().unwrap_or(0) == 0 {
+            orphans.push(u.clone());
+        }
+        let canon = tags(&html, &low, "link").into_iter().find(|l| attr(l, "rel").is_some_and(|r| r.eq_ignore_ascii_case("canonical"))).and_then(|l| attr(l, "href")).filter(|h| !h.trim().is_empty());
+        match canon {
+            None => no_canon.push(u.clone()),
+            Some(c) => {
+                let cp = c.split_once("://").map(|(_, r)| r.find('/').map(|i| r[i..].to_string()).unwrap_or_else(|| "/".into())).unwrap_or(c.clone());
+                if norm_path(&cp) != norm_path(&u) {
+                    bad_canon.push(format!("{u} → {c}"));
+                }
+            }
+        }
+        let (ld_n, errs) = json_ld(&html, &low);
+        for e in errs {
+            ld_err.push(format!("{u}：{e}"));
+        }
+        if ld_n == 0 && !special {
+            no_ld.push(u.clone());
+        }
         for a in tags(&html, &low, "a") {
             if let Some(h) = attr(a, "href") {
                 if !is_external(&h) && !link_ok(out, f, &h) && broken.len() < 30 {
@@ -602,6 +740,9 @@ pub fn readiness(out: &Path) -> Vec<Check> {
         Check { key: "required", label: "关于 / 联系 / 隐私政策", level: lvl(!missing.is_empty(), "warn"), detail: if missing.is_empty() { "都有".into() } else { format!("缺：{}", missing.join("、")) }, items: vec![] },
         Check { key: "placeholder", label: "占位和待补内容", level: lvl(!ph.is_empty(), "fail"), detail: if ph.is_empty() { "没有发现".into() } else { format!("{} 个页面还有占位或待补的内容", ph.len()) }, items: ph },
         Check { key: "links", label: "站内链接", level: lvl(!broken.is_empty(), "fail"), detail: if broken.is_empty() { "没有断链".into() } else { format!("{} 个链接指向不存在的页面", broken.len()) }, items: broken },
+        Check { key: "orphans", label: "孤立页面", level: lvl(!orphans.is_empty(), "fail"), detail: if orphans.is_empty() { "每个页面都有别的页面链到它".into() } else { format!("{} 个页面没有任何站内链接指向它：从相关页面、列表页或导航加链接", orphans.len()) }, items: orphans },
+        Check { key: "canonical", label: "规范网址（canonical）", level: if !no_canon.is_empty() { "fail" } else if !bad_canon.is_empty() { "warn" } else { "ok" }, detail: if !no_canon.is_empty() { format!("{} 个页面没有 canonical", no_canon.len()) } else if !bad_canon.is_empty() { format!("{} 个页面的 canonical 指向了别的网址（不是故意合并重复页的话要改）", bad_canon.len()) } else { "每页都有、指向自己".into() }, items: no_canon.into_iter().chain(bad_canon).collect() },
+        Check { key: "structured", label: "结构化数据", level: if !ld_err.is_empty() { "fail" } else if !no_ld.is_empty() { "warn" } else { "ok" }, detail: if !ld_err.is_empty() { format!("{} 处结构化数据有错，搜索引擎读不了", ld_err.len()) } else if !no_ld.is_empty() { format!("{} 个内容页没有结构化数据（Article / FAQPage / BreadcrumbList）", no_ld.len()) } else { "内容页都有、格式正确".into() }, items: ld_err.into_iter().chain(no_ld).collect() },
         Check { key: "title", label: "页面标题", level: if !no_title.is_empty() { "fail" } else if !dup.is_empty() { "warn" } else { "ok" }, detail: if !no_title.is_empty() { format!("{} 个页面没有标题", no_title.len()) } else if !dup.is_empty() { format!("{} 组页面标题重复", dup.len()) } else { "每页都有、不重复".into() }, items: no_title.into_iter().chain(dup).collect() },
         Check { key: "description", label: "页面描述", level: lvl(!no_desc.is_empty(), "warn"), detail: if no_desc.is_empty() { "每页都有".into() } else { format!("{} 个页面没有 description", no_desc.len()) }, items: no_desc },
         Check { key: "h1", label: "一级标题", level: lvl(!no_h1.is_empty(), "warn"), detail: if no_h1.is_empty() { "每页都有".into() } else { format!("{} 个页面没有 h1", no_h1.len()) }, items: no_h1 },
@@ -681,6 +822,37 @@ mod tests {
         assert_eq!(get("title").level, "ok");
     }
 
+    fn seo_page(path: &str, title: &str, head: &str, links: &str) -> String {
+        format!("<!doctype html><html lang=\"en\"><head><title>{title}</title><link rel=\"canonical\" href=\"https://ex.com{path}\">{head}</head><body><nav>{links}</nav><main><h1>{title}</h1></main></body></html>")
+    }
+
+    #[test]
+    fn readiness_flags_orphans_canonical_and_structured_data() {
+        let t = tempfile::tempdir().unwrap();
+        let ld = r#"<script type="application/ld+json">{"@context":"https://schema.org","@type":"Article"}</script>"#;
+        // 首页用本站绝对网址链到 /a/，/a/ 用相对路径链到 /b.html；/c/ 没人链（孤立）
+        write(t.path(), "index.html", &seo_page("/", "Home", ld, "<a href=\"https://www.ex.com/a/\">a</a>"));
+        write(t.path(), "a/index.html", &seo_page("/a/", "A", ld, "<a href=\"../b.html\">b</a><a href=\"/\">home</a>"));
+        write(t.path(), "b.html", &seo_page("/b", "B", "<script type=\"application/ld+json\">{oops}</script>", "<a href=\"/a/\">a</a>"));
+        write(t.path(), "c/index.html", &format!("<html><head><title>C</title><link rel=\"canonical\" href=\"https://ex.com/a/\"></head><body><h1>C</h1></body></html>"));
+        write(t.path(), "d/index.html", "<html><head><title>D</title></head><body><a href=\"/c/\">c</a><a href=\"/d/\">self</a></body></html>");
+        let inbound = inbound_links(t.path());
+        assert_eq!(inbound["/a/"], 2, "{inbound:?}");
+        assert_eq!(inbound["/b.html"], 1);
+        assert_eq!(inbound["/d/"], 0, "链自己不算");
+        let r = readiness(t.path());
+        let get = |k: &str| r.iter().find(|c| c.key == k).unwrap().clone();
+        assert_eq!(get("orphans").level, "fail");
+        assert_eq!(get("orphans").items, vec!["/d/".to_string()], "/c/ 有 /d/ 链着，首页不算");
+        assert_eq!(get("canonical").level, "fail");
+        assert!(get("canonical").items.contains(&"/d/".to_string()) && get("canonical").items.iter().any(|i| i.starts_with("/c/ → ")), "{:?}", get("canonical").items);
+        assert_eq!(get("structured").level, "fail");
+        assert!(get("structured").items.iter().any(|i| i.starts_with("/b.html：不是合法的 JSON")), "{:?}", get("structured").items);
+        assert_eq!(norm_path("/a/index.html"), "/a");
+        assert_eq!(norm_path("/b.html"), "/b");
+        assert_eq!(norm_path("/"), "/");
+    }
+
     #[test]
     fn progress_reads_files_not_promises() {
         let t = tempfile::tempdir().unwrap();
@@ -724,5 +896,18 @@ mod tests {
         let m = first_message(&req());
         assert!(m.contains(".pilot/todo.json") && m.contains("【待我处理的事】") && !m.contains("在汇报里列出来"));
         assert!(m.contains("【配置变量】") && m.contains(".env.example") && m.contains("PUBLIC_GA_ID") && continue_message(&[], "astro").contains("【配置变量】"));
+    }
+}
+
+#[cfg(test)]
+mod live_check {
+    /// 手动跑：PILOT_CHECK_OUT=<构建产物目录> cargo test --lib live_readiness -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_readiness() {
+        let out = std::path::PathBuf::from(std::env::var("PILOT_CHECK_OUT").unwrap());
+        for c in super::readiness(&out) {
+            println!("{} [{}] {} {:?}", c.label, c.level, c.detail, c.items.iter().take(5).collect::<Vec<_>>());
+        }
     }
 }
