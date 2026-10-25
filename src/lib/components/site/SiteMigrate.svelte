@@ -97,6 +97,11 @@
   const runningCur = $derived(job?.steps.find((s) => s.status === 'running'));
   let showLog = $state(false);
   const aiStarted = $derived(conv ? app.lives[conv.id]?.startedAt ?? 0 : 0);
+  // 上一轮是不是出错停下的（卡住、连续失败、网络……）：直接告诉用户原因
+  const aiStop = $derived.by(() => {
+    const last = conv?.messages?.[conv.messages.length - 1];
+    return last && last.role !== 'user' && last.error ? last.text.split('\n')[0].slice(0, 160) : '';
+  });
   const aiMins = $derived(aiStarted ? Math.max(1, Math.round((Date.now() - aiStarted) / 60000)) : 0);
   // 核对这一步接下来该做什么（只有它是主按钮）
   const vNext = $derived.by(() => {
@@ -221,7 +226,8 @@
             <div class="running"><span class="spin"></span><span class="rt"><b>AI 正在重做</b>{#if aiMins}<small>已 {aiMins} 分钟</small>{/if}</span>{#if conv}<button class="btn small primary" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开重做对话</button>{/if}</div>
             <p class="hint">做完后这里会出现「核对」。可以先去忙别的。</p>
           {:else}
-            <div class="act"><span class="grow">AI 停下了。做完了就核对；没做完的话让它继续。</span>
+            {#if aiStop}<div class="failed"><span class="lv block">!</span><span class="rt"><b>上一轮停下了</b><small>{aiStop}</small></span></div>{/if}
+            <div class="act"><span class="grow">{aiStop ? '点「继续重做」会接着原来的对话做，已经做过的不会重来。' : 'AI 停下了。做完了就核对；没做完的话让它继续。'}</span>
               {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
               <button class="btn small" onclick={() => startRebuild(site)}><Icon name="play" size={12} />继续重做</button>
               <button class="btn small primary" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />核对</button>

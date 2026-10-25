@@ -10,7 +10,8 @@ import { app, say, confirmDialog } from './app.svelte.js';
 import { connections } from './connections.svelte.js';
 import { sites, refreshSites, openSite, deploySite } from './sites.svelte.js';
 import { startSiteChat, MAKING_PERM, openMaking } from './siteCreate.svelte.js';
-import { startBackgroundChat } from './turns.svelte.js';
+import { startBackgroundChat, continueInBackground } from './turns.svelte.js';
+import { makingConv } from './siteMake.svelte.js';
 import { brainUsable } from './models';
 import { launcher } from './launcher.svelte.js';
 import type { Dynamic } from './dynamic.svelte.js';
@@ -170,18 +171,21 @@ export async function checkVpsDns(id: string) {
 
 export const extract = (id: string) => run(id, 'extract', () => invoke('migrate_extract', { id }));
 
-/** 重做（开始 / 继续 / 修核对出的问题）：在后台开一条对话，不跳走；进度在迁移卡片的「重做」这一步，想看再打开对话。
- *  继续时 AI 先看 git log 和站点约定接着做，所以每次开新对话也接得上。没有可用模型时才去启动页选。
+/** 重做（开始 / 继续 / 修核对出的问题）：都在后台跑，不跳走；进度在迁移卡片的「重做」这一步，想看再打开对话。
+ *  已经有重做对话就接着那一条说（AI 看得到之前做过的全部），第一次才开新对话；没有可用模型时才去启动页选。
  *  全自动档：在 Pilot 新建的本地文件夹里干活，拿不到部署凭据。 */
 export async function startRebuild(site: Site) {
   try {
     const text = await invoke<string>('migrate_rebuild_message', { id: site.id });
-    if (!brainUsable(launcher.lBrain)) {
+    const conv = makingConv(site.id);
+    const reuse = !!conv && /^(请迁移重做|继续迁移重做)/.test(conv.title) && conv.status !== 'running' && !app.running[conv.id];
+    if (!reuse && !brainUsable(launcher.lBrain)) {
       await startSiteChat(site.id, text, '重做要求写好了：选一个可用的模型后发送，就开始重做', MAKING_PERM);
       return;
     }
-    say('AI 在后台开始重做了，进度看「重做」这一步', 'ok');
-    void startBackgroundChat({ siteId: site.id, siteName: site.name, text, perm: MAKING_PERM }).finally(() => void loadMigrate(site.id));
+    say(reuse ? 'AI 在后台接着重做，进度看「重做」这一步' : 'AI 在后台开始重做了，进度看「重做」这一步', 'ok');
+    const run = reuse ? continueInBackground(conv!.id, text) : startBackgroundChat({ siteId: site.id, siteName: site.name, text, perm: MAKING_PERM });
+    void run.finally(() => void loadMigrate(site.id));
   } catch (e) { say(String(e), 'err'); }
   finally { void loadMigrate(site.id); }
 }

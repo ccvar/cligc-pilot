@@ -432,6 +432,8 @@ async fn execute_model_loop_inner(
     let client = api_profiles::http_client()?;
     let mut recovered = false;
     let mut retry_pending = false;
+    // 按进展判断要不要停：原地打转、连续失败才停（见 api_execution）
+    let mut guard = crate::api_execution::ProgressGuard::default();
     for request_index in 0..policy.max_requests {
         policy
             .check_boundary(request_index)
@@ -540,6 +542,7 @@ async fn execute_model_loop_inner(
         history.interrupted = true;
         save_history(&path, &history)?;
         let mut outputs = Vec::new();
+        let mut stuck: Option<StopReason> = None;
         for call in calls {
             let detail = tool_runtime::redact(&call.arguments.to_string(), &[api_key, site_key]);
             let at = crate::convo::utf16_len(&result.text);
@@ -578,6 +581,9 @@ async fn execute_model_loop_inner(
                 if failed { "failed" } else { "completed" },
                 if failed { &safe } else { "" },
             );
+            if stuck.is_none() {
+                stuck = guard.observe(&call.name, &call.arguments, &safe, failed).err();
+            }
             outputs.push((call.id, safe, failed, image));
         }
         append_tool_outputs_with_images(&profile.protocol, &mut history.items, outputs)?;
@@ -586,6 +592,10 @@ async fn execute_model_loop_inner(
         // side effects remain blocked rather than being replayed.
         history.interrupted = false;
         save_history(&path, &history)?;
+        // 这一批的结果都已存好再停：继续时 AI 能看到，不会重做
+        if let Some(stop) = stuck {
+            return Err(stop.to_string());
+        }
     }
     Err(StopReason::RequestBudget {
         limit: policy.max_requests,

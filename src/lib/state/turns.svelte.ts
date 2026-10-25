@@ -294,6 +294,25 @@ export async function startBackgroundChat(o: { siteId: string; siteName: string;
   } catch (e) { await failTurn(e, id); }
 }
 
+/** 在后台接着一条已有的对话发一句（不切换界面）。返回这一轮是否跑成功。 */
+export async function continueInBackground(convId: string, text: string): Promise<boolean> {
+  const c = app.convos.find((x) => x.id === convId);
+  if (!c || app.running[convId]) return false;
+  delete turns.autoRetried[convId];
+  delete turns.retryExhausted[convId];
+  const startedAt = Date.now();
+  app.lives[convId] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
+  app.running[convId] = c.conn_id;
+  app.convos = app.convos.map((x) => (x.id === convId ? { ...x, status: 'running', messages: [...x.messages, optimisticUser(text)] } : x));
+  try {
+    const conv = await invoke<Conversation>('send_message', { convId, message: text, onEvent: makeChannel(convId) });
+    await refreshConvos();
+    const failed = app.lives[convId]?.failed ?? false;
+    endTurn(conv, convId);
+    return !failed;
+  } catch (e) { await failTurn(e, convId); return false; }
+}
+
 // ---------- 重试 / 自动重连 ----------
 // 错误文本像不像"瞬时问题"（网络/限流/过载/5xx）——只对这类做自动重试，避免对密钥错误/取消等硬错误反复重跑。
 function isTransient(err: string): boolean {
