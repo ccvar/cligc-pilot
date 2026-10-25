@@ -27,6 +27,24 @@
     }
     return m;
   });
+  // 展开 / 收起某个站点的对话（原地展开，不切换页面）：别的站点的对话也能直接点开、拖进分屏。
+  // 当前站点默认展开；其它站点默认收起。记在本机。
+  const OPEN_KEY = 'cligc.pilot.sitesRailOpen';
+  let opened = $state<Set<string>>(new Set((() => { try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '[]') as string[]; } catch { return []; } })()));
+  let closed = $state<Set<string>>(new Set());
+  function isOpen(id: string) { return id === activeId ? !closed.has(id) : opened.has(id); }
+  function toggle(id: string) {
+    if (id === activeId) { const n = new Set(closed); if (n.has(id)) n.delete(id); else n.add(id); closed = n; return; }
+    const n = new Set(opened); if (n.has(id)) n.delete(id); else n.add(id); opened = n;
+    try { localStorage.setItem(OPEN_KEY, JSON.stringify([...n])); } catch { /* */ }
+  }
+  /** 非当前站点：直接从对话列表里取，新的在前；运营任务开的对话只露最近几条 */
+  function convsOf(id: string): Conversation[] {
+    const all = app.convos.filter((c) => c.conn_id === `site:${id}`).sort((a, b) => b.updated_at - a.updated_at);
+    const ops = all.filter((c) => c.origin === 'ops');
+    const keep = showOld.has(id) ? ops : ops.filter((c, i) => i < OPS_SHOWN || app.running[c.id] || c.id === app.activeConvId);
+    return all.filter((c) => c.origin !== 'ops' || keep.includes(c));
+  }
   const list = $derived(
     fleet.rows
       .filter((r) => lastConv.has(r.id) || r.id === activeId)
@@ -43,6 +61,9 @@
 {#snippet siteRow(s: SiteRow)}
   <div class="site" class:on={s.id === activeId && app.view === 'site'} class:ctx={s.id === activeId && app.view !== 'site'} role="button" tabindex="0" title={s.id === activeId ? '打开站点看板' : s.domain || s.name}
     onclick={() => openSite(s.id)} onkeydown={(e) => e.key === 'Enter' && openSite(s.id)}>
+    <button class="chev" class:open={isOpen(s.id)} aria-label={isOpen(s.id) ? '收起对话' : '展开对话'} aria-expanded={isOpen(s.id)} data-tip={isOpen(s.id) ? '收起对话' : '展开对话（不离开当前页面，可以拖进分屏）'} onclick={(e) => { e.stopPropagation(); toggle(s.id); }} onkeydown={(e) => e.stopPropagation()}>
+      <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </button>
     <span class="ic"><SiteIcon id={s.id} size={14} /></span>
     <span class="name">{s.name}</span>
     <span class="badges">
@@ -53,7 +74,7 @@
       {#if trafficDown(s)}<span class="down" title="点击比前 28 天明显下滑">↓</span>{/if}
     </span>
   </div>
-  {#if s.id === activeId}
+  {#if s.id === activeId && isOpen(s.id)}
     <div class="convs">
       {#each sidebar.grouped as g (g.slug)}
         {#if sidebar.grouped.length > 1}<div class="grp">{g.name}</div>{/if}
@@ -72,17 +93,30 @@
         {/if}
       {/each}
     </div>
+  {:else if s.id !== activeId && isOpen(s.id)}
+    {@const cs = convsOf(s.id)}
+    {@const opsN = app.convos.filter((c) => c.conn_id === `site:${s.id}` && c.origin === 'ops').length}
+    <div class="convs">
+      {#each cs as c (c.id)}{@render convRow(c)}{/each}
+      {#if opsN > OPS_SHOWN}
+        <button class="more" onclick={() => toggleOld(s.id)}>{showOld.has(s.id) ? '收起' : `更早的运营记录 ${opsN - cs.filter((c) => c.origin === 'ops').length} 条`}</button>
+      {/if}
+    </div>
   {/if}
 {/snippet}
 
 <style>
   .sr { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }
-  .site { margin: 0 8px; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 10px; border-radius: 9px; cursor: pointer; min-width: 0; }
+  .site { margin: 0 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 2px; border-radius: 9px; cursor: pointer; min-width: 0; }
   .site { transition: background-color .12s; }
   .site:hover { background: #f5f4f1; }
   .site.on { background: #f0efeb; }
   .site.ctx .ic { color: var(--text); }
   .ic { color: var(--dim); display: inline-flex; flex: none; }
+  .chev { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 5px; color: var(--faint); cursor: pointer; padding: 0; transition: background-color .12s, color .12s; }
+  .chev:hover { background: #e9e7e1; color: var(--text); }
+  .chev svg { transition: transform .15s cubic-bezier(.2, .7, .2, 1); }
+  .chev.open svg { transform: rotate(90deg); }
   .name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .badges { display: inline-flex; align-items: center; gap: 4px; flex: none; }
   .making { font-size: 10px; color: var(--faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; line-height: 14px; }
@@ -90,7 +124,7 @@
   .bad { width: 15px; height: 15px; border-radius: 50%; background: var(--err-soft); color: var(--err); font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
   .down { color: var(--err); font-size: 12px; font-weight: 700; }
   .run { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
-  .convs { padding: 1px 0 6px 12px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
+  .convs { padding: 1px 0 6px 28px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
   @keyframes sr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
   .more { display: block; margin: 1px 8px 2px 30px; padding: 3px 8px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--faint); cursor: pointer; text-align: left; }

@@ -38,8 +38,13 @@ class PanesState {
 export const panes = new PanesState();
 
 export function splitConversation(id:string):Conversation | null { return panes.splitSnapshots[id] ?? app.convos.find(c=>c.id===id) ?? null; }
+/** 分屏按「工作区」分组：所有站点的对话算同一个工作区（可以把两个站点的对话拉进同一个分屏、在站点之间切换不清空分屏），
+ *  其它连接各自一个。每个分屏里的对话本来就带着自己的连接，发消息、传附件都按对话自己的连接走。 */
+export function workspaceOf(connId:string):string {
+  return connId.startsWith('site:') ? 'site:*' : connId;
+}
 export function conversationWorkspace(c:Conversation):string {
-  return c.conn_id;
+  return workspaceOf(c.conn_id);
 }
 function resetConversationLayout(workspace:string) {
   if(panes.conversationLayoutWorkspace===workspace)return;

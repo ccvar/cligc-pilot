@@ -216,6 +216,6 @@ test('returning to a connection opens only that connection and restores its draf
 });
 
 test('workspace entry points all reset the conversation layout scope',()=>{
-  assert.match(sliceSource('lib/state/connections.svelte.ts','export async function selectConn(','export function openLocalWorkspace('),/switchConversationWorkspace\(id\)/);
+  assert.match(sliceSource('lib/state/connections.svelte.ts','export async function selectConn(','export function openLocalWorkspace('),/switchConversationWorkspace\(workspaceOf\(id\)\)/);
   assert.match(sliceSource('lib/state/connections.svelte.ts','export function openLocalWorkspace(','export function distroOf('),/selectConn\(WORKSPACE_CONN_ID\)/);
 });

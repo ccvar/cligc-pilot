@@ -4,7 +4,7 @@ import { hideTip } from '$lib/tip';
 import { invoke } from '@tauri-apps/api/core';
 import { pilotWindowLabel, CONN_WIN_PREFIX, LAST_CONN_KEY, isMainWindow, WORKSPACE_CONN_ID, SITES_CONN_ID } from './env';
 import { app, say, confirmDialog, refreshConns, refreshConvos } from './app.svelte.js';
-import { switchConversationWorkspace } from './panes.svelte.js';
+import { switchConversationWorkspace, workspaceOf } from './panes.svelte.js';
 import { launcher } from './launcher.svelte.js';
 import { disposeTerm } from './workbench.svelte.js';
 import { loadGhRepos } from './github.svelte.js';
@@ -141,7 +141,7 @@ export function openRemote() {
 export async function selectConn(id: string) {
   const switching = id !== app.activeConnId;
   const conn = app.conns.find((c) => c.id === id);
-  switchConversationWorkspace(id);
+  switchConversationWorkspace(workspaceOf(id));
   const seq = ++connections.selSeq; app.activeConnId = id;
   if (isMainWindow) { try { localStorage.setItem(LAST_CONN_KEY, id); } catch { /* */ } }
   if (conn?.kind === 'ssh') { try { localStorage.setItem(LAST_REMOTE_KEY, id); } catch { /* */ } }
