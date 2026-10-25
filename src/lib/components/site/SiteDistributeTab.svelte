@@ -4,6 +4,7 @@
   import './site.css';
   import Icon from './Icon.svelte';
   import BloggerMark from '$lib/components/icons/BloggerMark.svelte';
+  import Dropdown from '$lib/Dropdown.svelte';
   import type { Site } from '$lib/types';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -104,25 +105,20 @@
       <div class="row"><button class="btn small primary" onclick={() => bloggerLogin('')} disabled={blogger.busy}>{blogger.busy ? '在浏览器里授权…' : '接上 Blogger 账号'}</button></div>
     {:else if cfg}
       <div class="grid">
-        <label for="d-acct">账号</label>
-        <select id="d-acct" class="tin" value={cfg.blogger_conn_id} onchange={(e) => pickAccount(e.currentTarget.value)}>
-          <option value="">选一个 Blogger 账号</option>
-          {#each accounts as a (a.id)}<option value={a.id}>{mask(a.login || a.name)}</option>{/each}
-        </select>
-        <label for="d-blog">博客</label>
+        <span class="lbl">账号</span>
+        <Dropdown value={cfg.blogger_conn_id} placeholder="选一个 Blogger 账号" ariaLabel="Blogger 账号"
+          options={accounts.map((a) => ({ value: a.id, label: mask(a.remark?.trim() || a.login || a.name) }))} onchange={pickAccount} />
+        <span class="lbl">博客</span>
         <div class="row">
-          <select id="d-blog" class="tin" value={cfg.blog_id} disabled={!cfg.blogger_conn_id || !blogs} onchange={(e) => pickBlog(e.currentTarget.value)}>
-            <option value="">{!cfg.blogger_conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : blogs.length ? '选一个博客' : '这个账号下还没有博客'}</option>
-            {#each blogs ?? [] as b (b.id)}<option value={b.id}>{b.name || b.url}</option>{/each}
-          </select>
-          <button class="btn tiny quiet" onclick={() => loadBlogs(cfg.blogger_conn_id, true)} disabled={!cfg.blogger_conn_id} data-tip="在 Blogger 新建博客后点这里刷新"><Icon name="refresh" size={11} /></button>
-          <button class="btn tiny quiet" onclick={() => openUrl('https://www.blogger.com/')} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建一个，回来点刷新">去 Blogger 新建</button>
+          <div class="blog-dd"><Dropdown value={cfg.blog_id} disabled={!cfg.blogger_conn_id || !blogs?.length} ariaLabel="博客"
+            placeholder={!cfg.blogger_conn_id ? '先选账号' : !blogs ? (blogsErr ? '读不到博客' : '读取中…') : blogs.length ? '选一个博客' : '这个账号下还没有博客'}
+            options={(blogs ?? []).map((b) => ({ value: b.id, label: b.name || b.url, sub: b.url.replace(/^https?:\/\//, '').replace(/\/$/, '') }))} onchange={pickBlog} /></div>
+          <button class="btn small" onclick={() => loadBlogs(cfg.blogger_conn_id, true)} disabled={!cfg.blogger_conn_id} data-tip="在 Blogger 新建博客后点这里刷新"><Icon name="refresh" size={12} />刷新</button>
+          <button class="btn small" onclick={() => openUrl('https://www.blogger.com/')} data-tip="Blogger 的接口不能新建博客：在 blogger.com 上建一个，回来点刷新"><Icon name="external" size={12} />去 Blogger 新建</button>
         </div>
-        <label for="d-mode">发布方式</label>
-        <select id="d-mode" class="tin" value={cfg.mode || 'review'} onchange={(e) => saveConfig({ mode: e.currentTarget.value })}>
-          <option value="review">先给我看，我点「发布」才发</option>
-          <option value="draft">存成 Blogger 草稿，我去 Blogger 后台发</option>
-        </select>
+        <span class="lbl">发布方式</span>
+        <Dropdown value={cfg.mode || 'review'} ariaLabel="发布方式" onchange={(v) => saveConfig({ mode: v })}
+          options={[{ value: 'review', label: '先给我看', sub: '我点「发布」才发' }, { value: 'draft', label: '存成 Blogger 草稿', sub: '我去 Blogger 后台发' }]} />
       </div>
       {#if blogsErr}<p class="hint warn">{blogsErr}</p>{/if}
       <p class="hint">每个站只对应一个博客。只发 AI 写的导读（三五百字）和原文链接，不发全文，免得和你站上的原文抢排名；摘要里不放别的链接。</p>
@@ -184,8 +180,8 @@
 <style>
   .dist { display: flex; flex-direction: column; gap: 12px; }
   .grid { display: grid; grid-template-columns: 72px 1fr; gap: 8px 12px; align-items: center; margin: 4px 0 8px; max-width: 620px; }
-  .grid label { font-size: 12.5px; color: var(--dim); }
-  .grid .row .tin { flex: 1; min-width: 0; }
+  .grid .lbl { font-size: 12.5px; color: var(--dim); }
+  .grid .blog-dd { flex: 1; min-width: 0; }
   .hint.warn { color: var(--warn); }
   .cnt-n { font-size: 12px; color: var(--faint); font-weight: 500; margin-left: 2px; }
   .sub { font-size: 11.5px; color: var(--dim); font-weight: 400; margin-left: 8px; }
