@@ -45,6 +45,8 @@
   // ── 摘要设置（每个站一份，所有渠道共用）──
   let sd = $state<Settings>({ length: 'medium', extra: '', referral_on: false, referral_url: '', referral_label: '' });
   let sdSaving = $state(false);
+  // 默认只显示一行概览，点「调整」才展开
+  let sdOpen = $state(false);
   // 页面重新读取时（发布、对账之后）只在你没改过设置时同步，免得冲掉没保存的修改
   let sdSynced = '';
   $effect(() => {
@@ -66,11 +68,13 @@
   }
   async function saveSettings() {
     sdSaving = true;
-    try { const v = await invoke<Settings>('syndication_save_settings', { siteId: site.id, settings: sd }); sd = { ...v, length: v.length || 'medium' }; sdSynced = JSON.stringify(sd); if (st) st.settings = v; say('摘要设置已保存'); }
+    try { const v = await invoke<Settings>('syndication_save_settings', { siteId: site.id, settings: sd }); sd = { ...v, length: v.length || 'medium' }; sdSynced = JSON.stringify(sd); if (st) st.settings = v; sdOpen = false; say('摘要设置已保存'); }
     catch (e) { say(String(e), 'err'); }
     finally { sdSaving = false; }
   }
   const LENGTHS = [['short', '短', '150–250 字'], ['medium', '中', '300–500 字'], ['long', '长', '600–900 字']] as const;
+  const lenText = (k: string) => { const l = LENGTHS.find((x) => x[0] === (k || 'medium')) ?? LENGTHS[1]; return `${l[1]} · ${l[2]}`; };
+  function cancelSettings() { if (st) sd = { ...st.settings, length: st.settings.length || 'medium' }; sdOpen = false; }
   const brainOk = $derived(!!st && (st.brain === 'claude' || st.brain.startsWith('api:')));
   const live = $derived((st?.channels ?? []).filter((c) => c.enabled));
   const kindLabel = (k: string) => st?.kinds.find((x) => x.kind === k)?.label ?? k;
@@ -336,7 +340,21 @@
   </div>
 
   <div class="card">
-    <h3><Icon name="wand" />摘要设置<span class="grow"></span>{#if sdDirty}<button class="btn tiny quiet" onclick={() => st && (sd = { ...st.settings, length: st.settings.length || 'medium' })}>取消</button><button class="btn tiny primary" onclick={saveSettings} disabled={sdSaving}>{sdSaving ? '保存中…' : '保存'}</button>{/if}</h3>
+    <h3><Icon name="wand" />摘要设置<span class="grow"></span>
+      {#if sdOpen}
+        <button class="btn tiny quiet" onclick={cancelSettings}>取消</button><button class="btn tiny primary" onclick={saveSettings} disabled={sdSaving || !sdDirty}>{sdSaving ? '保存中…' : '保存'}</button>
+      {:else}
+        <button class="btn tiny quiet" onclick={() => (sdOpen = true)}><Icon name="sliders" size={12} />调整</button>
+      {/if}
+    </h3>
+    {#if !sdOpen}
+      {@const v = st?.settings}
+      <p class="sd-sum">
+        <span class="pill-l">{lenText(v?.length ?? '')}</span>
+        <span class:dim={!v?.extra}>{v?.extra ? `补充要求：${v.extra}` : '没有补充要求'}</span>
+        <span class:warnt={v?.referral_on} class:dim={!v?.referral_on}>{v?.referral_on ? '带推广链接' : '不带推广链接'}</span>
+      </p>
+    {:else}
     <div class="grid sg">
       <span class="lbl">长度</span>
       <span class="seg">
@@ -358,6 +376,7 @@
       {/if}
     </div>
     <p class="hint">长度和补充要求只影响之后新写的摘要（已经写好的可以点「重新生成」）；推广链接在发布时加，影响之后发出去的文章。</p>
+    {/if}
   </div>
 
   <div class="card">
@@ -473,6 +492,11 @@
   .sg .seg { justify-self: start; margin: 0; }
   .sg .ck { padding-top: 4px; }
   .ref { display: flex; flex-direction: column; gap: 6px; }
+  .sd-sum { margin: 2px 0 0; display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text); min-width: 0; }
+  .sd-sum > span:not(.pill-l) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  .sd-sum .dim { color: var(--faint); }
+  .sd-sum .warnt { color: #b45309; }
+  .pill-l { padding: 1px 8px; border-radius: 999px; background: #f1f0ec; font-size: 11.5px; color: var(--dim); }
   .ck { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); cursor: pointer; }
   .ck small { color: var(--faint); font-size: 11.5px; margin-left: 4px; }
   .ed .row-end .grow { flex: 1; }
