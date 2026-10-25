@@ -8,7 +8,7 @@
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import GaMark from '$lib/components/icons/GaMark.svelte';
-  import { ago as agoTs, num, pct as pctF, delta as dlt } from './fmt';
+  import { ago as agoTs, full, num, pct as pctF, delta as dlt } from './fmt';
   import { sites, loadDashboard, refreshSiteData } from '$lib/state/sites.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -39,7 +39,7 @@
     </div>
   {:else}
     <div class="bar">
-      <span class="faint">近 28 天，与前 28 天对比 · {fetched ? `${agoTs(fetched)}同步` : '还没同步过'} · 每天早上 7 点自动同步</span>
+      <span class="faint">近 28 天，与前 28 天对比 · {#if fetched}<span data-tip={full(fetched)}>{agoTs(fetched)}同步</span>{:else}还没同步过{/if} · 每天早上 7 点自动同步</span>
       <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
     <!-- 只显示还接着的数据源的错误（解绑后上次同步留下的报错不再挂着） -->

@@ -11,7 +11,7 @@
   import { fleet, applyFilter, sortRows, clicksChange, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
-  import { ago, num } from './fmt';
+  import { ago, full, num } from './fmt';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
@@ -122,7 +122,7 @@
                   {/if}
                   <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
                   <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" title={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
-                  <td class="faint when c-when">{when(r.active_at)}</td>
+                  <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
                 </tr>
               {:else}
                 <tr><td colspan="8" class="faint">没有符合条件的站点</td></tr>
@@ -151,7 +151,7 @@
                   <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
                   <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
                   <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>
-                  <td class="faint when">{when(p.item.updated_at)}</td>
+                  <td class="faint when"><span data-tip={full(p.item.updated_at)}>{when(p.item.updated_at)}</span></td>
                 </tr>
               {/each}
             </tbody>

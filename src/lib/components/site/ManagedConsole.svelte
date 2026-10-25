@@ -13,7 +13,7 @@
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
-  import { ago, clock } from './fmt';
+  import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
   import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
@@ -288,7 +288,7 @@
                 <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
               </div>
               <span class="ev-r">
-                <span class="faint t" title={clock(a.ts)}>{when(a.ts)}</span>
+                <span class="faint t" data-tip={full(a.ts)}>{when(a.ts)}</span>
                 {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
               </span>
             </div>

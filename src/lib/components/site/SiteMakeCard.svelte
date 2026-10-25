@@ -5,7 +5,7 @@
   import Icon from './Icon.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import type { Site } from '$lib/types';
-  import { ago } from './fmt';
+  import { ago, full } from './fmt';
   import { app } from '$lib/state/app.svelte.js';
   import { sites, checkSite } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
@@ -121,7 +121,7 @@
     <div class="sec">
       <b>上线前检查</b>
       {#if checksOk && !checksOpen}<span class="pass"><Icon name="check" size={11} />{checks.length} 项全部通过</span>{/if}
-      <small>{ms.built_at ? `构建于 ${ago(ms.built_at)}` : '还没有构建产物'}</small>
+      <small data-tip={ms.built_at ? full(ms.built_at) : undefined}>{ms.built_at ? `构建于 ${ago(ms.built_at)}` : '还没有构建产物'}</small>
       {#if checksOk}<button class="fold" aria-expanded={checksOpen} onclick={() => expand('checks', !checksOpen)}>{checksOpen ? '收起' : '展开'}<svg class="chev" class:up={checksOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
       <span class="grow"></span>
       <button class="btn tiny" onclick={() => checkSite(site.id)} disabled={building || job?.status === 'running'}><Icon name="play" size={11} />{building ? '构建中…' : ms.built_at ? '重新构建并检查' : '构建并检查'}</button>

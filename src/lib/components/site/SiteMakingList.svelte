@@ -6,7 +6,7 @@
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
   import type { Site } from '$lib/types';
-  import { ago } from './fmt';
+  import { ago, full } from './fmt';
   import { app } from '$lib/state/app.svelte.js';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite } from '$lib/state/sites.svelte.js';
@@ -133,7 +133,7 @@
                 {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />制作对话</button>{/if}
                 {#if ms?.built_at}<button class="btn tiny" onclick={() => previewSite(s)}><Icon name="external" size={11} />预览</button>{/if}
               </div>
-              <small class="when">更新于 {ago(s.updated_at)}</small>
+              <small class="when" data-tip={full(s.updated_at)}>更新于 {ago(s.updated_at)}</small>
             </div>
           {/each}
         </div>
@@ -148,7 +148,7 @@
                 <SiteIcon id={s.id} size={16} />
                 <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
                 <span class="state {liveState(s).tone}"><Icon name={liveState(s).icon} size={11} />{liveState(s).text}</span>
-                <span class="when">{ago(s.updated_at)}</span>
+                <span class="when" data-tip={full(s.updated_at)}>{ago(s.updated_at)}</span>
                 <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </button>
             </li>

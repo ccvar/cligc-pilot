@@ -6,7 +6,7 @@
   import type { ConfigState, ConfigVar, Site } from '$lib/types';
   import { say } from '$lib/state/app.svelte.js';
   import { sites, setSiteEnv } from '$lib/state/sites.svelte.js';
-  import { ago } from './fmt';
+  import { ago, full } from './fmt';
 
   let { site }: { site: Site } = $props();
   let cs = $state<ConfigState | null>(null);
@@ -48,7 +48,7 @@
     {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={sync} disabled={syncing} data-tip="写到 {cs.target_label}">{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="refresh" size={11} />同步到部署目标{/if}</button>{/if}
   </h3>
   <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? '部署目标'}。值不会显示，也不会进仓库。</p>
-  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到部署目标：下次上线时会自动同步，也可以现在点「同步到部署目标」。</p>{:else if cs?.synced_at}<p class="sync-ok">上次同步：{ago(cs.synced_at)}</p>{/if}
+  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到部署目标：下次上线时会自动同步，也可以现在点「同步到部署目标」。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
 
   {#if cs && cs.vars.length}
     <ul class="vars">
