@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { untrack } from 'svelte';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { savePrefs } from '$lib/defaults';
 import type { Brain, CliUpdateInfo } from '$lib/types';
@@ -238,6 +239,8 @@ export function initSettings() {
       if (wasClaude) void verifyClaude(true); // 新登录立即复验，别让旧的「失效」标记赖着
     }
   });
-  $effect(() => { if (settings.setupOpen) void verifyClaude(); });
-  $effect(() => { if (settings.setupOpen && app.brains?.claude.found && !settings.cliUpd) void checkCliUpdate(); });
+  // untrack：这两个函数一进来就读写 busy / 时间戳，被 effect 追踪的话会自己触发自己。
+  // 尤其 checkCliUpdate 查不到（离线 / 没有 npm）时 cliUpd 一直是 null，会无限重查、把页面卡死。
+  $effect(() => { if (settings.setupOpen) untrack(() => void verifyClaude()); });
+  $effect(() => { if (settings.setupOpen && app.brains?.claude.found && !settings.cliUpd) untrack(() => void checkCliUpdate()); });
 }
