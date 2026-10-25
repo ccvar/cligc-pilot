@@ -34,6 +34,7 @@
   import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
   import { initManaged } from '$lib/state/managed.svelte.js';
   import { phone, initPhone } from '$lib/state/phone.svelte.js';
+  import { initSuggest } from '$lib/state/suggest.svelte.js';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import { initOpsLive } from '$lib/state/turns.svelte.js';
@@ -86,6 +87,7 @@
   initFleet();
   initManaged();
   initPhone();
+  initSuggest();
   initOpsLive();
 </script>
 

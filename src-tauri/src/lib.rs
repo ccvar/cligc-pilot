@@ -25,6 +25,7 @@ mod ops_cmds;
 mod path_env;
 mod permit;
 mod mail;
+mod suggest;
 mod phone;
 mod ssh;
 mod sftp_transfer;
@@ -2972,6 +2973,13 @@ async fn mail_fill_code(state: tauri::State<'_, AppState>, serial: String) -> Re
     mail::fill_code_manual(&state.data_dir, &serial).await
 }
 
+/// 输入框的建议回复：这一轮结束后，用同一家的小模型猜用户下一句（见 `suggest`）。拿不到就是空建议。
+#[tauri::command]
+async fn suggest_reply(state: tauri::State<'_, AppState>, conv_id: String) -> Result<suggest::Suggestion, String> {
+    let conv = state.convos.get(&conv_id).ok_or("会话不存在")?;
+    Ok(suggest::suggest(&state.data_dir, &conv).await)
+}
+
 /// 手机连着电脑时屏幕常亮（开发者选项「不锁定屏幕」）。
 #[tauri::command]
 async fn phone_stay_awake(state: tauri::State<'_, AppState>, serial: String, on: bool) -> Result<(), String> {
@@ -4541,6 +4549,7 @@ pub fn run() {
             mail_remove,
             mail_google_connect,
             mail_fill_code,
+            suggest_reply,
             phone_stay_awake,
             install_claude,
             verify_cf_token,

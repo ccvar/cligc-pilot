@@ -25,7 +25,7 @@
   import { distroOf } from '$lib/state/connections.svelte.js';
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
   import WhyChips from '$lib/components/site/WhyChips.svelte';
-  import { suggestReply } from '$lib/suggestReply';
+  import { suggestionFor } from '$lib/state/suggest.svelte.js';
 
   export { splitContent, convPane };
   // 很长的用户消息（比如 Pilot 发给 AI 的整段指令）默认只露前几行，像 Claude 客户端那样
@@ -357,8 +357,7 @@
   {@const cfReady=scoped?panes.paneCfReady[id]??false:legacyComposer().cfReady}
   {@const uploading=scoped?!!panes.paneUploading[id]:composer.attaching}
   {@const messages=context?.messages.filter(m=>!m.hidden)??[]}
-  {@const lastMsg=messages[messages.length-1]}
-  {@const suggestion=!viewBusy&&lastMsg?.role==='assistant'&&!lastMsg.error?suggestReply(lastMsg.text):''}
+  {@const suggestion=suggestionFor(context,viewBusy)}
   <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}>
     <div class="thread-inner" >
       {#each messages as m, i (i)}
