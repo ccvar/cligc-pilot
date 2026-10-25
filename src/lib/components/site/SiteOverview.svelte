@@ -51,13 +51,15 @@
   <!-- 迁移中不显示上线向导：预览部署在迁移卡片里配（只建 Pages 项目、不绑域名），域名到切换时才指过来 -->
   {#if site.origin !== 'migrating'}<SiteLaunch {site} />{/if}
 
-  {#if job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
+  <!-- 迁移中：任务进度显示在迁移卡片当前那一步里；托管、数据这些到切换以后才有意义，先不显示 -->
+  {#if site.origin !== 'migrating' && job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
     <div class="card"><SiteJobPanel {job} /></div>
   {/if}
 
-  <SiteManagedCard {site} />
-
   {#if inboxReady(dyn.conf[site.id])}<SiteInbox {site} />{/if}
+
+  {#if site.origin !== 'migrating'}
+  <SiteManagedCard {site} />
 
   {#if !making && siteMake.state[site.id]?.todos?.length}
     <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} todos={siteMake.state[site.id]?.todos ?? []} /></div>
@@ -128,6 +130,7 @@
       </dl>
     </div>
   </div>
+  {/if}
 </div>
 
 <style>
