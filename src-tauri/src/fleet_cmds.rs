@@ -156,13 +156,42 @@ pub struct BindReport {
     /// 已经绑好、没动的站点数
     pub kept: usize,
     pub errors: Vec<String>,
+    /// 绑上的站点 id（和 bound 一一对应；自动匹配完要去拉这些站点的数据）
+    #[serde(skip)]
+    pub bound_ids: Vec<String>,
+}
+
+/// GA4 媒体资源的数据流主机名缓存（自动匹配用：打开站点总览、每天同步都会跑，不必每次都把每个媒体资源查一遍）。
+static STREAM_HOSTS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, (std::time::Instant, Vec<String>)>>> =
+    std::sync::LazyLock::new(Default::default);
+const STREAM_HOSTS_TTL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+async fn stream_hosts(token: &str, property: &str, fresh: bool) -> Vec<String> {
+    if !fresh {
+        if let Some((at, h)) = STREAM_HOSTS.lock().ok().and_then(|m| m.get(property).cloned()) {
+            if at.elapsed() < STREAM_HOSTS_TTL {
+                return h;
+            }
+        }
+    }
+    let Ok(h) = crate::google::ga4_stream_hosts(token, property).await else { return Vec::new() };
+    if let Ok(mut m) = STREAM_HOSTS.lock() {
+        m.insert(property.to_string(), (std::time::Instant::now(), h.clone()));
+    }
+    h
 }
 
 /// 按域名把一个数据源批量绑到所有站点：GA4 按网页数据流的网址匹配，Search Console 优先网域资源，
 /// Bing 按站点网址的主机名。已经绑好的不动（`overwrite` 为真时才重绑）；没有域名的站点跳过。
 #[tauri::command]
 pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String, overwrite: bool) -> Result<BindReport, String> {
-    let conn = state.conns.get(&conn_id)?;
+    bind_conn(&state, &conn_id, overwrite, true).await
+}
+
+/// `auto_bind_sites` 的本体；自动匹配（`data_cmds::auto_bind_data`）也用它。
+/// `fresh` 为假时数据流主机名可以用 6 小时内的缓存。
+pub async fn bind_conn(state: &AppState, conn_id: &str, overwrite: bool, fresh: bool) -> Result<BindReport, String> {
+    let conn = state.conns.get(conn_id)?;
     let sites: Vec<Site> = state.sites.list().into_iter().filter(|s| !s.domain.is_empty()).collect();
     let mut report = BindReport::default();
     match conn.kind.as_str() {
@@ -183,7 +212,7 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
             let mut hosts: Vec<(crate::google::Ga4Property, Vec<String>)> = Vec::new();
             if need_ga4 {
                 for p in props {
-                    let h = crate::google::ga4_stream_hosts(&token, &p.property).await.unwrap_or_default();
+                    let h = stream_hosts(&token, &p.property, fresh).await;
                     hosts.push((p, h));
                 }
             }
@@ -231,6 +260,7 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                     Ok(())
                 })?;
                 report.bound.push((s.name.clone(), what.join("、")));
+                report.bound_ids.push(s.id.clone());
             }
         }
         "bing" => {
@@ -253,6 +283,7 @@ pub async fn auto_bind_sites(state: tauri::State<'_, AppState>, conn_id: String,
                     Ok(())
                 })?;
                 report.bound.push((s.name.clone(), format!("Bing {}", b.url)));
+                report.bound_ids.push(s.id.clone());
             }
         }
         _ => return Err("这个连接不是数据源".into()),
