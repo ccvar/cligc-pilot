@@ -68,13 +68,14 @@
   async function run(path: string, label: string, f: () => Promise<Post>, done?: string) {
     busy = { ...busy, [path]: label };
     try { const p = await f(); setPost(p); if (done) say(done); return p; }
-    catch (e) { say(String(e), 'err'); }
+    catch (e) { if (String(e) === '已停止') say('已停止生成'); else say(String(e), 'err'); }
     finally { const b = { ...busy }; delete b[path]; busy = b; }
   }
   async function generate(r: Row) {
     const p = await run(r.path, '写摘要中…', () => invoke<Post>('syndication_generate', { siteId: site.id, path: r.path }));
     if (p) { open = r.path; draft = { title: p.title, summary: p.summary, labels: p.labels.join('，') }; }
   }
+  function stopGen(r: Row) { void invoke('syndication_cancel', { siteId: site.id, path: r.path }); }
   const labelsOf = (s: string) => s.split(/[,，、]/).map((x) => x.trim()).filter(Boolean);
   async function saveEdit(r: Row) {
     await run(r.path, '保存中…', () => invoke<Post>('syndication_edit', { siteId: site.id, path: r.path, title: draft.title, summary: draft.summary, labels: labelsOf(draft.labels) }), '已保存');
@@ -146,7 +147,7 @@
               <span class="t"><button class="link-btn" onclick={() => openUrl(r.url)} data-tip={r.url}>{r.title || r.path}</button>{#if r.date}<small>{r.date}</small>{/if}</span>
               <span class="st st-{s || 'none'}" data-tip={s === 'failed' ? r.post?.error : undefined}>{s ? STATUS[s] ?? s : ''}{#if (s === 'published' || s === 'draft') && r.post?.published_at} · {fmtDay(r.post.published_at)}{/if}</span>
               <span class="acts">
-                {#if b}<span class="busy"><span class="spin"></span>{b}</span>
+                {#if b}<span class="busy"><span class="spin"></span>{b}</span>{#if b === '写摘要中…'}<button class="btn tiny quiet" onclick={() => stopGen(r)}>停止</button>{/if}
                 {:else if s === 'published'}
                   {#if r.post?.post_url}<button class="btn tiny" onclick={() => r.post && openUrl(r.post.post_url)}>查看</button>{/if}
                 {:else if s === 'draft'}

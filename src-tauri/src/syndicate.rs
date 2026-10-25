@@ -102,6 +102,7 @@ fn prompt(a: &crate::site_make::Article, url: &str) -> String {
 - 300–500 字（英文 150–300 词），分 2–4 段；\n\
 - 用自己的话讲清楚：文章解决什么问题、讲了哪些要点、适合谁看。不要逐段照抄原文，不要编造原文没有的信息、数字或承诺；\n\
 - 不要写任何链接、网址、推荐码、邀请码，不要写「点击这里」；结尾不用写「阅读全文」，会自动附上原文链接；\n\
+- 正文里要用引号时用「」，不要用英文双引号；段落之间在 JSON 字符串里写成 \\n\\n；\n\
 - 标题：重新拟一个，不要和原文标题一字不差，不超过 30 个字（英文 70 个字符）；\n\
 - 标签：3–5 个，用原文的语言。\n\
 只输出 JSON，不要别的内容：{{\"title\": \"…\", \"summary\": \"第一段\\n\\n第二段\", \"labels\": [\"…\"]}}\n\n\
@@ -115,10 +116,67 @@ fn strip_urls(s: &str) -> String {
     s.split_whitespace().filter(|w| !(w.contains("://") || w.starts_with("www."))).collect::<Vec<_>>().join(" ")
 }
 
-/// 模型输出 → (标题, 摘要, 标签)。容忍 ```json 包裹和前后多余的话。
+/// 模型常见的 JSON 毛病：字符串里直接换行、正文里的英文双引号没转义。逐字扫一遍修好：
+/// 字符串里的换行 / 制表符转义；字符串里的 `"` 后面不是 `, } ] :` 的，当成正文里的引号转义掉。
+fn repair_json(s: &str) -> String {
+    let cs: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 16);
+    let (mut in_str, mut esc) = (false, false);
+    for (i, &c) in cs.iter().enumerate() {
+        if !in_str {
+            if c == '"' {
+                in_str = true;
+            }
+            out.push(c);
+            continue;
+        }
+        if esc {
+            esc = false;
+            out.push(c);
+            continue;
+        }
+        match c {
+            '\\' => {
+                esc = true;
+                out.push(c);
+            }
+            '"' => {
+                let next = cs[i + 1..].iter().find(|x| !x.is_whitespace());
+                if matches!(next, None | Some(',') | Some('}') | Some(']') | Some(':')) {
+                    in_str = false;
+                    out.push(c);
+                } else {
+                    out.push_str("\\\"");
+                }
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => {}
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// 模型输出里的那段 JSON：优先 ```json 代码块，否则第一个 `{` 到最后一个 `}`。
+fn json_block(raw: &str) -> Option<&str> {
+    if let Some(i) = raw.find("```json") {
+        let rest = &raw[i + 7..];
+        if let Some(j) = rest.find("```") {
+            let b = rest[..j].trim();
+            if b.starts_with('{') {
+                return Some(b);
+            }
+        }
+    }
+    let (a, b) = (raw.find('{')?, raw.rfind('}')?);
+    (a < b).then(|| &raw[a..=b])
+}
+
+/// 模型输出 → (标题, 摘要, 标签)。容忍 ```json 包裹、前后多余的话，以及字符串里的换行和没转义的引号。
 pub fn parse_summary(raw: &str) -> Result<(String, String, Vec<String>), String> {
-    let (a, b) = (raw.find('{').ok_or("模型没有按格式返回")?, raw.rfind('}').ok_or("模型没有按格式返回")?);
-    let v: serde_json::Value = serde_json::from_str(&raw[a..=b]).map_err(|_| "模型返回的 JSON 看不懂".to_string())?;
+    let block = json_block(raw).ok_or("模型没有按格式返回")?;
+    let v: serde_json::Value = serde_json::from_str(block).or_else(|_| serde_json::from_str(&repair_json(block))).map_err(|_| "模型返回的 JSON 看不懂".to_string())?;
     let title = v["title"].as_str().unwrap_or("").trim().chars().take(80).collect::<String>();
     let summary = v["summary"]
         .as_str()
@@ -225,6 +283,18 @@ fn upsert(dir: &Path, path: &str, edit: impl FnOnce(&mut Post)) -> Result<Post, 
     Ok(out)
 }
 
+/// 正在写的摘要（站点 id + 文章路径 → 停止信号）：点「停止」就结束那次模型调用（claude 子进程随之被杀）。
+static RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>> = std::sync::LazyLock::new(Default::default);
+
+pub const STOPPED: &str = "已停止";
+
+#[tauri::command]
+pub fn syndication_cancel(site_id: String, path: String) {
+    if let Some(tx) = RUNNING.lock().ok().and_then(|mut m| m.remove(&format!("{site_id}|{path}"))) {
+        let _ = tx.send(());
+    }
+}
+
 /// 用站点运营的模型给一篇文章写摘要（已发布的不重写）。
 #[tauri::command]
 pub async fn syndication_generate(state: tauri::State<'_, AppState>, site_id: String, path: String) -> Result<Post, String> {
@@ -239,8 +309,23 @@ pub async fn syndication_generate(state: tauri::State<'_, AppState>, site_id: St
     let url = article_url(&site, &a.path);
     let p = prompt(&a, &url);
     let ask = crate::oneshot::Ask { brain: &site.ops.brain, model: &site.ops.model, prompt: &p, max_tokens: 1500, small: false, timeout: Duration::from_secs(180) };
-    let raw = crate::oneshot::complete(&state.data_dir, &ask).await?;
-    let (title, summary, labels) = parse_summary(&raw)?;
+    let key = format!("{site_id}|{path}");
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    if let Ok(mut m) = RUNNING.lock() {
+        m.insert(key.clone(), tx);
+    }
+    let res = tokio::select! {
+        r = crate::oneshot::complete(&state.data_dir, &ask) => r,
+        _ = rx => Err(STOPPED.to_string()),
+    };
+    if let Ok(mut m) = RUNNING.lock() {
+        m.remove(&key);
+    }
+    let raw = res?;
+    let (title, summary, labels) = parse_summary(&raw).inspect_err(|_| {
+        // 留一份原文排查用（只留最近一次）
+        let _ = std::fs::write(dir.join("syndication_last_raw.txt"), &raw);
+    })?;
     upsert(&dir, &path, |p| {
         p.title = title;
         p.summary = summary;
@@ -330,6 +415,11 @@ mod tests {
         assert_eq!(l, vec!["USDT".to_string(), "新手".to_string()]);
         assert!(parse_summary("{\"title\":\"x\",\"summary\":\"太短\"}").is_err());
         assert!(parse_summary("no json").is_err());
+        // 字符串里直接换行、正文里的英文双引号没转义、前面多一句带 { 的话
+        let bad = "先说一句 {备注}\n```json\n{\"title\": \"币安买 USDT 三条路\", \"summary\": \"第一段讲\"快捷区\"和\"自选区\"怎么选，还有很多很多内容要写满六十个字才算够长，所以这里继续写。\n\n第二段讲手续费和溢价怎么算，读完就知道自己多花了多少。\", \"labels\": [\"币安\"]}\n```";
+        let (t, s, _) = parse_summary(bad).unwrap();
+        assert_eq!(t, "币安买 USDT 三条路");
+        assert!(s.contains("\"快捷区\"") && s.contains("\n\n"), "{s}");
     }
 
     /// 手动跑：PILOT_CHECK_OUT=<构建产物> PILOT_PROMPT_OUT=<输出文件> cargo test --lib dump_prompt -- --ignored
@@ -337,7 +427,7 @@ mod tests {
     #[ignore]
     fn dump_prompt() {
         let out = std::path::PathBuf::from(std::env::var("PILOT_CHECK_OUT").unwrap());
-        let a = crate::site_make::articles(&out).into_iter().find(|a| a.path.contains("buy-usdt")).unwrap();
+        let a = crate::site_make::articles(&out).into_iter().find(|a| a.path.contains(&std::env::var("PILOT_PROMPT_PAGE").unwrap_or("buy-usdt".into()))).unwrap();
         std::fs::write(std::env::var("PILOT_PROMPT_OUT").unwrap(), prompt(&a, &format!("https://example.com{}", a.path))).unwrap();
     }
 
