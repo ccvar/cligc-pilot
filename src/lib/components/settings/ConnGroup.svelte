@@ -21,7 +21,7 @@
     actions?: Snippet;
     children: Snippet;
   } = $props();
-  const folded = $derived(isFolded(kind, n));
+  const folded = $derived(isFolded(kind));
 </script>
 
 <div class="cg">
