@@ -2011,23 +2011,32 @@ async fn dns_snapshot(apex: &str, extra_hosts: &[String]) -> Vec<FullRec> {
             names.push(h.clone());
         }
     }
-    let mut out = Vec::new();
-    for n in &names {
+    // 每个名字一个任务并发查（顺着查一百多次要二十来秒），结果按原来的顺序拼回去
+    let mut set = tokio::task::JoinSet::new();
+    for (i, n) in names.into_iter().enumerate() {
         let is_root = n == apex;
-        let kinds: &[&str] = if is_root { &["A", "AAAA", "MX", "TXT", "CAA"] } else { &["CNAME", "A", "AAAA", "MX", "TXT"] };
-        let mut has_cname = false;
-        for k in kinds {
-            if has_cname && *k != "CNAME" {
-                break;
+        set.spawn(async move {
+            let kinds: &[&str] = if is_root { &["A", "AAAA", "MX", "TXT", "CAA"] } else { &["CNAME", "A", "AAAA", "MX", "TXT"] };
+            let mut out = Vec::new();
+            for k in kinds {
+                let recs = doh(&n, k).await;
+                let cname = *k == "CNAME" && !recs.is_empty();
+                out.extend(recs);
+                if cname {
+                    break;
+                }
             }
-            let recs = doh(n, k).await;
-            if *k == "CNAME" && !recs.is_empty() {
-                has_cname = true;
-            }
-            out.extend(recs);
+            (i, out)
+        });
+    }
+    let mut got = Vec::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok(x) = r {
+            got.push(x);
         }
     }
-    out
+    got.sort_by_key(|x| x.0);
+    got.into_iter().flat_map(|x| x.1).collect()
 }
 
 fn same_rec(a: &FullRec, b: &FullRec) -> bool {

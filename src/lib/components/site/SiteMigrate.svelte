@@ -45,6 +45,7 @@
   let formalIn = $state('');
   let stagingIn = $state('');
   const stg = $derived(v?.meta.staging);
+  const apexOf = (h: string) => h.replace(/^www\./, '');
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
   let cfConn = $state('');
   let project = $state('');
@@ -487,23 +488,23 @@
           <li class:ok={dns?.zone_status === 'active'}>
             <span class="lv">{dns?.zone_status === 'active' ? '✓' : '2'}</span>
             <div class="cb">
-              <span><b>域名的 DNS 在 Cloudflare 里生效</b>{#if dns?.zone_status === 'active'}<small>已生效</small>{:else if dns?.zone_id}<small>已加进 Cloudflare，等你改名称服务器（{dns.zone_status || '待生效'}）</small>{/if}</span>
+              <span><b>域名交给 Cloudflare 管理</b>{#if dns?.zone_status === 'active'}<small>{apexOf(host)} 已经在你的 Cloudflare 账号里</small>{:else if dns?.zone_id}<small>已加进 Cloudflare，等你改名称服务器</small>{/if}</span>
+              {#if dns?.zone_status !== 'active'}<small class="desc">切换就是在 Cloudflare 里把 {host} 改成指向新站，所以这个域名得由你的 Cloudflare 账号管理。</small>{/if}
               {#if !dns?.at}
-                <div class="row"><small class="faint">自动检查中：先存一份现在的 DNS 记录（邮件等），再看域名在不在 Cloudflare</small><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>{busy === 'dns' ? '检查中…' : '重新检查'}</button></div>
+                <div class="row"><span class="spin"></span><small class="faint">正在查 {apexOf(host)} 现在由谁管理，顺便记下现有的设置（邮件等），切换时不会弄丢</small></div>
               {:else if !dns.zone_id}
-                <small class="desc">{host.replace(/^www\./, '')} 还不在你的 Cloudflare 账号里。加进去以后 Cloudflare 会导入现有记录，Pilot 再对照一遍，缺的（尤其是邮件记录）补上，然后你去域名注册商改名称服务器。</small>
-                <div class="row"><button class="btn tiny" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>{busy === 'dns' ? '处理中…' : '接进 Cloudflare'}</button><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>重新检查</button></div>
+                <small class="desc">{apexOf(host)} 现在不在你的 Cloudflare 账号里。点「接进 Cloudflare」，Pilot 会把它加进去，并把现有的设置（邮件等）原样搬过去；之后只剩一件事要你做：去买域名的地方改两项「名称服务器」。</small>
+                <div class="row"><button class="btn tiny" onclick={() => addToCloudflare(site.id, apexOf(host))} disabled={!!busy || !site.deploy.cf_conn_id}>{busy === 'dns' ? '处理中…' : '接进 Cloudflare'}</button><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>重新检查</button></div>
               {:else}
                 {#if dns.missing.length}
-                  <small class="desc warn-text">原来的 {dns.missing.length} 条记录 Cloudflare 里还没有，改名称服务器前要补上，不然{dns.missing.some((r) => r.kind === 'MX') ? '邮件会收不到' : '这些子域名会打不开'}：</small>
+                  <small class="desc warn-text">还有 {dns.missing.length} 项现有设置没搬进 Cloudflare，不补上的话{dns.missing.some((r) => r.kind === 'MX') ? '邮件会收不到' : '这些子域名会打不开'}：</small>
                   <ul class="items">{#each dns.missing as r (r.kind + r.name + r.content)}<li class="mono">{r.kind} {r.name} → {r.priority != null ? `${r.priority} ` : ''}{r.content}</li>{/each}</ul>
-                  <div class="row"><button class="btn tiny" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 条</button></div>
+                  <div class="row"><button class="btn tiny" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 项</button></div>
                 {/if}
                 {#if dns.zone_status !== 'active'}
-                  <small class="desc">到域名注册商（买域名的地方）把名称服务器改成：</small>
+                  <small class="desc">去买域名的地方（域名注册商的后台，比如阿里云、GoDaddy、Namecheap），找到「名称服务器 / DNS 服务器 / Nameservers」，改成下面两个：</small>
                   <div class="ns">{#each dns.ns as n (n)}<code>{n}</code>{/each}</div>
-                  {#if dns.current_ns.length}<small class="faint">现在是：{dns.current_ns.join('、')}。改完一般几分钟到几小时生效，网站和邮件照常可用。</small>{/if}
-                  <div class="row"><button class="btn tiny" onclick={() => prepareDns(site.id)} disabled={!!busy}>{busy === 'dns' ? '检查中…' : '检查是否生效'}</button></div>
+                  <small class="faint">{dns.current_ns.length ? `现在是：${dns.current_ns.join('、')}。` : ''}改完一般几分钟到几小时生效，期间网站和邮件照常可用。Pilot 每分钟自动查一次，不用守着。</small>
                 {/if}
               {/if}
             </div>
