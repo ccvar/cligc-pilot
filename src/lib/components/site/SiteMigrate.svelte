@@ -44,6 +44,8 @@
   let editFormal = $state(false);
   let formalIn = $state('');
   let stagingIn = $state('');
+  // 测试域名是可选的：没绑过就先收起来
+  let showStaging = $state(false);
   const stg = $derived(v?.meta.staging);
   const apexOf = (h: string) => h.replace(/^www\./, '');
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
@@ -438,7 +440,9 @@
             {/if}
           </div>
           {#if moved}<small class="desc warn-text">换了域名：切换后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
-          {#if !isVps}
+          {#if !isVps && !stg?.host && !showStaging}
+            <div class="dm"><button class="link-btn" onclick={() => (showStaging = true)}>想先在测试域名上看看效果？</button><small class="faint">可选，不需要就直接切换</small></div>
+          {:else if !isVps}
             <div class="dm">
               <span class="dk">测试域名<em>可选</em></span>
               {#if stg?.host}
@@ -450,9 +454,10 @@
               {:else}
                 <input class="tin" bind:value={stagingIn} placeholder={`new.${host.replace(/^www\./, '')}`} spellcheck="false" autocapitalize="off" />
                 <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '上线中…' : '上线到测试域名'}</button>
+                <button class="btn tiny quiet" onclick={() => (showStaging = false)} disabled={busy === 'staging'}>收起</button>
               {/if}
             </div>
-            {#if !stg?.host}<small class="desc">想先看看效果：在一个没在用的子域名上打开新站，旧站不受影响，页面不让搜索引擎收录。不需要就直接切换。</small>{/if}
+            {#if !stg?.host}<small class="desc">在一个没在用的子域名上打开新站，旧站不受影响，页面不让搜索引擎收录。</small>{/if}
             {#if stg?.live.bad.length}
               <button class="link-btn sm al" onclick={() => toggleItem('stg')}>{openItems.has('stg') ? '收起' : '查看不对的地址'}</button>
               {#if openItems.has('stg')}<ul class="items">{#each stg.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
