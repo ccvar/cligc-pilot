@@ -349,13 +349,13 @@
   .more-wrap { position: relative; }
   .ic-btn.on { background: var(--su-hover); color: var(--text); }
   .more-mask { position: fixed; inset: 0; z-index: 30; }
-  .more-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: 280px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
-  .more-pop button { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: none; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer; }
+  .more-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; min-width: 180px; max-width: 240px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
+  .more-pop button { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px 7px 8px; border: none; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer; }
   .more-pop button:hover { background: var(--su-hover); }
   .more-pop button :global(svg) { flex: none; margin-top: 2px; color: var(--dim); }
   .more-pop span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .more-pop b { font-size: 13px; font-weight: 500; }
-  .more-pop small { font-size: 11.5px; color: var(--faint); line-height: 1.45; }
+  .more-pop small { font-size: 11px; color: var(--faint); line-height: 1.4; }
   .goal { display: flex; align-items: baseline; gap: 8px; width: 100%; margin: -6px 0 10px; padding: 0; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--dim); line-height: 1.6; text-align: left; cursor: pointer; }
   .goal-t { flex: 1; min-width: 0; max-width: 90ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .goal.open .goal-t { white-space: normal; color: var(--text); }
