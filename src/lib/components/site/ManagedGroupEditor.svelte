@@ -36,12 +36,11 @@
   let chosenAtOpen = $state<Set<string>>(new Set());
   let openedFor = '';
   $effect(() => { const k = `${g?.id ?? ''}:${managed.editor ? 1 : 0}`; if (k !== openedFor) { openedFor = k; chosenAtOpen = new Set(untrack(() => g?.sites ?? [])); } });
-  let onlyChosen = $state(false);
+  let chosenOpen = $state(false);
   const list = $derived.by(() => {
     const needle = q.trim().toLowerCase();
     const chosen = chosenAtOpen;
     return [...sites.list]
-      .filter((s) => !onlyChosen || (g?.sites ?? []).includes(s.id))
       .filter((s) => !needle || `${s.name} ${s.domain} ${s.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(needle))
       // 已选的排前面，其次是还没进任何方案的
       .sort((a, b) => Number(chosen.has(b.id)) - Number(chosen.has(a.id)) || Number(!!otherOf(a.id)) - Number(!!otherOf(b.id)) || a.name.localeCompare(b.name, 'zh'));
@@ -111,15 +110,27 @@
       <div class="field"><label for="ge-name">方案名称</label><input id="ge-name" class="tin" bind:value={g.name} placeholder="例如：中文站点 · 只改标题描述" maxlength="40" /></div>
 
       <div class="field">
-        <span class="lbl">站点 <span class="faint cnt">已选 {g.sites.length} 个</span>{#if g.sites.length}<button class="link-btn clear" onclick={() => g && (g.sites = [])}>清空</button>{/if}</span>
+        <span class="lbl">站点
+          <!-- 点「已选 N 个」浮出已选的站点：核对、去掉都在这里，不挤动下面的列表 -->
+          <span class="ch-wrap">
+            <button class="ch-btn" class:on={chosenOpen} onclick={() => (chosenOpen = !chosenOpen)} disabled={!g.sites.length} aria-haspopup="dialog" aria-expanded={chosenOpen}>已选 {g.sites.length} 个{#if g.sites.length}<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}</button>
+            {#if chosenOpen && g.sites.length}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span class="ch-mask" onclick={() => (chosenOpen = false)}></span>
+              <span class="ch-pop" role="dialog" aria-label="已选的站点">
+                <span class="ch-list">
+                  {#each g.sites as id (id)}
+                    {@const st = sites.list.find((x) => x.id === id)}
+                    <span class="ch-row"><SiteIcon {id} size={14} /><span class="ch-n">{st?.name ?? id}</span><button class="ch-x" onclick={() => toggle(id)} aria-label="去掉 {st?.name ?? id}" data-tip="不选这个站点">×</button></span>
+                  {/each}
+                </span>
+                <span class="ch-foot"><button class="link-btn" onclick={() => { if (g) g.sites = []; chosenOpen = false; }}>全部清空</button></span>
+              </span>
+            {/if}
+          </span>
+        </span>
         <div class="picker">
-          <div class="pk-search"><Icon name="search" size={13} /><input bind:value={q} placeholder={`在 ${sites.list.length} 个站点里搜索`} spellcheck="false" />
-            <!-- 只看已选：核对选了哪些，不用上下翻 -->
-            <div class="pk-seg" role="tablist">
-              <button role="tab" aria-selected={!onlyChosen} class:on={!onlyChosen} onclick={() => (onlyChosen = false)}>全部</button>
-              <button role="tab" aria-selected={onlyChosen} class:on={onlyChosen} onclick={() => (onlyChosen = true)} disabled={!g.sites.length && !onlyChosen}>已选 {g.sites.length}</button>
-            </div>
-          </div>
+          <div class="pk-search"><Icon name="search" size={13} /><input bind:value={q} placeholder={`在 ${sites.list.length} 个站点里搜索`} spellcheck="false" /></div>
           <div class="pk-list">
             {#each list as s (s.id)}
               {@const other = otherOf(s.id)}
@@ -129,7 +140,7 @@
                 <span class="pk-name">{s.name}</span>
                 {#if other}<span class="pk-tag" data-tip="勾选会把它从「{other.name}」移到这个方案">在「{other.name}」里</span>{/if}
               </label>
-            {:else}<p class="hint empty">{onlyChosen ? '还没选站点' : '没有匹配的站点'}</p>{/each}
+            {:else}<p class="hint empty">没有匹配的站点</p>{/each}
           </div>
         </div>
         {#if moving}<small class="warn-text">{moving} 个站点会从原来的方案移到这里，改用这个方案的规则。</small>{/if}
@@ -243,11 +254,21 @@
   .ge { width: min(640px, calc(100vw - 32px)); }
   .cnt { font-weight: 400; font-size: 11.5px; margin-left: 4px; }
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
-  .clear { margin-left: 8px; font-size: 12px; font-weight: 400; }
-  .pk-seg { flex: none; display: inline-flex; padding: 2px; border-radius: 7px; background: var(--rail); }
-  .pk-seg button { border: none; background: none; padding: 2px 9px; border-radius: 5px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
-  .pk-seg button.on { background: var(--card, #fff); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
-  .pk-seg button:disabled { opacity: .5; cursor: default; }
+  .ch-wrap { position: relative; display: inline-flex; margin-left: 6px; font-weight: 400; }
+  .ch-btn { display: inline-flex; align-items: center; gap: 4px; border: none; background: none; padding: 1px 6px; margin: -1px 0; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .ch-btn:hover:not(:disabled), .ch-btn.on { background: var(--su-hover); color: var(--text); }
+  .ch-btn:disabled { color: var(--faint); cursor: default; }
+  .ch-mask { position: fixed; inset: 0; z-index: 40; }
+  .ch-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 41; width: 260px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--card, #fff); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; }
+  .ch-list { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+  .ch-row { display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 8px; border-radius: 6px; font-size: 12.5px; color: var(--text); }
+  .ch-row:hover { background: var(--su-hover); }
+  .ch-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ch-x { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 5px; background: none; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; }
+  .ch-x:hover { background: var(--card, #fff); color: var(--text); }
+  .ch-foot { display: flex; justify-content: flex-end; padding: 6px 8px 4px; margin-top: 2px; border-top: 1px solid var(--border); }
+  .ch-foot .link-btn { font-size: 12px; color: var(--faint); }
+  .ch-foot .link-btn:hover { color: var(--err); }
   .pk-search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .pk-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }
   .pk-list { max-height: min(340px, 44vh); overflow-y: auto; padding: 4px; }
