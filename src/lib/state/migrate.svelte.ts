@@ -38,7 +38,7 @@ export interface MMeta {
   /** 正式域名（空＝旧站的域名） */
   formal: string;
   /** 切换前先上线到的测试域名 */
-  staging: { host: string; at: number; live: { at: number; base: string; checked: number; bad: string[] } };
+  staging: { host: string; at: number; status: string; live: { at: number; base: string; checked: number; bad: string[] } };
   dns: MDns;
   cutover: { at: number; host: string; zone_id: string; cf_conn: string; manual_dns: boolean; before: MRec[]; notes: string[]; rolled_back_at: number };
   track: { at: number; checked: number; bad: string[]; base_clicks: number; after_clicks: number; after_days: number; sitemap_submitted: boolean; indexnow_submitted: boolean; notes: string[] };
@@ -200,9 +200,18 @@ export const liveCheck = (id: string) => run(id, 'live', () => invoke('migrate_l
 export const checkOwnership = (id: string) => run(id, 'own', () => invoke('migrate_ownership', { id }));
 export const prepareDns = (id: string, create = false) => run(id, 'dns', () => invoke('migrate_dns_prepare', { id, create }));
 
+/** 切换这一步自动检查 DNS：不弹提示，失败了界面上照样能手动查 */
+export async function prepareDnsQuiet(id: string) {
+  try { await invoke('migrate_dns_prepare', { id, create: false }); } catch { /* 界面上有「检查 DNS」 */ }
+  void loadMigrate(id);
+}
+
 export async function addToCloudflare(id: string, domain: string) {
-  if (!await confirmDialog(`会用站点的 Cloudflare 连接把 ${domain} 加进 Cloudflare，并对照现在的 DNS 记录。之后要你去域名注册商把名称服务器改成 Cloudflare 给的那两个——改之前网站和邮件都不受影响。`, { title: '把域名接进 Cloudflare', kind: 'info', confirmText: '加进 Cloudflare' })) return;
-  await prepareDns(id, true);
+  if (!await confirmDialog(`会用站点的 Cloudflare 连接把 ${domain} 加进 Cloudflare，对照现在的 DNS 记录，缺的（邮件等）照原样补上。之后只剩一件事要你做：去域名注册商把名称服务器改成 Cloudflare 给的那两个——改之前网站和邮件都不受影响。`, { title: '把域名接进 Cloudflare', kind: 'info', confirmText: '加进 Cloudflare' })) return;
+  await run(id, 'dns', async () => {
+    const p = await invoke<{ missing: unknown[] }>('migrate_dns_prepare', { id, create: true });
+    if (p.missing.length) { await invoke('migrate_dns_fix', { id }); say(`已加进 Cloudflare，补上了 ${p.missing.length} 条原有记录`, 'ok'); }
+  });
 }
 
 export async function fixDns(id: string, n: number) {
@@ -241,6 +250,12 @@ export async function stagingRemove(id: string, host: string) {
 }
 
 export const stagingCheck = (id: string) => run(id, 'staging', () => invoke('migrate_staging_check', { id }));
+
+/** 测试域名还在生效中：问一次（生效了后台会自动实测） */
+export async function stagingStatus(id: string) {
+  try { const st = await invoke<string>('migrate_staging_status', { id }); if (st === 'active') void loadMigrate(id); return st; }
+  catch { return ''; }
+}
 
 export async function rollback(id: string, host: string) {
   if (!await confirmDialog(`把 ${host} 的 DNS 恢复成切换前的记录，打开的又会是旧站；新站和抓好的内容都保留，可以改好后再切换。`, { title: '回退到旧站', kind: 'danger', confirmText: '回退' })) return;

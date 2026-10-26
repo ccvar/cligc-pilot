@@ -180,6 +180,9 @@ pub struct Staging {
     pub at: u64,
     pub zone_id: String,
     pub cf_conn: String,
+    /// Pages 那边的自定义域名状态：pending（验证、签证书中，一般几分钟）/ active
+    #[serde(default)]
+    pub status: String,
     #[serde(default)]
     pub live: LiveCheck,
 }
@@ -2079,8 +2082,14 @@ pub async fn migrate_dns_prepare(state: tauri::State<'_, AppState>, id: String, 
         if !ns.is_empty() {
             prep.ns = ns;
         }
-        let have = crate::cf::all_dns_records(&token, &z.id).await.unwrap_or_default();
-        prep.missing = prep.snapshot.iter().filter(|r| !have.iter().any(|h| same_rec(r, h))).filter(|r| r.kind != "NS").cloned().collect();
+        // 已经在 Cloudflare 里生效的域名，Cloudflare 就是现在的 DNS，没有「缺」的说法
+        // （公开查到的代理记录是 Cloudflare 的 IP，拿来对照反而全是误报）
+        prep.missing = if prep.zone_status == "active" {
+            Vec::new()
+        } else {
+            let have = crate::cf::all_dns_records(&token, &z.id).await.unwrap_or_default();
+            prep.snapshot.iter().filter(|r| !have.iter().any(|h| same_rec(r, h))).filter(|r| r.kind != "NS").cloned().collect()
+        };
     }
     save_meta(&dir, |m| m.dns = prep.clone())?;
     Ok(prep)
@@ -2285,7 +2294,7 @@ pub async fn migrate_staging(app: tauri::AppHandle, state: tauri::State<'_, AppS
     if have.iter().any(|r| !(r.kind == "CNAME" && r.content.eq_ignore_ascii_case(&target))) {
         return Err(format!("{host} 已经有 DNS 记录（{}），为了不影响现有服务没有动它：换一个没在用的子域名", have.iter().map(|r| format!("{} {}", r.kind, r.content)).collect::<Vec<_>>().join("、")));
     }
-    let st = Staging { host: host.clone(), at: now(), zone_id: zone.id.clone(), cf_conn: cf.id.clone(), live: LiveCheck::default() };
+    let st = Staging { host: host.clone(), at: now(), zone_id: zone.id.clone(), cf_conn: cf.id.clone(), status: "pending".into(), live: LiveCheck::default() };
     // 先记下来、再上线一次（带上 noindex），最后才把域名指过来：不会有一刻能被收录
     save_meta(&dir, |m| m.staging = st.clone())?;
     let job_id = crate::site_cmds::start_deploy(app.clone(), &state, id.clone())?;
@@ -2344,14 +2353,18 @@ pub async fn migrate_staging_remove(state: tauri::State<'_, AppState>, id: Strin
 /// 在测试域名上把每个旧地址打开一遍（只是给你看，不影响能不能切换）。
 #[tauri::command]
 pub async fn migrate_staging_check(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
-    let site = state.sites.get(&id)?;
-    let dir = mdir(&state, &id);
+    start_staging_check(&app, &state, &id)
+}
+
+fn start_staging_check(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<String, String> {
+    let site = state.sites.get(id)?;
+    let dir = mdir(state, id);
     let st = load_meta(&dir).staging;
     if st.host.is_empty() {
         return Err("还没有测试域名".into());
     }
     let map: mx::UrlMap = read_json(&PathBuf::from(&site.local_dir).join(".pilot/migrate/urls.json")).ok_or("仓库里没有 .pilot/migrate/urls.json")?;
-    let job = state.site_jobs.start(Some(app), &id, "migrate:staging", "测试域名实测", LIVE_STEPS)?;
+    let job = state.site_jobs.start(Some(app.clone()), id, "migrate:staging", "测试域名实测", LIVE_STEPS)?;
     let job_id = job.id.clone();
     tauri::async_runtime::spawn(async move {
         job.step("live", "running", &st.host);
@@ -2359,9 +2372,34 @@ pub async fn migrate_staging_check(app: tauri::AppHandle, state: tauri::State<'_
         let bad = live.bad.len();
         let _ = save_meta(&dir, |m| m.staging.live = live);
         job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
-        job.finish(&if bad > 0 { Err(format!("{bad} 个地址不对（刚绑的域名证书要几分钟才签好，稍后再测）")) } else { Ok(()) });
+        job.finish(&if bad > 0 { Err(format!("{bad} 个地址不对")) } else { Ok(()) });
     });
     Ok(job_id)
+}
+
+/// 测试域名生效了没有（界面在 pending 时每隔一会儿问一次）：生效了就自动实测一遍。
+#[tauri::command]
+pub async fn migrate_staging_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let st = load_meta(&dir).staging;
+    if st.host.is_empty() {
+        return Ok(String::new());
+    }
+    if st.status == "active" {
+        return Ok(st.status);
+    }
+    let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在".to_string())?;
+    let token = crate::keychain::get_key(&cf.id)?;
+    let status = crate::cf::pages_domain_status(&token, &cf.account_id, &site.deploy.project, &st.host).await?.unwrap_or_else(|| "pending".into());
+    // Pages 说生效了还不够：真能打开才算（证书刚签好的那一会儿还会 522）
+    let opens = status == "active" && reqwest::Client::new().head(format!("https://{}/", st.host)).timeout(Duration::from_secs(10)).send().await.is_ok_and(|r| r.status().as_u16() < 500);
+    let status = if opens { "active".to_string() } else { "pending".to_string() };
+    save_meta(&dir, |m| m.staging.status = status.clone())?;
+    if opens && st.live.at == 0 {
+        let _ = start_staging_check(&app, &state, &id);
+    }
+    Ok(status)
 }
 
 /// 上线时不让搜索引擎收录的主机名：迁移中的测试域名。

@@ -4,6 +4,7 @@
   // 这一步的后台任务（盘点、抓取、核对、配置服务器、上线……）的进度直接显示在面板里，不再另起任务卡片。
   // 迁移期间站点的 domain 是空的：预览部署只建 Pages 项目、不绑域名，切换时才把域名指过来。
   import './site.css';
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -19,7 +20,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, stagingUp, stagingRemove, stagingCheck, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -82,6 +83,30 @@
   $effect(() => { if (!sshConn && sshConns.length) sshConn = site.deploy.ssh_conn_id || sshConns[0].id; });
   const vpsSetting = $derived(busy === 'vps' || (jobRunning && job.kind === 'vps:setup'));
   const vd = $derived(vpsDns[site.id]);
+  // ── 切换：能自动的都自动 ──
+  // 进到这一步就查一次 DNS（不用点「检查 DNS」）
+  let dnsAuto = '';
+  $effect(() => { if (v?.stage === 'cutover' && !isVps && !v.meta.dns.at && dnsAuto !== site.id) { dnsAuto = site.id; untrack(() => void prepareDnsQuiet(site.id)); } });
+  // 等你改名称服务器：每分钟自动查一次生效没有
+  $effect(() => {
+    if (v?.stage !== 'cutover' || isVps || !v.meta.dns.zone_id || v.meta.dns.zone_status === 'active') return;
+    const t = setInterval(() => untrack(() => void prepareDnsQuiet(site.id)), 60000);
+    return () => clearInterval(t);
+  });
+  // 自己的服务器：等你改 A 记录，每分钟查一次
+  $effect(() => {
+    if (v?.stage !== 'cutover' || !isVps || !vd || vd.points || vd.cf_auto) return;
+    const t = setInterval(() => untrack(() => void checkVpsDns(site.id)), 60000);
+    return () => clearInterval(t);
+  });
+  // 测试域名在生效中（Cloudflare 验证、签证书）：隔几秒问一次，生效了后台自动实测
+  $effect(() => {
+    const st = v?.meta.staging;
+    if (!st?.host || st.status === 'active') return;
+    untrack(() => void stagingStatus(site.id));
+    const t = setInterval(() => untrack(() => void stagingStatus(site.id)), 8000);
+    return () => clearInterval(t);
+  });
   $effect(() => { if (isVps && v?.stage === 'cutover' && !vd) void checkVpsDns(site.id); });
   const featNames = (fs: string[]) => ['form', 'comments', 'files'].filter((f) => fs.includes(f)).map((f) => FEATURE_LABEL[f]).join('、');
   const dynNeed = $derived(!!v?.dynamic && v.dynamic.features.length > 0);
@@ -118,6 +143,23 @@
     return last && last.role !== 'user' && last.error ? last.text.split('\n')[0].slice(0, 160) : '';
   });
   const aiMins = $derived(aiStarted ? Math.max(1, Math.round((Date.now() - aiStarted) / 60000)) : 0);
+  // 切换这一步现在该做什么：只剩一个动作，写在最上面
+  const cutNext = $derived.by<{ text: string; spin?: boolean; ready?: boolean; act?: 'addcf' | 'fix' | 'own' } | null>(() => {
+    if (!v || v.stage !== 'cutover') return null;
+    const apex = host.replace(/^www\./, '');
+    if (!own?.verified) return { text: `先确认 ${oldHost.replace(/^www\./, '')} 是你的：按下面第 1 条加一条 TXT 记录，或者在设置里接上 Search Console`, act: 'own' };
+    if (isVps) {
+      if (!vd) return { text: `正在检查 ${host} 指向哪里…`, spin: true };
+      if (!(vd.points || vd.cf_auto)) return { text: `只差一步要你自己做：到域名的 DNS 服务商把 ${host} 指向服务器 ${vd.ip}（见下面第 2 条），Pilot 会自动检查` };
+      return { text: `都准备好了。点「切换到新站」，${host} 就会打开新站；原来的记录存着，随时能回退。`, ready: true };
+    }
+    if (!dns?.at || busy === 'dns') return { text: `正在检查 ${apex} 的 DNS…`, spin: true };
+    if (!dns.zone_id) return { text: `${apex} 还不在你的 Cloudflare 账号里。点「接进 Cloudflare」：Pilot 自动加进去、照原样补齐现有记录（邮件等），之后只剩改名称服务器要你做。`, act: 'addcf' };
+    if (dns.missing.length) return { text: `原有的 ${dns.missing.length} 条记录还没进 Cloudflare，改名称服务器前要补上（见下面第 2 条）。`, act: 'fix' };
+    if (dns.zone_status !== 'active') return { text: `只差一步要你自己做：去域名注册商把名称服务器改成下面第 2 条里的两个。Pilot 每分钟自动检查一次，生效了这里会变。` };
+    const tip = stg?.host && stg.status !== 'active' ? `测试域名 ${stg.host} 还在生效中，可以等它好了先看看。` : '';
+    return { text: `都准备好了。点「切换到新站」，${host} 就会打开新站；原来的记录存着，随时能回退。${tip}`, ready: true };
+  });
   // 上线 / 发布成功过：实测不用重新构建，直接测
   const deployedOk = $derived(!!sites.status[site.id]?.last_deploy?.ok);
   const lastUrl = $derived(sites.status[site.id]?.last_deploy?.url ?? '');
@@ -371,6 +413,16 @@
         {/if}
 
       {:else if shown === 'cutover'}
+        {#if cutNext && isCurrent}
+          <div class="act next" class:ready={cutNext.ready}>
+            {#if cutNext.spin}<span class="spin"></span>{/if}
+            <span class="grow"><b>{cutNext.ready ? '可以切换了' : '下一步'}</b>{cutNext.text}</span>
+            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '切换中…' : '切换到新站'}</button>
+            {:else if cutNext.act === 'addcf'}<button class="btn small primary" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>接进 Cloudflare</button>
+            {:else if cutNext.act === 'fix' && dns}<button class="btn small primary" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 条</button>
+            {:else if cutNext.act === 'own'}<button class="btn small" onclick={() => checkOwnership(site.id)} disabled={!!busy}>{busy === 'own' ? '检查中…' : '重新检查'}</button>{/if}
+          </div>
+        {/if}
         <div class="domains">
           <div class="dm">
             <span class="dk">正式域名</span>
@@ -387,19 +439,19 @@
           {#if moved}<small class="desc warn-text">换了域名：切换后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
           {#if !isVps}
             <div class="dm">
-              <span class="dk">测试域名</span>
+              <span class="dk">测试域名<em>可选</em></span>
               {#if stg?.host}
                 <button class="link-btn mono" onclick={() => openUrl(`https://${stg.host}`)}>{stg.host}</button>
-                <small class="faint">{stg.live.at ? (stg.live.bad.length ? `${stg.live.checked} 个里 ${stg.live.bad.length} 个不对` : `${stg.live.checked} 个旧地址都正常`) : '已绑定 · 不让搜索引擎收录'}</small>
+                <small class="faint">{stg.status !== 'active' ? '正在生效（Cloudflare 验证域名、签证书，一般几分钟，好了自动实测）' : stg.live.at ? (stg.live.bad.length ? `${stg.live.checked} 个里 ${stg.live.bad.length} 个不对` : `已生效 · ${stg.live.checked} 个旧地址都正常 · 不让搜索引擎收录`) : '已生效 · 正在实测…'}</small>
                 <span class="grow"></span>
-                <button class="btn tiny" onclick={() => stagingCheck(site.id)} disabled={!!busy || jobRunning}>{runHere && job.kind === 'migrate:staging' ? '实测中…' : '实测测试域名'}</button>
+                {#if stg.status === 'active'}<button class="btn tiny" onclick={() => stagingCheck(site.id)} disabled={!!busy || jobRunning}>{runHere && job.kind === 'migrate:staging' ? '实测中…' : '重新实测'}</button>{:else}<span class="spin"></span>{/if}
                 <button class="btn tiny quiet" onclick={() => stagingRemove(site.id, stg.host)} disabled={!!busy || jobRunning}>删除</button>
               {:else}
                 <input class="tin" bind:value={stagingIn} placeholder={`new.${host.replace(/^www\./, '')}`} spellcheck="false" autocapitalize="off" />
                 <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '上线中…' : '上线到测试域名'}</button>
               {/if}
             </div>
-            {#if !stg?.host}<small class="desc">可选：先在一个测试域名上看新站（旧站不受影响，页面不让搜索引擎收录），没问题再切正式域名。要用 Cloudflare 里已经生效的域名，没在用的子域名最合适。</small>{/if}
+            {#if !stg?.host}<small class="desc">想先看看效果：在一个没在用的子域名上打开新站，旧站不受影响，页面不让搜索引擎收录。不需要就直接切换。</small>{/if}
             {#if stg?.live.bad.length}
               <button class="link-btn sm al" onclick={() => toggleItem('stg')}>{openItems.has('stg') ? '收起' : '查看不对的地址'}</button>
               {#if openItems.has('stg')}<ul class="items">{#each stg.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
@@ -437,7 +489,7 @@
             <div class="cb">
               <span><b>域名的 DNS 在 Cloudflare 里生效</b>{#if dns?.zone_status === 'active'}<small>已生效</small>{:else if dns?.zone_id}<small>已加进 Cloudflare，等你改名称服务器（{dns.zone_status || '待生效'}）</small>{/if}</span>
               {#if !dns?.at}
-                <div class="row"><button class="btn tiny" onclick={() => prepareDns(site.id)} disabled={!!busy}>{busy === 'dns' ? '检查中…' : '检查 DNS'}</button><small class="faint">先存一份现在的 DNS 记录（邮件等），再看域名在不在 Cloudflare</small></div>
+                <div class="row"><small class="faint">自动检查中：先存一份现在的 DNS 记录（邮件等），再看域名在不在 Cloudflare</small><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>{busy === 'dns' ? '检查中…' : '重新检查'}</button></div>
               {:else if !dns.zone_id}
                 <small class="desc">{host.replace(/^www\./, '')} 还不在你的 Cloudflare 账号里。加进去以后 Cloudflare 会导入现有记录，Pilot 再对照一遍，缺的（尤其是邮件记录）补上，然后你去域名注册商改名称服务器。</small>
                 <div class="row"><button class="btn tiny" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>{busy === 'dns' ? '处理中…' : '接进 Cloudflare'}</button><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>重新检查</button></div>
@@ -461,7 +513,7 @@
             <span class="lv">3</span>
             <div class="cb">
               <span><b>切换到新站</b><small>{isVps ? `${host} 指向服务器后，Caddy 自动申请 HTTPS 证书；原来的 DNS 记录存下来，可以回退。旧主机先别停。` : `${host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。`}</small></span>
-              <div class="row"><button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning || !own?.verified || (isVps ? !(vd?.points || vd?.cf_auto) : dns?.zone_status !== 'active' || !!dns?.missing.length)}><Icon name="rocket" size={12} />{busy === 'cutover' ? '切换中…' : '切换到新站'}</button></div>
+              {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「切换到新站」。</small>{/if}
             </div>
           </li>
         </ol>
@@ -521,6 +573,11 @@
   .domains { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--rail); }
   .dm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; min-height: 28px; }
   .dm .dk { flex: none; width: 64px; color: var(--dim); }
+  .dm .dk em { display: block; font-style: normal; font-size: 10.5px; color: var(--faint); }
+  .act.next { background: var(--rail); }
+  .act.next b { margin-right: 8px; color: var(--text); font-weight: 600; }
+  .act.next.ready { background: var(--su-ok-soft); }
+  .act.next .spin { flex: none; }
   .dm b { font-weight: 600; font-size: 13px; }
   .dm .tin { flex: 1; min-width: 180px; max-width: 320px; height: 28px; font-size: 12.5px; }
   .dm .grow { flex: 1; }

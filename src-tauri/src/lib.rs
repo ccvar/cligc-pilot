@@ -4682,6 +4682,7 @@ pub fn run() {
             migrate_cmds::migrate_staging,
             migrate_cmds::migrate_staging_remove,
             migrate_cmds::migrate_staging_check,
+            migrate_cmds::migrate_staging_status,
             migrate_cmds::migrate_ownership,
             migrate_cmds::migrate_dns_prepare,
             migrate_cmds::migrate_dns_fix,
