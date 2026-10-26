@@ -440,8 +440,11 @@
             {/if}
           </div>
           {#if moved}<small class="desc warn-text">换了域名：切换后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
+          {#if !isVps && (v.meta.live.base || lastUrl)}
+            <div class="dm"><span class="dk">预览地址</span><button class="link-btn mono" onclick={() => openUrl(v.meta.live.base || lastUrl)}>{(v.meta.live.base || lastUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</button><small class="faint">Cloudflare 自带的地址，现在就能打开看新站 · 不让搜索引擎收录</small></div>
+          {/if}
           {#if !isVps && !stg?.host && !showStaging}
-            <div class="dm"><button class="link-btn" onclick={() => (showStaging = true)}>想先在测试域名上看看效果？</button><small class="faint">可选，不需要就直接切换</small></div>
+            <div class="dm"><button class="link-btn" onclick={() => (showStaging = true)}>想在自己的域名下先看看？</button><small class="faint">可选：比如广告、统计、第三方嵌入只认你的域名时用</small></div>
           {:else if !isVps}
             <div class="dm">
               <span class="dk">测试域名<em>可选</em></span>
