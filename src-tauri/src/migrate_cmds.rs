@@ -618,6 +618,11 @@ async fn create_one(app: tauri::AppHandle, state: &AppState, req: CreateMigratio
         return Err(format!("「{}」已经是这个域名的站点了", s.name));
     }
     let parent = Path::new(req.parent_dir.trim());
+    // 默认位置（家目录下的 Sites）第一次用时还不存在：家目录里的就替你建好
+    let in_home = std::env::var_os("HOME").map(PathBuf::from).is_some_and(|h| parent.starts_with(&h) && parent != h);
+    if parent.is_absolute() && !parent.exists() && in_home {
+        std::fs::create_dir_all(parent).map_err(|e| format!("建不了文件夹 {}：{e}", parent.display()))?;
+    }
     if !parent.is_absolute() || !parent.is_dir() {
         return Err("存放位置不存在".into());
     }
@@ -1768,7 +1773,12 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
     let assets: Vec<String> = read_json(&code.join(".pilot/migrate/assets.json")).unwrap_or_default();
     let out = built.out.clone();
     let refs = dir.join("ref");
-    let (map2, inv2) = (map.clone(), inv.clone());
+    let (mut map2, inv2) = (map.clone(), inv.clone());
+    // 换了正式域名：canonical 应该指向新域名
+    let formal = load_meta(&dir).formal;
+    if !formal.is_empty() {
+        map2.domain = formal;
+    }
     let in_r2: Vec<String> = dynamic.as_ref().map(|d| d.large.clone()).unwrap_or_default();
     let routes_ok = dynamic.is_none() || built.out.join("_routes.json").is_file();
     let mut checks = tokio::task::spawn_blocking(move || mx::parity(&out, &map2, &inv2, &refs, &assets, &in_r2)).await.map_err(|e| e.to_string())?;

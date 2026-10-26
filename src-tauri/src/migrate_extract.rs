@@ -791,10 +791,81 @@ fn norm_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn gz_read(p: &Path) -> Option<String> {
+    use std::io::Read;
+    let f = std::fs::File::open(p).ok()?;
+    let mut s = String::new();
+    flate2::read::GzDecoder::new(f).read_to_string(&mut s).ok()?;
+    Some(s)
+}
+
+/// 页面的主体（<main> 里，没有就整个 <body>），用来数版块。
+fn main_part(html: &str) -> &str {
+    let low = html.to_ascii_lowercase();
+    let (a, b) = match (low.find("<main"), low.rfind("</main>")) {
+        (Some(a), Some(b)) if a < b => (a, b),
+        _ => (low.find("<body").unwrap_or(0), low.rfind("</body>").unwrap_or(html.len())),
+    };
+    html.get(a..b).unwrap_or(html)
+}
+
+fn count_tag(low: &str, tag: &str) -> usize {
+    low.match_indices(&format!("<{tag}")).filter(|(i, _)| low[i + tag.len() + 1..].starts_with([' ', '>', '\n', '\t', '/'])).count()
+}
+
+/// 页面上的版块：表格、折叠问答、图片。
+pub fn blocks(html: &str) -> (usize, usize, usize) {
+    let low = main_part(html).to_ascii_lowercase();
+    (count_tag(&low, "table"), count_tag(&low, "details"), count_tag(&low, "img"))
+}
+
+/// 旧页面是不是列表页（首页、分类、分页、资源索引……）：这种页面按内容重新生成，不拿正文去比。
+/// 看地址，也看旧页面里「标题本身就是链接」的条目有几个（文章列表、卡片列表都是这样）。
+pub fn is_listing(path: &str, old_html: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    // 首页，或者多语言站的语言首页（/en/、/es-ar/、/pt-br/）
+    let segs: Vec<&str> = p.trim_matches('/').split('/').filter(|x| !x.is_empty()).collect();
+    let lang = |x: &str| {
+        let b = x.as_bytes();
+        (b.len() == 2 && b.iter().all(u8::is_ascii_alphabetic)) || (b.len() == 5 && b[2] == b'-' && b[..2].iter().chain(&b[3..]).all(u8::is_ascii_alphabetic))
+    };
+    if segs.is_empty() || (segs.len() == 1 && lang(segs[0])) {
+        return true;
+    }
+    if ["/category", "/categories", "/tag/", "/tags", "/page/", "/cat/", "/archive", "/author/", "/topics"].iter().any(|k| p.contains(k)) {
+        return true;
+    }
+    let low = main_part(old_html).to_ascii_lowercase();
+    let mut linked = 0;
+    // <h3><a …>标题</a></h3>
+    for h in ["<h2", "<h3", "<h4"] {
+        for (i, _) in low.match_indices(h) {
+            let rest = &low[i..];
+            let Some(gt) = rest.find('>') else { continue };
+            if rest[gt + 1..].trim_start().starts_with("<a ") {
+                linked += 1;
+            }
+        }
+    }
+    // <a …><h3>标题</h3>…</a>：整张卡片是一个链接
+    for (i, _) in low.match_indices("<a ") {
+        let rest = &low[i..];
+        if let Some(end) = rest.find("</a>") {
+            if ["<h2", "<h3", "<h4"].iter().any(|h| rest[..end].contains(h)) {
+                linked += 1;
+            }
+        }
+    }
+    linked >= 3
+}
+
 /// 构建产物逐条对照旧站。`refs`：参考正文目录；`assets`：抓取时下载的图片和附件（新站路径）；
 /// `in_r2`：放在 R2 里的大文件（不在构建产物里，由 Functions 按原路径回应）。
 pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[String], in_r2: &[String]) -> Vec<ParityCheck> {
     let pages: HashMap<&str, &Page> = inv.pages.iter().map(|p| (p.path.as_str(), p)).collect();
+    // 旧页面快照（和参考正文放在一起）：判断列表页、数版块
+    let snaps = refs.parent().map(|d| d.join("snapshots")).unwrap_or_default();
+    let mut layout = Vec::new();
     let rules = std::fs::read_to_string(out.join("_redirects")).map(|t| parse_redirects(&t)).unwrap_or_default();
     let (mut missing, mut slash, mut files_missing, mut redirects_bad) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let (mut titles, mut descs, mut canon, mut text, mut schema, mut html_ext) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -843,10 +914,34 @@ pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[
                 if !lost.is_empty() {
                     schema.push(format!("{}：少了 {}", e.old, lost.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("、")));
                 }
-                if let Ok(r) = std::fs::read_to_string(refs.join(ref_name(&e.old))) {
-                    let c = containment(&r, &ex.text);
-                    if c < 0.9 {
-                        text.push(format!("{}：旧正文约 {:.0}% 在新页面里", e.old, c * 100.0));
+                let old_html = if old.snapshot.is_empty() { None } else { gz_read(&snaps.join(&old.snapshot)) };
+                let listing = matches!(e.kind.as_str(), "list" | "home") || is_listing(&e.old, old_html.as_deref().unwrap_or(""));
+                if !listing {
+                    if let Ok(r) = std::fs::read_to_string(refs.join(ref_name(&e.old))) {
+                        let c = containment(&r, &ex.text);
+                        if c < 0.9 {
+                            text.push(format!("{}：旧正文约 {:.0}% 在新页面里", e.old, c * 100.0));
+                        }
+                    }
+                }
+                // 版块：表格、折叠问答丢了就是版式被压平了（列表页也算）；内容页图片少了一截也算
+                {
+                    if let Some(oh) = &old_html {
+                        let (ot, od, oi) = blocks(oh);
+                        let (nt, nd, ni) = blocks(&html);
+                        let mut lost = Vec::new();
+                        if nt < ot {
+                            lost.push(format!("表格 {ot}→{nt}"));
+                        }
+                        if nd < od {
+                            lost.push(format!("折叠问答 {od}→{nd}"));
+                        }
+                        if !listing && oi >= 2 && ni * 10 < oi * 7 {
+                            lost.push(format!("图片 {oi}→{ni}"));
+                        }
+                        if !lost.is_empty() {
+                            layout.push(format!("{}：{}", e.old, lost.join("、")));
+                        }
                     }
                 }
             }
@@ -870,16 +965,17 @@ pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[
 
     let mut v = vec![
         check("missing", "页面都在", missing, true, &format!("{} 个保留的页面在新站上都有", keep_pages.len()), |n| format!("{n} 个旧地址在新站上没有对应页面")),
-        check("slash", "结尾斜杠一致", slash, true, "路径结尾的 / 和旧站一致", |n| format!("{n} 个地址结尾的 / 和旧站不一致，Cloudflare 会多跳一次，要改成和旧站一样")),
-        check("files", "RSS 和下载文件", files_missing, true, "RSS 和附件地址都在", |n| format!("{n} 个 RSS / 附件地址在新站上没有")),
-        check("redirects", "跳转规则", redirects_bad, true, "旧站已有的跳转都保留了", |n| format!("{n} 条跳转没有写进 _redirects 或状态码不对")),
+        check("slash", "地址写法一致", slash, true, "每个地址结尾带不带 / 都和旧站一样", |n| format!("{n} 个地址结尾带不带 / 和旧站不一样，打开时会多跳一次")),
+        check("files", "订阅和下载地址", files_missing, true, "订阅源（RSS）和下载文件的地址都还在", |n| format!("{n} 个订阅源 / 下载文件的地址在新站上没有")),
+        check("redirects", "旧站原有的跳转", redirects_bad, true, "旧站原有的跳转都保留了", |n| format!("{n} 条旧站原有的跳转没保留下来")),
         check("titles", "标题不变", titles, false, "页面标题和旧站一致", |n| format!("{n} 个页面的标题和旧站不一样")),
-        check("descriptions", "描述不变", descs, false, "页面描述和旧站一致", |n| format!("{n} 个页面的描述和旧站不一样")),
-        check("canonical", "canonical 指向正式域名", canon, false, "canonical 都指向正式域名上的原地址", |n| format!("{n} 个页面的 canonical 不是正式域名上的原地址")),
-        check("text", "正文没被改写", text, false, "抽查的正文都和旧站一致", |n| format!("{n} 个页面的正文和旧站差别较大（迁移时不改写正文）")),
-        check("schema", "结构化数据只增不减", schema, false, "旧站的结构化数据都保留了", |n| format!("{n} 个页面少了旧站有的结构化数据")),
-        check("assets", "图片和附件", assets_missing, false, "抓下来的图片和附件都在构建产物里", |n| format!("{n} 个图片 / 附件不在构建产物里")),
-        check("sitemap", "sitemap 覆盖全部页面", not_in_sitemap, false, "保留的页面都在 sitemap 里", |n| format!("{n} 个保留的页面不在 sitemap 里")),
+        check("descriptions", "搜索结果里的描述不变", descs, false, "搜索结果里显示的描述和旧站一致", |n| format!("{n} 个页面搜索结果里的描述和旧站不一样")),
+        check("canonical", "告诉搜索引擎的正式地址", canon, false, "每页都指向正式域名上的原地址", |n| format!("{n} 个页面告诉搜索引擎的正式地址（canonical）不对")),
+        check("text", "正文没被改写", text, false, "抽查的正文都和旧站一致（首页、列表页按内容重新生成，不比）", |n| format!("{n} 个页面的正文和旧站差别较大（迁移时不改写正文）")),
+        check("layout", "版块没丢", layout, false, "表格、折叠问答、图片这些版块都还在", |n| format!("{n} 个页面少了旧页面上的版块（表格、折叠问答、图片），像是版式被压平了：照旧页面的样子做成对应的组件")),
+        check("schema", "搜索结果里的附加信息", schema, false, "旧站给搜索引擎的附加信息（结构化数据）都保留了", |n| format!("{n} 个页面少了旧站有的附加信息（结构化数据，比如文章、问答）")),
+        check("assets", "图片和附件", assets_missing, false, "抓下来的图片和附件都在新站里", |n| format!("{n} 个图片 / 附件不在新站里")),
+        check("sitemap", "网站地图", not_in_sitemap, false, "保留的页面都在网站地图（sitemap）里", |n| format!("{n} 个保留的页面不在网站地图（sitemap）里")),
         check("html_ext", ".html 地址", html_ext, false, "", |n| format!("{n} 个地址以 .html 结尾：Cloudflare Pages 会把它们 308 跳到不带 .html 的地址（搜索引擎能跟上，但不是原样）")),
     ];
     if redirect_count > sm::CF_MAX_REDIRECTS {
@@ -929,6 +1025,18 @@ fn sitemap_paths(out: &Path) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listing_pages_and_lost_blocks() {
+        assert!(is_listing("/", "") && is_listing("/es-ar/", "") && is_listing("/blog/category/x", "") && is_listing("/blog/page/2/", ""));
+        let cards = "<main><h3><a href='/a'>A</a></h3><h3><a href='/b'>B</a></h3><h3> <a href='/c'>C</a></h3></main>";
+        assert!(is_listing("/resources", cards), "标题都是链接的是列表页");
+        assert!(!is_listing("/posts/how-to/", "<main><h2>Paso 1</h2><p>x</p><h2>Paso 2</h2></main>"));
+        assert!(!is_listing("/about/", "") && !is_listing("/a/", ""), "一级的普通页面不是列表页");
+        let old = "<body><main><details><summary>Q</summary>A</details><details></details><table></table><img src=a><img src=b></main></body>";
+        assert_eq!(blocks(old), (1, 2, 2));
+        assert_eq!(blocks("<main><tablex></tablex><img/></main>"), (0, 0, 1), "<tablex> 不是表格");
+    }
 
     const PAGE: &str = r##"<html><head><title>T</title></head><body>
 <header><nav><a href="/">Home</a><a href="/blog/">Blog</a></nav></header>

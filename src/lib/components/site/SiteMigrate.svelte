@@ -206,7 +206,7 @@
   const STEP_DESC: Record<string, string> = {
     survey: '找全旧站的页面，判断适合部署到哪',
     plan: '决定迁哪些页面、新站的样子、部署到哪',
-    extract: '把正文转成 Markdown，图片和附件放回原路径',
+    extract: '把旧站的文字、图片和附件搬下来，地址照旧',
     rebuild: 'AI 用 Astro 重做全站：URL 一个不变、正文一字不改',
     verify: '新站逐条对照旧站，再把每个旧地址实际打开一遍',
     cutover: '让正式域名打开新站，随时能退回旧站',
@@ -415,7 +415,7 @@
               <span><b>{isVps ? '发布到服务器，实测每个旧地址' : '部署到预览地址，实测每个旧地址'}</b>
                 {#if v.meta.live.at}<small>{v.meta.live.bad.length ? `${v.meta.live.checked} 个里 ${v.meta.live.bad.length} 个不对` : `${v.meta.live.checked} 个旧地址都能正常打开或跳转`}</small>{/if}
               </span>
-              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '部署'}，还没实测：点「实测每个旧地址」（不用重新构建，一两分钟），都通过就进入「切换」。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
+              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '部署'}，还没实测：点「实测每个旧地址」（不用重新构建，一两分钟），都通过就到「正式上线」。` : isVps ? '发布到服务器后，Pilot 会在服务器上把每个旧地址打开一遍，不用先改域名的指向。' : `部署到 ${v.preview.replace(/^https?:\/\//, '')}（Cloudflare 自带的地址，只给你看），成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
               {#if v.meta.live.bad.length}
                 <button class="link-btn sm al" onclick={() => toggleItem('live')}>{openItems.has('live') ? '收起' : '查看不对的地址'}</button>
                 {#if openItems.has('live')}<ul class="items">{#each v.meta.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
@@ -451,12 +451,13 @@
           <div class="dm">
             <span class="dk">正式域名</span>
             {#if editFormal}
+              <small class="desc warn-text formal-warn">换正式域名等于整站搬家：新站会上到新域名，搜索引擎也会把它当成正式站。只是想先看看效果的话，不用换，用下面的预览地址或「在自己的域名下先看看」。</small>
               <input class="tin" bind:value={formalIn} placeholder={oldHost} spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter') void setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; }); }} />
               <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
               <button class="btn tiny quiet" onclick={() => (editFormal = false)}>取消</button>
             {:else}
               <b class="mono">{host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
-              {#if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
+              {#if !isVps && !moved}<button class="link-btn" onclick={() => { formalIn = ''; editFormal = true; }}>要换成新域名？</button>{:else if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
               {#if moved && oldOwned}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>改回 {oldHost}</button>{/if}
             {/if}
           </div>
@@ -636,6 +637,7 @@
   .domains { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--rail); }
   .dm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; min-height: 28px; }
   .dm .dk { flex: none; width: 64px; color: var(--dim); }
+  .formal-warn { flex-basis: 100%; order: -1; margin-bottom: 2px; }
   .dm .dk em { display: block; font-style: normal; font-size: 10.5px; color: var(--faint); }
   .act.next { background: var(--rail); }
   .act.next b { margin-right: 8px; color: var(--text); font-weight: 600; }

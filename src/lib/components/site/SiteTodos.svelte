@@ -65,10 +65,15 @@
     </li>
   {/each}
 </ul>
-<div class="batch">
-  <span>{#if busy}AI 正在这个站点里干活，等它这一轮结束再交。{:else if batch.length}这一批 {batch.length} 项：填好的值和勾选的事会合成一条消息，AI 一轮处理完。{:else}填好要补的值、勾选要 AI 做的事，然后一起交给 AI。{/if}</span>
-  <button class="btn small primary" disabled={busy || sending || !batch.length} onclick={send}><Icon name="wand" size={12} />{sending ? '交给 AI…' : `一起交给 AI${batch.length ? `（${batch.length} 项）` : ''}`}</button>
-</div>
+<!-- 选了东西才出现底栏（贴在列表底部跟着滚）；什么都没选时只留一行说明，不盖住别的内容 -->
+{#if batch.length || sending}
+  <div class="batch">
+    <span>{#if busy}AI 正在这个站点里干活，等它这一轮结束再交。{:else}这一批 {batch.length} 项：填好的值和勾选的事会合成一条消息，AI 一轮处理完。{/if}</span>
+    <button class="btn small primary" disabled={busy || sending || !batch.length} onclick={send}><Icon name="wand" size={12} />{sending ? '交给 AI…' : `一起交给 AI（${batch.length} 项）`}</button>
+  </div>
+{:else}
+  <p class="batch-hint">填好要补的值、勾选要 AI 做的事，下面会出现「一起交给 AI」。</p>
+{/if}
 
 <style>
   .todos { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -94,6 +99,7 @@
   .pick.on .box { background: var(--text); border-color: var(--text); }
   .ready { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ok); }
   .batch { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 8px 8px 8px 14px; border-radius: 10px; background: var(--card, #fff); border: 1px solid var(--border2); box-shadow: 0 6px 18px rgba(30, 25, 15, .08); font-size: 12px; color: var(--dim); }
+  .batch-hint { margin: 8px 0 0; font-size: 12px; color: var(--faint); }
   .batch span { flex: 1; min-width: 0; line-height: 1.5; }
   .batch .btn { flex: none; }
 </style>

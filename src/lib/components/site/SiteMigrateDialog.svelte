@@ -22,12 +22,15 @@
     <div class="sheet-body">
       <p class="hint">把线上的站点搬进 Pilot 重做：原来的 URL 和正文都保留，换成新的视觉，部署到 Cloudflare 或你自己的服务器。搬完以后由托管运营接着更新内容。</p>
       <ol class="flow">
-        <li><b>盘点</b>找全旧站的页面、判断适合部署到哪</li>
-        <li><b>抓取</b>正文转成 Markdown，图片和附件放回原路径</li>
-        <li><b>重做</b>AI 用 Astro 重做全站，URL 一个不变</li>
-        <li><b>核对</b>每个旧地址在新站上实测，通过才能正式上线</li>
-        <li><b>上线</b>确认是你的站后再把域名指过来，随时能退回旧站</li>
+        <li><b>盘点</b>找全旧站的页面，判断适合放在哪</li>
+        <li><b>确认方案</b>选部署到哪、新站的样子（大约 1 分钟）</li>
+        <li><b>抓取</b>把文字、图片和附件搬下来，地址照旧</li>
+        <li><b>重做</b>先挑一个设计方向，AI 照着重做全站，文字一字不改</li>
+        <li><b>核对</b>每个旧地址在新站上实际打开一遍，有问题 AI 自己修</li>
+        <li><b>正式上线</b>确认是你的站，让域名打开新站，随时能退回</li>
+        <li><b>上线后观察</b>盯 4 周：旧地址、搜索流量</li>
       </ol>
+      <p class="hint">确认方案以后，抓取、重做、核对都会自动接着做，只在需要你挑设计方向和正式上线时停下来。</p>
       <div class="seg" role="tablist">
         <button class:on={!d.multi} onclick={() => (d.multi = false)} disabled={d.busy}>一个站点</button>
         <button class:on={d.multi} onclick={() => (d.multi = true)} disabled={d.busy}>批量迁移</button>
@@ -68,7 +71,7 @@
   .flow { list-style: none; margin: 4px 0 6px; padding: 10px 12px; border-radius: 10px; background: var(--rail); display: flex; flex-direction: column; gap: 5px; counter-reset: f; }
   .flow li { counter-increment: f; display: flex; gap: 8px; font-size: 12px; color: var(--dim); line-height: 1.5; }
   .flow li::before { content: counter(f); flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 1px var(--border2); font-size: 10px; font-weight: 600; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; }
-  .flow b { flex: none; font-weight: 600; color: var(--text); width: 30px; white-space: nowrap; }
+  .flow b { flex: none; font-weight: 600; color: var(--text); width: 66px; white-space: nowrap; }
   .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dim); }
   .grow { flex: 1; }
   .opt { font-weight: 400; color: var(--faint); font-size: 11px; margin-left: 4px; }

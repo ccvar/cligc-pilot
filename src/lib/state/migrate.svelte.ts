@@ -5,6 +5,7 @@ import { untrack } from 'svelte';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
+import { homeDir } from '@tauri-apps/api/path';
 import type { Site } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { connections } from './connections.svelte.js';
@@ -81,8 +82,12 @@ function defaultParent(): string {
     const p = s.local_dir.replace(/[\\/][^\\/]+[\\/]?$/, '');
     if (p) count.set(p, (count.get(p) ?? 0) + 1);
   }
-  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? homeSites;
 }
+
+/** 第一次用、又没有别的站点可参照：默认放在家目录下的 Sites（不存在会自动建） */
+let homeSites = '';
+void homeDir().then((h) => { homeSites = `${h.replace(/[\\/]+$/, '')}/Sites`; }).catch(() => {});
 
 export function openMigrate(multi = false) {
   connections.switcherOpen = false;
