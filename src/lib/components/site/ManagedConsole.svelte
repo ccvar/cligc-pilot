@@ -61,6 +61,16 @@
     for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
   });
   let logOpen = $state(false);
+  // 日志按「时间 + 站点 + 条目 + 类型」作 key；同一秒批量暂停 / 退出多个站点时会撞，重复的加序号（撞 key 会让整个列表渲染失败）
+  const activityKeys = $derived.by(() => {
+    const seen = new Map<string, number>();
+    return managed.activity.map((a) => {
+      const k = `${a.ts}:${a.site_id}:${a.item_id}:${a.kind}`;
+      const n = seen.get(k) ?? 0;
+      seen.set(k, n + 1);
+      return n ? `${k}:${n}` : k;
+    });
+  });
   async function moveSite(id: string, from: string, to: string) {
     if (to === from) return;
     if (to === '__new') { newGroup([id]); return; }
@@ -323,7 +333,7 @@
         {#if logOpen}
           {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{/if}
         <div class="list feed">
-          {#each managed.activity as a (a.ts + ':' + a.item_id + ':' + a.kind)}
+          {#each managed.activity as a, i (activityKeys[i])}
             <div class="li ev">
               <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
