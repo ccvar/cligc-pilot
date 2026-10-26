@@ -175,6 +175,17 @@ export async function setGroupPaused(g: ManagedGroup, paused: boolean) {
   try { await invoke('set_group_paused', { id: g.id, paused }); await loadManaged(); say(paused ? `已暂停「${g.name}」` : `已恢复「${g.name}」`); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 一次暂停 / 恢复所有托管方案（批量操作；状态都记在各个方案上，不另设全局开关）。 */
+export async function setAllGroupsPaused(groups: ManagedGroup[], paused: boolean) {
+  const list = groups.filter((g) => g.paused !== paused);
+  if (!list.length) return;
+  if (paused && !(await confirmDialog(`暂停全部 ${list.length} 个托管方案？这些方案里的站点都不再自动运行（正在进行的那一项会跑完）。之后可以一个个恢复，也可以一起恢复。`, { title: '暂停全部方案', kind: 'warning', confirmText: '全部暂停' }))) return;
+  try {
+    for (const g of list) await invoke('set_group_paused', { id: g.id, paused });
+    await loadManaged();
+    say(paused ? `已暂停 ${list.length} 个方案` : `已恢复 ${list.length} 个方案`);
+  } catch (e) { say(String(e), 'err'); }
+}
 /** 单独启用 / 停止某个站点的托管。 */
 export async function setSiteActive(siteId: string, active: boolean) {
   try { await invoke('set_site_managed_active', { siteId, active }); await loadManaged(); say(active ? '已恢复托管' : '已停止托管，规则保留'); }

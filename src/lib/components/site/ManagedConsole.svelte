@@ -16,7 +16,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setAllGroupsPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -119,7 +119,12 @@
     <div class="row">
       <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
       {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
-      {#if o}<button class="btn small {paused ? 'primary' : ''}" onclick={() => setPaused(!paused)}><Icon name={paused ? 'play' : 'pause'} size={12} />{paused ? '恢复托管' : '暂停托管'}</button>{/if}
+      <!-- 旧版的「全部暂停」开关：还停着就给个恢复，恢复后不再出现；以后暂停都在方案上 -->
+      {#if o && paused}<button class="btn small primary" onclick={() => setPaused(false)}><Icon name="play" size={12} />恢复托管</button>
+      {:else if o && groups.length}
+        {@const allPaused = groups.every((g) => g.paused)}
+        <button class="ic-btn" onclick={() => setAllGroupsPaused(groups, !allPaused)} aria-label={allPaused ? '恢复全部方案' : '暂停全部方案'} data-tip={allPaused ? '恢复全部托管方案' : '暂停全部托管方案（之后可以一个个恢复）'}><Icon name={allPaused ? 'play' : 'pause'} size={15} /></button>
+      {/if}
     </div>
   </header>
   <nav class="tabs">
