@@ -918,7 +918,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         format!(
             "代码在 GitHub 仓库 `{repo}`，当前目录是 Pilot 克隆好的检出（提交作者 `{login}`，凭据已注入）。\
 【改代码的流程】不要直接提交到默认分支 `{branch}`：先 `git switch -c pilot/<简短主题>`，小步提交、写清楚提交说明；\
-改完先跑构建与检查并如实报告。需要发布时：有 `github_publish` 工具就用它（Pilot 代为推送并开 PR，合并用 `github_merge`，会先请用户确认）；\
+改完先跑构建与检查并如实报告。需要发布时：有 `github_publish` 工具就用它（Pilot 代为推送并开 PR，合并用 `github_merge`；询问 / 自动档会先请用户确认，全自动档直接执行）；\
 没有这个工具时 `git push -u origin <分支>`，再用 `gh pr create` 开 PR（写清改了什么、为什么、怎么验证），没有 gh 就把 `https://github.com/{repo}/compare/<分支>?expand=1` 给用户。\
 不要读取、打印 GITHUB_TOKEN / GH_TOKEN，不要改 credential 相关配置；强制推送、删分支、合并 PR 都要先征得用户同意。",
             repo = site.repo,
@@ -939,7 +939,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
 【站点信息】{root}框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
 【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
 你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\
-用户要你上线时：有 `site_deploy` 工具就调用它（Pilot 先请用户确认，再构建并上线、跑完把结果给你）；GitHub 来源先合并进默认分支（`github_merge` 传 deploy=true 可以合并完直接上线）；\
+用户要你上线时：有 `site_deploy` 工具就调用它（询问 / 自动档 Pilot 先请用户确认，全自动档直接执行；构建并上线、跑完把结果给你）；GitHub 来源先合并进默认分支（`github_merge` 传 deploy=true 可以合并完直接上线）；\
 没有这个工具时请用户在站点页点「构建并上线」。\n\
 【干活的规矩】仓库里有 `.pilot/site.md`（站点约定：内容放哪、页面格式、新增一页要改哪些地方）就先读它并照着做，改了目录结构或页面格式时同步更新它；\
 再读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\

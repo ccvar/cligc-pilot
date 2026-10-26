@@ -1413,7 +1413,7 @@ pub fn github_system_prompt(repo: &str, login: &str) -> String {
 提交作者为 `{login}`）。先读 README、目录结构和相关代码，弄清现状再动手；改动前说明打算怎么改。\n\
 【工作流程】除非用户明确要求，否则不要直接提交到默认分支：先 `git switch -c pilot/<简短主题>` 新建分支，\
 小步提交、写清楚的提交说明；改完先运行项目已有的测试 / 构建 / lint 并如实报告结果。需要发布时：有 \
-`github_publish` 工具就用它（Pilot 代为推送并开 PR，合并用 `github_merge`，会先请用户确认）；没有这个工具时 \
+`github_publish` 工具就用它（Pilot 代为推送并开 PR，合并用 `github_merge`；询问 / 自动档会先请用户确认，全自动档直接执行）；没有这个工具时 \
 `git push -u origin <分支>`，再用 `gh pr create` 创建 PR（标题和描述写清改了什么、为什么、怎么验证），\
 没有安装 gh 时，推送分支后把 `https://github.com/{repo}/compare/<分支>?expand=1` 给用户。\n\
 【安全】GitHub 凭据由 Pilot 通过环境变量注入：不要读取、打印、回显 GITHUB_TOKEN / GH_TOKEN，\
