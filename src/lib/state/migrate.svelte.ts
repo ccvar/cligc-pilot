@@ -67,7 +67,7 @@ const PARENT_KEY = 'cligc.pilot.newSiteParent';
 export const migrate = $state({
   view: {} as Record<string, MView>,
   loading: {} as Record<string, boolean>,
-  /** 正在做的操作（按站点）：plan / dns / cutover / rollback / own … */
+  /** 正在做的操作（按站点）：plan / dns / cutover / rollback / own …（同时有几件在做时显示最新那件，全部做完才清空） */
   busy: {} as Record<string, string>,
   dialog: { open: false, multi: false, domain: '', domains: '', parent: '', busy: false, err: '', results: [] as { domain: string; site_id: string; error: string }[] },
 });
@@ -145,23 +145,24 @@ export async function loadMigrate(id: string) {
   finally { migrate.loading[id] = false; }
 }
 
-/** 常见的报错翻译成「怎么回事 + 下一步怎么做」；认不出的照原样 */
-export function friendly(e: unknown): string {
-  const m = String(e).replace(/^Error:\s*/, '');
-  if (/Cloudflare 40[13]|Authentication error|Unauthorized|permission/i.test(m) && !m.includes('令牌缺'))
-    return `Cloudflare 令牌的权限不够，这一步做不了。到 Cloudflare 后台（我的个人资料 → API 令牌）给这个令牌加上对应权限，或者在 Pilot 的连接里换一个权限够的令牌。\n（原文：${m}）`;
-  if (/请求 Cloudflare 失败|error sending request|timed out|dns error|connection (refused|reset)/i.test(m))
-    return `连不上服务器，可能是网络或代理的问题。检查网络后再试一次。\n（原文：${m}）`;
-  if (/keychain|钥匙串|secret/i.test(m) && /not found|找不到/i.test(m))
-    return `这个连接的密钥找不到了：到 Pilot 的连接里重新填一下。\n（原文：${m}）`;
-  return m;
+// 一个站点可能同时在做几件事（比如后台自动推进和你手点的）：按栈记着，先结束的那件不能把别人的「忙」标志清掉
+const busyOps: Record<string, string[]> = {};
+function beginBusy(id: string, label: string) {
+  (busyOps[id] ??= []).push(label);
+  migrate.busy[id] = label;
+}
+function endBusy(id: string, label: string) {
+  const ops = busyOps[id] ?? [];
+  const i = ops.lastIndexOf(label);
+  if (i >= 0) ops.splice(i, 1);
+  migrate.busy[id] = ops.length ? ops[ops.length - 1] : '';
 }
 
 async function run(id: string, busy: string, f: () => Promise<unknown>, ok?: string) {
-  migrate.busy[id] = busy;
+  beginBusy(id, busy);
   try { await f(); if (ok) say(ok, 'ok'); }
-  catch (e) { say(friendly(e), 'err'); }
-  finally { migrate.busy[id] = ''; void loadMigrate(id); }
+  catch (e) { say(String(e), 'err'); }
+  finally { endBusy(id, busy); void loadMigrate(id); }
 }
 
 export const resurvey = (id: string) => run(id, 'survey', () => invoke('migrate_survey', { id }));
@@ -187,10 +188,10 @@ export const setupVps = (id: string, sshConnId: string) => run(id, 'vps', () => 
 /** 自己的服务器：域名现在解析到哪、和服务器 IP 对不对得上。 */
 export const vpsDns = $state({} as Record<string, MVpsDns | undefined>);
 export async function checkVpsDns(id: string) {
-  migrate.busy[id] = 'vpsdns';
+  beginBusy(id, 'vpsdns');
   try { vpsDns[id] = await invoke<MVpsDns>('migrate_vps_dns', { id }); }
-  catch (e) { say(friendly(e), 'err'); }
-  finally { migrate.busy[id] = ''; }
+  catch (e) { say(String(e), 'err'); }
+  finally { endBusy(id, 'vpsdns'); }
 }
 
 export const extract = (id: string) => run(id, 'extract', () => invoke('migrate_extract', { id }));
@@ -202,7 +203,7 @@ export async function startRebuild(site: Site) {
   try {
     const text = await invoke<string>('migrate_rebuild_message', { id: site.id });
     await sendMaking(site, text, 'AI 在后台开始重做了，进度看「重做」这一步', 'AI 在后台接着重做，进度看「重做」这一步', '重做要求写好了：选一个可用的模型后发送，就开始重做');
-  } catch (e) { say(friendly(e), 'err'); }
+  } catch (e) { say(String(e), 'err'); }
   finally { void loadMigrate(site.id); }
 }
 
@@ -232,7 +233,7 @@ export async function askDirections(site: Site, feedback = '') {
   try {
     const text = await invoke<string>('migrate_directions_message', { id: site.id, feedback: feedback.trim() || null });
     await sendMaking(site, text, 'AI 在后台画 3 个设计方向，好了这里会出现', 'AI 按你的意见重新画 3 个方向', '要求写好了：选一个可用的模型后发送，AI 就开始画设计方向');
-  } catch (e) { say(friendly(e), 'err'); }
+  } catch (e) { say(String(e), 'err'); }
   finally { void loadMigrate(site.id); }
 }
 
@@ -242,11 +243,11 @@ export async function pickDirection(site: Site, direction: string) {
     await invoke('migrate_pick_direction', { id: site.id, direction });
     await loadMigrate(site.id);
     await startRebuild(site);
-  } catch (e) { say(friendly(e), 'err'); }
+  } catch (e) { say(String(e), 'err'); }
 }
 
 export async function openDirection(id: string, direction: string) {
-  try { await invoke('migrate_direction_open', { id, direction }); } catch (e) { say(friendly(e), 'err'); }
+  try { await invoke('migrate_direction_open', { id, direction }); } catch (e) { say(String(e), 'err'); }
 }
 
 export const verify = (id: string) => run(id, 'verify', () => invoke('migrate_verify', { id }));
@@ -307,9 +308,9 @@ export async function cutover(id: string, host: string, vps = false, cfAuto = fa
 export async function setFormal(id: string, host: string, old: string, oldOwned = true) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
   if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '')) {
-    migrate.busy[id] = 'formal';
+    beginBusy(id, 'formal');
     const u = await hostUse(id, h);
-    migrate.busy[id] = '';
+    endBusy(id, 'formal');
     if (!u) { say(`「${h}」不是有效的域名`, 'err'); return false; }
     const inUse = u.records.length > 0 && !u.ours;
     const seo = oldOwned
@@ -484,21 +485,21 @@ export async function confirmAllDefault() {
 
 export async function setAuto(id: string, on: boolean) {
   try { await invoke('migrate_set_auto', { id, auto: on }); await loadMigrate(id); if (on) void autoTick(); else delete batch.waiting[id]; }
-  catch (e) { say(friendly(e), 'err'); }
+  catch (e) { say(String(e), 'err'); }
 }
 
 const aiRunningFor = (id: string) => app.convos.some((c) => c.conn_id === `site:${id}` && c.status === 'running');
 
 /** 只有一个 Cloudflare 连接时，替你建预览用的 Pages 项目（名字按旧站域名 + -new） */
 export async function setupPreviewProject(site: Site, cfConn: string, project: string) {
-  migrate.busy[site.id] = 'pages';
+  beginBusy(site.id, 'pages');
   try {
     await invoke('save_site', { site: { ...site, deploy: { ...site.deploy, mode: 'direct', cf_conn_id: cfConn, project: project.trim(), branch: site.deploy.branch || 'main' } } });
     await refreshSites();
     await invoke('site_setup_pages', { id: site.id });
     say(`已建好预览用的 Cloudflare Pages 项目 ${project.trim()}`, 'ok');
-  } catch (e) { say(friendly(e), 'err'); }
-  finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
+  } catch (e) { say(String(e), 'err'); }
+  finally { endBusy(site.id, 'pages'); void loadMigrate(site.id); }
 }
 
 export function defaultProject(site: Site): string {
@@ -556,6 +557,8 @@ async function advance(s: Site, slots: { ai: number }): Promise<string> {
         // 部署成功后后台会自己接着实测；过了 3 分钟还没实测结果才补一次
         if (batch.deployed[s.id] && justFailed && lastJob?.kind === 'deploy') { delete batch.deployed[s.id]; return '部署没成功，要你看一下'; }
         if (sites.status[s.id]?.last_deploy?.ok && batch.deployed[s.id] && Date.now() - batch.deployed[s.id] > 180000) { await liveCheck(s.id); return ''; }
+        // 文件夹里有未提交的改动时 deploySite 会弹确认框；定时器里不弹，停下来等你手动部署
+        if (sites.status[s.id]?.dirty) return '有未提交的改动，等你确认';
         if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id); }
         return '';
       }
@@ -602,7 +605,7 @@ export function initMigrate() {
       const s = sites.list.find((x) => x.id === j.site_id);
       if (!showMigrateCard(s)) return;
       void loadMigrate(j.site_id).then(() => autoTick());
-      if (j.kind.startsWith('migrate:')) say(j.status === 'ok' ? `${j.title}完成` : j.status === 'canceled' ? `已停止${j.title}` : `${j.title}没通过：${friendly(j.error.split('\n')[0])}`, j.status === 'ok' ? 'ok' : 'err');
+      if (j.kind.startsWith('migrate:')) say(j.status === 'ok' ? `${j.title}完成` : j.status === 'canceled' ? `已停止${j.title}` : `${j.title}没通过：${j.error.split('\n')[0]}`, j.status === 'ok' ? 'ok' : 'err');
     });
     // 自动推进的兜底：每 20 秒看一眼（AI 一轮做完、作业结束都会立刻推，这里防漏）
     const t = setInterval(() => void autoTick(), 20000);

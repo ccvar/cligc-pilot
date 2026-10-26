@@ -29,7 +29,7 @@
     {#if box?.unread}<span class="pill warn">{box.unread} 条未读</span>{/if}
     {#if box?.pending}<span class="pill warn">{box.pending} 条评论待审</span>{/if}
     <span class="grow"></span>
-    <button class="ic-btn" onclick={() => loadInbox(site.id)} disabled={loading} aria-label="刷新" data-tip="重新读取"><RefreshIcon spinning={loading} /></button>
+    <button class="ic-btn ic-sm" onclick={() => loadInbox(site.id)} disabled={loading} aria-label="刷新" data-tip="重新读取"><RefreshIcon spinning={loading} /></button>
   </h3>
   {#if conf?.notes?.length}<ul class="notes">{#each conf.notes as n (n)}<li><Icon name="info" size={12} />{n}</li>{/each}</ul>{/if}
   {#if err}
@@ -95,8 +95,6 @@
 </div>
 
 <style>
-  .ic-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
-  .ic-btn:hover { background: #f1efe9; color: var(--text); }
   .head { margin-bottom: 8px; }
   .grow { flex: 1; }
   .notes { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }

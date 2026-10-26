@@ -159,7 +159,7 @@
   {/if}
 
   <!-- 全局操作反馈挂在应用根层：无论当前打开抽屉、弹窗还是确认框，都应位于最外层。 -->
-  {#if app.flash}<div class="flash {app.flashKind}" role="status" aria-live="polite">{app.flash}</div>{/if}
+  {#if app.flash}<div class="flash {app.flashKind}" role="status" aria-live="polite">{app.flash}{#if app.flashRaw}<span class="flash-raw">原文：{app.flashRaw}</span>{/if}</div>{/if}
 
   <Sidebar />
 
@@ -374,6 +374,7 @@
   /* 吐司：pre-wrap 让「——详情——」多行错误可读；err 形态限高可滚动（安装失败输出末尾等） */
   .flash { position: fixed; top: 40px; left: 50%; transform: translateX(-50%); z-index: 1200; background: #14231a; color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow); max-width: 70%; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-app-region: no-drag; }
   .flash.err { max-height: 42vh; overflow-x: hidden; overflow-y: auto; }
+  .flash-raw { display: block; margin-top: 6px; font-size: 11px; opacity: .75; }
   .imgtip { position: fixed; z-index: 130; transform: translate(-50%, -100%); padding: 5px; border-radius: 10px; background: #fff; border: 1px solid rgba(0, 0, 0, .1); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); pointer-events: none; visibility: hidden; }
   .imgtip.ready { visibility: visible; animation: tipin .12s ease-out both; }
   .imgtip.below { transform: translate(-50%, 0); }

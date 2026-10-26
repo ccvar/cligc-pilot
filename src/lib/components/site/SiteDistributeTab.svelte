@@ -89,8 +89,9 @@
   $effect(() => {
     if (!addOpen) return;
     const close = (e: MouseEvent) => { if (addEl && !addEl.contains(e.target as Node)) addOpen = false; };
-    document.addEventListener('mousedown', close, true);
-    return () => document.removeEventListener('mousedown', close, true);
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') addOpen = false; };
+    document.addEventListener('mousedown', close, true); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', close, true); document.removeEventListener('keydown', esc); };
   });
   function newChannel(kind: string) {
     addOpen = false;
@@ -386,7 +387,7 @@
           <button class:on={filter === k} onclick={() => (filter = k)}>{l}<small>{n}</small></button>
         {/each}
       </span>
-      <button class="btn tiny quiet" onclick={load} data-tip="重新读取站点文章"><Icon name="refresh" size={11} /></button>
+      <button class="btn tiny quiet" onclick={load} aria-label="重新读取站点文章" data-tip="重新读取站点文章"><Icon name="refresh" size={11} /></button>
     </h3>
     {#if loadErr}<p class="hint warn">{loadErr}</p>
     {:else if st && !st.built}<p class="hint">站点还没有构建产物，读不到文章：先在「部署」里构建一次。</p>

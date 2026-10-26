@@ -57,7 +57,7 @@
         </div>
         <small>会在这里新建一个文件夹放新站的代码，只在你的电脑上。</small>
       </div>
-      {#if d.err}<div class="err-note">{d.err}</div>{/if}
+      <div class="err-note slot" class:on={!!d.err} role="alert">{d.err}</div>
     </div>
     <footer class="sheet-foot">
       <span class="grow"></span>

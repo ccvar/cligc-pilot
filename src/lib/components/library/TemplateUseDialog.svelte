@@ -15,7 +15,7 @@
       {#if !app.isCfConn}<p class="hint warn-text">请先在左下角切到一个 Cloudflare 连接，再用模板建站。</p>{/if}
       <p class="hint">给新项目起个名，模板文件会拷进去，然后在对话里描述你的定制。</p>
       <input class="tin" bind:value={library.useTmplProject} placeholder="新项目名，如 my-landing" spellcheck="false" onkeydown={(e) => e.key === 'Enter' && confirmUseTmpl()} />
-      {#if library.useTmplErr}<div class="err-note">{library.useTmplErr}</div>{/if}
+      <div class="err-note slot" class:on={!!library.useTmplErr} role="alert">{library.useTmplErr}</div>
       <div class="row-end">
         <button class="btn ghost" onclick={() => (library.useTmplOpen = false)} disabled={library.useTmplBusy}>取消</button>
         <button class="btn primary" onclick={confirmUseTmpl} disabled={library.useTmplBusy || !library.useTmplProject.trim() || !app.isCfConn}>{library.useTmplBusy ? '创建中…' : '创建项目'}</button>
@@ -33,6 +33,11 @@
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  /* 报错位始终占一行：出现时只是淡入，弹窗不长高、不重新居中 */
+  .err-note.slot:not(.on) { visibility: hidden; }
+  .err-note.slot:not(.on)::before { content: '\200b'; }
+  .err-note.slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
   .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }

@@ -130,17 +130,18 @@
             {#snippet icon()}<ConnectionMark kind={g.kind === 'other' ? g.items[0].kind : g.kind} size={14} />{/snippet}
             {#each g.items as c (c.id)}
               {@const nm = connectionDisplayName(c)}
-              <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" role="button" tabindex="0"
-                onclick={() => selectConn(c.id)}
-                onkeydown={(e) => e.key === 'Enter' && e.currentTarget === e.target && selectConn(c.id)}
-                oncontextmenu={(e) => openConnCtx(e, c)}>
-                {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
-                <b class="cr-name" data-tip={maskTip(nm, mask(nm))}>{mask(nm)}</b>
-                {#if c.kind === 'ssh'}
-                  <small class="cr-sub" data-tip={maskTip(sshSub(c), mask(sshSub(c)))}>{mask(sshSub(c))}</small>
-                {:else if connSub(c)}
-                  <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : maskTip(connSub(c), mask(connSub(c)))}>{mask(connSub(c))}</small>
-                {/if}
+              <!-- 行里有齿轮按钮，按钮不能套按钮：名字那块自己是「选中这个连接」的按钮（原生支持 Enter / 空格） -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="conn-row {app.activeConnId === c.id ? 'on' : ''}" oncontextmenu={(e) => openConnCtx(e, c)}>
+                <button type="button" class="cr-main" onclick={() => selectConn(c.id)}>
+                  {#if c.kind === 'ssh'}<span class="cr-os" data-tip={sshSub(c)}><DistroMark id={distroOf(c)} size={14} /></span>{/if}
+                  <b class="cr-name" data-tip={maskTip(nm, mask(nm))}>{mask(nm)}</b>
+                  {#if c.kind === 'ssh'}
+                    <small class="cr-sub" data-tip={maskTip(sshSub(c), mask(sshSub(c)))}>{mask(sshSub(c))}</small>
+                  {:else if connSub(c)}
+                    <small class="cr-sub" class:conn-remark={!!c.remark?.trim()} data-tip={c.remark?.trim() ? `脱敏 Key：${c.key_prefix}` : maskTip(connSub(c), mask(connSub(c)))}>{mask(connSub(c))}</small>
+                  {/if}
+                </button>
                 <button
                   class="icon-btn sm cr-gear"
                   class:active={connections.connCtx?.conn.id === c.id}
@@ -347,7 +348,8 @@
   /* 无边框动作按钮（头部次要动作）：去边框去底，仅 hover 有淡底 */
   .btn.bare { border: none; background: none; }
   .btn.bare:hover { background: var(--rail); border-color: transparent; }
-  .authbtn { display: inline-flex; align-items: center; gap: 3px; background: none; border: none; padding: 1px 2px; color: var(--accent); font-size: 12px; font-weight: 550; line-height: 1; cursor: pointer; }
+  /* 这一行右侧的动作位（去授权 / 粘贴 Token / 升级）统一 26px 高，换哪个都不动行高 */
+  .authbtn { display: inline-flex; align-items: center; gap: 3px; box-sizing: border-box; height: 26px; background: none; border: none; padding: 0 2px; color: var(--accent); font-size: 12px; font-weight: 550; line-height: 1; cursor: pointer; }
   .authbtn:hover { color: var(--accent-h); }
   .setup-add { position: relative; display: inline-flex; }
   .setup-add-trigger { width: 27px; height: 27px; padding: 0; }
@@ -397,6 +399,8 @@
   .conn-groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   .cr-os { flex: none; display: inline-flex; width: 14px; margin-left: -22px; } /* 放进左侧缩进里，机器名和其他组的名字对齐 */
   .conn-row :global(.sm) { border-radius: 6px; }
+  .cr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+  .cr-main:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .icon-btn.sm { padding: 4px; border-radius: 7px; }
   .brain-row { display: flex; align-items: center; gap: 11px; padding: 0; }
   .brain-auth-actions { flex: none; display: inline-flex; align-items: center; gap: 8px; }
@@ -425,7 +429,7 @@
   .brain-auth-icon :global(.rfz) { width: 12px; height: 12px; }
   .brain-auth-icon .wr-spin { width: 10px; height: 10px; }
   .cli-new { color: var(--ok); }
-  .cli-upg { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 6px; color: var(--ok); cursor: pointer; }
+  .cli-upg { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 7px; color: var(--ok); cursor: pointer; }
   .cli-upg:hover:not(:disabled) { background: #f1efe9; }
   .cli-upg:disabled { color: var(--faint); cursor: default; }
   .verify-bad { color: #b45309; font-size: 10px; font-weight: 550; white-space: nowrap; }

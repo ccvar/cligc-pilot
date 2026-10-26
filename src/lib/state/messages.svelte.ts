@@ -340,24 +340,39 @@ export function hostOf(u: string): string { try { return new URL(u).host; } catc
 
 // 从对话里认出这个项目已部署的线上地址（AI 部署完都会说「访问 https://xxx」）。
 // 优先自定义域名，其次 *.pages.dev；忽略 localhost / CDN / 文档等无关链接。
-export function detectSiteUrl(convs: (Conversation | null)[]): string {
+// 每条对话的探测结果按 id + updated_at + 消息数缓存：侧栏分组每次 convos 刷新都要算，不能每次把所有助手消息重新正则一遍
+const siteUrlCache = new Map<string, { stamp: string; custom: string; pages: string }>();
+function detectInConv(c: Conversation): { custom: string; pages: string } {
+  const stamp = `${c.updated_at}:${c.messages.length}:${c.status}`;
+  const hit = siteUrlCache.get(c.id);
+  if (hit && hit.stamp === stamp) return hit;
   const re = /https?:\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s`"'）)，。；]*/gi;
+  let custom = '', pages = '';
+  for (const m of c.messages) {
+    if (m.role !== 'assistant' || m.hidden) continue;
+    const found = m.text.match(re);
+    if (!found) continue;
+    for (let u of found) {
+      u = u.replace(/[.,;)]+$/, '');
+      const host = u.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
+      if (host.includes('localhost') || host.startsWith('127.') || host.includes('cloudflare.com')
+        || host.includes('developers.') || host.includes('tailwindcss.com') || host.includes('github')
+        || host.includes('npmjs') || host.includes('unpkg') || host.includes('jsdelivr')) continue;
+      if (host.endsWith('.pages.dev')) pages = u; else custom = u;
+    }
+  }
+  const r = { stamp, custom, pages };
+  siteUrlCache.set(c.id, r);
+  if (siteUrlCache.size > 2000) siteUrlCache.delete(siteUrlCache.keys().next().value!);
+  return r;
+}
+export function detectSiteUrl(convs: (Conversation | null)[]): string {
   let custom = '', pages = '';
   for (const c of convs) {
     if (!c) continue;
-    for (const m of c.messages) {
-      if (m.role !== 'assistant' || m.hidden) continue;
-      const found = m.text.match(re);
-      if (!found) continue;
-      for (let u of found) {
-        u = u.replace(/[.,;)]+$/, '');
-        const host = u.replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
-        if (host.includes('localhost') || host.startsWith('127.') || host.includes('cloudflare.com')
-          || host.includes('developers.') || host.includes('tailwindcss.com') || host.includes('github')
-          || host.includes('npmjs') || host.includes('unpkg') || host.includes('jsdelivr')) continue;
-        if (host.endsWith('.pages.dev')) pages = u; else custom = u;
-      }
-    }
+    const r = detectInConv(c);
+    if (r.custom) custom = r.custom;
+    if (r.pages) pages = r.pages;
   }
   return custom || pages;
 }

@@ -153,7 +153,7 @@
         </div>
         {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
       {/if}
-      {#if f.err}<div class="err-note">{f.err}</div>{/if}
+      <div class="err-note slot" class:on={!!f.err} role="alert">{f.err}</div>
     </div>
     <footer class="sheet-foot">
       {#if quick}

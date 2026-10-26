@@ -190,14 +190,14 @@
             <button class="bind g-btn" onclick={connectGoogle} aria-expanded={clientOpen}><GmailMark size={12} />用 Google 登录</button>
           {/if}
         </div>
-        {#if !mailOpen && !clientOpen && mailErr}<p class="err row-err">{mailErr}</p>{/if}
+        {#if !mailOpen && !clientOpen}<p class="err row-err slot" class:on={!!mailErr} role="alert">{mailErr}</p>{/if}
         {#if clientOpen}
           <div class="mail-form">
             <p class="hint">第一次用要填一次 Google 登录凭证：在 Google Cloud 建一个「桌面应用」类型的 OAuth 客户端，并启用 Gmail API（<button class="lnk" onclick={() => openUrl('https://console.cloud.google.com/apis/credentials')}>打开 Google Cloud 凭据页</button>）。和网站数据（GA4 / Search Console）共用这一份，只存在钥匙串里。</p>
             <input class="mi" placeholder="客户端 ID（….apps.googleusercontent.com）" bind:value={clientId} autocomplete="off" spellcheck="false" />
             <input class="mi" type="password" placeholder="客户端密钥（GOCSPX-…）" bind:value={clientSecret} autocomplete="off"
               onkeydown={(e) => { if (e.key === 'Enter' && clientId && clientSecret && !mailBusy) void saveClientAndConnect(); }} />
-            {#if mailErr}<p class="err">{mailErr}</p>{/if}
+            <p class="err slot" class:on={!!mailErr} role="alert">{mailErr}</p>
             <div class="mail-act"><button class="bind" onclick={saveClientAndConnect} disabled={mailBusy || !clientId.trim() || !clientSecret.trim()}>{mailBusy ? '保存中…' : '保存并登录'}</button></div>
           </div>
         {/if}
@@ -213,7 +213,7 @@
                 QQ / 163 邮箱在网页版「设置 → 账户」里开启 IMAP，生成授权码填在这里。密码只存在这台电脑的钥匙串里。
               {/if}
             </p>
-            {#if mailErr}<p class="err">{mailErr}</p>{/if}
+            <p class="err slot" class:on={!!mailErr} role="alert">{mailErr}</p>
             <div class="mail-act"><button class="bind" onclick={connectMail} disabled={mailBusy || !mailEmail.trim() || !mailPass.trim()}>{mailBusy ? '连接中…' : '连接'}</button></div>
           </div>
         {/if}
@@ -242,6 +242,11 @@
   .lnk { border: none; background: none; padding: 0; font: inherit; color: #1a73e8; cursor: pointer; }
   .lnk:hover { text-decoration: underline; }
   .err { margin: 0; color: #b42318; font-size: 11.5px; line-height: 1.5; }
+  /* 报错位始终占一行：出现时只是淡入，表单不跳 */
+  .slot:not(.on) { visibility: hidden; }
+  .slot:not(.on)::before { content: '\200b'; }
+  .slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   .row-err { padding: 0 10px 8px 31px; }
   .mail-act { display: flex; justify-content: flex-end; }
   .mail-log { list-style: none; margin: 0; padding: 0 10px 7px 31px; color: var(--dim); font-size: 11px; line-height: 1.7; }

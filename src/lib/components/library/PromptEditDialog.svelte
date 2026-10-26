@@ -3,18 +3,29 @@
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { library, savePrompt } from '$lib/state/library.svelte.js';
   import { DIALOG_GEOMETRY } from '$lib/state/env';
+  import { confirmDialog } from '$lib/state/app.svelte.js';
+
+  // 点遮罩 / 按 Esc 关掉：写了东西还没保存的，先问一句，不悄悄丢
+  function dirty(): boolean {
+    const saved = library.promptEditId ? library.userPrompts.find((p) => p.id === library.promptEditId) : null;
+    return library.promptEditTitle.trim() !== (saved?.title ?? '').trim() || library.promptEditBody.trim() !== (saved?.body ?? '').trim();
+  }
+  async function tryClose() {
+    if (dirty() && !await confirmDialog('这条提示词还没保存，关掉就丢了。', { title: '放弃修改？', kind: 'warning', confirmText: '放弃', cancelText: '继续编辑' })) return;
+    library.promptEditOpen = false;
+  }
 </script>
 
 <!-- 提示词 新建/编辑 -->
 {#if library.promptEditOpen}
-  <div class="mask" role="presentation" onclick={() => (library.promptEditOpen = false)}></div>
-  <div class="modal wide" use:dialogGeometry={DIALOG_GEOMETRY.promptEditor} use:escClose={() => (library.promptEditOpen = false)} role="dialog" aria-modal="true" aria-label={library.promptEditId ? '编辑提示词' : '新增提示词'}>
-    <header class="sheet-head"><b>{library.promptEditId ? '编辑提示词' : '新增提示词'}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (library.promptEditOpen = false)}>×</button></header>
+  <div class="mask" role="presentation" onclick={() => void tryClose()}></div>
+  <div class="modal wide" use:dialogGeometry={DIALOG_GEOMETRY.promptEditor} use:escClose={() => void tryClose()} role="dialog" aria-modal="true" aria-label={library.promptEditId ? '编辑提示词' : '新增提示词'}>
+    <header class="sheet-head"><b>{library.promptEditId ? '编辑提示词' : '新增提示词'}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => void tryClose()}>×</button></header>
     <div class="sheet-body">
       <input class="tin" bind:value={library.promptEditTitle} placeholder="标题，如 手冲咖啡落地页" spellcheck="false" />
       <textarea class="tin" style="margin-top:7px; min-height:150px; line-height:1.5" bind:value={library.promptEditBody} placeholder="写清楚你要什么样的网站：给谁看、要哪些区块、风格方向，合适的话让它把表单存进 D1，结尾让它先给方案。"></textarea>
       <div class="row-end">
-        <button class="btn ghost" onclick={() => (library.promptEditOpen = false)}>取消</button>
+        <button class="btn ghost" onclick={() => void tryClose()}>取消</button>
         <button class="btn primary" onclick={savePrompt} disabled={!library.promptEditTitle.trim() || !library.promptEditBody.trim()}>保存</button>
       </div>
     </div>

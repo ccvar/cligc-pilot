@@ -98,13 +98,13 @@
               <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="2" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
                 onpaste={onComposerPaste}
-                onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
+                onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
               <div class="composer-bar">
                 <div class="cb-left"><span class="ssh-target" title={app.activeConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(app.activeConn)} size={13} /><span class="st-addr">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}</span></span></div>
                 <div class="cb-right">
                   <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, true)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, true)} />
                   <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
-                  <button class="send" onclick={startChat} disabled={(!launcher.lDraft.trim() && !composer.attachments.length) || composer.attaching || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
+                  <button class="send" onclick={() => void startChat()} disabled={(!launcher.lDraft.trim() && !composer.attachments.length) || composer.attaching || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
                 </div>
               </div>
             </div>

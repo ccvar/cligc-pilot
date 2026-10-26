@@ -102,6 +102,13 @@
   const allOff = $derived(groups.some((g) => g.sites.length) && groups.every((g) => g.sites.every((x) => g.stopped.includes(x))));
   let moreOpen = $state(false);
   let planMenu = $state('');
+  // 弹出菜单：点外面关（遮罩），按 Esc 也关
+  $effect(() => {
+    if (!moreOpen && !planMenu) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { moreOpen = false; planMenu = ''; } };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  });
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
@@ -356,8 +363,6 @@
   .log-h .chev { color: var(--faint); transition: transform .16s var(--su-ease); }
   .oplog.open .log-h .chev { transform: rotate(90deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
-  .ic-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 8px; color: var(--dim); cursor: pointer; transition: background-color .12s, color .12s; }
-  .ic-btn:hover { background: var(--su-hover); color: var(--text); }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }

@@ -13,7 +13,7 @@
       <p class="hint">备注会替代列表里的脱敏 Key；鼠标悬停仍可查看原来的脱敏 Key。留空保存即可清除。</p>
       <!-- svelte-ignore a11y_autofocus -->
       <input class="tin" bind:value={connections.connRemarkEdit.value} maxlength="60" placeholder="例如 cms.ccvar.com" spellcheck="false" autocapitalize="off" autocorrect="off" autofocus disabled={connections.connRemarkEdit.busy} onkeydown={(e) => e.key === 'Enter' && void saveConnRemark()} />
-      {#if connections.connRemarkEdit.error}<div class="err-note">{connections.connRemarkEdit.error}</div>{/if}
+      <div class="err-note slot" class:on={!!connections.connRemarkEdit.error} role="alert">{connections.connRemarkEdit.error}</div>
       <div class="row-end">
         <button class="btn ghost" onclick={() => (connections.connRemarkEdit = null)} disabled={connections.connRemarkEdit.busy}>取消</button>
         <button class="btn primary" onclick={() => void saveConnRemark()} disabled={connections.connRemarkEdit.busy || connections.connRemarkEdit.value.trim() === connections.connRemarkEdit.original}>{connections.connRemarkEdit.busy ? '保存中…' : '保存'}</button>
@@ -31,6 +31,11 @@
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  /* 报错位始终占一行：出现时只是淡入，弹窗不长高、不重新居中 */
+  .err-note.slot:not(.on) { visibility: hidden; }
+  .err-note.slot:not(.on)::before { content: '\200b'; }
+  .err-note.slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
   .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }

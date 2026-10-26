@@ -69,7 +69,7 @@
           </div>
         {/if}
       {/if}
-      {#if gh.ghErr}<div class="err-note">{gh.ghErr}</div>{/if}
+      <div class="err-note slot" class:on={!!gh.ghErr} role="alert">{gh.ghErr}</div>
       <div class="row-end">
         <button class="btn small ghost" onclick={closeGhConnect} disabled={gh.ghConnecting || gh.ghVerifying}>取消</button>
         <button class="btn small primary" onclick={confirmGh} disabled={gh.ghConnecting || !v || !sameAccount || !v.repos.length}>{gh.ghConnecting ? (updating ? '更新中…' : '连接中…') : updating ? '更新此连接' : '连接'}</button>
@@ -88,6 +88,11 @@
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  /* 报错位始终占一行：出现时只是淡入，弹窗不长高、不重新居中 */
+  .err-note.slot:not(.on) { visibility: hidden; }
+  .err-note.slot:not(.on)::before { content: '\200b'; }
+  .err-note.slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
   .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }

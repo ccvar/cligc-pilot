@@ -50,6 +50,13 @@
   const problemSites = $derived(new Set(issues.filter((g) => !g.soft).flatMap((g) => g.rows.map((r) => r.id))).size);
   const onlyLabel = $derived(ISSUE_GROUPS.find((g) => g.k === fleet.filter)?.l ?? '');
   let issuesOpen = $state(false);
+  // 弹出列表：点外面关（遮罩），按 Esc 也关
+  $effect(() => {
+    if (!issuesOpen) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') issuesOpen = false; };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  });
   function pickIssue(k: typeof fleet.filter) { fleet.filter = k; fleet.tab = 'sites'; issuesOpen = false; }
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>

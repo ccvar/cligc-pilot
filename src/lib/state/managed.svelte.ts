@@ -192,7 +192,14 @@ export async function setSiteActive(siteId: string, active: boolean) {
   catch (e) { say(String(e), 'err'); }
 }
 
-export async function loadManaged() {
+// 同时被几处叫到（打开控制台、保存后、定时刷新）时只跑一次：里面有旧版配置的迁移写盘，并发跑会互相覆盖
+let managedLoading: Promise<void> | null = null;
+export function loadManaged(): Promise<void> {
+  if (managedLoading) return managedLoading;
+  managedLoading = loadManagedOnce().finally(() => { managedLoading = null; });
+  return managedLoading;
+}
+async function loadManagedOnce() {
   try {
     let [o, a] = await Promise.all([invoke<ManagedOverview>('managed_overview'), invoke<ManagedActivity[]>('managed_activity', { limit: 300 })]);
     // 暂停只有一层：每个站点自己的开关。旧版的「全部暂停」和「方案暂停」换成把对应站点的开关关掉（效果一样，什么都不跑）

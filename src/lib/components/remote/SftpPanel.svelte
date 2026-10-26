@@ -45,7 +45,7 @@
     <button class="fh fh-date" onclick={() => setSort('mtime')}>{@render colGrip('date')}日期{#if sftp.sftpSort.key === 'mtime'}<span class="fh-ar" class:desc={!sftp.sftpSort.asc}>^</span>{/if}</button>
   </div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="files-list" oncontextmenu={(e) => openFctx(e, null)}>
+  <div class="files-list" role="tree" tabindex="-1" aria-label="远端文件" oncontextmenu={(e) => openFctx(e, null)}>
     {#if sftp.sftpBusy && !sftp.sftpRows.length}
       <div class="files-empty">读取中…</div>
     {:else if !sftp.sftpRows.length}
@@ -56,7 +56,7 @@
         {@const deleteTarget = isSftpDeleteTarget(r.path)}
         {@const renaming = sftp.fileRename?.connId === sftp.sftpConnId && sftp.fileRename?.path === r.path}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="frow" class:on={sftp.sftpSel === r.path} class:deleting class:drop-target={sftp.sftpFileOver && sftp.sftpDropTarget?.remoteDir === r.path && r.dir && !r.link} data-sftp-drop-path={r.path} role="row" tabindex="-1" aria-busy={deleting}
+        <div class="frow" class:on={sftp.sftpSel === r.path} class:deleting class:drop-target={sftp.sftpFileOver && sftp.sftpDropTarget?.remoteDir === r.path && r.dir && !r.link} data-sftp-drop-path={r.path} role="treeitem" tabindex="0" aria-selected={sftp.sftpSel === r.path} aria-expanded={r.dir && !r.link ? sftp.sftpOpenDirs.has(r.path) : undefined} aria-level={r.depth + 1} aria-busy={deleting}
           draggable={isMac && !deleting && !renaming && !sftp.sftpBusy && !sftp.sftpXfer && !sftp.sftpNativeDragging} ondragstart={(e) => onSftpDragStart(e, r)}
           onclick={() => { if (!deleting) sftp.sftpSel = r.path; }}
           ondblclick={() => { if (!deleting && !renaming) sftpOpenRow(r); }}
@@ -169,6 +169,7 @@
   .files-empty { padding: 28px 0; text-align: center; color: var(--faint); font-size: 13px; }
   .frow { display: flex; align-items: center; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none; }
   .frow:hover { background: var(--rail); }
+  .frow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .frow.on { background: var(--accent-soft); }
   .frow.drop-target { background: var(--accent-soft); outline: 1px solid var(--border2); outline-offset: -1px; }
   .frow.deleting, .frow.deleting:hover, .frow.deleting.on { background: var(--rail); opacity: .52; cursor: progress; }

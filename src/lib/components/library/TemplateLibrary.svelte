@@ -4,6 +4,22 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { library, catOf, loadTemplates, previewTemplate, openUseTmpl, delTemplate, CAT_MINE } from '$lib/state/library.svelte.js';
   import { relTime } from '$lib/state/sidebar.svelte.js';
+
+  // 缩略图是整页 iframe（1280×860 缩到 0.23），一屏十几张全挂上很重：只给滚进视口的卡片挂，
+  // 同时最多留 MAX_LIVE 张（滚远了的先撤），其余显示首字母占位。按 slug 做 key，切分类时还在的卡不重建。
+  const MAX_LIVE = 8;
+  let live = $state<string[]>([]);
+  const inView = new Set<string>();
+  function lazyThumb(node: HTMLElement, slug: string) {
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) {
+        inView.add(slug);
+        if (!live.includes(slug)) live = [...live.filter((s) => inView.has(s) || s === slug), slug].slice(-MAX_LIVE);
+      } else inView.delete(slug);
+    }, { rootMargin: '160px 0px' });
+    io.observe(node);
+    return { destroy() { io.disconnect(); inView.delete(slug); } };
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -32,9 +48,9 @@
     {:else}
       <div class="tmpl-grid">
         {#each library.tmplShown as t (t.slug)}
-          <div class="tmpl-card" id="tmpl-{t.slug}">
+          <div class="tmpl-card" id="tmpl-{t.slug}" use:lazyThumb={t.slug}>
             <div class="tmpl-thumb">
-              {#if library.tmplHtml[t.slug]}
+              {#if library.tmplHtml[t.slug] && live.includes(t.slug)}
                 <iframe class="tmpl-frame" srcdoc={library.tmplHtml[t.slug]} sandbox="allow-scripts" title={t.name} tabindex="-1" scrolling="no"></iframe>
               {:else}
                 <span class="tmpl-letter">{t.name.slice(0, 1)}</span>

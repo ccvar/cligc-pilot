@@ -81,8 +81,11 @@
       <button type="button" onclick={() => { fontSize = Math.min(22, fontSize + 1); }} disabled={fontSize >= 22} aria-label="放大编辑器字号">A+</button>
     </div>
   </div>
-  {#if error}<div class="editor-error" role="alert">{error}</div>{/if}
-  <div class="code-surface" bind:this={container}></div>
+  <div class="code-wrap">
+    <!-- 报错浮在编辑区顶上，不把编辑器往下推 -->
+    {#if error}<div class="editor-error" role="alert">{error}</div>{/if}
+    <div class="code-surface" bind:this={container}></div>
+  </div>
   {#if !editor && !error}<div class="editor-loading" role="status">正在加载代码编辑器…</div>{/if}
   <div class="editor-status">
     <span>行 {status.line}，列 {status.column}<span class="status-separator">·</span>共 {status.lines} 行</span>
@@ -122,7 +125,8 @@
   .code-surface :global(.cm-button) { color: var(--text, #302d28); background: var(--bg, #fff); border: 1px solid var(--border, #e8e5df); border-radius: 4px; text-transform: none; }
   .editor-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 6px 14px; font-size: 10.5px; color: var(--dim, #77746c); border-top: 1px solid var(--border, #e8e5df); flex: none; }
   .status-separator { opacity: .55; padding: 0 7px; }
-  .editor-error { padding: 8px 14px; background: var(--err-soft, #fff0ee); color: var(--err, #b23b30); font-size: 12px; white-space: pre-wrap; max-height: 110px; overflow: auto; }
+  .code-wrap { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+  .editor-error { position: absolute; top: 0; left: 0; right: 0; z-index: 3; padding: 8px 14px; background: var(--err-soft, #fff0ee); color: var(--err, #b23b30); font-size: 12px; white-space: pre-wrap; max-height: 110px; overflow: auto; box-shadow: 0 2px 6px rgba(0, 0, 0, .08); }
   .editor-loading { padding: 10px 14px; font-size: 12px; color: var(--dim, #77746c); }
   @media (max-width: 720px) { .appearance { margin-left: 0; } .editor-status > span:last-child { display: none; } }
 </style>

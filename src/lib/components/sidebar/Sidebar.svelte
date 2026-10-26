@@ -59,16 +59,17 @@
 
 <!-- 对话行：普通工作区和站点列表共用 -->
 {#snippet convRow(c: Conversation)}
-<div class="convo {app.activeConvId === c.id ? 'on' : ''}" onpointerdown={(e)=>startConversationPointerDrag(e,c.id)} draggable="true" ondragstart={(e)=>startConversationDrag(e,c.id)} ondragend={endConversationDrag} role="button" tabindex="0"
-  onclick={() => openConv(c.id)} onkeydown={(e) => e.key === 'Enter' && openConv(c.id)}>
-  <div class="convo-body">
+<!-- 行本身不是按钮（里面还有删除键，按钮不能套按钮）：标题区是打开对话的按钮，× 是并列的另一个 -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="convo {app.activeConvId === c.id ? 'on' : ''}" onpointerdown={(e)=>startConversationPointerDrag(e,c.id)} draggable="true" ondragstart={(e)=>startConversationDrag(e,c.id)} ondragend={endConversationDrag}>
+  <button type="button" class="convo-body" onclick={() => openConv(c.id)}>
     <span class="convo-bi" title={brainLabel(c.brain)}><BrainIcon brain={modelIcon(c.brain)} size={11} /></span>
     <span class="convo-title">{convTitle(c.title)}</span>
     {#if c.status === 'running' || app.running[c.id]}<span class="mini-run"></span>{/if}
     {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
     <span class="convo-when">{relTime(c.updated_at)}</span>
-  </div>
-  <button class="convo-x" title="删除对话" onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
+  </button>
+  <button class="convo-x" title="删除对话" aria-label="删除对话" onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
 </div>
 {/snippet}
 
@@ -178,16 +179,20 @@
   .convo { position: relative; display: flex; align-items: center; gap: 6px; border-radius: 8px; margin: 0 8px; padding: 1px 6px 1px 19px; cursor: pointer; }
   .convo:hover { background: #f5f4f1; }
   .convo.on { background: #f0efeb; }
-  .convo-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .convo-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+  .convo-body:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .convo-bi { flex: none; display: inline-flex; align-items: center; }
   /* 对话标题：比分组头（.site-grp-name 12.5px/var(--text)）小半号、淡一档——让站点头当主、对话当项 */
   .convo-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .convo-when { flex: none; font-size: 11px; color: var(--dim); }
+  /* 时间和悬停时换上来的 × 占同一个 44px 位：切换时标题的截断位置不跳 */
+  .convo-when { flex: none; width: 44px; text-align: right; font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; }
   .mini-run { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; flex: none; }
   .mini-permit { font-size: 10px; font-weight: 600; color: #b45309; background: #faf1d8; padding: 0 5px; border-radius: 4px; flex: none; }
-  .convo-x { display: none; background: none; border: none; color: var(--faint); font-size: 16px; line-height: 1; padding: 1px 2px 1px 4px; border-radius: 5px; cursor: pointer; flex: none; }
+  .convo-x { display: none; box-sizing: border-box; width: 44px; text-align: right; background: none; border: none; color: var(--faint); font-size: 16px; line-height: 1; padding: 1px 2px 1px 4px; border-radius: 5px; cursor: pointer; flex: none; }
   .convo:hover .convo-x, .convo:focus-within .convo-x { display: block; }
   .convo:hover .convo-when, .convo:focus-within .convo-when { display: none; }
+  /* × 顶替时间的位置：从标题按钮里把时间收掉、× 在外面同宽补上，整行宽度不变 */
+  .convo:hover .convo-body, .convo:focus-within .convo-body { margin-right: -6px; }
   .convo-x:hover { color: var(--dim); }
   @keyframes pulse { 50% { opacity: .35; } }
   .site-grp-fav { width: 14px; height: 14px; border-radius: 3px; flex: none; object-fit: cover; }

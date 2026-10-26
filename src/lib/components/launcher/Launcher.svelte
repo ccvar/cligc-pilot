@@ -52,7 +52,7 @@
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
             placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
             oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
-            onkeydown={(e) => onComposerKey(e, startChat)}></textarea>
+            onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
             {#if app.isSitesHub}
@@ -83,7 +83,7 @@
             <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, app.isSshConn)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, app.isSshConn)} />
             <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
             <UsageRing />
-            <button class="send" onclick={startChat} disabled={((app.isCfConn || app.isGhConn || app.isSitesHub) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
+            <button class="send" onclick={() => void startChat()} disabled={((app.isCfConn || app.isGhConn || app.isSitesHub) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
           </div>
         </div>
       </div>

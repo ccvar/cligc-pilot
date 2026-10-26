@@ -8,6 +8,7 @@ import { detectSiteUrl } from './messages.svelte.js';
 import type { LiveTurn } from './messages.svelte.js';
 import { sites, siteConnection, isSiteConnId, siteIdOf } from './sites.svelte.js';
 import { settings } from './settings.svelte.js';
+import { explainError } from '$lib/friendlyError';
 
 type ConfirmKind = 'warning' | 'danger' | 'info';
 
@@ -20,6 +21,8 @@ class AppState {
   apiProfilesLoaded = $state(false);
   flash = $state('');
   flashKind = $state<'ok' | 'err'>('ok');
+  /** 报错翻译成人话后的后端原文（没翻译时为空），吐司里放小字 */
+  flashRaw = $state('');
   confirmState = $state<null | { message: string; title: string; kind: ConfirmKind; confirmText: string; cancelText: string }>(null);
   confirmResolve: ((value: boolean) => void) | null = null;
   activeConn = $derived.by(() => {
@@ -82,9 +85,10 @@ async function refreshApiProfiles() {
   finally { app.apiProfilesLoaded = true; }
 }
 
+// 确认框排队：已经有一个在等用户看时，后来的等它关掉再弹，不能把正在看的那一个悄悄收掉（后台定时器触发的尤其如此）
+let confirmQueue: Promise<unknown> = Promise.resolve();
 export function confirmDialog(message: string, options: { title?: string; kind?: ConfirmKind; confirmText?: string; cancelText?: string } = {}) {
-  if (app.confirmResolve) app.confirmResolve(false);
-  return new Promise<boolean>((resolve) => {
+  const show = () => new Promise<boolean>((resolve) => {
     app.confirmResolve = resolve;
     app.confirmState = {
       message,
@@ -94,6 +98,9 @@ export function confirmDialog(message: string, options: { title?: string; kind?:
       cancelText: options.cancelText || '取消',
     };
   });
+  const p = confirmQueue.then(show, show);
+  confirmQueue = p.then(() => undefined, () => undefined);
+  return p;
 }
 
 export function finishConfirm(value: boolean) {
@@ -104,10 +111,12 @@ export function finishConfirm(value: boolean) {
 }
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
 export function say(m: string, k: 'ok' | 'err' = 'ok', ms = 0) {
-  app.flash = m; app.flashKind = k;
+  // 报错统一在这里翻译成人话（后端原文多是英文 / 状态码）；原文留在 flashRaw，界面放小字
+  const x = k === 'err' ? explainError(m) : null;
+  app.flash = x?.known ? x.text : m; app.flashKind = k; app.flashRaw = x?.known ? x.raw : '';
   // 上一条的定时器不能把这一条提前收掉（「正在下线…」4 秒后把刚出的结果清了）
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => (app.flash = ''), ms || (k === 'err' ? 8000 : 4000));
+  flashTimer = setTimeout(() => { app.flash = ''; app.flashRaw = ''; }, ms || (k === 'err' ? 8000 : 4000));
 }
 export async function refreshConns() {
   try {

@@ -21,7 +21,7 @@
     {@const on = c.id === app.activeConnId}
     <div class="host" class:on={on && app.view === 'remote'} class:ctx={on && app.view !== 'remote'} class:menu={connections.connCtx?.conn.id === c.id}
       role="button" tabindex="0" title="{c.ssh_user}@{c.ssh_host}{c.ssh_port && c.ssh_port !== 22 ? ':' + c.ssh_port : ''}"
-      onpointerdown={(e) => startRemoteDrag(e, c.id)} onclick={() => selectConn(c.id)} onkeydown={(e) => e.key === 'Enter' && selectConn(c.id)} oncontextmenu={(e) => openConnCtx(e, c)}>
+      onpointerdown={(e) => startRemoteDrag(e, c.id)} onclick={() => selectConn(c.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void selectConn(c.id); } }} oncontextmenu={(e) => openConnCtx(e, c)}>
       <span class="ic"><DistroMark id={distroOf(c)} size={14} /></span>
       <span class="main"><b>{mask(connectionDisplayName(c))}</b><small>{mask(sshSub(c))}</small></span>
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}

@@ -74,7 +74,7 @@
           {#if !v.set && v.auto}<small class="auto">自动用 <code>{v.auto}</code>（按站点域名，改域名会跟着变）</small>{/if}
           {#if editing === v.key}
             <div class="row">
-              <input class="tin mono" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '输入新值（会覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
+              <input class="tin mono small" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '输入新值（会覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
               <button class="btn small primary" onclick={() => save(v.key, val)} disabled={!val.trim()}>保存</button>
               <button class="btn small ghost" onclick={() => (editing = '')}>取消</button>
             </div>
@@ -95,8 +95,8 @@
     <div class="add">
       <span class="lbl">添加其他变量</span>
       <div class="row">
-        <input class="tin mono" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
-        <input class="tin mono" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
+        <input class="tin mono small" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
+        <input class="tin mono small" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
         <button class="btn small primary" onclick={addNew} disabled={!newKey.trim() || !newVal.trim() || sites.saving || addBusy}>{addBusy ? '保存中…' : '保存'}</button>
         <button class="btn small ghost" onclick={() => (adding = false)}>取消</button>
       </div>

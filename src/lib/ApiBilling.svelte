@@ -115,8 +115,7 @@
           {/if}
         {/if}
       {/if}
-      {#if error}<p class="error" role="alert">{error}</p>{#if !settings && !busy}<button type="button" class="link" disabled={disabled} onclick={loadSettings}>重试</button>{/if}{/if}
-      {#if notice}<p class="note" role="status">{notice}</p>{/if}
+      <p class="note slot" class:error={!!error} class:on={!!(error || notice)} role={error ? 'alert' : 'status'}>{error || notice}{#if error && !settings && !busy} <button type="button" class="link" disabled={disabled} onclick={loadSettings}>重试</button>{/if}</p>
     </div>
   {/if}
 </div>
@@ -147,6 +146,10 @@
   dd { margin:1px 0 0; color:var(--text); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   .note,.error { margin:5px 0 0; color:var(--faint); font-size:10.5px; line-height:1.45; overflow-wrap:anywhere; }
   .error { color:var(--err); }
+  .slot:not(.on) { visibility:hidden; }
+  .slot:not(.on)::before { content:'\200b'; }
+  .slot.on { animation:noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity:0; } }
   .warning { color:var(--dim); }
   .credential-row { margin-top:7px; gap:6px; color:var(--dim); font-size:10.5px; }
   .credential-row .icon-button { padding:3px; }

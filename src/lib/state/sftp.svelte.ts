@@ -7,6 +7,7 @@ import { fitFileMenu, copyTargetName } from '$lib/sftpFiles';
 import { open, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import { pilotWindowLabel, isMac } from './env';
 import { app, say, confirmDialog } from './app.svelte.js';
+import { friendly } from '$lib/friendlyError';
 import { missingSshCredential, repairActiveSshCredential, workbench, bytesToB64 } from './workbench.svelte.js';
 import { sftpEdit } from './editor.svelte.js';
 
@@ -264,7 +265,7 @@ export async function sftpGo(path: string) {
     sftp.sftpPath = p; sftp.sftpPathDraft = p; sftp.sftpSel = '';
     sftp.sftpOpenDirs = new Set();
     await loadDir(p, true);
-  } catch (e) { sftp.sftpErr = String(e); }
+  } catch (e) { sftp.sftpErr = friendly(e); }
   finally { sftp.sftpBusy = false; }
 }
 export function sftpUp() {

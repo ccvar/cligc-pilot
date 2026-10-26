@@ -175,7 +175,7 @@
 
 <section class="api-services" aria-label="API 服务">
   <div class="section-head"><span class="section-title">API 服务<InfoTip text={'API 独立计费；密钥只存入系统凭据库，不随配置导出。测试连接只读取模型列表，不会调用模型生成内容。\n能做：文本对话、本地文件、SSH、看图（Claude / OpenAI Responses 接口），GitHub 推送和开 PR、站点上线（都先请你确认）。\nPDF 识别和 Cloudflare 授权操作请暂用本地客户端。'} label="API 服务说明" /></span><button type="button" class="add" disabled={!!busy} onclick={() => edit()}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button></div>
-  {#if error}<p class="message error" role="alert">{error}</p>{/if}
+  <p class="message error slot" class:on={!!error} role="alert">{error}</p>
   {#if !profiles.length && editorId === null}<p class="empty">使用自己的 API Key 接入 OpenAI、Claude 或兼容服务。</p>{/if}
   <div class="service-list">
     {#each profiles as profile (profile.id)}
@@ -186,9 +186,10 @@
           <span class="connection-state" class:verified={profile.enabled && results[profile.id]?.ok} class:failed={profile.enabled && results[profile.id]?.ok === false} title={results[profile.id]?.message ?? status(profile)}><i aria-hidden="true"></i><span>{status(profile)}</span></span>
           <ApiServiceMenu name={profile.name} enabled={profile.enabled} busy={!!busy} onedit={() => edit(profile)} ontest={() => test(profile)} ontoggle={() => toggle(profile)} ondelete={() => deleteTarget = profile} />
         </div>
-        {#if results[profile.id]}<p class="test-result" class:error={!results[profile.id].ok} role="status">{results[profile.id].message}</p>{/if}
-        {#if editorId === profile.id}{@render editor()}
-        {:else}{#key `${profile.id}:${profile.protocol}:${profile.base_url}`}<ApiBilling id={profile.id} name={profile.name} disabled={!!busy} />{/key}{/if}
+        <p class="test-result slot" class:error={!!results[profile.id] && !results[profile.id].ok} class:on={!!results[profile.id]} role="status">{results[profile.id]?.message ?? ''}</p>
+        {#if editorId === profile.id}{@render editor()}{/if}
+        <!-- 编辑时只是藏起来、不卸载：关掉编辑器不用重新读一遍账单。key 里的协议 / 地址变了才重建（换了接口，旧结果作废） -->
+        <div hidden={editorId === profile.id}>{#key `${profile.id}:${profile.protocol}:${profile.base_url}`}<ApiBilling id={profile.id} name={profile.name} disabled={!!busy} />{/key}</div>
       </div>
     {/each}
   </div>
@@ -222,8 +223,7 @@
     </div>
     <button type="button" class="advanced-toggle" aria-expanded={advanced} disabled={!!busy} onclick={() => advanced = !advanced}><svg class:open={advanced} viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="m4.5 3 3 3-3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>高级设置<span>{advanced ? '' : '接口地址 · 输出上限'}</span></button>
     {#if advanced}<div class="fields advanced"><label class="field full"><span>API 基础地址</span><input bind:value={baseUrl} type="url" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" disabled={!!busy} /><small>填写基础地址，不包含 /responses、/messages 或 /chat/completions。</small></label><label class="field"><span>单次最大输出 token</span><input type="number" bind:value={maxOutput} oninput={() => maxOutputEdited = true} aria-describedby="api-max-output-help" min="1" max="1000000" step="1" disabled={!!busy} /></label><p id="api-max-output-help" class="inline-note full">上限包含模型思考与工具调用参数；长代码任务可在模型支持时设为 32768。{#if protocol === 'anthropic_messages'}Claude 达到上限时，当前响应最多按原上限重试一次，不会自动提高上限。{/if}</p></div>{/if}
-    {#if editorNotice}<p class="message" role="status">{editorNotice}</p>{/if}
-    {#if editorError}<p class="message error" role="alert">{editorError}</p>{/if}
+    <p class="message slot" class:error={!!editorError} class:on={!!(editorError || editorNotice)} role={editorError ? 'alert' : 'status'}>{editorError || editorNotice}</p>
     <div class="editor-footer"><span>仅配置支持工具调用的对话模型。</span><div><button type="button" class="button" onclick={closeEditor} disabled={!!busy}>取消</button><button type="submit" class="button primary" disabled={!!busy}>{busy ? busyLabel : '保存'}</button></div></div>
   </form>
 {/snippet}
@@ -283,6 +283,11 @@
   .model-options small { font-size:11px; color:var(--faint); padding:5px; display:block; }
   .message { margin:8px 0 0; color:var(--dim); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
   .error { color:var(--err); }
+  /* 提示位始终占一行：出现时只是淡入，不把下面的内容往下推 */
+  .slot:not(.on) { visibility:hidden; }
+  .slot:not(.on)::before { content:'\200b'; }
+  .slot.on { animation:noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity:0; } }
   .editor-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
   .editor-footer > span { color:var(--faint); font-size:10px; line-height:1.4; }
   .editor-footer > div { display:flex; align-items:center; gap:6px; flex:none; }

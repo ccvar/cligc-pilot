@@ -42,6 +42,11 @@ export function initOpsLive() {
     let done: Record<string, ReturnType<typeof setTimeout>> = {};
     const un = listen<{ conv_id: string; event: TurnEvent }>('ops-turn', (e) => {
       const { conv_id: id, event: ev } = e.payload;
+      // 上一轮刚 done、还在等 1.5 秒撤缓冲时下一轮就来了：取消那个定时器，缓冲重开，别让两轮的文字接在一起、也别让它在半路被撤掉
+      if (ev.type !== 'done' && done[id]) {
+        clearTimeout(done[id]); delete done[id];
+        delete app.lives[id];
+      }
       if (!app.lives[id]) {
         const now = Date.now();
         app.lives[id] = { text: '', tools: [], activities: {}, lastActivityAt: now, error: '', failed: false, startedAt: now };
@@ -51,11 +56,15 @@ export function initOpsLive() {
       if (ev.type === 'done') {
         clearTimeout(done[id]);
         // 后端跑完才落库最终消息；稍等一下再刷新，然后撤掉流式缓冲
-        done[id] = setTimeout(async () => {
+        const t = setTimeout(async () => {
           await refreshConvos();
+          // 等刷新的这一会儿新一轮已经开始了：缓冲是新一轮的，不动
+          if (done[id] !== t) return;
+          delete done[id];
           if (app.activeConvId === id) app.activeConv = app.convos.find((c) => c.id === id) ?? app.activeConv;
           delete app.lives[id]; delete app.running[id];
         }, 1500);
+        done[id] = t;
       }
     });
     return () => { void un.then((f) => f()); Object.values(done).forEach(clearTimeout); done = {}; };
@@ -211,7 +220,8 @@ export async function failTurn(e: unknown, convId: string) {
   if (app.activeConvId === convId) scrollSoon();
 }
 
-export async function startChat() {
+/** perm 给了就只用于这一条对话（比如制作站点用「全自动」）：不改启动页选的档位，也不写进偏好 */
+export async function startChat(opts: { perm?: string } = {}) {
   // 全部站点 / 托管运营里开的新对话：先进入所选站点，再按站点会话开始
   if (app.isSitesHub) {
     const sid = launcher.lSite;
@@ -227,6 +237,7 @@ export async function startChat() {
   const taskType: TaskType = site ? 'site' : app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : app.isGhConn ? 'repo' : 'workspace';
   launcher.prefs.brain = launcher.lBrain; launcher.prefs.model = launcher.lModel; launcher.prefs.perm = launcher.lPerm; launcher.prefs.effort = launcher.lEffort; savePrefs(launcher.prefs);
   const model = launcher.lModel;
+  const perm = opts.perm || launcher.lPerm;
   // CF 建站：把所选视觉风格的 tokens 指令拼进首条消息（可见、可追溯）。
   const styleDir = app.isCfConn && launcher.lStyle ? STYLE_DIRECTIVES[launcher.lStyle] : '';
   let text = launcher.lDraft.trim() + (styleDir ? `\n\n【视觉风格】${styleDir}` : '');
@@ -242,7 +253,7 @@ export async function startChat() {
   const optimistic: Conversation = {
     id, conn_id: conversationConnId, conn_name: app.activeConn.name, site_slug: mSlug, site_name: mName,
     workspace_dir: workspace ? launcher.workspaceDir : '',
-    task_type: taskType, brain: launcher.lBrain, model, perm_mode: launcher.lPerm, effort: launcher.lEffort, session_ref: '',
+    task_type: taskType, brain: launcher.lBrain, model, perm_mode: perm, effort: launcher.lEffort, session_ref: '',
     title: text.slice(0, 30), messages: [optimisticUser(text)], status: 'running', created_at: now, updated_at: now,
   };
   // 立刻塞进侧栏，这样即便用户随后切走/新开对话，这条新会话也带着 running 圈可见，不必等这一轮跑完才出现。
@@ -253,7 +264,7 @@ export async function startChat() {
   try {
     const conv = await invoke<Conversation>('start_conversation', {
       convId: id, connId: conversationConnId, siteSlug: mSlug, siteName: mName,
-      taskType, brain: launcher.lBrain, model, permMode: launcher.lPerm, effort: launcher.lEffort, fast: launcher.lFast,
+      taskType, brain: launcher.lBrain, model, permMode: perm, effort: launcher.lEffort, fast: launcher.lFast,
       workspaceDir: workspace ? launcher.workspaceDir : '',
       message: text, onEvent: makeChannel(id),
     });

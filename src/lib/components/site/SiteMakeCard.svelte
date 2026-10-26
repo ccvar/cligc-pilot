@@ -82,7 +82,7 @@
     {#if aiRunning}<span class="live"><span class="spin"></span>AI 正在制作…</span>{/if}
     {#if ms?.built_at}<button class="btn tiny" onclick={() => previewSite(site)} data-tip="在预览窗里打开构建产物（和上线的是同一份文件）"><Icon name="external" size={12} />本地预览</button>{/if}
     {#if conv}<button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />制作对话</button>{/if}
-    <button class="ic-btn" onclick={() => loadMake(site.id)} disabled={loading} aria-label="重新检查" data-tip="重新看一遍站点文件"><RefreshIcon spinning={loading} /></button>
+    <button class="ic-btn ic-sm" onclick={() => loadMake(site.id)} disabled={loading} aria-label="重新检查" data-tip="重新看一遍站点文件"><RefreshIcon spinning={loading} /></button>
   </h3>
 
   {#if ms}
@@ -173,8 +173,6 @@
   .live { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--dim); }
   .spin { width: 10px; height: 10px; border: 1.5px solid var(--border2); border-top-color: var(--dim); border-radius: 50%; animation: mk-spin .7s linear infinite; }
   @keyframes mk-spin { to { transform: rotate(360deg); } }
-  .ic-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
-  .ic-btn:hover { background: #f1efe9; color: var(--text); }
   .resume { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin-bottom: 14px; border-radius: 10px; background: #faf6ec; border: 1px solid #f0e4c4; font-size: 12.5px; color: #6b4e12; }
   .resume span { flex: 1; min-width: 0; line-height: 1.5; }
   .resume .btn { flex: none; }

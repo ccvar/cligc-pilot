@@ -98,9 +98,9 @@
     <b data-tip={maskTip(footName, mask(footName))}>{mask(footName)}</b>
     {#if app.activeConn}<small>{#if app.activeConn.kind === 'sites'}{siteCount} 个站点{makingN ? ` · ${makingN} 个制作中` : ''}{:else if app.isSiteConn}{sites.active?.domain || '站点'} · 共 {siteCount} 个站点{:else if app.isCfConn}{app.cfProjects.length} 个项目{sidebar.cfSiteCount ? ` · ${sidebar.cfSiteCount} 个站点` : ''}{:else if app.isGhConn}{app.activeConn.login}{gh.repos.length ? ` · ${gh.repos.length} 个仓库` : ''}{:else if app.isSshConn}<!--
       远程连接：这里放远端系统版本（点一下重探，比如刚 do-release-upgrade 过）。
-    --><span class="foot-os" role="button" tabindex="-1" title="远端系统 · 点击重新检测"
+      外层已经是按钮，这里不能再套一个可聚焦的「按钮」：只留鼠标点击重探（键盘走外层按钮打开切换器）。
+    --><!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions --><span class="foot-os" title="远端系统 · 点击重新检测"
       onclick={(e) => { e.stopPropagation(); probeOs(app.activeConnId, true); }}
-      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); probeOs(app.activeConnId, true); } }}
       ><DistroMark id={distroOf(app.activeConn)} size={12} />{connections.osProbing[app.activeConnId] ? '检测系统…' : sshSub(app.activeConn)}</span>{:else}本地 · 不连接任何服务{/if}</small>{/if}
   </span>
   <!-- 永远是展开箭头：这是个切换器，不是设置快捷键。 -->

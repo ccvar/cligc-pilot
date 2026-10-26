@@ -20,6 +20,8 @@
 .su .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: var(--su-ring); }
 .su .tin::placeholder { color: var(--faint); }
 .su .tin.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+/* 和 .btn.small（26px）排在同一行的输入框：同高、同字号、同圆角 */
+.su input.tin.small { height: 26px; padding: 0 8px; font-size: 12px; border-radius: 7px; }
 
 .su .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; white-space: nowrap; transition: background-color .12s, border-color .12s, color .12s, box-shadow .12s, transform .08s; }
 .su .btn:hover:not(:disabled) { background: var(--su-hover); border-color: #d6d3ca; }
@@ -48,6 +50,10 @@
 .su .warn-text { color: var(--warn); }
 .su .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .su .ok-note { color: var(--ok); background: var(--su-ok-soft); border: 1px solid var(--su-ok-line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+/* 报错 / 结果提示的固定位：始终占一行高，内容出现时只是淡入，弹窗不会因此长高、重新居中 */
+.su .err-note.slot:not(.on), .su .ok-note.slot:not(.on) { visibility: hidden; }
+.su .err-note.slot:not(.on)::before, .su .ok-note.slot:not(.on)::before { content: '\200b'; }
+.su .err-note.slot.on, .su .ok-note.slot.on { animation: su-fade .18s ease-out; }
 .su .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .su .dim { color: var(--dim); }
 .su .faint { color: var(--faint); }

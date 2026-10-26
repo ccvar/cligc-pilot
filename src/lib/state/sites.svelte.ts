@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { Connection, Dashboard, CacheMeta, Site, SiteImportPreview, SiteJob, SiteStatus, DeployRecord, PagesDeployment, PagesProject, GhRepo } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
+import { friendly } from '$lib/friendlyError';
 import { connections, selectConn } from './connections.svelte.js';
 
 export const SITE_PREFIX = 'site:';
@@ -237,7 +238,7 @@ export async function loadImportRepos() {
   if (!f.ghConnId) return;
   f.reposLoading = true;
   try { f.repos = await invoke<GhRepo[]>('list_github_repos', { connId: f.ghConnId }); }
-  catch (e) { f.err = String(e); }
+  catch (e) { f.err = friendly(e); }
   finally { f.reposLoading = false; }
 }
 export async function loadImportProjects() {
@@ -245,7 +246,7 @@ export async function loadImportProjects() {
   if (!f.cfConnId) { f.projects = []; return; }
   f.projectsLoading = true;
   try { f.projects = await invoke<PagesProject[]>('list_cf_pages_projects', { connId: f.cfConnId }); }
-  catch (e) { f.projects = []; f.err = `读取 Pages 项目失败：${String(e)}`; }
+  catch (e) { f.projects = []; f.err = friendly(`读取 Pages 项目失败：${String(e)}`); }
   finally { f.projectsLoading = false; matchProject(); }
 }
 
@@ -316,7 +317,7 @@ export async function detectImport(arg: { path?: string }) {
     const preview = await detectOne(f.source, f.ghConnId, f.source === 'github' ? f.repo : arg.path ?? '');
     Object.assign(f, { preview, step: 'review', ...fieldsFrom(preview, f.cfConnId) });
     matchProject();
-  } catch (e) { f.err = String(e); }
+  } catch (e) { f.err = friendly(e); }
   finally { f.busy = false; }
 }
 

@@ -158,7 +158,7 @@
   <div class="ds-block">
     <div class="ds-title">IndexNow</div>
     <div class="row">
-      <input class="tin mono" style="max-width:340px" bind:value={draft.data.indexnow_key} placeholder="验证密钥（站点根目录 &lt;key&gt;.txt 的内容）" spellcheck="false" />
+      <input class="tin mono small" style="max-width:340px" bind:value={draft.data.indexnow_key} placeholder="验证密钥（站点根目录 &lt;key&gt;.txt 的内容）" spellcheck="false" />
       <button class="btn small" onclick={setupIndexNow} disabled={ixBusy || !draft.domain}>{ixBusy ? '处理中…' : draft.data.indexnow_key ? '重新写入验证文件' : '生成密钥并写入验证文件'}</button>
     </div>
     <small class="faint">每次上线后，Pilot 只把内容有变化的页面提交给 IndexNow（Bing、Yandex 等共享）。{site.source === 'github' ? 'GitHub 来源会开一个 PR 加入验证文件。' : ''}</small>

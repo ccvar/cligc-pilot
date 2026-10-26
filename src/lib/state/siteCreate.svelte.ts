@@ -5,11 +5,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { Site } from '$lib/types';
 import { app, say } from './app.svelte.js';
+import { friendly } from '$lib/friendlyError';
 import { connections, selectConn } from './connections.svelte.js';
 import { sites, refreshSites, SITE_PREFIX } from './sites.svelte.js';
 import { SITES_CONN_ID } from './env';
 import { launcher, STYLE_DIRECTIVES } from './launcher.svelte.js';
-import { savePrefs } from '$lib/defaults';
 import { composer } from './composer.svelte.js';
 import { brainUsable } from './models';
 import { startChat } from './turns.svelte.js';
@@ -146,13 +146,7 @@ export async function startSiteChat(siteId: string, text: string, noBrainHint = 
   composer.attachments = [];
   launcher.lDraft = text;
   if (!brainUsable(launcher.lBrain)) { app.view = 'launcher'; say(noBrainHint, 'err'); return; }
-  if (!perm) { await startChat(); return; }
-  const keep = { l: launcher.lPerm, p: launcher.prefs.perm };
-  launcher.lPerm = perm;
-  // startChat 在第一个 await 之前就带着档位发出了请求，这里立刻换回来：不影响之后开的对话，也不写进偏好
-  const run = startChat();
-  launcher.lPerm = keep.l; launcher.prefs.perm = keep.p; savePrefs(launcher.prefs);
-  await run;
+  await startChat(perm ? { perm } : {});
 }
 
 /** 制作站点（第一版、继续制作、修上线前检查的问题）用「全自动」：在 Pilot 新建的本地文件夹里干活，
@@ -183,7 +177,7 @@ export async function createSite() {
     // 在新站点里开第一版对话：需求就是第一条消息（看得见、可追溯）
     await startSiteChat(r.site.id, r.message, '站点已建好，需求也写好了：选一个可用的模型后发送，就开始制作第一版', MAKING_PERM);
   } catch (e) {
-    f.err = String(e);
+    f.err = friendly(e);
   } finally {
     f.busy = false;
   }

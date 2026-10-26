@@ -14,7 +14,7 @@
       <p class="hint">当前项目会被复制成模板（自动去掉密钥、依赖、构建产物），之后可引用它快速建站。</p>
       <input class="tin" bind:value={library.saveTmplName} placeholder="模板名，如 minimal-landing" spellcheck="false" />
       <input class="tin" style="margin-top:7px" bind:value={library.saveTmplDesc} placeholder="一句话描述（可选）" />
-      {#if library.saveTmplErr}<div class="err-note">{library.saveTmplErr}</div>{/if}
+      <div class="err-note slot" class:on={!!library.saveTmplErr} role="alert">{library.saveTmplErr}</div>
       <div class="row-end">
         <button class="btn ghost" onclick={() => (library.saveTmplOpen = false)} disabled={library.saveTmplBusy}>取消</button>
         <button class="btn primary" onclick={confirmSaveTmpl} disabled={library.saveTmplBusy || !library.saveTmplName.trim()}>{library.saveTmplBusy ? '保存中…' : '存为模板'}</button>
@@ -32,6 +32,11 @@
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  /* 报错位始终占一行：出现时只是淡入，弹窗不长高、不重新居中 */
+  .err-note.slot:not(.on) { visibility: hidden; }
+  .err-note.slot:not(.on)::before { content: '\200b'; }
+  .err-note.slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
   .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }

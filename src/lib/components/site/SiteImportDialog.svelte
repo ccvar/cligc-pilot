@@ -178,7 +178,7 @@
         </div>
         {#each d.notes as n (n)}<p class="hint">{n}</p>{/each}
       {/if}
-      {#if f.err}<div class="err-note">{f.err}</div>{/if}
+      <div class="err-note slot" class:on={!!f.err} role="alert">{f.err}</div>
     </div>
     {#if f.step === 'batch'}
       <footer class="sheet-foot">

@@ -13,7 +13,7 @@
       <p class="hint">位置：<code>{sftp.fsAsk.dir}</code></p>
       <!-- svelte-ignore a11y_autofocus -->
       <input class="tin" bind:value={sftp.fsAsk.value} placeholder={sftp.fsAsk.mode === 'mkdir' ? '文件夹名' : '文件名（例如 notes.txt）'} spellcheck="false" autocapitalize="off" autocorrect="off" autofocus disabled={sftp.fsAsk.busy} onkeydown={(e) => e.key === 'Enter' && confirmFsAsk()} />
-      {#if sftp.fsAsk.err}<div class="err-note">{sftp.fsAsk.err}</div>{/if}
+      <div class="err-note slot" class:on={!!sftp.fsAsk.err} role="alert">{sftp.fsAsk.err}</div>
       <div class="row-end">
         <button class="btn ghost" onclick={() => (sftp.fsAsk = null)} disabled={sftp.fsAsk.busy}>取消</button>
         <button class="btn primary" onclick={confirmFsAsk} disabled={sftp.fsAsk.busy || !sftp.fsAsk.value.trim()}>{sftp.fsAsk.busy ? '处理中…' : '确定'}</button>
@@ -31,6 +31,11 @@
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+  /* 报错位始终占一行：出现时只是淡入，弹窗不长高、不重新居中 */
+  .err-note.slot:not(.on) { visibility: hidden; }
+  .err-note.slot:not(.on)::before { content: '\200b'; }
+  .err-note.slot.on { animation: noteIn .18s ease-out; }
+  @keyframes noteIn { from { opacity: 0; } }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
   .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }

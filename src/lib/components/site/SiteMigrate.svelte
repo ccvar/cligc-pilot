@@ -224,7 +224,7 @@
   <h3>
     <Icon name="route" />迁移进度<span class="sub">{launched && v ? `从 ${v.domain} 迁到 ${v.meta.cutover.host}` : `迁移自 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
     <span class="grow"></span>
-    <button class="ic-btn" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新迁移状态"><RefreshIcon spinning={loading} /></button>
+    <button class="ic-btn ic-sm" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新迁移状态"><RefreshIcon spinning={loading} /></button>
   </h3>
 
   <ol class="stages" role="tablist">
@@ -742,8 +742,6 @@
   .link-btn.al { align-self: flex-start; }
   .kv { font-size: 12.5px; }
   .mg h3 .sub { font-weight: 400; font-size: 12px; color: var(--faint); }
-  .ic-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
-  .ic-btn:hover { background: #f1efe9; color: var(--text); }
   .stages { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--faint); }
   .stages .n { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--border2); box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 600; }
   .running { display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin-bottom: 12px; border-radius: 10px; background: var(--su-run-soft); color: var(--su-run); font-size: 12.5px; }

@@ -60,7 +60,7 @@
 
 {#snippet siteRow(s: SiteRow)}
   <div class="site" class:on={s.id === activeId && app.view === 'site'} class:ctx={s.id === activeId && app.view !== 'site'} role="button" tabindex="0" title={s.id === activeId ? '打开站点看板' : s.domain || s.name}
-    onclick={() => openSite(s.id)} onkeydown={(e) => e.key === 'Enter' && openSite(s.id)}>
+    onclick={() => openSite(s.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSite(s.id); } }}>
     <button class="chev" class:open={isOpen(s.id)} aria-label={isOpen(s.id) ? '收起对话' : '展开对话'} aria-expanded={isOpen(s.id)} data-tip={isOpen(s.id) ? '收起对话' : '展开对话（不离开当前页面，可以拖进分屏）'} onclick={(e) => { e.stopPropagation(); toggle(s.id); }} onkeydown={(e) => e.stopPropagation()}>
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>

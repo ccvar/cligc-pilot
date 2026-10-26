@@ -37,7 +37,14 @@
     requestAnimationFrame(() => {
       const lh = parseFloat(getComputedStyle(t).lineHeight) || 22;
       if (t.scrollHeight > lh * 1.6 + 24) grown[key] = true;
+      // 删回一行以内（展开后的宽度下也只占一行）就收回去，不用等清空
+      else if (grown[key] && !t.value.includes('\n') && t.scrollHeight <= lh + 24) grown[key] = false;
     });
+  }
+  // 消息列表的 key：按时间戳 + 角色（同一秒的重复消息再加序号），中间一条被隐藏时后面的 <details> 展开态、缩略图不会串到别的消息上
+  function messageKeys(ms: Message[]): string[] {
+    const seen = new Map<string, number>();
+    return ms.map((m) => { const k = `${m.ts}:${m.role}`; const n = seen.get(k) ?? 0; seen.set(k, n + 1); return n ? `${k}:dup${n}` : k; });
   }
   function toggleUser(k: string) { const n = new Set(openUser); if (n.has(k)) n.delete(k); else n.add(k); openUser = n; }
 </script>
@@ -244,6 +251,7 @@
   {@const activePermits=permits.pendingPermits.filter(p=>p.conv===context.id)}
       {#if viewBusy && liveView}
         {@const progress = executionProgress(liveView, thread.nowMs)}
+        <!-- @const 编译成 derived：parts 只在正文 / 工具变了才重算，nowMs 每秒一跳不会带着它重跑 -->
         {@const parts = interleave(liveView.text, liveView.tools)}
         {@const lastSteps = parts.length > 0 && parts[parts.length - 1].kind === 'steps'}
         <div class="msg assistant">
@@ -367,14 +375,18 @@
   {@const uploading=scoped?!!panes.paneUploading[id]:composer.attaching}
   {@const messages=context?.messages.filter(m=>!m.hidden)??[]}
   {@const suggestion=suggestionFor(context,viewBusy)}
-  {@const compact=(!draft || !grown[id||'main']) && !draft.includes('\n') && !attachments.length && !(queued && queued.convId===activeConvId) && !uploading && !(scoped && panes.splitErrors[id])}
+  {@const messageKey=messageKeys(messages)}
+  {@const compact=(!draft || !grown[id||'main']) && !draft.includes('\n') && !attachments.length && !(queued && queued.convId===activeConvId) && !uploading}
   <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}>
     <div class="thread-inner" >
-      {#each messages as m, i (i)}
+      {#each messages as m, i (messageKey[i])}
         {@render bubble(m, i === messages.length - 1,context)}
       {/each}
       {#if activeConv}{@render conversationActivity(activeConv)}{/if}
     </div>
+    <!-- 分屏里发送出错：贴在消息区底部浮着，不挤进输入框、也不改变输入框一行 / 两层的排法
+         （composer-wrap 在分屏里会滚动裁切，所以不能浮在它外面） -->
+    {#if scoped && panes.splitErrors[id]}<p class="pane-error" role="alert">{panes.splitErrors[id]}</p>{/if}
   </div>
 
   <div class="composer-wrap">
@@ -390,7 +402,6 @@
       ondragover={(e)=>{if(scoped){if(e.dataTransfer?.types.includes('Files'))e.preventDefault();}else onComposerDragOver(e);}}
       ondragleave={(e)=>{if(!scoped)onComposerDragLeave(e);}}
       ondrop={(e)=>{if(scoped&&e.dataTransfer?.files.length){e.preventDefault();e.stopPropagation();void uploadPaneFiles(id,e.dataTransfer.files);}else if(!scoped)onComposerDrop(e);}}>
-      {#if scoped && panes.splitErrors[id]}<p class="pane-error" role="alert">{panes.splitErrors[id]}</p>{/if}
       {#if queued && queued.convId === activeConvId}
         <div class="queued-row">
           <span class="queued-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" /><path d="M8 4.7V8l2.2 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
@@ -468,7 +479,7 @@
   .conversation-site-link>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .conversation-site-link.static{cursor:default;color:var(--dim)}
   .thread-head .th-info[role="button"]{cursor:grab}
-  .pane-error{color:var(--danger,#ad3228);font-size:13px;margin:8px 16px;overflow-wrap:anywhere}
+  .pane-error{position:sticky;bottom:8px;margin:0 16px 8px;padding:6px 10px;border-radius:8px;background:#fff;border:1px solid color-mix(in srgb,var(--danger,#ad3228) 35%,transparent);box-shadow:var(--shadow);color:var(--danger,#ad3228);font-size:13px;overflow-wrap:anywhere;z-index:2}
   :global(.pane) .thread{min-height:0;overscroll-behavior:contain}
   :global(.canvas.multi .pane) .thread-inner{padding:18px 20px 8px}
   :global(.canvas.multi .pane) .composer-wrap{padding:8px 16px 14px;max-height:55%;overflow-y:auto}
