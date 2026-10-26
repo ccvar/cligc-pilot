@@ -30,6 +30,15 @@
   export { splitContent, convPane };
   // 很长的用户消息（比如 Pilot 发给 AI 的整段指令）默认只露前几行，像 Claude 客户端那样
   let openUser = $state<Set<string>>(new Set());
+  // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层（按分屏的格子各记各的）
+  let grown = $state<Record<string, boolean>>({});
+  function watchGrow(t: HTMLTextAreaElement, key: string) {
+    if (!t.value) { grown[key] = false; return; }
+    requestAnimationFrame(() => {
+      const lh = parseFloat(getComputedStyle(t).lineHeight) || 22;
+      if (t.scrollHeight > lh * 1.6 + 24) grown[key] = true;
+    });
+  }
   function toggleUser(k: string) { const n = new Set(openUser); if (n.has(k)) n.delete(k); else n.add(k); openUser = n; }
 </script>
 
@@ -358,6 +367,7 @@
   {@const uploading=scoped?!!panes.paneUploading[id]:composer.attaching}
   {@const messages=context?.messages.filter(m=>!m.hidden)??[]}
   {@const suggestion=suggestionFor(context,viewBusy)}
+  {@const compact=(!draft || !grown[id||'main']) && !draft.includes('\n') && !attachments.length && !(queued && queued.convId===activeConvId) && !uploading && !(scoped && panes.splitErrors[id])}
   <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}>
     <div class="thread-inner" >
       {#each messages as m, i (i)}
@@ -376,7 +386,7 @@
         <span class="tipwrap" data-tip={cfReady ? '变成一个站点：接 GitHub、域名、GA4 / Search Console 数据，开始运营' : '先让 AI 建出页面'}><button class="cb-prev dim" onclick={()=>context && void importCfProject(context.conn_id, context.site_slug)} disabled={!cfReady || viewBusy}><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="6.6" stroke="currentColor" stroke-width="1.5" /><path d="M3.6 10h12.8M10 3.4c1.9 1.8 2.9 4.1 2.9 6.6s-1 4.8-2.9 6.6M10 3.4C8.1 5.2 7.1 7.5 7.1 10s1 4.8 2.9 6.6" stroke="currentColor" stroke-width="1.3" /></svg>转为站点</button></span>
       </div>
     {/if}
-    <div class="composer" class:fileover={!scoped&&composer.composerFileOver} role="group" aria-label="消息输入"
+    <div class="composer" class:compact class:fileover={!scoped&&composer.composerFileOver} role="group" aria-label="消息输入"
       ondragover={(e)=>{if(scoped){if(e.dataTransfer?.types.includes('Files'))e.preventDefault();}else onComposerDragOver(e);}}
       ondragleave={(e)=>{if(!scoped)onComposerDragLeave(e);}}
       ondrop={(e)=>{if(scoped&&e.dataTransfer?.files.length){e.preventDefault();e.stopPropagation();void uploadPaneFiles(id,e.dataTransfer.files);}else if(!scoped)onComposerDrop(e);}}>
@@ -401,7 +411,8 @@
         </div>
       {/if}
       {#if uploading}<span class="attach-loading">上传中…</span>{/if}
-      <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? '输入下一条，回车排队，等这轮结束自动发送' : suggestion ? `${suggestion}（按 Tab 填入）` : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
+      <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? (compact ? '输入下一条，回车排队' : '输入下一条，回车排队，等这轮结束自动发送') : suggestion ? `${suggestion}（按 Tab 填入）` : compact ? '继续说…（Shift+Enter 换行）' : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
+        oninput={(e)=>watchGrow(e.currentTarget, id||'main')}
         oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
         onpaste={(e)=>onComposerPaste(e,scoped?id:'')}
         onkeydown={(e) => {
@@ -496,6 +507,12 @@
   .cb-left { display: flex; align-items: center; gap: 1px; flex: 1; min-width: 0; }
   .cb-right { display: flex; align-items: center; gap: 3px; flex: none; }
   .composer-bar .send { position: static; width: 30px; height: 30px; margin-left: 3px; font-size: 15px; }
+  /* 一行模式：文字和右边的按钮并排，左边的文件夹徽标先收起来（展开成两层时再出现） */
+  .composer-wrap .composer.compact { flex-direction: row; align-items: center; }
+  .composer-wrap .composer.compact textarea { flex: 1; min-width: 0; padding: 12px 8px 12px 16px; }
+  .composer-wrap .composer.compact textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .composer.compact .composer-bar { flex: none; padding: 0 8px 0 0; }
+  .composer.compact .cb-left { display: none; }
   /* 会话页只读徽标（站点/厂商，不可改）。 */
   .cb-ro { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; color: var(--dim); font-size: 13px; opacity: .9; min-width: 0; }
   .cb-ro-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
