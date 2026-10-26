@@ -2220,6 +2220,8 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
         s.origin = "migrated".into();
         Ok(())
     })?;
+    // 正式域名定了：AI 重做时留的「确认正式域名」待办删掉
+    let _ = crate::site_make::remove_todo(&PathBuf::from(&site.local_dir), "domain");
     let old_host = origin_host(&inv, &site);
     if host != old_host {
         // 换了域名：站点地址变量（AI 按【配置变量】写的）改成新域名，canonical / sitemap 跟着变

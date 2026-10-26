@@ -648,7 +648,7 @@
   .warn-text, .domains .desc.warn-text, .cb .desc.warn-text { color: var(--su-warn-ink, #8a5a08); }
   .act.ok-bar { background: var(--su-ok-soft); }
   .act b { margin-right: 6px; color: var(--text); font-weight: 600; }
-  .danger-row { border-top: 1px solid var(--border); padding-top: 10px !important; }
+  .danger-row { margin-top: 2px; }
   .danger-link { color: var(--err); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }

@@ -34,6 +34,8 @@
   $effect(() => { void loadDynamic(site.id); });
   // 老站点：没有站点约定就提示补一份（托管运营和 AI 加内容都按它来）
   $effect(() => { if (!isMaking(site.id)) void loadMake(site.id, false); });
+  // 正式域名已经定了（填了域名、或者迁移上线过）：AI 留的「确认正式域名」不用再显示
+  const todos = $derived((siteMake.state[site.id]?.todos ?? []).filter((t) => !(t.id === 'domain' && site.domain)));
   const needConventions = $derived(!making && siteMake.state[site.id]?.conventions === false && !siteMake.hidden.includes(site.id));
   // 数据和收录接到了哪些：一眼看清哪些绑好了、哪些还差（细节在设置里）
   const binds = $derived([
@@ -61,8 +63,8 @@
   {#if site.origin !== 'migrating'}
   <SiteManagedCard {site} />
 
-  {#if !making && siteMake.state[site.id]?.todos?.length}
-    <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} todos={siteMake.state[site.id]?.todos ?? []} /></div>
+  {#if !making && todos.length}
+    <div class="card"><h3><Icon name="inbox" />需要你处理</h3><SiteTodos {site} {todos} /></div>
   {/if}
 
   {#if needConventions}
