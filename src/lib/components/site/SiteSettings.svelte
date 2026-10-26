@@ -10,7 +10,7 @@
   import SiteVpsCard from './SiteVpsCard.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
-  import { sites, editSite, saveSiteDraft, removeSite } from '$lib/state/sites.svelte.js';
+  import { sites, editSite, saveSiteDraft, removeSite, takedownSite } from '$lib/state/sites.svelte.js';
   import { setTags, fleet } from '$lib/state/fleet.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -129,8 +129,12 @@
 
     <div class="card danger-zone">
       <div class="dz">
-        <div><b><Icon name="trash" />移除站点</b><p class="hint">只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
-        <button class="btn small danger" onclick={() => removeSite(site)}>移除这个站点</button>
+        <div><b><Icon name="trash" />下线并删除</b><p class="hint">把网站从网上撤下来{site.deploy.project && (site.deploy.mode === 'direct' || site.deploy.mode === 'pages_git') ? `（删除 Cloudflare Pages 项目 ${site.deploy.project}，解除域名指向）` : ''}{site.origin === 'migrated' ? '，迁移的域名恢复成上线前的样子' : ''}，再从 Pilot 移除；可以选择把代码文件夹移到废纸篓。不能撤销。</p></div>
+        <button class="btn small danger" onclick={() => takedownSite(site)}>下线并删除</button>
+      </div>
+      <div class="dz">
+        <div><b><Icon name="x" />只从 Pilot 移除</b><p class="hint">网站照常在线，只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
+        <button class="btn small" onclick={() => removeSite(site)}>只从 Pilot 移除</button>
       </div>
     </div>
   </div>
@@ -139,6 +143,8 @@
 <style>
   .st { display: flex; flex-direction: column; gap: 14px; }
   .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
+  .danger-zone { display: flex; flex-direction: column; gap: 14px; }
+  .dz + .dz { padding-top: 14px; border-top: 1px solid var(--border); }
   .dz { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
   .dz b { font-size: 13.5px; font-weight: 600; }
   .dz .hint { margin: 2px 0 0; max-width: 60ch; }

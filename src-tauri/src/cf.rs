@@ -558,6 +558,21 @@ pub async fn set_dns_proxied(token: &str, zone_id: &str, record_id: &str, proxie
     cf_send(token, reqwest::Method::PATCH, &format!("/zones/{zone_id}/dns_records/{record_id}"), Some(serde_json::json!({ "proxied": proxied }))).await.map(|_| ())
 }
 
+/// Pages 项目绑的所有自定义域名（含还在验证的）。
+pub async fn list_pages_domains(token: &str, account_id: &str, project: &str) -> Result<Vec<String>, String> {
+    let body = cf_get(token, &format!("/accounts/{account_id}/pages/projects/{project}/domains")).await?;
+    Ok(body["result"].as_array().into_iter().flatten().filter_map(|d| d["name"].as_str().map(String::from)).collect())
+}
+
+/// 删掉整个 Pages 项目（部署、pages.dev 地址一起没了）。项目不存在算成功。
+pub async fn delete_pages_project(token: &str, account_id: &str, project: &str) -> Result<(), String> {
+    match cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/pages/projects/{project}"), None).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.contains("404") || e.to_ascii_lowercase().contains("not found") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 pub async fn delete_pages_domain(token: &str, account_id: &str, project: &str, domain: &str) -> Result<(), String> {
     cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/pages/projects/{project}/domains/{domain}"), None).await.map(|_| ())
 }

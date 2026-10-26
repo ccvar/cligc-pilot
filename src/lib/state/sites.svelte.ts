@@ -333,6 +333,26 @@ export async function setSiteEnv(id: string, set: [string, string][], remove: st
     return true;
   } catch (e) { say(String(e), 'err'); return false; }
 }
+/** 下线并删除：从网上撤下来（Cloudflare Pages 项目、域名指向；迁移站点先恢复域名），再从 Pilot 移除，可选把文件夹移到废纸篓。 */
+export async function takedownSite(s: Site) {
+  const live = s.domain || (s.deploy.project ? `${s.deploy.project}.pages.dev` : '');
+  const what: string[] = [];
+  if (s.origin === 'migrated' || s.origin === 'migrating') what.push('迁移这边：旧域名的跳转取消、测试域名删掉，正式域名恢复成上线前的样子（旧站不受影响）');
+  if ((s.deploy.mode === 'direct' || s.deploy.mode === 'pages_git') && s.deploy.project) what.push(`Cloudflare：解除自定义域名、删掉指向它的 DNS 记录，删除 Pages 项目 ${s.deploy.project}`);
+  else if (s.deploy.mode === 'workers' || s.deploy.mode === 'vps') what.push(`${s.deploy.mode === 'vps' ? '服务器' : 'Cloudflare Workers'} 上的网站 Pilot 还不能替你删，完成后会告诉你去哪删`);
+  what.push('Pilot 里的站点记录、数据缓存、运营记录和站点会话一起删除');
+  if (!await confirmDialog(`下线后${live ? ` ${live} 就打不开了，` : ''}这一步不能撤销：\n\n${what.map((w) => `· ${w}`).join('\n')}`, { title: `下线并删除「${s.name}」`, kind: 'danger', confirmText: '下线并删除' })) return;
+  const trash = s.source === 'local' && !!s.local_dir && await confirmDialog(`代码文件夹 ${s.local_dir} 要不要一起移到废纸篓？移到废纸篓以后还能从废纸篓找回来。`, { title: '代码文件夹怎么办', kind: 'warning', confirmText: '移到废纸篓', cancelText: '保留文件夹' });
+  try {
+    say('正在下线…');
+    const notes = await invoke<string[]>('site_takedown', { id: s.id, trashFolder: trash });
+    await refreshSites();
+    await refreshConvos();
+    void selectConn('__sites__');
+    say(notes.join('\n'), 'ok');
+  } catch (e) { say(String(e), 'err'); }
+}
+
 export async function removeSite(s: Site) {
   const ok = await confirmDialog(`移除站点「${s.name}」？Pilot 里的数据缓存、运营记录和站点会话会一并删除；你的代码文件夹和 GitHub 仓库不会被改动。`, { title: '移除站点', kind: 'danger', confirmText: '移除' });
   if (!ok) return;

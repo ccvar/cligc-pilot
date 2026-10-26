@@ -2823,6 +2823,48 @@ async fn undo_old_redirect(state: &AppState, dir: &Path, r: &OldRedirect) -> Res
     Ok(())
 }
 
+/// 下线迁移站点时收尾：取消旧域名跳转、删掉测试域名、把正式域名恢复成上线前的样子。返回做了什么。
+pub async fn takedown_migration(state: &AppState, site: &Site) -> Result<Vec<String>, String> {
+    let dir = mdir(state, &site.id);
+    let meta = load_meta(&dir);
+    let mut notes = Vec::new();
+    if meta.old_redirect.at > 0 {
+        undo_old_redirect(state, &dir, &meta.old_redirect).await?;
+        notes.push(format!("{} 不再跳转，又会打开旧站", meta.old_redirect.from.join("、")));
+    }
+    if !meta.staging.host.is_empty() {
+        if let (Ok(cf), true) = (state.conns.get(&meta.staging.cf_conn), !meta.staging.zone_id.is_empty()) {
+            if let Ok(token) = crate::keychain::get_key(&cf.id) {
+                for r in crate::cf::all_dns_records(&token, &meta.staging.zone_id).await.unwrap_or_default() {
+                    if r.name.eq_ignore_ascii_case(&meta.staging.host) && r.kind == "CNAME" && r.content.ends_with(".pages.dev") {
+                        let _ = crate::cf::delete_dns_record(&token, &meta.staging.zone_id, &r.id).await;
+                    }
+                }
+            }
+        }
+        notes.push(format!("删掉了测试域名 {}", meta.staging.host));
+    }
+    let cut = meta.cutover.clone();
+    if cut.at > 0 && !cut.host.is_empty() {
+        if crate::site_vps_host::managed(site) {
+            notes.push(rollback_vps(state, site, &dir, &cut).await?);
+        } else if !cut.zone_id.is_empty() {
+            let cf = state.conns.get(if cut.cf_conn.is_empty() { &site.deploy.cf_conn_id } else { &cut.cf_conn })?;
+            let token = crate::keychain::get_key(&cf.id)?;
+            for r in crate::cf::all_dns_records(&token, &cut.zone_id).await? {
+                if r.name.eq_ignore_ascii_case(&cut.host) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME") {
+                    crate::cf::delete_dns_record(&token, &cut.zone_id, &r.id).await?;
+                }
+            }
+            for r in &cut.before {
+                crate::cf::create_dns_record(&token, &cut.zone_id, r).await?;
+            }
+            notes.push(if cut.before.is_empty() { format!("{} 的指向删掉了（上线前它没在用）", cut.host) } else { format!("{} 恢复成上线前的 {} 条记录", cut.host, cut.before.len()) });
+        }
+    }
+    Ok(notes)
+}
+
 // ───────────────────────── ⑥ 切换（自己的服务器） ─────────────────────────
 
 /// 自己的服务器：域名现在解析到哪（DoH），和服务器 IP 对不对得上，域名在不在 Cloudflare 里（在就能自动改）。

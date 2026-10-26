@@ -579,6 +579,66 @@ pub fn remove_site(state: tauri::State<'_, AppState>, id: String) -> Result<(), 
     Ok(())
 }
 
+/// 下线并删除：把站从网上撤下来（迁移站点先恢复域名；Cloudflare Pages 解除自定义域名、删掉指向它的 CNAME、删除项目），
+/// 再从 Pilot 移除；`trash_folder` 时本地文件夹移到废纸篓。返回做了什么、还有什么要你自己处理。
+#[tauri::command]
+pub async fn site_takedown(state: tauri::State<'_, AppState>, id: String, trash_folder: bool) -> Result<Vec<String>, String> {
+    let site = state.sites.get(&id)?;
+    if state.site_jobs.running(&id) {
+        return Err("站点有任务正在运行，请先停止".into());
+    }
+    let conv_id = format!("site:{id}");
+    if state.convos.list().iter().any(|c| c.conn_id == conv_id && c.status == "running") {
+        return Err("站点下有对话正在运行，请先停止".into());
+    }
+    let mut notes = Vec::new();
+    if matches!(site.origin.as_str(), "migrating" | "migrated") {
+        notes.extend(crate::migrate_cmds::takedown_migration(&state, &site).await?);
+    }
+    match site.deploy.mode.as_str() {
+        "direct" | "pages_git" if !site.deploy.project.is_empty() => {
+            let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在，没法下线：先在设置里选好连接".to_string())?;
+            let token = crate::keychain::get_key(&cf.id)?;
+            let project = site.deploy.project.clone();
+            let target = format!("{project}.pages.dev");
+            for d in crate::cf::list_pages_domains(&token, &cf.account_id, &project).await.unwrap_or_default() {
+                let _ = crate::cf::delete_pages_domain(&token, &cf.account_id, &project, &d).await;
+                // 只删指向这个项目的 CNAME，别的记录不碰
+                for c in state.conns.list().into_iter().filter(|c| c.kind == "cloudflare") {
+                    let Ok(t) = crate::keychain::get_key(&c.id) else { continue };
+                    let Ok(Some(z)) = crate::cf::zone_for(&t, &d).await else { continue };
+                    for r in crate::cf::all_dns_records(&t, &z.id).await.unwrap_or_default() {
+                        if r.name.eq_ignore_ascii_case(&d) && r.kind == "CNAME" && r.content.trim_end_matches('.').eq_ignore_ascii_case(&target) {
+                            let _ = crate::cf::delete_dns_record(&t, &z.id, &r.id).await;
+                        }
+                    }
+                    break;
+                }
+                notes.push(format!("{d} 不再指向这个站"));
+            }
+            crate::cf::delete_pages_project(&token, &cf.account_id, &project).await?;
+            notes.push(format!("删除了 Cloudflare Pages 项目 {project}（{target} 打不开了）"));
+        }
+        "workers" if !site.deploy.project.is_empty() => notes.push(format!("Cloudflare Workers 上的 {} Pilot 还不能替你删：到 Cloudflare 后台 → Workers 和 Pages 里删掉它", site.deploy.project)),
+        "vps" => notes.push("服务器上的网站文件和配置 Pilot 还不能替你删：登录服务器手动删掉".into()),
+        _ => {}
+    }
+    state.sites.remove(&id)?;
+    sites::delete_env(&id);
+    let _ = state.convos.remove_by_conn_id(&conv_id);
+    if trash_folder && site.source == "local" && !site.local_dir.is_empty() {
+        let p = std::path::PathBuf::from(&site.local_dir);
+        if p.is_dir() {
+            match move_to_trash(&p) {
+                Ok(()) => notes.push(format!("文件夹 {} 移到了废纸篓", site.local_dir)),
+                Err(e) => notes.push(format!("文件夹没移成：{e}")),
+            }
+        }
+    }
+    notes.push(format!("已从 Pilot 移除「{}」", site.name));
+    Ok(notes)
+}
+
 #[tauri::command]
 pub fn site_env_keys(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<String>, String> {
     state.sites.get(&id)?;

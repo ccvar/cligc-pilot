@@ -4724,6 +4724,7 @@ pub fn run() {
             site_cmds::site_config_sync,
             site_cmds::save_site,
             site_cmds::remove_site,
+            site_cmds::site_takedown,
             site_cmds::site_env_keys,
             site_cmds::set_site_env,
             site_cmds::site_status,
