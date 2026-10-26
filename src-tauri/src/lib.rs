@@ -4688,6 +4688,7 @@ pub fn run() {
             migrate_cmds::migrate_directions_message,
             migrate_cmds::migrate_directions,
             migrate_cmds::migrate_pick_direction,
+            migrate_cmds::migrate_set_auto,
             migrate_cmds::migrate_direction_open,
             migrate_cmds::migrate_set_formal,
             migrate_cmds::migrate_host_use,

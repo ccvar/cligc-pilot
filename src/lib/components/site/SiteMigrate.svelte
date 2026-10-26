@@ -21,7 +21,7 @@
   import { openConv } from '$lib/state/conversations.js';
   import { humanTool } from '$lib/state/messages.svelte.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, directions, loadDirections, askDirections, pickDirection, openDirection, setFormal, hostUse, useText, oldRedirect, oldRedirectUndo, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setupPreviewProject, defaultProject, batch, setAuto, directions, loadDirections, askDirections, pickDirection, openDirection, setFormal, hostUse, useText, oldRedirect, oldRedirectUndo, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -61,7 +61,7 @@
   let cfConn = $state('');
   let project = $state('');
   $effect(() => { if (!cfConn && cfConns.length) cfConn = site.deploy.cf_conn_id || cfConns[0].id; });
-  $effect(() => { if (!project) project = (site.deploy.project || (site.migrate_from ?? site.name).replace(/^www\./, '').split('.')[0]).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') + '-new'; });
+  $effect(() => { if (!project) project = defaultProject(site); });
   let editPlan = $state(false);
   let openItems = $state<Set<string>>(new Set());
   function toggleItem(k: string) { const n = new Set(openItems); if (n.has(k)) n.delete(k); else n.add(k); openItems = n; }
@@ -79,16 +79,7 @@
   $effect(() => { if (v?.meta.parity_at) void loadMake(site.id, false); });
 
   /** 只建 Pages 项目、不绑域名（站点的 domain 迁移期间是空的） */
-  async function setupPreview() {
-    migrate.busy[site.id] = 'pages';
-    try {
-      await invoke('save_site', { site: { ...site, deploy: { ...site.deploy, mode: 'direct', cf_conn_id: cfConn, project: project.trim(), branch: site.deploy.branch || 'main' } } });
-      await refreshSites();
-      await invoke('site_setup_pages', { id: site.id });
-      say(`已建好 Pages 项目 ${project.trim()}，可以部署到预览地址了`, 'ok');
-    } catch (e) { say(String(e), 'err'); }
-    finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
-  }
+  const setupPreview = () => setupPreviewProject(site, cfConn, project);
   const isVps = $derived(v?.plan?.deploy === 'vps');
   const sshConns = $derived(app.conns.filter((c) => c.kind === 'ssh'));
   let sshConn = $state('');
@@ -245,6 +236,19 @@
       </li>
     {/each}
   </ol>
+
+  {#if v?.plan && ['extract', 'rebuild', 'verify'].includes(v.stage)}
+    <div class="autobar" class:on={v.plan.auto}>
+      {#if v.plan.auto}
+        <span class="dot" class:wait={!!batch.waiting[site.id]}></span>
+        <span class="grow">{batch.waiting[site.id] ? `自动推进停在这里：${batch.waiting[site.id]}` : '自动推进中：每一步做完会自己接着下一步，到挑设计方向、正式上线时停下来等你'}</span>
+        <button class="link-btn" onclick={() => setAuto(site.id, false)}>改成手动</button>
+      {:else}
+        <span class="grow">现在是手动：每一步要你点。</span>
+        <button class="link-btn" onclick={() => setAuto(site.id, true)}>打开自动推进</button>
+      {/if}
+    </div>
+  {/if}
 
   {#if !v}
     <div class="bars"><i style="width:58%"></i><i style="width:34%"></i></div>
@@ -703,6 +707,10 @@
   .act b { margin-right: 6px; color: var(--text); font-weight: 600; }
   .danger-row { margin-top: 2px; }
   .danger-link { color: var(--err); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+  .autobar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); margin: -4px 0 2px; }
+  .autobar.on { color: var(--dim); }
+  .autobar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--su-ok-soft); flex: none; }
+  .autobar .dot.wait { background: var(--warn, #c98a1b); box-shadow: 0 0 0 3px #faf1d8; }
   .dirs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
   .dir { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 8px; background: var(--card, #fff); }
   .dir .shot { display: block; padding: 0; border: none; border-radius: 8px; overflow: hidden; aspect-ratio: 16 / 10; background: var(--rail); cursor: zoom-in; }

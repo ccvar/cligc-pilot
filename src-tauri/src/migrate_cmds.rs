@@ -1699,6 +1699,15 @@ pub fn migrate_directions(state: tauri::State<'_, AppState>, id: String) -> Resu
     Ok(list)
 }
 
+/// 打开 / 关掉自动推进（确认方案以后一路自动做到可以正式上线）。
+#[tauri::command]
+pub fn migrate_set_auto(state: tauri::State<'_, AppState>, id: String, auto: bool) -> Result<(), String> {
+    let dir = mdir(&state, &id);
+    let mut plan: Plan = read_json(&dir.join("plan.json")).ok_or("先确认迁移方案")?;
+    plan.auto = auto;
+    write_json(&dir.join("plan.json"), &plan)
+}
+
 /// 挑定设计方向：d1 / d2 / d3，或者 auto（跳过，让 AI 自己定）。
 #[tauri::command]
 pub fn migrate_pick_direction(state: tauri::State<'_, AppState>, id: String, direction: String) -> Result<(), String> {

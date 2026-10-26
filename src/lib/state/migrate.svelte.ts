@@ -449,11 +449,22 @@ export function migrateNext(site: Site): MNext {
   }
 }
 
-// ───────── 批量迁移：按默认方案确认、自动推进 ─────────
+// ───────── 自动推进：单个站点（方案里勾了）或者批量迁移打开了「自动推进」 ─────────
 
-/** 自动推进：抓取 → AI 重做（后台对话，一次 aiMax 个）→ 核对 → 发布到预览（部署已配好的）→ 再核对。
- *  不会自动确认方案、不会配置服务器 / Cloudflare 项目、不会切换域名。 */
-export const batch = $state({ auto: false, aiMax: 1, deployed: {} as Record<string, number>, note: '' });
+/** 自动推进：抓取 → AI 画设计方向（等你挑）→ AI 重做 → 核对 → 没通过让 AI 修（最多 2 轮）
+ *  → 建 Cloudflare 预览项目（只有一个连接时）→ 配动态功能 → 部署到预览 → 实测。
+ *  不会替你：确认方案、挑设计方向、配置服务器、正式上线。
+ *  batch.auto：批量迁移的总开关；单个站点看方案里的 auto。 */
+export const batch = $state({
+  auto: false,
+  aiMax: 1,
+  deployed: {} as Record<string, number>,
+  note: '',
+  /** 自动推进停下来在等你的事（按站点） */
+  waiting: {} as Record<string, string>,
+  /** 这一轮会话里自动让 AI 修 / 接着做了几次（防止来回打转） */
+  fixes: {} as Record<string, number>,
+});
 
 export function migratingSites(): Site[] { return sites.list.filter((s) => s.origin === 'migrating'); }
 
@@ -461,67 +472,124 @@ export function migratingSites(): Site[] { return sites.list.filter((s) => s.ori
 function defaultPlan(v: MView) {
   const s = v.survey!;
   const features = Object.fromEntries(s.features.filter((f) => f.key !== 'search').map((f) => [f.key, f.key === 'login' || f.key === 'cart' ? 'drop' : 'keep'])) as Record<string, 'keep' | 'drop'>;
-  return { drop_groups: [], drop_paths: [], visual: 'keep_brand' as const, style: '', features, deploy: ((s.cn_share ?? 0) >= 0.5 ? 'vps' : 'direct') as 'vps' | 'direct' };
+  return { drop_groups: [], drop_paths: [], visual: 'keep_brand' as const, style: '', features, deploy: ((s.cn_share ?? 0) >= 0.5 ? 'vps' : 'direct') as 'vps' | 'direct', auto: true };
 }
 
 export async function confirmAllDefault() {
   const list = migratingSites().filter((s) => migrate.view[s.id]?.stage === 'plan' && migrate.view[s.id]?.survey);
   if (!list.length) { say('没有等确认方案的站点'); return; }
-  if (!await confirmDialog(`按默认方案确认 ${list.length} 个站点并开始抓取：页面全部保留、保留品牌升级设计、表单和评论保留、登录和购物车去掉；访客主要在中国大陆的部署到自己的服务器，其余部署到 Cloudflare。\n\n${list.map((s) => s.migrate_from).join('、')}`, { title: '按默认方案确认', kind: 'info', confirmText: '确认' })) return;
+  if (!await confirmDialog(`按默认方案确认 ${list.length} 个站点并开始抓取：页面全部保留、保留品牌升级设计、表单和评论保留、登录和购物车去掉；访客主要在中国大陆的部署到自己的服务器，其余部署到 Cloudflare。确认后自动往下做，到挑设计方向、正式上线时停下来等你。\n\n${list.map((s) => s.migrate_from).join('、')}`, { title: '按默认方案确认', kind: 'info', confirmText: '确认' })) return;
   for (const s of list) await confirmPlan(s.id, defaultPlan(migrate.view[s.id]!));
+}
+
+export async function setAuto(id: string, on: boolean) {
+  try { await invoke('migrate_set_auto', { id, auto: on }); await loadMigrate(id); if (on) void autoTick(); else delete batch.waiting[id]; }
+  catch (e) { say(friendly(e), 'err'); }
 }
 
 const aiRunningFor = (id: string) => app.convos.some((c) => c.conn_id === `site:${id}` && c.status === 'running');
 
-let ticking = false;
-export async function batchTick() {
-  if (!batch.auto || ticking) return;
-  ticking = true;
+/** 只有一个 Cloudflare 连接时，替你建预览用的 Pages 项目（名字按旧站域名 + -new） */
+export async function setupPreviewProject(site: Site, cfConn: string, project: string) {
+  migrate.busy[site.id] = 'pages';
   try {
-    const list = migratingSites();
-    let ai = list.filter((s) => aiRunningFor(s.id)).length;
-    const waiting: string[] = [];
-    for (const s of list) {
-      await loadMigrate(s.id);
-      const v = migrate.view[s.id];
-      if (!v || sites.jobs[s.id]?.status === 'running' || aiRunningFor(s.id)) continue;
-      const lastJob = sites.jobs[s.id];
-      const justFailed = lastJob && lastJob.status === 'failed' && lastJob.finished_at > Date.now() / 1000 - 600;
-      if (v.stage === 'plan') { waiting.push(`${s.migrate_from} 等你确认方案`); continue; }
-      if (v.stage === 'extract') { if (!justFailed || lastJob?.kind !== 'migrate:extract') await extract(s.id); continue; }
-      if (v.stage === 'rebuild') {
-        if (!v.meta.rebuild_at) {
-          if (ai >= batch.aiMax) continue;
-          try {
-            const text = await invoke<string>('migrate_rebuild_message', { id: s.id });
-            void startBackgroundChat({ siteId: s.id, siteName: s.name, text, perm: MAKING_PERM });
-            ai += 1;
-          } catch (e) { batch.note = `${s.migrate_from}：${String(e)}`; }
-        } else if (!justFailed) await verify(s.id);
-        continue;
-      }
-      if (v.stage === 'verify') {
-        const blocks = v.meta.parity.some((p) => p.level === 'block');
-        if (blocks || v.meta.live.bad.length) { waiting.push(`${s.migrate_from} 核对没通过，要你看一下`); continue; }
-        if (!v.deploy_ready) { waiting.push(`${s.migrate_from} 等你配置${v.plan?.deploy === 'vps' ? '服务器' : ' Cloudflare 项目'}`); continue; }
-        if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') { waiting.push(`${s.migrate_from} 等你配置动态功能`); continue; }
-        // 先发布到预览，发布完再核对一次
-        if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id); }
-        else if (lastJob?.kind === 'deploy' && lastJob.status === 'ok') { delete batch.deployed[s.id]; await verify(s.id); }
-        else if (justFailed) { waiting.push(`${s.migrate_from} 发布失败，要你看一下`); delete batch.deployed[s.id]; }
-        continue;
-      }
-      if (v.stage === 'cutover') waiting.push(`${s.migrate_from} 核对通过，等你正式上线`);
-    }
-    batch.note = waiting.join('；');
-  } finally { ticking = false; }
+    await invoke('save_site', { site: { ...site, deploy: { ...site.deploy, mode: 'direct', cf_conn_id: cfConn, project: project.trim(), branch: site.deploy.branch || 'main' } } });
+    await refreshSites();
+    await invoke('site_setup_pages', { id: site.id });
+    say(`已建好预览用的 Cloudflare Pages 项目 ${project.trim()}`, 'ok');
+  } catch (e) { say(friendly(e), 'err'); }
+  finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
 }
 
-let timer: ReturnType<typeof setInterval> | null = null;
+export function defaultProject(site: Site): string {
+  return (site.deploy.project || (site.migrate_from || site.name).replace(/^www\./, '').split('.')[0]).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') + (site.deploy.project ? '' : '-new');
+}
+
+/** 往前推一步；返回停下来在等你的事（没有就是空） */
+async function advance(s: Site, slots: { ai: number }): Promise<string> {
+  const v = migrate.view[s.id];
+  if (!v || migrate.busy[s.id] || sites.jobs[s.id]?.status === 'running' || aiRunningFor(s.id)) return '';
+  const lastJob = sites.jobs[s.id];
+  const justFailed = !!lastJob && lastJob.status === 'failed' && lastJob.finished_at > Date.now() / 1000 - 600;
+  const fixes = batch.fixes[s.id] ?? 0;
+  switch (v.stage) {
+    case 'plan': return '等你确认方案';
+    case 'extract':
+      if (justFailed && lastJob?.kind === 'migrate:extract') return '抓取没成功，要你看一下';
+      await extract(s.id); return '';
+    case 'rebuild': {
+      if (!v.meta.rebuild_at && !v.plan?.direction) {
+        if (v.meta.directions_at) return '等你挑设计方向';
+        if (slots.ai <= 0) return '';
+        slots.ai -= 1; await askDirections(s); return '';
+      }
+      if (!v.meta.rebuild_at) { if (slots.ai <= 0) return ''; slots.ai -= 1; await startRebuild(s); return ''; }
+      if (aiStopped(s.id)) {
+        if (fixes >= 2) return 'AI 停下了好几次，要你看一下';
+        if (slots.ai <= 0) return '';
+        batch.fixes[s.id] = fixes + 1; slots.ai -= 1; await startRebuild(s); return '';
+      }
+      if (justFailed && lastJob?.kind === 'migrate:verify') return '核对没跑成，要你看一下';
+      await verify(s.id); return '';
+    }
+    case 'verify': {
+      // AI 修过（重做要求比上次核对新）：先重新核对，再决定下一步
+      if (v.meta.rebuild_at > v.meta.parity_at) {
+        if (justFailed && lastJob?.kind === 'migrate:verify') return '核对没跑成，要你看一下';
+        await verify(s.id); return '';
+      }
+      const blocks = v.meta.parity.some((p) => p.level === 'block');
+      if (blocks || v.meta.live.bad.length) {
+        if (fixes >= 2) return '核对没通过，AI 修了两轮还有问题，要你看一下';
+        if (slots.ai <= 0) return '';
+        batch.fixes[s.id] = fixes + 1; slots.ai -= 1; delete batch.deployed[s.id]; await startRebuild(s); return '';
+      }
+      if (!v.deploy_ready) {
+        if (v.plan?.deploy === 'vps') return '等你选服务器';
+        const cfs = app.conns.filter((c) => c.kind === 'cloudflare');
+        const conn = s.deploy.cf_conn_id || (cfs.length === 1 ? cfs[0].id : '');
+        if (!conn) return cfs.length ? '等你选用哪个 Cloudflare 账号' : '等你连接 Cloudflare';
+        await setupPreviewProject(s, conn, defaultProject(s)); return '';
+      }
+      if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') { await setupDynamic(s.id); return ''; }
+      if (!v.meta.live.at) {
+        // 部署成功后后台会自己接着实测；过了 3 分钟还没实测结果才补一次
+        if (batch.deployed[s.id] && justFailed && lastJob?.kind === 'deploy') { delete batch.deployed[s.id]; return '部署没成功，要你看一下'; }
+        if (sites.status[s.id]?.last_deploy?.ok && batch.deployed[s.id] && Date.now() - batch.deployed[s.id] > 180000) { await liveCheck(s.id); return ''; }
+        if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id); }
+        return '';
+      }
+      return '';
+    }
+    case 'cutover': delete batch.fixes[s.id]; return '核对都通过了，等你正式上线';
+    default: return '';
+  }
+}
+
+let ticking = false;
+export async function autoTick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    const all = migratingSites();
+    const list = all.filter((s) => batch.auto || migrate.view[s.id]?.plan?.auto);
+    if (!list.length) return;
+    // 同时在跑的 AI：批量时按上限，单个站点自己的不占别人的名额
+    const slots = { ai: Math.max(0, (batch.auto ? batch.aiMax : list.length) - all.filter((s) => aiRunningFor(s.id)).length) };
+    for (const s of list) {
+      await loadMigrate(s.id);
+      const w = await advance(s, slots);
+      if (w) batch.waiting[s.id] = w; else delete batch.waiting[s.id];
+    }
+    batch.note = list.filter((s) => batch.waiting[s.id]).map((s) => `${s.migrate_from} ${batch.waiting[s.id]}`).join('；');
+  } finally { ticking = false; }
+}
+/** 旧名字：批量面板还在用 */
+export const batchTick = autoTick;
+
 export function setBatchAuto(on: boolean) {
   batch.auto = on;
-  if (timer) { clearInterval(timer); timer = null; }
-  if (on) { timer = setInterval(() => void batchTick(), 20000); void batchTick(); }
+  if (on) void autoTick();
   else batch.note = '';
 }
 
@@ -533,10 +601,20 @@ export function initMigrate() {
       if (j.status === 'running') return;
       const s = sites.list.find((x) => x.id === j.site_id);
       if (!showMigrateCard(s)) return;
-      void loadMigrate(j.site_id).then(() => batchTick());
-      if (j.kind.startsWith('migrate:')) say(j.status === 'ok' ? `${j.title}完成` : j.status === 'canceled' ? `已停止${j.title}` : `${j.title}没通过：${j.error.split('\n')[0]}`, j.status === 'ok' ? 'ok' : 'err');
+      void loadMigrate(j.site_id).then(() => autoTick());
+      if (j.kind.startsWith('migrate:')) say(j.status === 'ok' ? `${j.title}完成` : j.status === 'canceled' ? `已停止${j.title}` : `${j.title}没通过：${friendly(j.error.split('\n')[0])}`, j.status === 'ok' ? 'ok' : 'err');
     });
-    return () => { void un.then((f) => f()); };
+    // 自动推进的兜底：每 20 秒看一眼（AI 一轮做完、作业结束都会立刻推，这里防漏）
+    const t = setInterval(() => void autoTick(), 20000);
+    return () => { void un.then((f) => f()); clearInterval(t); };
+  });
+  // 迁移站点的 AI 一轮做完：刷新，自动推进接着往下
+  let was = new Set<string>();
+  $effect(() => {
+    const now = new Set(app.convos.filter((c) => c.status === 'running' && c.conn_id.startsWith('site:')).map((c) => c.conn_id.slice(5)));
+    const ended = [...was].filter((id) => !now.has(id));
+    was = now;
+    if (ended.length) untrack(() => { for (const id of ended) if (migrate.view[id]) void loadMigrate(id).then(() => { void loadDirections(id); void autoTick(); }); });
   });
 }
 

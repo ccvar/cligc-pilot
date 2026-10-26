@@ -18,6 +18,8 @@
   let feats = $state<Record<string, 'keep' | 'drop'>>({});
   /** 部署到哪：Cloudflare（默认）或自己的服务器 */
   let deploy = $state<'direct' | 'vps'>('direct');
+  /** 确认后自动往下做（默认开） */
+  let auto = $state(true);
   let inited = '';
   $effect(() => {
     const k = `${id}:${v.plan?.confirmed_at ?? 0}`;
@@ -47,6 +49,109 @@
 </script>
 
 <div class="sv">
+  {#if editable}
+    <!-- 确认方案：要你决定的三件事放最上面（都有默认值），盘点报告收起来 -->
+    <p class="summary">找到 <b>{s.pages}</b> 个网页、<b>{s.assets}</b> 个图片和附件{#if s.gsc_used}，已用 Search Console 补全有搜索流量的页面{/if}。将迁 <b>{keepN}</b> 页，地址一个不变。</p>
+  <div class="host" class:ok={host.supported}>
+    <div class="hh"><b>建议放在：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
+    <ul>{#each host.reasons as r (r)}<li>{r}</li>{/each}</ul>
+    {#if !host.supported}<small>部署到 VPS 还不支持。{s.features.some((f) => f.key === 'login' || f.key === 'cart') ? '登录、购物车这类功能可以在下面选「去掉」，就能放到 Cloudflare。' : ''}</small>{/if}
+  </div>
+
+  {#if s.features.length}
+    <div class="blk"><b class="bt">动态功能{#if editable}<small>选保留还是去掉</small>{/if}</b>
+      <ul class="feats">
+        {#each s.features as f (f.key)}
+          <li>
+            <span class="pill {f.static_ok ? 'ok' : feats[f.key] === 'drop' ? '' : 'warn'}">{f.label} · {f.pages} 页</span>
+            <small>{f.key === 'search' ? f.plan : feats[f.key] === 'drop' ? '去掉：新站上不放这个功能的入口' : f.plan}</small>
+            {#if editable && f.key !== 'search'}
+              <span class="grow"></span>
+              <div class="seg mini" role="tablist">
+                <button class:on={feats[f.key] !== 'drop'} onclick={() => (feats = { ...feats, [f.key]: 'keep' })}>保留</button>
+                <button class:on={feats[f.key] === 'drop'} onclick={() => (feats = { ...feats, [f.key]: 'drop' })}>去掉</button>
+              </div>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+    <div class="blk plan">
+      <b class="bt">部署到哪</b>
+      <div class="seg" role="tablist">
+        <button class:on={deploy === 'direct' && host.target !== 'vps'} disabled={host.target === 'vps'} onclick={() => (deploy = 'direct')}>Cloudflare{host.target !== 'vps' && (s.cn_share ?? 0) < 0.5 ? '（推荐）' : ''}</button>
+        <button class:on={deploy === 'vps' || host.target === 'vps'} onclick={() => (deploy = 'vps')}>自己的服务器{host.target === 'vps' || (s.cn_share ?? 0) >= 0.5 ? '（推荐）' : ''}</button>
+      </div>
+      <small class="faint">{deploy === 'vps' || host.target === 'vps' ? '放在你自己的服务器上：Pilot 替你装好网页服务、免费 HTTPS 证书和表单评论服务，不用懂运维。访客主要在中国大陆时更合适（大陆的服务器要先 ICP 备案）。' : `${host.label}：全球都快、免费额度够用、不用维护服务器。`}</small>
+      <b class="bt">新站的样子</b>
+      <div class="seg" role="tablist">
+        <button class:on={visual === 'keep_brand'} onclick={() => (visual = 'keep_brand')}>保留品牌，升级设计</button>
+        <button class:on={visual === 'fresh'} onclick={() => (visual = 'fresh')}>全新视觉</button>
+      </div>
+      <small class="faint">{visual === 'keep_brand' ? '沿用 logo、站名和主色，排版、版式和细节按获奖级网站的标准重做。' : '只保留站名，设计方向重新定。'} 正文一字不改写，URL 一个不变。</small>
+      <textarea class="tin" rows="2" bind:value={style} placeholder="对新站样子的补充要求（可选）：比如「更简洁，参考 Stripe 文档的排版」"></textarea>
+      <label class="auto-ck"><input type="checkbox" bind:checked={auto} />确认后自动往下做：抓取、画设计方向、重做、核对、部署到预览，到挑设计方向和正式上线时停下来等你</label>
+      <div class="row">
+        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats, deploy: host.target === 'vps' ? 'vps' : deploy, auto })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
+        <button class="btn small quiet" onclick={() => resurvey(id)} disabled={!!busy}>重新盘点</button>
+      </div>
+    </div>
+      <details class="report">
+      <summary>盘点详情：页面分组（可以勾掉不迁的）、流量最高的页面、打不开的地址</summary>
+      <div class="report-body">
+  <div class="stats">
+    <div class="stat"><small>网页</small><b>{s.pages}</b>{#if s.truncated}<em>达到上限</em>{/if}</div>
+    <div class="stat"><small>图片和附件</small><b>{s.assets}</b><em>{s.files ? `其中下载文件 ${s.files}` : ''}</em></div>
+    <div class="stat"><small>RSS / Atom</small><b>{s.feeds}</b></div>
+    <div class="stat"><small>旧站已有跳转</small><b>{s.redirects}</b></div>
+    <div class="stat"><small>打不开的地址</small><b>{s.broken.length}</b>{#if s.broken.length}<em><button class="link-btn" onclick={() => (showBroken = !showBroken)}>{showBroken ? '收起' : '查看'}</button></em>{/if}</div>
+  </div>
+  {#if showBroken}<ul class="items">{#each s.broken as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
+  <p class="meta-line">
+    {s.origin}
+    · 路径{s.trailing_slash === 'always' ? '都以 / 结尾' : s.trailing_slash === 'never' ? '都不以 / 结尾' : '结尾有的带 / 有的不带'}
+    {#if s.js_rendered} · 浏览器端渲染（已用浏览器抓取）{/if}
+    {#if s.generator} · {s.generator}{/if}
+    {#if s.analytics.length} · 统计 {s.analytics.join('、')}{/if}
+    {#if s.gsc_used} · 已用 Search Console 补漏{/if}
+  </p>
+
+  {#if s.notes.length}
+    <ul class="notes">{#each s.notes as n (n)}<li><Icon name="info" size={12} />{n}</li>{/each}</ul>
+  {/if}
+
+  <div class="blk">
+    <b class="bt">页面分组 <small>{editable ? `勾掉不想迁的组 · 将迁 ${keepN} 页` : `${keepN} 页`}</small></b>
+    <table class="tbl">
+      <thead><tr>{#if editable}<th></th>{/if}<th>分组</th><th class="num">页数</th><th>类型</th>{#if s.gsc_used}<th class="num">点击</th>{/if}<th>示例</th></tr></thead>
+      <tbody>
+        {#each s.groups as g (g.key)}
+          <tr class:off={dropped.has(g.key)}>
+            {#if editable}<td class="ck"><input type="checkbox" checked={!dropped.has(g.key)} onchange={() => toggle(g.key)} aria-label="迁移 {g.key}" /></td>{/if}
+            <td class="mono gk">{groupLabel(g.key)}</td>
+            <td class="num">{g.count}</td>
+            <td>{PTYPE[g.ptype] ?? g.ptype}</td>
+            {#if s.gsc_used}<td class="num">{g.clicks || ''}</td>{/if}
+            <td class="trunc mono sm" title={g.samples.join('\n')}>{g.samples.slice(0, 2).join('  ')}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+
+  {#if s.top.length}
+    <div class="blk"><b class="bt">搜索流量最高的页面 <small>近 16 个月 · Search Console</small>{#if s.top.length > 5}<button class="link-btn sm" onclick={() => (showTop = !showTop)}>{showTop ? '收起' : `全部 ${s.top.length} 个`}</button>{/if}</b>
+      <table class="tbl top"><tbody>
+        {#each s.top.slice(0, showTop ? 20 : 5) as t (t.path)}<tr><td class="trunc" title={`${t.path}\n${t.title}`}><span class="mono sm">{t.path}</span> <small class="faint">{t.title}</small></td><td class="num">{t.clicks} 点击</td><td class="num faint">{t.impressions} 展示</td></tr>{/each}
+      </tbody></table>
+    </div>
+  {/if}
+
+      </div>
+    </details>
+  {:else}
   <div class="stats">
     <div class="stat"><small>网页</small><b>{s.pages}</b>{#if s.truncated}<em>达到上限</em>{/if}</div>
     <div class="stat"><small>图片和附件</small><b>{s.assets}</b><em>{s.files ? `其中下载文件 ${s.files}` : ''}</em></div>
@@ -65,7 +170,7 @@
   </p>
 
   <div class="host" class:ok={host.supported}>
-    <div class="hh"><b>部署去向：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
+    <div class="hh"><b>建议放在：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
     <ul>{#each host.reasons as r (r)}<li>{r}</li>{/each}</ul>
     {#if !host.supported}<small>部署到 VPS 还不支持。{s.features.some((f) => f.key === 'login' || f.key === 'cart') ? '登录、购物车这类功能可以在下面选「去掉」，就能放到 Cloudflare。' : ''}</small>{/if}
   </div>
@@ -121,27 +226,6 @@
     </div>
   {/if}
 
-  {#if editable}
-    <div class="blk plan">
-      <b class="bt">部署到哪</b>
-      <div class="seg" role="tablist">
-        <button class:on={deploy === 'direct' && host.target !== 'vps'} disabled={host.target === 'vps'} onclick={() => (deploy = 'direct')}>Cloudflare{host.target !== 'vps' && (s.cn_share ?? 0) < 0.5 ? '（推荐）' : ''}</button>
-        <button class:on={deploy === 'vps' || host.target === 'vps'} onclick={() => (deploy = 'vps')}>自己的服务器{host.target === 'vps' || (s.cn_share ?? 0) >= 0.5 ? '（推荐）' : ''}</button>
-      </div>
-      <small class="faint">{deploy === 'vps' || host.target === 'vps' ? 'Pilot 配置你的服务器：Caddy 管网页和自动 HTTPS，表单和评论由一个 Go 小服务处理，数据存 SQLite。访客主要在中国大陆时更合适（放大陆的服务器要先 ICP 备案）。' : `${host.label}：速度快、免费额度够用、不用维护服务器。`}</small>
-      <b class="bt">新站的样子</b>
-      <div class="seg" role="tablist">
-        <button class:on={visual === 'keep_brand'} onclick={() => (visual = 'keep_brand')}>保留品牌，升级设计</button>
-        <button class:on={visual === 'fresh'} onclick={() => (visual = 'fresh')}>全新视觉</button>
-      </div>
-      <small class="faint">{visual === 'keep_brand' ? '沿用 logo、站名和主色，排版、版式和细节按获奖级网站的标准重做。' : '只保留站名，设计方向重新定。'} 正文一字不改写，URL 一个不变。</small>
-      <textarea class="tin" rows="2" bind:value={style} placeholder="补充要求（可选）：比如「更简洁，参考 Stripe 文档的排版」"></textarea>
-      <div class="row">
-        <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats, deploy: host.target === 'vps' ? 'vps' : deploy })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
-        <button class="btn small quiet" onclick={() => resurvey(id)} disabled={!!busy}>重新盘点</button>
-        <small class="faint">技术栈 Astro</small>
-      </div>
-    </div>
   {/if}
 </div>
 
@@ -172,7 +256,15 @@
   .sm { font-size: 11.5px; }
   .items { margin: 0; padding: 6px 10px; list-style: none; background: var(--rail); border-radius: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; }
   .items li { font-size: 11.5px; color: var(--dim); }
-  .plan { padding-top: 12px; border-top: 1px solid var(--border); gap: 8px; }
+  .plan { padding-top: 4px; gap: 8px; }
+  .summary { margin: 0; font-size: 13px; color: var(--dim); line-height: 1.6; }
+  .summary b { color: var(--text); font-weight: 600; }
+  .report { border-top: 1px solid var(--border); padding-top: 10px; }
+  .report summary { cursor: pointer; font-size: 12.5px; color: var(--dim); }
+  .report summary:hover { color: var(--text); }
+  .report-body { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+  .auto-ck { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--dim); line-height: 1.5; margin-top: 4px; }
+  .auto-ck input { margin-top: 3px; accent-color: var(--accent); }
   .plan textarea { font-family: inherit; font-size: 12.5px; }
   .link-btn.sm { font-size: 11.5px; }
   .top td.num { width: 1%; padding-left: 16px; }
