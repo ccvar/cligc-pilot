@@ -127,7 +127,7 @@
       <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
       {#if o?.sites.length}
         <div class="more-wrap">
-          <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="更多操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '更多操作'}><Icon name="sliders" size={15} /></button>
+          <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="托管运营的整体操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '生成日报、暂停 / 恢复全部'}><Icon name="sliders" size={15} /></button>
           {#if moreOpen}
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <div class="more-mask" onclick={() => (moreOpen = false)}></div>
@@ -235,7 +235,7 @@
           <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
             <span class="more-wrap">
-              <button class="ic-btn ic-sm" class:on={planMenu === g.id} onclick={() => (planMenu = planMenu === g.id ? '' : g.id)} aria-label="方案设置" aria-haspopup="menu" aria-expanded={planMenu === g.id} data-tip={planMenu === g.id ? null : '方案设置'}><Icon name="sliders" size={14} /></button>
+              <button class="ic-btn ic-sm" class:on={planMenu === g.id} onclick={() => (planMenu = planMenu === g.id ? '' : g.id)} aria-label="这个方案的操作" aria-haspopup="menu" aria-expanded={planMenu === g.id} data-tip={planMenu === g.id ? null : '编辑、暂停这个方案'}><Icon name="more" size={16} /></button>
               {#if planMenu === g.id}
                 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                 <span class="more-mask" onclick={() => (planMenu = '')}></span>
