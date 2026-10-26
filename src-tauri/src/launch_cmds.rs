@@ -605,9 +605,6 @@ pub struct AutoBindResult {
 #[tauri::command]
 pub async fn launch_auto_bind(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<AutoBindResult, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = crate::sites::protected_reason(&site) {
-        return Err(r);
-    }
     let (done, errors) = probe_bindings(&state, &site, true, true).await;
     let mut out = AutoBindResult { done, errors, republishing: false };
     let site = state.sites.get(&id)?;
@@ -845,10 +842,7 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
         return Err("站点没有填写域名".into());
     }
     if auto.unwrap_or(false) {
-        // 会删路由、解绑域名：受保护的站点不碰；界面上已经把清单给用户确认过
-        if let Some(r) = crate::sites::protected_reason(&site) {
-            return Err(r);
-        }
+        // 会删路由、解绑域名：界面上已经把清单给用户确认过
         return Ok(domain_settle(&state.conns, &site).await);
     }
     Ok(domain_check(&state.conns, &site, quick.unwrap_or(false)).await)
@@ -1035,9 +1029,6 @@ pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, q
 #[tauri::command]
 pub async fn site_domain_fix(state: tauri::State<'_, AppState>, id: String, kind: String, conn: String, target: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = crate::sites::protected_reason(&site) {
-        return Err(r);
-    }
     domain_fix(&state.conns, &site, &kind, &conn, &target).await
 }
 

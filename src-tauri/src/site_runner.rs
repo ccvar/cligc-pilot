@@ -271,11 +271,6 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
     let st = ctx.state();
     let site = st.sites.get(site_id)?;
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
-    // 受保护的站点：任何自动流程都不碰，作业直接按失败收尾，原因给用户看
-    if let Some(why) = crate::sites::protected_reason(&site) {
-        job.finish(&Err(why.clone()));
-        return Err(why);
-    }
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
     tauri::async_runtime::spawn(async move {

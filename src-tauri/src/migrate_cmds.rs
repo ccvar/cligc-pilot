@@ -2354,9 +2354,6 @@ pub async fn migrate_dns_fix(state: tauri::State<'_, AppState>, id: String) -> R
 #[tauri::command]
 pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<Cutover, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = crate::sites::protected_reason(&site) {
-        return Err(r);
-    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let plan: Option<Plan> = read_json(&dir.join("plan.json"));
@@ -2602,9 +2599,6 @@ pub async fn migrate_host_use(state: tauri::State<'_, AppState>, id: String, hos
 #[tauri::command]
 pub async fn migrate_staging(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, host: String) -> Result<Staging, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = crate::sites::protected_reason(&site) {
-        return Err(r);
-    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let meta = load_meta(&dir);
@@ -2752,9 +2746,6 @@ pub fn noindex_hosts(site_dir: &Path) -> Vec<String> {
 #[tauri::command]
 pub async fn migrate_old_redirect(state: tauri::State<'_, AppState>, id: String) -> Result<OldRedirect, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = crate::sites::protected_reason(&site) {
-        return Err(r);
-    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let meta = load_meta(&dir);

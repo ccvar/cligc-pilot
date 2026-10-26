@@ -523,9 +523,6 @@ pub async fn run_republish(site: Site, conns: ConnStore, site_dir: PathBuf, job:
     let started = now();
     let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: "files".into(), ..Default::default() };
     let result = async {
-        if let Some(r) = crate::sites::protected_reason(&site) {
-            return Err(r);
-        }
         job.step("prepare", "running", "");
         let (built, last) = live_build(&site, &site_dir).await.inspect_err(|_| job.step("prepare", "failed", ""))?;
         rec.commit = last.commit.clone();
@@ -583,9 +580,6 @@ pub const CHECK_STEPS: &[(&str, &str)] = &[
 /// 预检：只跑「准备代码 → 安装 → 构建 → 检查」，不上传。GitHub 来源检查的是生产分支的最新代码。
 pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job) -> Result<(), String> {
     let result = async {
-        if let Some(r) = crate::sites::protected_reason(&site) {
-            return Err(r);
-        }
         job.step("prepare", "running", "");
         let (dir, stamp) = match site.source.as_str() {
             "github" => {
@@ -603,10 +597,6 @@ pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job
 }
 
 async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord, mut spec: crate::site_verify::Spec) -> Result<(), String> {
-    // 受保护的站点：不管是谁发起的（手动、运营任务、回滚）都不上线
-    if let Some(r) = crate::sites::protected_reason(site) {
-        return Err(r);
-    }
     if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err("这个站点不是由 Pilot 直接上传部署的".into());
     }

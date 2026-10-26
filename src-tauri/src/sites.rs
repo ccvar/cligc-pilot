@@ -62,22 +62,6 @@ impl DataBinding {
     }
 }
 
-/// 任何自动流程都不许碰的站点：上线 / 下线 / 切换域名 / 托管运营 / 迁移切换前都要先查。
-/// 之前只靠「别去导入它」，代码里没有任何保护。
-pub const PROTECTED_HOSTS: &[&str] = &["tt.cligx.com"];
-
-/// 这个站点受保护时返回给用户看的原因，否则 None。按主域名和 www. 变体比对；
-/// 迁移中的站点正式域名还没填（在 `migrate_from` 里），也一并查。
-pub fn protected_reason(site: &Site) -> Option<String> {
-    let bare = |d: &str| d.trim().trim_start_matches("www.").to_ascii_lowercase();
-    [site.domain.as_str(), site.migrate_from.as_str()]
-        .into_iter()
-        .map(bare)
-        .filter(|h| !h.is_empty())
-        .find(|h| PROTECTED_HOSTS.contains(&h.as_str()))
-        .map(|h| format!("{h} 是受保护的站点，Pilot 不会对它执行上线、下线、改域名或自动运营；请在 Cloudflare 后台手动处理"))
-}
-
 /// 先写到旁边的临时文件再改名：写到一半崩了（断电、强退）原文件还是完整的，不会留下半截 JSON。
 pub fn write_atomic(p: &Path, raw: &[u8]) -> Result<(), String> {
     if let Some(d) = p.parent() {
@@ -1095,16 +1079,6 @@ pub fn delete_env(site_id: &str) {
 #[cfg(test)]
 mod tests {
 
-    /// 受保护的站点：正式域名、www 变体、迁移中的旧域名都认得出来。
-    #[test]
-    fn protected_site_is_recognised_by_domain_or_migrate_from() {
-        let mk = |domain: &str, from: &str| -> Site { serde_json::from_value(serde_json::json!({"id":"x","name":"x","domain":domain,"migrate_from":from,"source":"local","created_at":0,"updated_at":0})).unwrap() };
-        assert!(super::protected_reason(&mk("tt.cligx.com", "")).is_some());
-        assert!(super::protected_reason(&mk("www.tt.cligx.com", "")).is_some());
-        assert!(super::protected_reason(&mk("", "tt.cligx.com")).is_some());
-        assert!(super::protected_reason(&mk("example.com", "")).is_none());
-        assert!(super::protected_reason(&mk("", "")).is_none());
-    }
 
     /// 原子写：写完文件完整，旁边不留临时文件。
     #[test]

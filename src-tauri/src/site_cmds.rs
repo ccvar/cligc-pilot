@@ -648,9 +648,6 @@ pub fn remove_site(state: tauri::State<'_, AppState>, id: String) -> Result<(), 
 #[tauri::command]
 pub async fn site_takedown(state: tauri::State<'_, AppState>, id: String, trash_folder: bool) -> Result<Vec<String>, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = sites::protected_reason(&site) {
-        return Err(r);
-    }
     if state.site_jobs.running(&id) {
         return Err("站点有任务正在运行，请先停止".into());
     }
@@ -799,9 +796,6 @@ pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id:
 
 pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) -> Result<String, String> {
     let mut site = state.sites.get(&id)?;
-    if let Some(r) = sites::protected_reason(&site) {
-        return Err(r);
-    }
     // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
     if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
         let key = crate::bing::new_indexnow_key();
@@ -839,9 +833,6 @@ pub async fn site_publish_files(app: tauri::AppHandle, state: tauri::State<'_, A
 
 pub(crate) async fn start_publish_files(app: &tauri::AppHandle, state: &AppState, id: &str, fallback: bool) -> Result<String, String> {
     let site = state.sites.get(id)?;
-    if let Some(r) = sites::protected_reason(&site) {
-        return Err(r);
-    }
     let site_dir = state.sites.data_dir(id);
     match crate::site_deploy::live_build(&site, &site_dir).await {
         Ok(_) => {
@@ -916,9 +907,6 @@ pub(crate) async fn deploy_and_wait(site_id: &str) -> Result<serde_json::Value, 
 #[tauri::command]
 pub fn check_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
-    if let Some(r) = sites::protected_reason(&site) {
-        return Err(r);
-    }
     let job = state.site_jobs.start(Some(app), &id, "check", "构建预检", crate::site_deploy::CHECK_STEPS)?;
     let job_id = job.id.clone();
     let conns = state.conns.clone();

@@ -29,16 +29,6 @@ fn log_site(state: &AppState, site_id: &str, kind: &str, title: String) {
 }
 
 /// 站点的执行档位跟着所在方案的自主程度走；没托管（你自己运营）＝第 1 档：照常同步数据、找机会、体检，不自动改代码。
-/// 受保护的站点不能进托管（自动改代码、自动上线）：有一个就整批拒绝，原因照站点的说法给用户看。
-fn refuse_protected(state: &AppState, ids: &[String]) -> Result<(), String> {
-    for id in ids {
-        if let Some(r) = state.sites.get(id).ok().and_then(|s| crate::sites::protected_reason(&s)) {
-            return Err(r);
-        }
-    }
-    Ok(())
-}
-
 fn set_level(state: &AppState, site_id: &str, level: u8) {
     let _ = state.sites.update(site_id, crate::now_secs(), |s| {
         s.ops.level = level;
@@ -81,7 +71,6 @@ pub fn save_managed_group(state: tauri::State<'_, AppState>, group: ManagedGroup
     let known: std::collections::HashSet<String> = state.sites.list().into_iter().map(|s| s.id).collect();
     g.sites.retain(|id| known.contains(id));
     g.sites.dedup();
-    refuse_protected(&state, &g.sites)?;
     g.stopped.retain(|id| g.sites.contains(id));
     let mut c = managed::load(&state.data_dir);
     if g.id.is_empty() {
@@ -147,9 +136,6 @@ pub fn set_group_paused(state: tauri::State<'_, AppState>, id: String, paused: b
 /// 单独启用 / 停止方案里的某个站点（规则保留，停止期间不自动运行）。
 #[tauri::command]
 pub fn set_site_managed_active(state: tauri::State<'_, AppState>, site_id: String, active: bool) -> Result<(), String> {
-    if active {
-        refuse_protected(&state, std::slice::from_ref(&site_id))?;
-    }
     let mut c = managed::load(&state.data_dir);
     let g = c.groups.iter_mut().find(|g| g.sites.contains(&site_id)).ok_or("这个站点不在任何托管方案里")?;
     g.stopped.retain(|x| x != &site_id);
@@ -175,7 +161,6 @@ pub fn set_managed_paused(state: tauri::State<'_, AppState>, paused: bool) -> Re
 pub fn set_sites_managed(state: tauri::State<'_, AppState>, ids: Vec<String>, managed: bool, group_id: Option<String>) -> Result<usize, String> {
     let mut c = managed::load(&state.data_dir);
     if managed {
-        refuse_protected(&state, &ids)?;
         let gid = match group_id.filter(|g| c.groups.iter().any(|x| &x.id == g)).or_else(|| c.groups.first().map(|g| g.id.clone())) {
             Some(g) => g,
             None => {
