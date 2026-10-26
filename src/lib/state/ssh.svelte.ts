@@ -17,7 +17,11 @@ class SshFormState {
   sshTesting = $state(false);
   sshConnecting = $state(false);
   sshErr = $state('');
-  sshFp = $state(''); // 试连拿到的主机指纹；非空 = 认证已通过、待你确认指纹
+  sshFp = $state(''); // 试连拿到的主机指纹；非空 = 已连上这台机器、待你核对指纹
+  // 这枚指纹下认证已经通过（编辑时指纹没变：一步到位）。false = 只取了指纹、密码还没发——
+  // 密码只会发给你核对过指纹的机器，所以「添加 / 保存」那一下会先带着这枚指纹认证一次。
+  sshAuthed = $state(false);
+  sshFpNote = $state(''); // 后端对这枚指纹的说明（比如「和记住的不一样，没有发送密码」）
   sshEditId = $state(''); // 非空 = 编辑已有连接
   sshCredentialRepair = $state(false); // 从“凭据缺失”入口进入：必须补填，不能空保存
   sshOldFp = $state(''); // 编辑时：连接里存着的旧指纹，用来发现「机器的指纹变了」
@@ -47,12 +51,12 @@ export const sshAuthOpts = [
   { value: 'key', label: '密钥', sub: '用私钥文件登录（更安全）' },
 ];
 export function openSshConnect() {
-  sshForm.sshOpen = true; sshForm.sshErr = ''; sshForm.sshFp = ''; sshForm.sshEditId = ''; sshForm.sshCredentialRepair = false; sshForm.sshOldFp = '';
+  sshForm.sshOpen = true; sshForm.sshErr = ''; sshForm.sshFp = ''; sshForm.sshAuthed = false; sshForm.sshFpNote = ''; sshForm.sshEditId = ''; sshForm.sshCredentialRepair = false; sshForm.sshOldFp = '';
   sshForm.sshF = { ...SSH_BLANK };
   sshForm.sshF0 = { ...SSH_BLANK };
 }
 export function openSshEdit(c: Connection) {
-  sshForm.sshOpen = true; sshForm.sshErr = ''; sshForm.sshFp = ''; sshForm.sshEditId = c.id; sshForm.sshCredentialRepair = false; sshForm.sshOldFp = c.ssh_fingerprint || '';
+  sshForm.sshOpen = true; sshForm.sshErr = ''; sshForm.sshFp = ''; sshForm.sshAuthed = false; sshForm.sshFpNote = ''; sshForm.sshEditId = c.id; sshForm.sshCredentialRepair = false; sshForm.sshOldFp = c.ssh_fingerprint || '';
   // 密码/口令不回显（我们自己也读不到明文以外的用途）——留空即保持钥匙串里那条不变。
   sshForm.sshF = {
     name: c.name, host: c.ssh_host ?? '', port: c.ssh_port || 22, user: c.ssh_user ?? '',
@@ -64,6 +68,27 @@ export function openSshCredentialRepair(c: Connection) {
   openSshEdit(c);
   sshForm.sshCredentialRepair = true;
 }
+type SshProbe = { fingerprint: string; auth_ok: boolean; error: string };
+function probeArgs(expectFingerprint: string) {
+  return {
+    host: sshForm.sshF.host.trim(), port: Number(sshForm.sshF.port) || 22, user: sshForm.sshF.user.trim(), auth: sshForm.sshF.auth,
+    password: sshForm.sshF.password, keyPath: sshForm.sshF.keyPath, keyPass: sshForm.sshF.keyPass, expectFingerprint,
+    // 编辑时密码/口令留空 = 用钥匙串里存着的那条来试（后端取，前端永远看不到明文）
+    connId: sshForm.sshEditId,
+  };
+}
+/** 带着你核对过的指纹认证一次：指纹一致才会把密码 / 私钥签名发出去。成功后 sshAuthed=true。 */
+async function authWithConfirmedFp(): Promise<boolean> {
+  if (sshForm.sshAuthed) return true;
+  const p = await invoke<SshProbe>('verify_ssh', probeArgs(sshForm.sshFp));
+  if (!p.auth_ok) {
+    // 刚核对完指纹就又变了：极少见，但不能当没看见
+    sshForm.sshFp = p.fingerprint; sshForm.sshFpNote = p.error; sshForm.sshAuthed = false;
+    return false;
+  }
+  sshForm.sshAuthed = true;
+  return true;
+}
 export async function saveSshEdit() {
   if (sshForm.sshConnecting) return;
   if (sshForm.sshCredentialRepair && sshForm.sshF.auth === 'password' && !sshForm.sshF.password) {
@@ -72,6 +97,8 @@ export async function saveSshEdit() {
   }
   sshForm.sshConnecting = true; sshForm.sshErr = '';
   try {
+    // 试连过但还没认证（指纹刚核对完）：先用这枚指纹认证一次，密码错了在这里就能知道
+    if (sshForm.sshFp && !(await authWithConfirmedFp())) return;
     const conn = await invoke<Connection>('update_ssh', {
       connId: sshForm.sshEditId,
       name: sshForm.sshF.name.trim(), host: sshForm.sshF.host.trim(), port: Number(sshForm.sshF.port) || 22,
@@ -101,15 +128,13 @@ export async function pickSshKey() {
 }
 export async function testSsh() {
   if (sshForm.sshTesting || !sshForm.sshCanTest) return;
-  sshForm.sshTesting = true; sshForm.sshErr = ''; sshForm.sshFp = '';
+  sshForm.sshTesting = true; sshForm.sshErr = ''; sshForm.sshFp = ''; sshForm.sshAuthed = false; sshForm.sshFpNote = '';
   try {
-    const p = await invoke<{ fingerprint: string; auth_ok: boolean; error: string }>('verify_ssh', {
-      host: sshForm.sshF.host.trim(), port: Number(sshForm.sshF.port) || 22, user: sshForm.sshF.user.trim(), auth: sshForm.sshF.auth,
-      password: sshForm.sshF.password, keyPath: sshForm.sshF.keyPath, keyPass: sshForm.sshF.keyPass, expectFingerprint: '',
-      // 编辑时密码/口令留空 = 用钥匙串里存着的那条来试（后端取，前端永远看不到明文）
-      connId: sshForm.sshEditId,
-    });
-    sshForm.sshFp = p.fingerprint;
+    // 新机器（没记住指纹）：只连上拿指纹就断开，**不发密码**——先让你核对指纹，添加时才认证。
+    // 编辑已有连接：带着记住的指纹去连，一致就顺手认证（一步到位）；
+    // 不一致时后端在认证前就断开（密码没发出去），把新指纹给回来让你比对。
+    const p = await invoke<SshProbe>('verify_ssh', probeArgs(sshForm.sshEditId ? sshForm.sshOldFp : ''));
+    sshForm.sshFp = p.fingerprint; sshForm.sshAuthed = p.auth_ok; sshForm.sshFpNote = p.error;
   } catch (e) { sshForm.sshErr = String(e); }
   finally { sshForm.sshTesting = false; }
 }
@@ -117,6 +142,8 @@ export async function confirmSsh() {
   if (sshForm.sshConnecting || !sshForm.sshFp) return;
   sshForm.sshConnecting = true; sshForm.sshErr = '';
   try {
+    // 指纹你刚核对过：现在才带着它登录一次（密码只发给指纹对得上的机器）；认证不过就停在这里
+    if (!(await authWithConfirmedFp())) return;
     const conn = await invoke<Connection>('connect_ssh', {
       name: sshForm.sshF.name.trim(), host: sshForm.sshF.host.trim(), port: Number(sshForm.sshF.port) || 22,
       user: sshForm.sshF.user.trim(), auth: sshForm.sshF.auth, keyPath: sshForm.sshF.keyPath,

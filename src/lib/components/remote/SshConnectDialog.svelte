@@ -45,12 +45,17 @@
             <code class="fp-old">{sshForm.sshOldFp}</code>
             <small>现在连上看到的是：</small>
             <code>{sshForm.sshFp}</code>
-            <small>服务器重装 / 换机器会这样，<b>被中间人劫持也会这样</b>。请到服务器上执行
+            <small>服务器重装 / 换机器会这样，<b>被中间人劫持也会这样</b>。{sshForm.sshFpNote || '密码没有发出去。'}请到服务器上执行
               <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> 亲自核对；对不上就别保存。</small>
-          {:else}
+          {:else if sshForm.sshAuthed}
             <b>认证通过。请核对主机指纹：</b>
             <code>{sshForm.sshFp}</code>
             <small>请确认它和你在服务器上执行 <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> 看到的一致 —— 对不上可能是中间人。确认后此指纹会被记住，以后变了会直接拒连。</small>
+          {:else}
+            <!-- 只取了指纹、还没登录：密码要等你核对完指纹、点下一步才会发出去。 -->
+            <b>已连上这台机器。请先核对主机指纹：</b>
+            <code>{sshForm.sshFp}</code>
+            <small>请确认它和你在服务器上执行 <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> 看到的一致 —— 对不上可能是中间人。密码 / 私钥还没有发出去：点下面的按钮才会用它登录，然后记住这枚指纹，以后变了会直接拒连。</small>
           {/if}
         </div>
       {/if}
@@ -63,9 +68,9 @@
         {:else if !sshForm.sshFp}
           <button class="btn primary" onclick={testSsh} disabled={sshForm.sshTesting || !sshForm.sshCanTest}>{sshForm.sshTesting ? '连接中…' : '测试连接'}</button>
         {:else if sshForm.sshEditId}
-          <button class="btn primary" class:danger={sshForm.sshFpChanged} onclick={saveSshEdit} disabled={sshForm.sshConnecting}>{sshForm.sshConnecting ? '保存中…' : sshForm.sshFpChanged ? '我已核对，接受新指纹' : '指纹无误，保存'}</button>
+          <button class="btn primary" class:danger={sshForm.sshFpChanged} onclick={saveSshEdit} disabled={sshForm.sshConnecting}>{sshForm.sshConnecting ? (sshForm.sshAuthed ? '保存中…' : '登录中…') : sshForm.sshFpChanged ? '我已核对，接受新指纹并登录' : sshForm.sshAuthed ? '指纹无误，保存' : '指纹无误，登录并保存'}</button>
         {:else}
-          <button class="btn primary" onclick={confirmSsh} disabled={sshForm.sshConnecting}>{sshForm.sshConnecting ? '添加中…' : '指纹无误，添加'}</button>
+          <button class="btn primary" onclick={confirmSsh} disabled={sshForm.sshConnecting}>{sshForm.sshConnecting ? '登录中…' : '指纹无误，登录并添加'}</button>
         {/if}
       </div>
     </div>

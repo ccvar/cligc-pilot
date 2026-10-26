@@ -2,12 +2,9 @@
 //! 元数据存 connections.json（原子写），密钥/口令只进系统钥匙串（account = 连接 id）。
 
 use serde::{Deserialize, Serialize};
-
-
 use std::fs;
-
 use std::path::{Path, PathBuf};
-
+use std::sync::{Arc, Mutex};
 
 use crate::keychain;
 
@@ -62,6 +59,9 @@ pub struct Connection {
 pub struct ConnStore {
     file: PathBuf,
     workspaces_dir: PathBuf,
+    /// 每个「读列表—改—写回」都在这把锁里做：探测系统信息的异步任务回来写 set_ssh_os 时，
+    /// 用户可能正在改备注——两边各读一份旧列表再各自写回，后写的会把先写的抹掉。
+    lock: Arc<Mutex<()>>,
 }
 
 impl ConnStore {
@@ -71,11 +71,18 @@ impl ConnStore {
         Ok(Self {
             file: data_dir.join("connections.json"),
             workspaces_dir,
+            lock: Arc::new(Mutex::new(())),
         })
     }
 
-    pub fn list(&self) -> Vec<Connection> {
+    /// 直接读磁盘，不拿锁——给已经持锁的方法内部用（std Mutex 不可重入）。
+    fn read(&self) -> Vec<Connection> {
         crate::store_file::read_or_quarantine(&self.file)
+    }
+
+    pub fn list(&self) -> Vec<Connection> {
+        let _g = self.lock.lock().unwrap();
+        self.read()
     }
 
     fn save(&self, conns: &[Connection]) -> Result<(), String> {
@@ -87,7 +94,8 @@ impl ConnStore {
     }
 
     pub fn get(&self, id: &str) -> Result<Connection, String> {
-        self.list()
+        let _g = self.lock.lock().unwrap();
+        self.read()
             .into_iter()
             .find(|c| c.id == id)
             .ok_or_else(|| format!("未找到连接 {id}"))
@@ -102,13 +110,14 @@ impl ConnStore {
         token: &str,
         account_id: &str,
     ) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let token = token.trim();
         if token.is_empty() {
             return Err("Token 不能为空".into());
         }
         let prefix = keychain::key_prefix(token);
         // 去重：同账号 + 同 token 前缀视为同一连接。
-        if let Some(dup) = self.list().iter().find(|c| {
+        if let Some(dup) = self.read().iter().find(|c| {
             c.kind == "cloudflare" && c.account_id == account_id && c.key_prefix == prefix
         }) {
             return Err(format!("已存在相同的 Cloudflare 连接「{}」。", dup.name));
@@ -142,7 +151,7 @@ impl ConnStore {
             ssh_os_id: String::new(),
             created_at: chrono_now(),
         };
-        let mut conns = self.list();
+        let mut conns = self.read();
         conns.push(conn.clone());
         if let Err(e) = self.save(&conns) {
             let _ = keychain::delete_key(&conn_id);
@@ -161,13 +170,14 @@ impl ConnStore {
         login: &str,
         user_id: u64,
     ) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let token = token.trim();
         if token.is_empty() || login.trim().is_empty() {
             return Err("Token 或账号为空".into());
         }
         let prefix = keychain::key_prefix(token);
         let account_id = user_id.to_string();
-        if let Some(dup) = self.list().iter().find(|c| {
+        if let Some(dup) = self.read().iter().find(|c| {
             c.kind == "github" && c.account_id == account_id && c.key_prefix == prefix
         }) {
             return Err(format!("已存在相同的 GitHub 连接「{}」。", dup.name));
@@ -196,7 +206,7 @@ impl ConnStore {
             ssh_os_id: String::new(),
             created_at: chrono_now(),
         };
-        let mut conns = self.list();
+        let mut conns = self.read();
         conns.push(conn.clone());
         if let Err(e) = self.save(&conns) {
             let _ = keychain::delete_key(&conn_id);
@@ -219,6 +229,7 @@ impl ConnStore {
         account_id: &str,
         dedupe: &str,
     ) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         if !matches!(kind, "google" | "bing" | "blogger" | "wordpress") {
             return Err("不支持的数据源".into());
         }
@@ -226,7 +237,7 @@ impl ConnStore {
         if secret.is_empty() {
             return Err("凭据不能为空".into());
         }
-        if let Some(dup) = self.list().iter().find(|c| c.kind == kind && !dedupe.is_empty() && c.key_prefix == dedupe) {
+        if let Some(dup) = self.read().iter().find(|c| c.kind == kind && !dedupe.is_empty() && c.key_prefix == dedupe) {
             return Err(format!("已存在相同的连接「{}」。", dup.name));
         }
         let conn_id = uuid::Uuid::new_v4().to_string();
@@ -253,7 +264,7 @@ impl ConnStore {
             ssh_os_id: String::new(),
             created_at: chrono_now(),
         };
-        let mut conns = self.list();
+        let mut conns = self.read();
         conns.push(conn.clone());
         if let Err(e) = self.save(&conns) {
             let _ = keychain::delete_key(&conn_id);
@@ -265,7 +276,8 @@ impl ConnStore {
 
     /// 替换数据源连接的凭据（同一类型；Google 可在服务账号与 OAuth 之间切换）。
     pub fn replace_data_secret(&self, id: &str, secret: &str, key_kind: &str, login: &str, dedupe: &str) -> Result<Connection, String> {
-        let mut conns = self.list();
+        let _g = self.lock.lock().unwrap();
+        let mut conns = self.read();
         let Some(i) = conns.iter().position(|c| c.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
@@ -301,6 +313,7 @@ impl ConnStore {
         secret: &str,
         fingerprint: &str,
     ) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let (host, user, key_path, fingerprint) = (
             host.trim(),
             user.trim(),
@@ -324,7 +337,7 @@ impl ConnStore {
         }
         let port = if port == 0 { 22 } else { port };
         // 去重：同一台机器的同一用户视为同一连接。
-        if let Some(dup) = self.list().iter().find(|c| {
+        if let Some(dup) = self.read().iter().find(|c| {
             c.kind == "ssh" && c.ssh_host == host && c.ssh_port == port && c.ssh_user == user
         }) {
             return Err(format!(
@@ -373,7 +386,7 @@ impl ConnStore {
             ssh_os_id: String::new(),
             created_at: chrono_now(),
         };
-        let mut conns = self.list();
+        let mut conns = self.read();
         conns.push(conn.clone());
         if let Err(e) = self.save(&conns) {
             let _ = keychain::delete_key(&conn_id);
@@ -384,7 +397,8 @@ impl ConnStore {
     }
 
     pub fn remove(&self, id: &str) -> Result<(), String> {
-        let mut conns = self.list();
+        let _g = self.lock.lock().unwrap();
+        let mut conns = self.read();
         let before = conns.len();
         conns.retain(|c| c.id != id);
         if conns.len() == before {
@@ -399,6 +413,7 @@ impl ConnStore {
 
     /// 设置连接备注。空字符串表示清除；限制为单行短文本，避免把连接切换器撑坏。
     pub fn set_remark(&self, id: &str, remark: &str) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let remark = remark.trim();
         if remark.chars().count() > 60 {
             return Err("备注最多 60 个字符".into());
@@ -406,7 +421,7 @@ impl ConnStore {
         if remark.chars().any(char::is_control) {
             return Err("备注只能填写单行文字".into());
         }
-        let mut conns = self.list();
+        let mut conns = self.read();
         let Some(slot) = conns.iter_mut().find(|c| c.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
@@ -419,11 +434,12 @@ impl ConnStore {
     /// 只替换指定 Cloudflare 连接的 Token；连接 id、账号、Zone 绑定和工作区全部保留。
     /// 调用方必须先验证新 Token 仍可访问原 account_id。
     pub fn replace_token(&self, id: &str, kind: &str, token: &str) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let token = token.trim();
         if token.is_empty() {
             return Err("Token 不能为空".into());
         }
-        let mut conns = self.list();
+        let mut conns = self.read();
         let Some(target) = conns.iter().position(|connection| connection.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
@@ -456,7 +472,8 @@ impl ConnStore {
 
     /// 记录远端系统信息（首次连上探到后写入，之后 UI 直接显示、不再连）。
     pub fn set_ssh_os(&self, id: &str, pretty: &str, os_id: &str) -> Result<Connection, String> {
-        let mut conns = self.list();
+        let _g = self.lock.lock().unwrap();
+        let mut conns = self.read();
         let Some(slot) = conns.iter_mut().find(|c| c.id == id) else {
             return Err(format!("未找到连接 {id}"));
         };
@@ -485,6 +502,7 @@ impl ConnStore {
         secret: &str,
         fingerprint: &str,
     ) -> Result<Connection, String> {
+        let _g = self.lock.lock().unwrap();
         let (host, user, key_path, fingerprint) = (
             host.trim(),
             user.trim(),
@@ -501,7 +519,7 @@ impl ConnStore {
             return Err("缺少主机指纹：请先「测试连接」并确认指纹".into());
         }
         let port = if port == 0 { 22 } else { port };
-        let mut conns = self.list();
+        let mut conns = self.read();
         let Some(old) = conns.iter().find(|c| c.id == id).cloned() else {
             return Err(format!("未找到连接 {id}"));
         };
@@ -784,6 +802,53 @@ mod tests {
         let c2 = store.get("c2").unwrap();
         assert_eq!(c2.ssh_host, "2.2.2.2");
         assert_eq!(c2.ssh_fingerprint, "SHA256:old");
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// 并发的「读—改—写」互相不覆盖：探测回来的 set_ssh_os 和用户同时改的备注都得留下。
+    #[test]
+    fn concurrent_mutations_do_not_clobber_each_other() {
+        let base = std::env::temp_dir().join(format!("pilot-lock-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let store = ConnStore::new(&base).unwrap();
+        let conn = Connection {
+            id: "s1".into(),
+            name: "root@h".into(),
+            remark: String::new(),
+            kind: "ssh".into(),
+            skill_dir: String::new(),
+            key_prefix: String::new(),
+            key_kind: String::new(),
+            account_id: String::new(),
+            login: String::new(),
+            ssh_host: "h".into(),
+            ssh_port: 22,
+            ssh_user: "root".into(),
+            ssh_auth: "key".into(),
+            ssh_key_path: "/k".into(),
+            ssh_fingerprint: "SHA256:x".into(),
+            ssh_os: String::new(),
+            ssh_os_id: String::new(),
+            created_at: "t".into(),
+        };
+        store.save(&[conn]).unwrap();
+        let (a, b) = (store.clone(), store.clone());
+        let t1 = std::thread::spawn(move || {
+            for i in 0..50 {
+                a.set_remark("s1", &format!("备注{i}")).unwrap();
+            }
+        });
+        let t2 = std::thread::spawn(move || {
+            for i in 0..50 {
+                b.set_ssh_os("s1", &format!("Ubuntu {i}"), "ubuntu").unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let c = store.get("s1").unwrap();
+        assert_eq!(c.remark, "备注49");
+        assert_eq!(c.ssh_os, "Ubuntu 49");
+        assert_eq!(c.ssh_os_id, "ubuntu");
         fs::remove_dir_all(&base).ok();
     }
 

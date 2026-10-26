@@ -495,8 +495,31 @@ struct Prepared {
     path: PathBuf,
     // Retain through the OS copy operation, including after its drop callback.
     _stage: tempfile::TempDir,
+    /// 准备好的时刻：到期（DRAG_TTL）就清掉，缓存不再只增不减。
+    created: std::time::Instant,
 }
 static PREPARED: OnceLock<Mutex<HashMap<String, Arc<Prepared>>>> = OnceLock::new();
+
+/// 拖出缓存的寿命。拖完（放下/取消）再等这么久才删：macOS 的放下回调在 Finder 开始拷贝时就触发，
+/// 大文件此时还没拷完，立刻删会让拷贝半途失败。没拖的也按这个年龄过期。
+const DRAG_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// 清掉到期的拖出缓存（删表项即删临时目录）。
+fn evict_stale_prepared() {
+    if let Ok(mut items) = PREPARED.get_or_init(Default::default).lock() {
+        items.retain(|_, p| p.created.elapsed() < DRAG_TTL);
+    }
+}
+
+/// 拖动结束：等 DRAG_TTL 后把这条缓存清掉（见 DRAG_TTL 为什么不能立刻删）。
+fn release_prepared_later(drag_id: String) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(DRAG_TTL).await;
+        if let Ok(mut items) = PREPARED.get_or_init(Default::default).lock() {
+            items.remove(&drag_id);
+        }
+    });
+}
 
 /// Only expired Pilot-owned staging folders, never destinations chosen by users.
 fn clean_old_drag_cache(base: &Path) {
@@ -647,12 +670,13 @@ pub async fn sftp_download_entry(
     });
     cancellable(&mut cancel, crate::ensure_ssh(&state, &conn_id)).await?;
     let requested = if prepare_drag {
+        evict_stale_prepared();
         let entries = PREPARED
             .get_or_init(Default::default)
             .lock()
             .map_err(|e| e.to_string())?;
         if entries.len() >= 32 {
-            return Err("本次会话拖出缓存已达上限，请使用普通下载或重启 Pilot 清理缓存".into());
+            return Err("同时准备中的拖出文件太多，请稍等几分钟再试或使用普通下载".into());
         }
         drop(entries);
         let base = state.data_dir.join("sftp-drag");
@@ -722,6 +746,7 @@ pub async fn sftp_download_entry(
                     owner: window.label().into(),
                     path: staged,
                     _stage: stage,
+                    created: std::time::Instant::now(),
                 }),
             );
         Ok(DownloadResult {
@@ -775,6 +800,8 @@ pub async fn sftp_start_drag(
                         }
                         .into(),
                     );
+                    // 拖完了：这条缓存过一会儿就清（给系统拷贝留足时间）。
+                    release_prepared_later(drag_id.clone());
                 },
                 drag::Options {
                     mode: drag::DragMode::Copy,

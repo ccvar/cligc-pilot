@@ -3,7 +3,8 @@
 //! 安全边界（改这个文件前先读）：
 //! - 密码 / 密钥口令只在内存里传递，源头是钥匙串；**绝不落盘、绝不进 AI 子进程的环境变量**。
 //!   （对比 CF：把 api token 塞进子进程 env 是可接受的，SSH 口令给一个 shell 就不行。）
-//! - 主机密钥 **TOFU**：首连时 `expect=None`，接受并把指纹交给 UI 让用户确认；此后每次连接
+//! - 主机密钥 **TOFU**：首连时 `expect=None` **只取指纹、不认证**（密码不能先于指纹确认发给一台
+//!   谁也没核对过的机器），把指纹交给 UI 让用户确认；确认后才带着这枚指纹认证。此后每次连接
 //!   都带上已确认的指纹，**不匹配直接拒绝**（防中间人）。绝不做「无条件 Ok(true)」的省事写法。
 //! - PTY 原始字节可能不是合法 UTF-8（也含 ANSI 转义），一律 base64 传给前端，由 xterm 解码写入，
 //!   避免半个多字节字符把 JSON 序列化炸掉。
@@ -33,13 +34,20 @@ pub enum SshEvent {
 }
 
 /// 试连结果：把主机指纹交给 UI 做 TOFU 确认，并报告认证是否通过。
+///
+/// 三种形态：
+/// - `auth_ok=true`：指纹和期望的一致、认证也过了。
+/// - `auth_ok=false, error=""`：**只取了指纹、没有认证**（首次连接、还没人确认过这台机器）。
+///   UI 让用户核对指纹，确认后再带着这枚指纹来认证。密码在确认之前不会发给任何人。
+/// - `auth_ok=false, error≠""`：主机指纹和记住的**不一致**，连接在认证前就被掐断了；
+///   `fingerprint` 是现在看到的那枚，UI 把新旧两枚并排给人看。
 #[derive(Clone, Serialize)]
 pub struct SshProbe {
     /// SHA256:... 形式的主机公钥指纹。
     pub fingerprint: String,
-    /// 认证是否成功（指纹拿到但认证失败时为 false，UI 据此提示是密码/密钥的问题）。
+    /// 认证是否成功。
     pub auth_ok: bool,
-    /// 认证失败原因（auth_ok=true 时为空串）。
+    /// 没通过的原因（见上；auth_ok=true 时为空串）。
     pub error: String,
 }
 
@@ -129,6 +137,16 @@ fn posix_shell_quote(value: &str) -> String {
 /// 无口令私钥不会有钥匙串条目 —— get_key 失败按「无口令」处理，不是错误。
 pub fn auth_for(conn: &crate::conns::Connection) -> Result<SshAuth, String> {
     let secret = crate::keychain::get_key(&conn.id).ok();
+    auth_with_secret(conn, secret)
+}
+
+/// 异步上下文里用这个：钥匙串读取是同步系统调用（还可能弹授权框），放阻塞线程池做。
+pub async fn auth_for_async(conn: &crate::conns::Connection) -> Result<SshAuth, String> {
+    let secret = crate::keychain::get_key_async(&conn.id).await.ok();
+    auth_with_secret(conn, secret)
+}
+
+fn auth_with_secret(conn: &crate::conns::Connection, secret: Option<String>) -> Result<SshAuth, String> {
     Ok(if conn.ssh_auth == "key" {
         SshAuth {
             user: conn.ssh_user.clone(),
@@ -214,7 +232,57 @@ async fn connect_auth(
 ) -> Result<(client::Handle<Client>, String), String> {
     tokio::time::timeout(CONNECT_TIMEOUT, connect_auth_inner(host, port, auth, expect))
         .await
-        .map_err(|_| format!("连接 {host}:{port} 超时（{} 秒）：主机没开、端口不对或网络不通", CONNECT_TIMEOUT.as_secs()))?
+        .map_err(|_| timeout_msg(host, port))?
+        .map_err(|e| e.to_string())
+}
+
+fn timeout_msg(host: &str, port: u16) -> String {
+    format!("连接 {host}:{port} 超时（{} 秒）：主机没开、端口不对或网络不通", CONNECT_TIMEOUT.as_secs())
+}
+
+/// 建连阶段的失败。指纹不符单独成一类：probe 要把看到的新指纹交给 UI 给人核对，
+/// 而真正的连接路径（终端 / SFTP / AI 桥）照旧当成错误直接拒。
+enum OpenError {
+    /// 主机指纹和记住的不一致，连接在认证之前就断了（密码没发出去）。附上这次看到的指纹。
+    KeyMismatch(String),
+    Other(String),
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            // 这是安全事件，不能糊弄过去。
+            OpenError::KeyMismatch(_) => write!(f, "连接失败：主机指纹和记住的不一致，可能是服务器重装了，也可能是中间人攻击。请核实后编辑连接、重新测试并确认新指纹"),
+            OpenError::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+/// 只建连、校验主机密钥，**不认证**。返回 (未认证的会话, 看到的指纹)。
+async fn open_session(
+    host: &str,
+    port: u16,
+    expect: Option<String>,
+) -> Result<(client::Handle<Client>, String), OpenError> {
+    let seen = Arc::new(StdMutex::new(String::new()));
+    let handler = Client {
+        expect: expect.clone(),
+        seen: seen.clone(),
+    };
+    let connected = client::connect(cfg(), (host, port), handler).await;
+    let fp = seen.lock().map(|g| g.clone()).unwrap_or_default();
+    match connected {
+        Ok(session) => Ok((session, fp)),
+        Err(e) => {
+            // 看到了指纹、且和期望的不一样 → 就是被我们自己的 check_server_key 拒掉的。
+            if let Some(exp) = expect.as_deref() {
+                if !fp.is_empty() && fp != exp {
+                    return Err(OpenError::KeyMismatch(fp));
+                }
+            }
+            Err(OpenError::Other(format!("连接 {host}:{port} 失败: {e}")))
+        }
+    }
 }
 
 async fn connect_auth_inner(
@@ -222,24 +290,13 @@ async fn connect_auth_inner(
     port: u16,
     auth: &SshAuth,
     expect: Option<String>,
-) -> Result<(client::Handle<Client>, String), String> {
-    let seen = Arc::new(StdMutex::new(String::new()));
-    let handler = Client {
-        expect: expect.clone(),
-        seen: seen.clone(),
-    };
-    let mut session = client::connect(cfg(), (host, port), handler)
-        .await
-        .map_err(|e| {
-            // 指纹对不上时 russh 报的是通用错误，这里补一句人话（这是安全事件，不能糊弄过去）。
-            if expect.is_some() {
-                format!("连接失败（若主机指纹变了则可能是中间人攻击，请核实后重新添加）: {e}")
-            } else {
-                format!("连接 {host}:{port} 失败: {e}")
-            }
-        })?;
-    let fp = seen.lock().map(|g| g.clone()).unwrap_or_default();
+) -> Result<(client::Handle<Client>, String), OpenError> {
+    let (session, fp) = open_session(host, port, expect).await?;
+    authenticate(session, auth).await.map(|s| (s, fp)).map_err(OpenError::Other)
+}
 
+/// 在已建好、主机密钥已校验过的会话上认证。只有走到这里，密码 / 私钥签名才会发出去。
+async fn authenticate(mut session: client::Handle<Client>, auth: &SshAuth) -> Result<client::Handle<Client>, String> {
     let ok = if let Some(pw) = auth.password.as_deref() {
         session
             .authenticate_password(auth.user.clone(), pw.to_string())
@@ -268,31 +325,50 @@ async fn connect_auth_inner(
     if !ok {
         return Err("认证失败：用户名/密码或私钥不对".into());
     }
-    Ok((session, fp))
+    Ok(session)
 }
 
-/// 试连：拿主机指纹 + 验证认证是否可用。首次添加连接时用（expect=None 走 TOFU 探测）。
-/// 注意：指纹即使认证失败也会返回，UI 才能区分「指纹要确认」和「密码错了」。
+async fn hangup(session: client::Handle<Client>) {
+    // 探测完立刻断开，不留连接。
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "probe done", "")
+        .await;
+}
+
+/// 试连（TOFU 两步走）：
+/// - `expect=None`（这台机器还没人确认过）：只建连拿指纹就断开，**不认证**——密码不能先于
+///   指纹确认发给一台谁也没核对过的机器。返回 auth_ok=false、error 空。
+/// - `expect=Some(指纹)`（用户确认过 / 连接里存着的）：指纹一致才认证；不一致则在认证前断开，
+///   返回 auth_ok=false 并附上新看到的指纹和说明（不是 Err——UI 要拿新指纹给人看）。
 pub async fn probe(
     host: &str,
     port: u16,
     auth: &SshAuth,
     expect: Option<String>,
 ) -> Result<SshProbe, String> {
-    match connect_auth(host, port, auth, expect).await {
-        Ok((session, fp)) => {
-            // 探测完立刻断开，不留连接。
-            let _ = session
-                .disconnect(russh::Disconnect::ByApplication, "probe done", "")
-                .await;
-            Ok(SshProbe {
-                fingerprint: fp,
-                auth_ok: true,
-                error: String::new(),
-            })
+    let fut = async {
+        let Some(exp) = expect else {
+            let (session, fp) = open_session(host, port, None).await.map_err(|e| e.to_string())?;
+            hangup(session).await;
+            return Ok(SshProbe { fingerprint: fp, auth_ok: false, error: String::new() });
+        };
+        match open_session(host, port, Some(exp)).await {
+            Ok((session, fp)) => {
+                let session = authenticate(session, auth).await?;
+                hangup(session).await;
+                Ok(SshProbe { fingerprint: fp, auth_ok: true, error: String::new() })
+            }
+            Err(OpenError::KeyMismatch(seen)) => Ok(SshProbe {
+                fingerprint: seen,
+                auth_ok: false,
+                error: "这台机器的主机指纹和之前记住的不一样，没有发送密码。请核对后再决定是否接受新指纹。".into(),
+            }),
+            Err(e) => Err(e.to_string()),
         }
-        Err(e) => Err(e),
-    }
+    };
+    tokio::time::timeout(CONNECT_TIMEOUT, fut)
+        .await
+        .map_err(|_| timeout_msg(host, port))?
 }
 
 /// 一条活着的 SSH 连接：一个 handle + 其上的若干通道（PTY / SFTP / exec）。

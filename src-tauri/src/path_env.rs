@@ -40,15 +40,51 @@ fn fix_macos() {
     }
 }
 
+/// 登录 shell 最多等这么久：.zshrc 里有东西卡住（等输入、连网、nvm 慢）时，不能让应用连窗口都不出。
+/// 超时就杀掉它，PATH 用进程继承的那份凑合（最多是找不到新装的 CLI，再探测时还有托管 Node 兜底）。
+#[cfg(target_os = "macos")]
+const SHELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[cfg(target_os = "macos")]
 fn login_shell_env() -> Option<Vec<(String, String)>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let cmd = format!("printf '%s\\n' \"{MARK}\"; env; printf '%s\\n' \"{MARK}\"");
-    let out = std::process::Command::new(&shell)
+    let mut child = std::process::Command::new(&shell)
         .args(["-l", "-i", "-c", &cmd])
-        .output()
+        .stdin(std::process::Stdio::null()) // 交互 shell 别等人敲键
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    // 读 stdout 放到另一个线程、用带超时的 channel 收结果：主线程最多等 SHELL_TIMEOUT，
+    // 到点就杀 shell；读线程在管道关掉后自己退出（不 join，免得被 shell 遗留的后台进程拖住）。
+    let mut pipe = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let raw = match rx.recv_timeout(SHELL_TIMEOUT) {
+        Ok(raw) => raw,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!("[pilot] 登录 shell {SHELL_TIMEOUT:?} 内没退出，已放弃导入其 PATH/代理，沿用进程自带的环境");
+            return None;
+        }
+    };
+    // 输出已经收完，shell 通常也已退出；万一还赖着（关了 stdout 却没退），稍等一下就杀，不无限等。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if matches!(child.try_wait(), Ok(None)) {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let stdout = String::from_utf8_lossy(&raw);
     // shell rc 文件可能自带输出，只取两个标记行之间的内容。
     let start = stdout.find(MARK)? + MARK.len();
     let end = start + stdout[start..].rfind(MARK)?;

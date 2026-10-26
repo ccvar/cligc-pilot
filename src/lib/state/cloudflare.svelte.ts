@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Connection } from '$lib/types';
-import { app, say, refreshConns } from './app.svelte.js';
+import { app, say, refreshConns, confirmDialog } from './app.svelte.js';
 import { connections, selectConn } from './connections.svelte.js';
 import { panes } from './panes.svelte.js';
 import { thread } from './thread.svelte.js';
@@ -42,14 +42,26 @@ export async function checkCfReady() {
 export function portOf(url: string): string {
   try { return ':' + new URL(url).port; } catch { return url; }
 }
+/** cf_preview_start 的返回：开好了给 URL；项目 pilot.json 自定义了预览命令、还没人确认过 → 先给命令原文让人确认。 */
+type PreviewStart = { kind: 'started'; url: string } | { kind: 'confirm'; command: string };
 export async function startPreview() {
   if (!app.activeConv || cf.previewBusy) return;
   cf.previewBusy = true;
+  const args = { connId: app.activeConv.conn_id, project: app.activeConv.site_slug };
   say('正在启动本地预览…（起来就开窗）');
   try {
+    let r = await invoke<PreviewStart>('cf_preview_start', args);
+    if (r.kind === 'confirm') {
+      // pilot.json 是 AI 会改的文件：里面的命令会在你的电脑上以你的身份执行，所以第一次见到要你亲自点头。
+      // 同一条命令确认一次就记住；命令改了会再问。
+      const ok = await confirmDialog(`这个项目的 pilot.json 自定义了预览命令，Pilot 会在项目目录里运行它：\n\n${r.command}\n\n看不懂或不认识这条命令就先别运行。确认后同一条命令不会再问。`, { title: '运行项目自定义的预览命令？', confirmText: '运行' });
+      if (!ok) { say('已取消预览'); return; }
+      // 把确认过的命令原文带回去：后端只在 pilot.json 里的命令和它一字不差时才执行
+      r = await invoke<PreviewStart>('cf_preview_start', { ...args, confirmedCommand: r.command });
+      if (r.kind === 'confirm') { say('pilot.json 里的预览命令刚刚被改过了，请重新点预览确认', 'err'); return; }
+    }
     // 端口是后端挑的空端口（8788 被别的程序占着时会自动往上让），所以别写死——用它返回的真 URL。
-    const u = await invoke<string>('cf_preview_start', { connId: app.activeConv.conn_id, project: app.activeConv.site_slug });
-    say(`本地预览已打开（${portOf(u)}）·关掉预览窗即停止`);
+    say(`本地预览已打开（${portOf(r.url)}）·关掉预览窗即停止`);
   } catch (e) { say(String(e), 'err'); }
   finally { cf.previewBusy = false; }
 }

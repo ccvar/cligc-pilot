@@ -105,82 +105,181 @@ pub struct Conversation {
     pub origin: String,
 }
 
+/// 活着的会话列表只在首次用到时从 conversations.json 读一次，之后常驻内存（写操作直写磁盘）。
+/// 以前每次 list/get 都整文件读+解析、每次保存都整文件序列化——权限轮询、读图片都要过一遍，
+/// 会话多了以后白白烤 CPU。
 #[derive(Clone)]
 pub struct ConvStore {
     file: PathBuf,
-    lock: Arc<Mutex<()>>,
+    /// 运行中那一轮的草稿各自一个小文件：conversations.partial/<id>.json。
+    /// 每 3 秒一次的 checkpoint 只写这个小文件，不再整个重写 conversations.json。
+    partial_dir: PathBuf,
+    /// 超过 300 条上限挤出去的旧会话追加到这里，只存不读（界面不展示，但一条都不丢）。
+    archive: PathBuf,
+    /// None = 还没从磁盘装载。
+    cache: Arc<Mutex<Option<Vec<Conversation>>>>,
 }
+
+/// 活着的会话上限；超出的最旧会话搬去归档文件。
+const LIVE_CAP: usize = 300;
 
 impl ConvStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
             file: data_dir.join("conversations.json"),
-            lock: Arc::new(Mutex::new(())),
+            partial_dir: data_dir.join("conversations.partial"),
+            archive: data_dir.join("conversations-archive.json"),
+            cache: Arc::new(Mutex::new(None)),
         }
     }
 
+    /// 装载（只在第一次）并返回缓存。调用方必须已经持有锁。
+    fn loaded<'a>(&self, cache: &'a mut Option<Vec<Conversation>>) -> &'a mut Vec<Conversation> {
+        cache.get_or_insert_with(|| {
+            let mut v: Vec<Conversation> = crate::store_file::read_or_quarantine(&self.file);
+            v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            v
+        })
+    }
+
+    /// 测试用：磁盘上的那份（绕开缓存）。
+    #[cfg(test)]
     fn read(&self) -> Vec<Conversation> {
         let mut v: Vec<Conversation> = crate::store_file::read_or_quarantine(&self.file);
         v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         v
     }
 
+    fn partial_file(&self, id: &str) -> PathBuf {
+        // id 是我们自己生成的 uuid；再过一遍白名单，别让奇怪的 id 变成路径
+        let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+        self.partial_dir.join(format!("{safe}.json"))
+    }
+
+    fn read_partial(&self, id: &str) -> Option<Message> {
+        let raw = fs::read(self.partial_file(id)).ok()?;
+        serde_json::from_slice::<Message>(&raw).ok().map(|m| Message { partial: true, ..m })
+    }
+
+    fn clear_partial(&self, id: &str) {
+        let _ = fs::remove_file(self.partial_file(id));
+    }
+
+    /// 把会话连同磁盘上的草稿一起拼出来（草稿只在运行中才算）。
+    fn with_partial(&self, mut c: Conversation) -> Conversation {
+        if c.status == "running" {
+            if let Some(p) = self.read_partial(&c.id) {
+                if c.messages.last().map(|m| m.partial).unwrap_or(false) {
+                    c.messages.pop();
+                }
+                c.messages.push(p);
+            }
+        }
+        c
+    }
+
     /// 最近更新在前。
     pub fn list(&self) -> Vec<Conversation> {
-        let _g = self.lock.lock().unwrap();
-        self.read().into_iter().map(without_partial).collect()
+        let mut g = self.cache.lock().unwrap();
+        self.loaded(&mut g).iter().cloned().map(without_partial).collect()
     }
 
     pub fn get(&self, id: &str) -> Option<Conversation> {
-        let _g = self.lock.lock().unwrap();
-        self.read().into_iter().find(|c| c.id == id).map(without_partial)
+        let mut g = self.cache.lock().unwrap();
+        self.loaded(&mut g).iter().find(|c| c.id == id).cloned().map(without_partial)
     }
 
     /// 连写到一半的那条一起取（界面丢了这一轮的实时通道时，用它接着显示进度）。
     pub fn get_live(&self, id: &str) -> Option<Conversation> {
-        let _g = self.lock.lock().unwrap();
-        self.read().into_iter().find(|c| c.id == id)
+        let mut g = self.cache.lock().unwrap();
+        let c = self.loaded(&mut g).iter().find(|c| c.id == id).cloned()?;
+        Some(self.with_partial(c))
     }
 
     /// 存下运行中这一轮写到一半的回复（替换上一次存的那份）。会话已经不在跑了就不存。
+    /// 只写 conversations.partial/<id>.json 这个小文件，不碰主文件。
     pub fn checkpoint(&self, id: &str, partial: Message) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
-        let Some(c) = list.iter_mut().find(|c| c.id == id) else { return Ok(()) };
+        let mut g = self.cache.lock().unwrap();
+        let Some(c) = self.loaded(&mut g).iter().find(|c| c.id == id) else { return Ok(()) };
         if c.status != "running" {
             return Ok(());
         }
-        if c.messages.last().map(|m| m.partial).unwrap_or(false) {
-            c.messages.pop();
-        }
-        c.messages.push(Message { partial: true, ..partial });
-        self.save(&list)
+        let msg = Message { partial: true, ..partial };
+        let raw = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&self.partial_dir).map_err(|e| format!("create partial dir: {e}"))?;
+        let file = self.partial_file(id);
+        let tmp = file.with_extension("json.tmp");
+        fs::write(&tmp, &raw).map_err(|e| format!("write partial tmp: {e}"))?;
+        fs::rename(&tmp, &file).map_err(|e| format!("replace partial: {e}"))
     }
 
-    fn save(&self, list: &[Conversation]) -> Result<(), String> {
-        let raw = serde_json::to_vec_pretty(list).map_err(|e| e.to_string())?;
-        let tmp = self.file.with_extension("json.tmp");
-        fs::write(&tmp, &raw).map_err(|e| format!("write conversations tmp: {e}"))?;
-        fs::rename(&tmp, &self.file).map_err(|e| format!("replace conversations.json: {e}"))
+    /// 把缓存落盘（原子：同目录临时文件 + rename）。调用方须已持锁且已把缓存改好。
+    /// 写失败就把缓存作废：下次访问重新从磁盘装载，内存里绝不留一份磁盘上没有的改动。
+    fn commit(&self, cache: &mut Option<Vec<Conversation>>) -> Result<(), String> {
+        let list = self.loaded(cache);
+        let res = serde_json::to_vec_pretty(list).map_err(|e| e.to_string()).and_then(|raw| {
+            let tmp = self.file.with_extension("json.tmp");
+            fs::write(&tmp, &raw).map_err(|e| format!("write conversations tmp: {e}"))?;
+            fs::rename(&tmp, &self.file).map_err(|e| format!("replace conversations.json: {e}"))
+        });
+        if res.is_err() {
+            *cache = None;
+        }
+        res
+    }
+
+    /// 改完某条会话后的收尾：不在跑了就把草稿文件清掉（正式回复已经替代了它）。
+    fn settle(&self, c: &Conversation) {
+        if c.status != "running" {
+            self.clear_partial(&c.id);
+        }
+    }
+
+    /// 挤出上限的旧会话追加进归档文件（只追加，永不读回界面）。
+    fn archive_overflow(&self, overflow: &[Conversation]) -> Result<(), String> {
+        if overflow.is_empty() {
+            return Ok(());
+        }
+        let mut old: Vec<Conversation> = crate::store_file::read_or_quarantine(&self.archive);
+        old.extend(overflow.iter().cloned());
+        let raw = serde_json::to_vec(&old).map_err(|e| e.to_string())?;
+        let tmp = self.archive.with_extension("json.tmp");
+        fs::write(&tmp, &raw).map_err(|e| format!("write archive tmp: {e}"))?;
+        fs::rename(&tmp, &self.archive).map_err(|e| format!("replace archive: {e}"))
     }
 
     pub fn upsert(&self, conv: Conversation) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
+        let id = conv.id.clone();
         if let Some(slot) = list.iter_mut().find(|c| c.id == conv.id) {
             *slot = conv;
         } else {
             list.push(conv);
         }
         list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        list.truncate(300);
-        self.save(&list)
+        // 超出上限的最旧会话不再悄悄丢掉：先归档，归档写不进去就不删（宁可超一点）。
+        let overflow: Vec<Conversation> = if list.len() > LIVE_CAP { list.split_off(LIVE_CAP) } else { Vec::new() };
+        if let Err(e) = self.archive_overflow(&overflow) {
+            list.extend(overflow);
+            eprintln!("[pilot] 会话归档失败：{e}");
+        } else {
+            for c in &overflow {
+                self.clear_partial(&c.id);
+            }
+        }
+        let updated = list.iter().find(|c| c.id == id).cloned();
+        self.commit(&mut g)?;
+        if let Some(c) = updated {
+            self.settle(&c);
+        }
+        Ok(())
     }
 
     /// 原子开始续对话：锁内检查—追加用户消息—置 running，杜绝同一会话并发起两轮（TOCTOU）。
     pub fn begin_turn(&self, id: &str, now: u64, user: Message) -> TurnStart {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let Some(slot) = list.iter_mut().find(|c| c.id == id) else {
             return TurnStart::NotFound;
         };
@@ -191,7 +290,7 @@ impl ConvStore {
         slot.messages.push(user);
         slot.status = "running".into();
         slot.updated_at = now;
-        if let Err(e) = self.save(&list) {
+        if let Err(e) = self.commit(&mut g) {
             return TurnStart::Failed(e);
         }
         if fresh {
@@ -205,8 +304,8 @@ impl ConvStore {
     /// 取最后一条用户消息文本作为要重跑的提示词、置 running。不新增用户消息（重试不是新问）。
     /// 返回要重试的用户消息文本。
     pub fn begin_retry(&self, id: &str, now: u64) -> Result<String, String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let Some(slot) = list.iter_mut().find(|c| c.id == id) else {
             return Err("会话不存在".into());
         };
@@ -236,15 +335,16 @@ impl ConvStore {
         };
         slot.status = "running".into();
         slot.updated_at = now;
-        self.save(&list)?;
+        self.clear_partial(id);
+        self.commit(&mut g)?;
         Ok(text)
     }
 
     /// 原子开始"重建会话"：同 begin_retry，但**不要求已有 session**——重建本来就是
     /// 为了抛弃损坏/缺失的底层会话另起新的（含首轮就崩、session_ref 为空的情况）。
     pub fn begin_rebuild(&self, id: &str, now: u64) -> Result<String, String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let Some(slot) = list.iter_mut().find(|c| c.id == id) else {
             return Err("会话不存在".into());
         };
@@ -270,7 +370,8 @@ impl ConvStore {
         };
         slot.status = "running".into();
         slot.updated_at = now;
-        self.save(&list)?;
+        self.clear_partial(id);
+        self.commit(&mut g)?;
         Ok(text)
     }
 
@@ -279,15 +380,16 @@ impl ConvStore {
     where
         F: FnOnce(&mut Conversation),
     {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let Some(slot) = list.iter_mut().find(|c| c.id == id) else {
             return Ok(None);
         };
         f(slot);
         slot.updated_at = now;
         let updated = slot.clone();
-        self.save(&list)?;
+        self.commit(&mut g)?;
+        self.settle(&updated);
         Ok(Some(updated))
     }
 
@@ -302,52 +404,71 @@ impl ConvStore {
     where
         F: FnOnce(&mut Conversation) -> Result<(), String>,
     {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let Some(slot) = list.iter_mut().find(|c| c.id == id) else {
             return Ok(None);
         };
-        f(slot)?;
-        slot.updated_at = now;
-        let updated = slot.clone();
-        self.save(&list)?;
-        Ok(Some(updated))
+        // 校验失败不能留下半截改动：先在副本上改，通过了再写回缓存。
+        let mut draft = slot.clone();
+        f(&mut draft)?;
+        draft.updated_at = now;
+        *slot = draft.clone();
+        self.commit(&mut g)?;
+        self.settle(&draft);
+        Ok(Some(draft))
     }
 
     pub fn remove(&self, id: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         list.retain(|c| c.id != id);
-        self.save(&list)
+        self.clear_partial(id);
+        self.commit(&mut g)
     }
 
     /// 删除某连接下的所有对话（删连接时级联清理，避免留下够不到密钥的孤儿会话）。
     pub fn remove_by_conn_id(&self, conn_id: &str) -> Result<(), String> {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
-        let before = list.len();
-        list.retain(|c| c.conn_id != conn_id);
-        if list.len() != before {
-            self.save(&list)?;
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
+        let gone: Vec<String> = list.iter().filter(|c| c.conn_id == conn_id).map(|c| c.id.clone()).collect();
+        if gone.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        list.retain(|c| c.conn_id != conn_id);
+        for id in &gone {
+            self.clear_partial(id);
+        }
+        self.commit(&mut g)
     }
 
     /// 启动时把残留 running 的会话置回 idle（进程随退出被杀，不可能还在跑）。
     pub fn mark_idle(&self, now: u64) {
-        let _g = self.lock.lock().unwrap();
-        let mut list = self.read();
+        let mut g = self.cache.lock().unwrap();
+        let list = self.loaded(&mut g);
         let mut changed = false;
+        let mut settled: Vec<String> = Vec::new();
         for c in list.iter_mut() {
             if c.status == "running" {
+                // 草稿在旁边的小文件里（旧版本是直接写在会话里的，两种都认）：先拼进来再转成「被中断」。
+                if let Some(p) = self.read_partial(&c.id) {
+                    if c.messages.last().map(|m| m.partial).unwrap_or(false) {
+                        c.messages.pop();
+                    }
+                    c.messages.push(p);
+                }
                 c.status = "idle".into();
                 c.updated_at = now;
                 changed = true;
                 interrupted(c, now);
+                settled.push(c.id.clone());
             }
         }
         if changed {
-            let _ = self.save(&list);
+            let _ = self.commit(&mut g);
+            for id in &settled {
+                self.clear_partial(id);
+            }
         }
     }
 }
@@ -475,18 +596,90 @@ mod tests {
         store.upsert(c).unwrap();
         store.checkpoint("r", Message { partial: true, ..msg("assistant", "写好了首页") }).unwrap();
         store.checkpoint("r", Message { partial: true, ..msg("assistant", "写好了首页和指南") }).unwrap();
-        // 运行中：对外看不到草稿，磁盘上只存一份（后一次替换前一次）
+        // 运行中：对外看不到草稿；草稿在旁边的小文件里只存一份（后一次替换前一次），主文件不动
         assert_eq!(store.get("r").unwrap().messages.len(), 1);
-        assert_eq!(store.read()[0].messages.len(), 2);
+        assert_eq!(store.read()[0].messages.len(), 1, "checkpoint 不该重写 conversations.json");
+        assert!(store.partial_file("r").exists());
+        let live = store.get_live("r").unwrap();
+        assert_eq!(live.messages.len(), 2);
+        assert!(live.messages[1].partial && live.messages[1].text == "写好了首页和指南");
         // 应用重启：草稿变成「被中断」的回复
         store.mark_idle(9);
         let got = store.get("r").unwrap();
         let last = got.messages.last().unwrap();
         assert!(got.status == "idle" && last.error && !last.partial);
         assert!(last.text.contains("没有跑完") && last.text.contains("写好了首页和指南"));
+        assert!(!store.partial_file("r").exists(), "转成正式回复后草稿文件要清掉");
         // 不在跑的会话不再接受草稿
         store.checkpoint("r", Message { partial: true, ..msg("assistant", "迟到的") }).unwrap();
         assert_eq!(store.get("r").unwrap().messages.len(), 2);
+        assert!(!store.partial_file("r").exists());
+    }
+
+    /// 旧版本把草稿直接写在会话里：重启后同样要转成「被中断」的回复。
+    #[test]
+    fn legacy_inline_partial_is_still_recovered_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = conv("old", "", vec![msg("user", "做"), Message { partial: true, ..msg("assistant", "做了一半") }]);
+        c.status = "running".into();
+        std::fs::write(dir.path().join("conversations.json"), serde_json::to_vec(&vec![c]).unwrap()).unwrap();
+        let store = ConvStore::new(dir.path());
+        store.mark_idle(5);
+        let got = store.get("old").unwrap();
+        assert_eq!(got.status, "idle");
+        assert!(got.messages.last().unwrap().text.contains("做了一半"));
+        assert!(!got.messages.last().unwrap().partial);
+    }
+
+    /// 缓存：改动对下一次读立刻可见；也确实写进了磁盘（新建一个 ConvStore 能读回来）。
+    #[test]
+    fn cache_is_write_through_and_survives_a_fresh_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConvStore::new(dir.path());
+        store.upsert(conv("a", "s", vec![msg("user", "一")])).unwrap();
+        assert_eq!(store.list().len(), 1);
+        store.mutate("a", 7, |c| c.title = "改过".into()).unwrap();
+        assert_eq!(store.get("a").unwrap().title, "改过");
+        assert_eq!(store.get("a").unwrap().updated_at, 7);
+        // 另一个 store（模拟重启）从磁盘读到同样的内容
+        let again = ConvStore::new(dir.path());
+        let c = again.get("a").unwrap();
+        assert_eq!(c.title, "改过");
+        assert_eq!(c.messages.len(), 1);
+        again.remove("a").unwrap();
+        assert!(again.get("a").is_none());
+        assert!(ConvStore::new(dir.path()).get("a").is_none());
+        // 校验失败的 mutate_checked 不污染缓存
+        store.upsert(conv("b", "s", vec![])).unwrap();
+        let _ = store.mutate_checked("b", 9, |c| { c.title = "坏".into(); Err("no".into()) });
+        assert_eq!(store.get("b").unwrap().title, "t");
+        assert_eq!(ConvStore::new(dir.path()).get("b").unwrap().title, "t");
+    }
+
+    /// 超过上限的旧会话搬去归档文件，一条都不丢；活着的列表仍然只留上限条。
+    #[test]
+    fn overflow_goes_to_archive_instead_of_vanishing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConvStore::new(dir.path());
+        for i in 0..(LIVE_CAP + 3) {
+            let mut c = conv(&format!("c{i}"), "s", vec![]);
+            c.updated_at = i as u64;
+            store.upsert(c).unwrap();
+        }
+        let live = store.list();
+        assert_eq!(live.len(), LIVE_CAP);
+        assert!(live.iter().all(|c| c.id != "c0" && c.id != "c1" && c.id != "c2"), "最旧的三条被挤出");
+        let archived: Vec<Conversation> = crate::store_file::read_or_quarantine(&dir.path().join("conversations-archive.json"));
+        let ids: Vec<&str> = archived.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["c0", "c1", "c2"]);
+        // 再挤一条：归档是追加，不是覆盖
+        let mut c = conv("new", "s", vec![]);
+        c.updated_at = 999;
+        store.upsert(c).unwrap();
+        let archived: Vec<Conversation> = crate::store_file::read_or_quarantine(&dir.path().join("conversations-archive.json"));
+        assert_eq!(archived.len(), 4);
+        assert_eq!(archived[3].id, "c3");
+        assert!(store.list().iter().all(|c| c.id != "c3"), "归档的不再出现在界面列表");
     }
 
     #[test]

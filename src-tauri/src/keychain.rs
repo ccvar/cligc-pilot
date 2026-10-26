@@ -247,6 +247,15 @@ pub fn get_key(conn_id: &str) -> Result<String, String> {
     read_secret(conn_id)?.ok_or_else(|| "keychain read: NoEntry".to_string())
 }
 
+/// 异步上下文里取密钥：钥匙串是同步系统调用（macOS 还可能弹授权框等人点），
+/// 放到阻塞线程池去做，别把 tokio 的工作线程卡住。
+pub async fn get_key_async(conn_id: &str) -> Result<String, String> {
+    let id = conn_id.to_string();
+    tauri::async_runtime::spawn_blocking(move || get_key(&id))
+        .await
+        .map_err(|e| format!("keychain task: {e}"))?
+}
+
 pub fn delete_key(conn_id: &str) -> Result<(), String> {
     remove_secret(conn_id)
 }

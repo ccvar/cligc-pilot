@@ -10,6 +10,57 @@ use std::path::{Path, PathBuf};
 /// 钉死的托管 Node 版本：v22 LTS（nodejs.org/dist/v22.14.0 实测在档，win/darwin/linux 全平台有包）。
 pub const NODE_VERSION: &str = "v22.14.0";
 
+/// 上面这个版本在 nodejs.org/dist/v22.14.0/SHASUMS256.txt 里公布的 SHA-256（随版本一起钉死）。
+/// 下载回来的包（不论官源还是镜像）必须对上其中一条才解压——镜像被篡改 / 下载截断都在这一步被拦住。
+/// 升 NODE_VERSION 时同步更新这张表（取官方 SHASUMS256.txt 里对应的六行）。
+const NODE_SHA256: &[(&str, &str)] = &[
+    ("node-v22.14.0-darwin-arm64.tar.gz", "e9404633bc02a5162c5c573b1e2490f5fb44648345d64a958b17e325729a5e42"),
+    ("node-v22.14.0-darwin-x64.tar.gz", "6698587713ab565a94a360e091df9f6d91c8fadda6d00f0cf6526e9b40bed250"),
+    ("node-v22.14.0-linux-arm64.tar.gz", "8cf30ff7250f9463b53c18f89c6c606dfda70378215b2c905d0a9a8b08bd45e0"),
+    ("node-v22.14.0-linux-x64.tar.gz", "9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2"),
+    ("node-v22.14.0-win-arm64.zip", "2d71f5f9b2fffa33baa108c07d74b0d24e0c3dd8f441d567772ae0e3dd4b1a22"),
+    ("node-v22.14.0-win-x64.zip", "55b639295920b219bb2acbcfa00f90393a2789095b7323f79475c9f34795f217"),
+];
+
+/// 官方校验和清单地址（内置表里找不到该文件名时的兜底来源；始终从 nodejs.org 取，不从镜像取）。
+pub fn shasums_url() -> String {
+    format!("https://nodejs.org/dist/{NODE_VERSION}/SHASUMS256.txt")
+}
+
+/// 从 SHASUMS256.txt 文本里找某个文件的 SHA-256（格式：`<hex>  <文件名>` 一行一个）。
+pub fn sha_from_shasums(text: &str, filename: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let mut it = line.split_whitespace();
+        let hex = it.next()?;
+        let name = it.next()?;
+        (name == filename && hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| hex.to_ascii_lowercase())
+    })
+}
+
+/// 期望的校验和：先查内置表，没有再去 nodejs.org 拉 SHASUMS256.txt。
+async fn expected_sha256(filename: &str) -> Result<String, String> {
+    if let Some((_, hex)) = NODE_SHA256.iter().find(|(n, _)| *n == filename) {
+        return Ok((*hex).to_string());
+    }
+    let text = fetch_text(&shasums_url())
+        .await
+        .map_err(|e| format!("取不到官方校验和（{}）：{e}", shasums_url()))?;
+    sha_from_shasums(&text, filename).ok_or_else(|| format!("官方 SHASUMS256.txt 里没有 {filename}"))
+}
+
+/// 校验下载内容的 SHA-256。
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::Digest as _;
+    let mut h = sha2::Sha256::new();
+    h.update(data);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 单次下载的体积上限（Node 便携包约 30–50 MB，grok exe 更小；超过就是不对的东西）。
+/// 不信 Content-Length 来预分配：恶意/出错的服务器报个天文数字就能让我们一口气申请几 GB 内存。
+pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
 /// macOS ~/.zprofile 守卫块标记（存在即视为已写入，跳过）。
 pub const ZPROFILE_MARK: &str = "# cligc-pilot managed node";
 
@@ -227,11 +278,18 @@ pub async fn ensure(data_dir: &Path, progress: impl Fn(&str, u32)) -> Result<Pat
     }
     let filename =
         dist_filename(current_os(), std::env::consts::ARCH).expect("managed_bin_dir 已校验平台");
+    let want = expected_sha256(&filename).await?;
     let mut data: Option<Vec<u8>> = None;
     let mut last_err = String::new();
     for url in dist_urls(&filename) {
         match download(&url, &progress).await {
             Ok(b) => {
+                // 校验和对不上就当这个源坏了，换下一个源；两个源都不对才报错。
+                let got = sha256_hex(&b);
+                if got != want {
+                    last_err = format!("{url}: 校验和不符（期望 {want}，实际 {got}），已丢弃");
+                    continue;
+                }
                 data = Some(b);
                 break;
             }
@@ -311,7 +369,11 @@ pub(crate) async fn fetch_text(url: &str) -> Result<String, String> {
 }
 
 /// 分块下载（每 ≥2% 报一次进度；拿不到总长不报百分比）。代理走进程环境变量（reqwest 默认读取）。
+/// 只走 https；体积超过 MAX_DOWNLOAD_BYTES 直接中止（边收边数，不按 Content-Length 预分配）。
 pub(crate) async fn download(url: &str, progress: &impl Fn(&str, u32)) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err("只允许通过 https 下载".into());
+    }
     let mut resp = reqwest::Client::new()
         .get(url)
         .timeout(std::time::Duration::from_secs(600))
@@ -322,10 +384,16 @@ pub(crate) async fn download(url: &str, progress: &impl Fn(&str, u32)) -> Result
         return Err(format!("HTTP {}", resp.status()));
     }
     let total = resp.content_length().unwrap_or(0);
-    let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
+    if total > MAX_DOWNLOAD_BYTES {
+        return Err(format!("文件过大（{} MB），已拒绝下载", total / 1024 / 1024));
+    }
+    let mut buf: Vec<u8> = Vec::new();
     let mut last_pct = 0u32;
     progress("download", 0);
     while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
+        if buf.len() as u64 + chunk.len() as u64 > MAX_DOWNLOAD_BYTES {
+            return Err(format!("下载超过 {} MB 上限，已中止", MAX_DOWNLOAD_BYTES / 1024 / 1024));
+        }
         buf.extend_from_slice(&chunk);
         if total > 0 {
             let pct = ((buf.len() as u64 * 100) / total) as u32;
@@ -403,6 +471,25 @@ mod tests {
             dist_root("node-v22.14.0-darwin-arm64.tar.gz"),
             "node-v22.14.0-darwin-arm64"
         );
+    }
+
+    /// 校验和：钉死的表覆盖全部六个发行包、都是合法 sha256；SHASUMS256.txt 解析只认精确文件名。
+    #[test]
+    fn pinned_shasums_cover_every_dist_and_parse_official_list() {
+        for (os, arch) in [("windows", "x86_64"), ("windows", "aarch64"), ("macos", "aarch64"), ("macos", "x86_64"), ("linux", "x86_64"), ("linux", "aarch64")] {
+            let f = dist_filename(os, arch).unwrap();
+            let (_, hex) = NODE_SHA256.iter().find(|(n, _)| *n == f).unwrap_or_else(|| panic!("{f} 没有内置校验和"));
+            assert!(hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()), "{f}");
+        }
+        let text = "abc\n9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2  node-v22.14.0-linux-x64.tar.gz\nzz  node-v22.14.0-linux-x64.tar.gz.bak\n";
+        assert_eq!(
+            sha_from_shasums(text, "node-v22.14.0-linux-x64.tar.gz").as_deref(),
+            Some("9d942932535988091034dc94cc5f42b6dc8784d6366df3a36c4c9ccb3996f0c2")
+        );
+        assert!(sha_from_shasums(text, "node-v22.14.0-linux-x64.tar.gz.bak").is_none(), "不是 64 位十六进制就不算");
+        assert!(sha_from_shasums(text, "node-v22.14.0-win-x64.zip").is_none());
+        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(shasums_url(), "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt");
     }
 
     /// 版本解析：v 前缀/裸版本/垃圾输入。

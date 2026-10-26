@@ -553,7 +553,8 @@ fn ssh_auth_from(
     }
 }
 
-/// 试连：拿主机指纹 + 验证认证。首次添加传空 expect（TOFU 探测，指纹交 UI 确认）。
+/// 试连。expect 为空（首次添加 / 还没记住指纹）：只取主机指纹、**不认证**，指纹交 UI 让人核对；
+/// expect 非空：指纹一致才认证，不一致在认证前断开并把新指纹交回去（见 ssh::probe）。
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn verify_ssh(
@@ -578,7 +579,7 @@ async fn verify_ssh(
             .and_then(|id| state.conns.get(id).ok())
             .filter(|c| c.kind == "ssh" && c.ssh_auth == auth)
         {
-            let stored = ssh::auth_for(&old).ok();
+            let stored = ssh::auth_for_async(&old).await.ok();
             match (auth.as_str(), stored) {
                 ("password", Some(s)) => a.password = s.password,
                 ("key", Some(s)) => a.key_pass = s.key_pass,
@@ -705,7 +706,7 @@ async fn ssh_os_probe(
     if conn.kind != "ssh" {
         return Err("这不是远程连接".into());
     }
-    let auth = ssh::auth_for(&conn)?;
+    let auth = ssh::auth_for_async(&conn).await?;
     let expect = (!conn.ssh_fingerprint.is_empty()).then(|| conn.ssh_fingerprint.clone());
     state
         .ssh
@@ -751,7 +752,7 @@ async fn ssh_open_shell(
     if conn.kind != "ssh" {
         return Err("这不是远程连接".into());
     }
-    let auth = ssh::auth_for(&conn)?;
+    let auth = ssh::auth_for_async(&conn).await?;
     let expect = (!conn.ssh_fingerprint.is_empty()).then(|| conn.ssh_fingerprint.clone());
     state
         .ssh
@@ -817,7 +818,7 @@ async fn ensure_ssh(state: &AppState, conn_id: &str) -> Result<(), String> {
     if conn.kind != "ssh" {
         return Err("这不是远程连接".into());
     }
-    let auth = ssh::auth_for(&conn)?;
+    let auth = ssh::auth_for_async(&conn).await?;
     let expect = (!conn.ssh_fingerprint.is_empty()).then(|| conn.ssh_fingerprint.clone());
     state
         .ssh
@@ -948,7 +949,7 @@ async fn sftp_upload(
 /// 把粘贴/拖拽的文件存进当前会话的工作目录 uploads/ 下，返回相对路径（AI 可直接读取）。
 /// CF 会话＝项目目录；自由对话＝会话工作目录。
 #[tauri::command]
-fn save_attachment(
+async fn save_attachment(
     state: tauri::State<'_, AppState>,
     conn_id: String,
     project: String,
@@ -959,8 +960,20 @@ fn save_attachment(
         return Err("文件太大（上限 25MB）".into());
     }
     let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project)?;
+    // 25MB 的写盘别占着主线程 / tokio 工作线程。
+    tauri::async_runtime::spawn_blocking(move || write_attachment(&conn, &runtime_project, &filename, &data))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn write_attachment(
+    conn: &conns::Connection,
+    runtime_project: &str,
+    filename: &str,
+    data: &[u8],
+) -> Result<String, String> {
     let dir = {
-        let w = resolve_work_dir(&conn, &runtime_project)?;
+        let w = resolve_work_dir(conn, runtime_project)?;
         if w.is_empty() {
             conn.skill_dir.clone()
         } else {
@@ -972,7 +985,7 @@ fn save_attachment(
     }
     let up = std::path::Path::new(&dir).join("uploads");
     std::fs::create_dir_all(&up).map_err(|e| format!("建 uploads 目录失败: {e}"))?;
-    let safe = sanitize_filename(&filename);
+    let safe = sanitize_filename(filename);
     let mut target = up.join(&safe);
     if target.exists() {
         let p = std::path::Path::new(&safe);
@@ -990,7 +1003,7 @@ fn save_attachment(
             }
         }
     }
-    std::fs::write(&target, &data).map_err(|e| format!("保存附件失败: {e}"))?;
+    std::fs::write(&target, data).map_err(|e| format!("保存附件失败: {e}"))?;
     let name = target
         .file_name()
         .and_then(|n| n.to_str())
@@ -1222,7 +1235,7 @@ mod workdir_tests {
     /// 取 Cmd 计划；不是 Cmd 就炸（测试里用，省得每处 match）。
     fn plan_cmd(d: &std::path::Path, dev: Option<String>, out: &str, port: u16) -> (String, u16) {
         match preview_plan(d, dev, out, port).unwrap() {
-            PreviewPlan::Cmd(c, p) => (c, p),
+            PreviewPlan::Wrangler(c, p) | PreviewPlan::Custom(c, p) => (c, p),
             PreviewPlan::Static(..) => panic!("这个目录该走 wrangler，却被判成了静态"),
         }
     }
@@ -1240,7 +1253,7 @@ mod workdir_tests {
         std::fs::write(plain.join("index.html"), "<h1>hi</h1>").unwrap();
         match preview_plan(&plain, None, "", 8788).unwrap() {
             PreviewPlan::Static(dir, _) => assert_eq!(dir, plain, "静态站该由内建服务器伺候"),
-            PreviewPlan::Cmd(c, _) => panic!("纯静态站不该拉 wrangler: {c}"),
+            PreviewPlan::Wrangler(c, _) | PreviewPlan::Custom(c, _) => panic!("纯静态站不该拉 wrangler: {c}"),
         }
 
         // 有 Workers/Pages 特性 → 必须仍然交给 wrangler
@@ -1261,6 +1274,11 @@ mod workdir_tests {
         let free = free_port(9700).expect("找不到空闲端口跑这条测试");
         let (cmd, _) = plan_cmd(&plain, Some("npm run dev".into()), "", free);
         assert_eq!(cmd, "npm run dev", "自定义 dev 命令优先级最高");
+        // 但它必须被标成「自定义」——执行前要经人确认、不给 token；wrangler 那条才是我们自己的
+        assert!(matches!(preview_plan(&plain, Some("npm run dev".into()), "", free), Ok(PreviewPlan::Custom(..))));
+        let w = base.join("w-functions");
+        std::fs::create_dir_all(w.join("functions")).unwrap();
+        assert!(matches!(preview_plan(&w, None, "", free), Ok(PreviewPlan::Wrangler(..))));
 
         std::fs::remove_dir_all(&base).ok();
     }
@@ -1748,6 +1766,22 @@ fn free_port(want: u16) -> Option<u16> {
     (want..want.saturating_add(64)).find(|p| !port_taken(*p))
 }
 
+/// port_taken 的异步版（给 async 命令用：150ms 的阻塞 connect 不该占着 tokio 工作线程）。
+async fn port_taken_async(port: u16) -> bool {
+    tokio::time::timeout(
+        Duration::from_millis(150),
+        tokio::net::TcpStream::connect(("127.0.0.1", port)),
+    )
+    .await
+    .map(|r| r.is_ok())
+    .unwrap_or(false)
+}
+
+/// free_port 的异步版：最多 64 次 150ms 的探测，放阻塞线程池做。
+async fn free_port_async(want: u16) -> Option<u16> {
+    tauri::async_runtime::spawn_blocking(move || free_port(want)).await.ok().flatten()
+}
+
 /// 等预览服务真的能连上。替掉写死的 2.5s：机器慢就白屏、起不来也照样开窗，两头不讨好。
 /// 起得快就早开（常见情况比 2.5s 还快），起不来就明说。
 async fn wait_preview(port: u16, secs: u64) -> bool {
@@ -1786,10 +1820,81 @@ fn declares_compat_date(dir: &std::path::Path) -> bool {
 
 /// 预览怎么跑。
 enum PreviewPlan {
-    /// 跑外部命令：wrangler，或 pilot.json 里自定义的 dev。
-    Cmd(String, u16),
+    /// Pilot 自己拼的 wrangler 命令（项目用到 Workers/Pages 特性时）。这是我们自己的命令，可以给它 CF token。
+    Wrangler(String, u16),
+    /// pilot.json 里自定义的 dev 命令。pilot.json 是 AI 会写的文件——这条命令**执行前必须经人确认**，
+    /// 而且**不给 CF token**（否则 AI 写一行 `"dev": "curl -d $CLOUDFLARE_API_TOKEN …"` 就把 token 带走了）。
+    Custom(String, u16),
     /// 内建静态服务器直接伺候这个目录 —— **不需要 wrangler、不需要 Node**。
     Static(std::path::PathBuf, u16),
+}
+
+/// cf_preview_start 的结果：要么预览已经开了，要么得先让人确认 pilot.json 里那条自定义命令。
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PreviewStart {
+    Started { url: String },
+    /// 把原样的命令给前端弹确认框；用户点了「运行」前端再带着这条命令（confirmed_command）重新调用。
+    Confirm { command: String },
+}
+
+/// 用户已确认过的自定义预览命令记在 Pilot 数据目录（不能记在项目里：项目目录 AI 能写，
+/// 写一条「已确认」等于绕过确认）。键 = sha256(连接 id + 项目 + 命令原文)，换一条命令就再问一次。
+fn preview_confirm_key(conn_id: &str, project: &str, command: &str) -> String {
+    node_boot::sha256_hex(format!("{conn_id}\n{project}\n{command}").as_bytes())
+}
+
+fn preview_confirmed_file(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join("preview-confirmed.json")
+}
+
+fn preview_cmd_confirmed(data_dir: &std::path::Path, key: &str) -> bool {
+    let keys: Vec<String> = store_file::read_or_quarantine(&preview_confirmed_file(data_dir));
+    keys.iter().any(|k| k == key)
+}
+
+fn remember_preview_cmd(data_dir: &std::path::Path, key: &str) -> Result<(), String> {
+    let file = preview_confirmed_file(data_dir);
+    let mut keys: Vec<String> = store_file::read_or_quarantine(&file);
+    if keys.iter().any(|k| k == key) {
+        return Ok(());
+    }
+    keys.push(key.to_string());
+    let raw = serde_json::to_vec(&keys).map_err(|e| e.to_string())?;
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, raw).map_err(|e| format!("记录已确认命令失败: {e}"))?;
+    std::fs::rename(&tmp, &file).map_err(|e| format!("记录已确认命令失败: {e}"))
+}
+
+/// 起外部预览进程（wrangler 或自定义 dev 命令）。`env` 里只放这条命令该拿到的变量。
+fn spawn_preview_cmd(shell_cmd: &str, dir: &str, env: &[(&str, &str)]) -> Result<std::process::Child, String> {
+    #[cfg(windows)]
+    let mut c = {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(shell_cmd);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut c = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(shell_cmd);
+        c
+    };
+    c.current_dir(dir);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0); // 整组，停预览时连 node 子进程一起杀
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c.spawn().map_err(|e| format!("启动预览失败: {e}\n{}", wrangler_hint()))
 }
 
 /// 预览方案决策（两个预览入口共用）。三条路，优先级从高到低：
@@ -1811,7 +1916,7 @@ fn preview_plan(
 Pilot 改不了 —— 先关掉占用它的程序，或在 pilot.json 里换一个 \"port\"（并同步改 dev 命令）。"
             ));
         }
-        return Ok(PreviewPlan::Cmd(d, port));
+        return Ok(PreviewPlan::Custom(d, port));
     }
     let p = free_port(port)
         .ok_or_else(|| format!("找不到空闲的预览端口（{port} 往上 64 个都被占着）。"))?;
@@ -1835,7 +1940,7 @@ Pilot 改不了 —— 先关掉占用它的程序，或在 pilot.json 里换一
     } else {
         format!(" --compatibility-date={FALLBACK_COMPAT_DATE}")
     };
-    Ok(PreviewPlan::Cmd(
+    Ok(PreviewPlan::Wrangler(
         format!("wrangler pages dev {target} --ip 127.0.0.1 --port {p}{compat}"),
         p,
     ))
@@ -1854,7 +1959,7 @@ fn url_port(url: &str) -> Option<u16> {
 async fn wait_port_released(port: u16, ms: u64) {
     let deadline = std::time::Instant::now() + Duration::from_millis(ms);
     while std::time::Instant::now() < deadline {
-        if !port_taken(port) {
+        if !port_taken_async(port).await {
             return;
         }
         tokio::time::sleep(Duration::from_millis(80)).await;
@@ -1863,18 +1968,29 @@ async fn wait_port_released(port: u16, ms: u64) {
 
 /// 同一个东西、预览还活着、窗还在 → 别重启，直接复用（调用方负责 show+focus）。
 /// `wrangler pages dev` 本来就盯着文件变化，重启纯属让用户白等一次启动。
-fn reusable_preview(app: &AppHandle, state: &AppState, project: &str) -> Option<String> {
-    let g = state.preview.lock().unwrap();
-    let h = g.as_ref()?;
-    if h.project != project {
-        return None;
-    }
-    let port = url_port(&h.url)?;
-    if !port_taken(port) {
+async fn reusable_preview(app: &AppHandle, state: &AppState, project: &str) -> Option<String> {
+    // 锁里只抄出 url，探端口要 await，别攥着锁。
+    let url = {
+        let g = state.preview.lock().unwrap();
+        let h = g.as_ref()?;
+        if h.project != project {
+            return None;
+        }
+        h.url.clone()
+    };
+    let port = url_port(&url)?;
+    if !port_taken_async(port).await {
         return None; // 进程已经死了 → 老老实实重起
     }
     app.get_webview_window("preview")?; // 窗关了（关窗会 stop_preview）→ 重起
-    Some(h.url.clone())
+    Some(url)
+}
+
+/// preview_plan 的异步包装：里面要探端口（最多 64 次阻塞 connect），放阻塞线程池。
+async fn preview_plan_async(dir: std::path::PathBuf, dev_cmd: Option<String>, out: String, port: u16) -> Result<PreviewPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || preview_plan(&dir, dev_cmd, &out, port))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// pilot.json → (dev 命令, 产物目录, 预览端口)。缺省 dev=None、out=""、port=8788。
@@ -1908,32 +2024,38 @@ fn read_pilot_json(dir: &std::path::Path) -> (Option<String>, String, u16) {
 }
 
 /// 停掉当前预览。外部进程要整树杀并回收（避免僵尸）；内建服务器 abort 掉即可。
+/// 杀进程 + wait 是阻塞调用，丢到阻塞线程池去做——调用方（async 命令 / 窗口事件）不等它；
+/// 真要等端口松手的地方用 wait_port_released 探端口。
 fn stop_preview(state: &AppState) {
     let Some(h) = state.preview.lock().unwrap().take() else {
         return;
     };
     match h.proc {
         PreviewProc::Builtin(task) => task.abort(), // listener 随之 drop，端口立刻松手
-        PreviewProc::Child(mut child) => {
-            let pid = child.id();
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("kill")
-                    .args(["-9", &format!("-{pid}")])
-                    .status();
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/T", "/F", "/PID", &pid.to_string()])
-                    .creation_flags(0x0800_0000)
-                    .status();
-            }
-            let _ = child.kill();
-            let _ = child.wait();
+        PreviewProc::Child(child) => {
+            tauri::async_runtime::spawn_blocking(move || kill_preview_tree(child));
         }
     }
+}
+
+fn kill_preview_tree(mut child: std::process::Child) {
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &format!("-{pid}")])
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// 输入框/选中文字的右键菜单。**必须是原生菜单，不能前端自己画。**
@@ -2099,26 +2221,39 @@ async fn start_builtin(dir: std::path::PathBuf, port: u16) -> Result<PreviewProc
 }
 
 /// 启动本地预览：静态站用内建服务器（不需要 wrangler），有 Workers/Pages 特性的才跑 wrangler；
-/// pilot.json 自定义了 dev 就跑它。然后开预览窗。
+/// pilot.json 自定义了 dev 就跑它——但那是 AI 会写的文件，所以**第一次见到这条命令要先让人确认**
+/// （返回 Confirm，前端弹框，用户点运行后带着 confirmed_command 再来），且**不把 CF token 给它**。
+/// 然后开预览窗。
 #[tauri::command]
 async fn cf_preview_start(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     conn_id: String,
     project: String,
-) -> Result<String, String> {
+    confirmed_command: Option<String>,
+) -> Result<PreviewStart, String> {
     let conn = state.conns.get(&conn_id)?;
     if conn.kind != "cloudflare" {
         return Err("这个连接不是 Cloudflare".into());
     }
-    let token = keychain::get_key(&conn.id)?;
     let dir = resolve_work_dir(&conn, &project)?;
     // 同一个项目、预览还活着、窗还在 → 直接聚焦，不重启（dev server 本来就热更新）。
-    if let Some(u) = reusable_preview(&app, &state, &project) {
+    if let Some(u) = reusable_preview(&app, &state, &project).await {
         open_preview_window(&app, &u, &project)?;
-        return Ok(u);
+        return Ok(PreviewStart::Started { url: u });
     }
     let (dev_cmd, out, port) = read_pilot_json(std::path::Path::new(&dir));
+    // 先定方案再停旧预览：要是还得问人，别先把正在跑的预览掐了。
+    let plan = preview_plan_async(std::path::PathBuf::from(&dir), dev_cmd, out, port).await?;
+    if let PreviewPlan::Custom(cmd, _) = &plan {
+        let key = preview_confirm_key(&conn.id, &project, cmd);
+        // 确认必须绑定命令原文：弹框到点「运行」之间 pilot.json 可能又被改了，改了就再问。
+        if confirmed_command.as_deref() == Some(cmd.as_str()) {
+            remember_preview_cmd(&state.data_dir, &key)?;
+        } else if !preview_cmd_confirmed(&state.data_dir, &key) {
+            return Ok(PreviewStart::Confirm { command: cmd.clone() });
+        }
+    }
     // 一次只跑一个预览。先记下旧端口：停完要等它**真的**松手，否则紧接着的探测会把「正在退场」的
     // 端口当成「被占」，端口就一路往上爬。
     let old_port = state
@@ -2131,39 +2266,25 @@ async fn cf_preview_start(
     if let Some(p) = old_port {
         wait_port_released(p, 2500).await;
     }
-    let plan = preview_plan(std::path::Path::new(&dir), dev_cmd, &out, port)?;
     let (proc, port, external) = match plan {
         PreviewPlan::Static(sd, p) => (start_builtin(sd, p).await?, p, false),
-        PreviewPlan::Cmd(shell_cmd, p) => {
-            #[cfg(windows)]
-            let mut c = {
-                let mut c = std::process::Command::new("cmd");
-                c.arg("/C").arg(&shell_cmd);
-                c
-            };
-            #[cfg(not(windows))]
-            let mut c = {
-                let mut c = std::process::Command::new("sh");
-                c.arg("-c").arg(&shell_cmd);
-                c
-            };
-            c.current_dir(&dir).env("CLOUDFLARE_API_TOKEN", &token);
+        PreviewPlan::Wrangler(shell_cmd, p) => {
+            // 只有我们自己拼的 wrangler 命令才拿得到 token。
+            let token = keychain::get_key_async(&conn.id).await?;
+            let mut env: Vec<(&str, &str)> = vec![("CLOUDFLARE_API_TOKEN", token.as_str())];
             if !conn.account_id.is_empty() {
-                c.env("CLOUDFLARE_ACCOUNT_ID", &conn.account_id);
+                env.push(("CLOUDFLARE_ACCOUNT_ID", conn.account_id.as_str()));
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                c.process_group(0); // 整组，停预览时连 node 子进程一起杀
+            let child = spawn_preview_cmd(&shell_cmd, &dir, &env)?;
+            (PreviewProc::Child(child), p, true)
+        }
+        PreviewPlan::Custom(shell_cmd, p) => {
+            // 自定义命令：不注入任何凭据（账号 id 不是秘密，给它无妨）。
+            let mut env: Vec<(&str, &str)> = Vec::new();
+            if !conn.account_id.is_empty() {
+                env.push(("CLOUDFLARE_ACCOUNT_ID", conn.account_id.as_str()));
             }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                c.creation_flags(0x0800_0000);
-            }
-            let child = c
-                .spawn()
-                .map_err(|e| format!("启动预览失败: {e}\n{}", wrangler_hint()))?;
+            let child = spawn_preview_cmd(&shell_cmd, &dir, &env)?;
             (PreviewProc::Child(child), p, true)
         }
     };
@@ -2183,7 +2304,7 @@ async fn cf_preview_start(
         ));
     }
     open_preview_window(&app, &url, &title_name)?;
-    Ok(url)
+    Ok(PreviewStart::Started { url })
 }
 
 /// wrangler 起不来时的提示。**只在真需要 wrangler 时才会走到这里**（静态站根本不碰它），
@@ -2215,7 +2336,7 @@ async fn site_preview_start(app: AppHandle, state: tauri::State<'_, AppState>, i
 /// 用内建静态服务器预览一个目录，打开预览窗（`page`：要打开的路径，比如 `/a/b.html`；空＝首页）。
 /// 同一个 key 的服务还在就直接复用。
 pub(crate) async fn preview_dir(app: &AppHandle, state: &AppState, key: &str, dir: std::path::PathBuf, title: &str, page: &str) -> Result<String, String> {
-    if let Some(u) = reusable_preview(app, state, key) {
+    if let Some(u) = reusable_preview(app, state, key).await {
         let full = format!("{u}{page}");
         open_preview_window(app, &full, title)?;
         return Ok(full);
@@ -2225,7 +2346,7 @@ pub(crate) async fn preview_dir(app: &AppHandle, state: &AppState, key: &str, di
     if let Some(p) = old_port {
         wait_port_released(p, 2500).await;
     }
-    let port = free_port(PREVIEW_DEFAULT_PORT).ok_or("找不到空闲的预览端口")?;
+    let port = free_port_async(PREVIEW_DEFAULT_PORT).await.ok_or("找不到空闲的预览端口")?;
     let proc = start_builtin(dir, port).await?;
     let url = format!("http://127.0.0.1:{port}");
     *state.preview.lock().unwrap() = Some(PreviewHandle { proc, url: url.clone(), project: key.to_string() });
@@ -2265,19 +2386,19 @@ async fn cf_preview_template(
     let title_name = cf_templates::display_name(&state.data_dir.join("templates"), &slug);
     // 同一个模板、预览还活着、窗还在 → 直接聚焦，不重启。
     let label = format!("template:{slug}");
-    if let Some(u) = reusable_preview(&app, &state, &label) {
+    if let Some(u) = reusable_preview(&app, &state, &label).await {
         open_preview_window(&app, &u, &title_name)?;
         return Ok(u);
     }
     let (dev_cmd, out, port) = read_pilot_json(&dir);
-    // 静态预览不一定需要 token；有 CF 连接就顺手带上（模板含绑定时用得到）。
-    let token = state
-        .conns
-        .list()
-        .iter()
-        .find(|c| c.kind == "cloudflare")
-        .and_then(|c| keychain::get_key(&c.id).ok())
-        .unwrap_or_default();
+    // 模板不属于任何连接，预览**不给任何 token**（本地 wrangler pages dev 用不着）。
+    // 以前随手拿第一个 CF 连接的 token 塞进去——模板里的 pilot.json 是 AI 写的，等于把 token 交给它。
+    let plan = preview_plan_async(dir.clone(), dev_cmd, out, port).await?;
+    if let PreviewPlan::Custom(cmd, _) = &plan {
+        return Err(format!(
+            "这个模板的 pilot.json 自定义了预览命令（{cmd}）。模板预览不执行自定义命令——先用这个模板建项目，再在项目里预览。"
+        ));
+    }
     let old_port = state
         .preview
         .lock()
@@ -2291,41 +2412,13 @@ async fn cf_preview_template(
     // 随附模板全是「单文件、内联 CSS、零外部资源」的静态 HTML（这是库自己的硬契约，有测试钉着），
     // 所以这里几乎总是走内建服务器：**不需要 wrangler、不需要 Node，也没有 25 秒冷启**。
     // （用户存的模板可能带 functions/ 之类，那种才落回 wrangler —— preview_plan 会认出来。）
-    let plan = preview_plan(&dir, dev_cmd, &out, port)?;
     let (proc, port, external) = match plan {
         PreviewPlan::Static(sd, p) => (start_builtin(sd, p).await?, p, false),
-        PreviewPlan::Cmd(shell_cmd, p) => {
-            #[cfg(windows)]
-            let mut c = {
-                let mut c = std::process::Command::new("cmd");
-                c.arg("/C").arg(&shell_cmd);
-                c
-            };
-            #[cfg(not(windows))]
-            let mut c = {
-                let mut c = std::process::Command::new("sh");
-                c.arg("-c").arg(&shell_cmd);
-                c
-            };
-            c.current_dir(&dir);
-            if !token.is_empty() {
-                c.env("CLOUDFLARE_API_TOKEN", &token);
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                c.process_group(0);
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                c.creation_flags(0x0800_0000);
-            }
-            let child = c
-                .spawn()
-                .map_err(|e| format!("启动预览失败: {e}\n{}", wrangler_hint()))?;
+        PreviewPlan::Wrangler(shell_cmd, p) => {
+            let child = spawn_preview_cmd(&shell_cmd, &dir.to_string_lossy(), &[])?;
             (PreviewProc::Child(child), p, true)
         }
+        PreviewPlan::Custom(..) => unreachable!("上面已经拒掉"),
     };
     let url = format!("http://127.0.0.1:{port}");
     *state.preview.lock().unwrap() = Some(PreviewHandle {
@@ -4125,6 +4218,23 @@ mod brain_login_command_tests {
         assert!(is_claude_auth_error(
             r#"Failed to authenticate. API Error: 401 {"message":"Invalid bearer token"}"#
         ));
+        assert!(is_claude_auth_error("Not logged in · Please run /login"));
+        assert!(is_claude_auth_error(r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#));
+        assert!(is_claude_auth_error("API Error: 401 {}"));
+    }
+
+    /// 限流 / 额度 / 普通报错里带 token、auth、login 字样，不是凭据问题，不能让用户去重登。
+    #[test]
+    fn rate_limit_and_generic_errors_are_not_credential_failures() {
+        for text in [
+            "API Error: 429 This request would exceed the rate limit for tokens per minute",
+            "You've hit your usage limit; resets at 3pm",
+            "Error: model claude-opus-4-6 does not support author mode",
+            "Login page loaded but failed to fetch model list",
+            "API Error: 500 token count exceeded",
+        ] {
+            assert!(!is_claude_auth_error(text), "{text}");
+        }
     }
 }
 
@@ -4188,10 +4298,26 @@ async fn verify_claude_credential(token: Option<&str>) -> Result<bool, String> {
     }
 }
 
+/// 只认明确的「凭据被拒」标记。以前连 "token"/"auth"/"login" 这种词都算——限流提示
+/// （"tokens per minute"）、模型名含 auth 的报错都会被当成「Token 失效」让用户白白重登。
 fn is_claude_auth_error(text: &str) -> bool {
-    ["auth", "login", "credential", "unauthorized", "401", "token", "oauth"]
-        .iter()
-        .any(|needle| text.to_ascii_lowercase().contains(needle))
+    let t = text.to_ascii_lowercase();
+    [
+        "api error: 401",
+        "status 401",
+        "401 unauthorized",
+        "invalid bearer token",
+        "not logged in",
+        "failed to authenticate",
+        "invalid api key",
+        "authentication_error",
+        "invalid authentication credentials",
+        "please run /login",
+        "oauth token has expired",
+        "oauth token revoked",
+    ]
+    .iter()
+    .any(|needle| t.contains(needle))
 }
 
 /// 保存 `claude setup-token` 生成的订阅 OAuth Token。只写系统安全存储，不修改
@@ -4818,6 +4944,7 @@ pub fn run() {
             ops_cmds::read_report,
             launch_cmds::import_cf_project,
             launch_cmds::launch_status,
+            launch_cmds::launch_auto_bind,
             launch_cmds::site_to_github,
             launch_cmds::ga4_to_config,
             launch_cmds::site_pages_dns_replace,
