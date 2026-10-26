@@ -154,7 +154,8 @@ pub(crate) const VISUAL_STANDARD: &str = "【视觉标准】以 Awwwards、Webby
 - 排版：清楚的字号刻度和行高；正文 16–18px，行宽适中（中文每行约 30–40 字）；标题有张力，长文读起来不累。\n\
 - 留白与网格：统一的间距刻度和栅格，区块之间有松有紧的节奏。\n\
 - 视觉层级：每一屏有一个焦点，最重要的信息最先被看到，次要信息让位。\n\
-- 色彩：克制的主色加一个强调色，文字对比度达到 WCAG AA；要做深色模式就成套做。\n\
+- 色彩：克制的主色加一个强调色，文字对比度达到 WCAG AA；要做深色模式就成套做。配色从品牌、行业和读者来，不从「看起来有质感」来。\n\
+- 避开 AI 建站的通用套路：不用米黄 / 奶油 / 暖白的「纸张」底色（#f4f1e9、#faf7f0、#f5f0e6 这一类），底色默认用纯白、中性浅灰或深色，要用带颜色的底必须来自品牌、并在 `.pilot/site.md` 写明理由；也不要拿「纸张、票据、印章、撕边、手账」当设计概念，不满屏用等宽大写小字当标签。Pilot 构建后会检查底色。\n\
 - 动效与微交互：只做有目的的过渡（进入、悬停、焦点、按下、展开），时长 150–400ms；支持 prefers-reduced-motion；不为炫技牺牲性能。\n\
 - 响应式：375、768、1280、1920 宽度都要精心适配，不只是挤得下。\n\
 - 性能与可访问性：不引入大体积动画库；图片用现代格式并标明宽高；首屏快、不跳动；语义化标签、焦点可见、键盘可用。";
@@ -706,6 +707,193 @@ const EXTRA_PLACEHOLDERS: &[&str] = &["敬请期待", "coming soon", "待补", "
 /// 内容页的文字量下限（和托管运营判断「新页面太薄」用同一把尺）。
 pub const THIN_UNITS: usize = 600;
 
+/// 页面底色是不是 AI 最爱用的米黄 / 奶油「纸张」色：是就返回那个颜色。
+/// 看 html / body / :root 的背景（解析一层 CSS 变量），深色模式里的定义不算；找不到再看叫 bg / paper / background 之类的变量。
+pub fn paper_background(out: &Path) -> Option<String> {
+    let mut css = String::new();
+    let mut files = Vec::new();
+    walk(out, &[], &mut files, &|p| has_ext(p, &["css"]));
+    files.sort();
+    for f in files.iter().take(40) {
+        css.push_str(&std::fs::read_to_string(f).unwrap_or_default());
+        css.push('\n');
+    }
+    // 内联在页面里的样式（Astro 小样式表会内联）
+    let home = std::fs::read_to_string(out.join("index.html")).unwrap_or_default();
+    let low = home.to_ascii_lowercase();
+    for st in tags(&home, &low, "style") {
+        css.push_str(st);
+        css.push('\n');
+    }
+    let css = strip_dark(&css);
+    let rules = css_rules(&css);
+    let mut vars: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (_, body) in &rules {
+        for (k, v) in decls(body) {
+            if let Some(name) = k.strip_prefix("--") {
+                vars.entry(name.to_string()).or_insert(v);
+            }
+        }
+    }
+    let resolve = |v: &str| -> Option<String> {
+        let mut v = v.trim().to_string();
+        for _ in 0..3 {
+            let Some(rest) = v.strip_prefix("var(") else { break };
+            let name = rest.trim_end_matches(')').split(',').next()?.trim().trim_start_matches("--").to_string();
+            v = vars.get(&name)?.trim().to_string();
+        }
+        Some(v)
+    };
+    let mut cands = Vec::new();
+    for (sel, body) in &rules {
+        if !sel.split(',').any(|x| matches!(x.trim(), "html" | "body" | ":root" | "html body")) {
+            continue;
+        }
+        for (k, v) in decls(body) {
+            if k == "background-color" || k == "background" {
+                if let Some(c) = resolve(&v) {
+                    cands.push(c);
+                }
+            }
+        }
+    }
+    if cands.is_empty() {
+        for k in ["bg", "background", "paper", "page", "canvas", "surface", "color-bg", "color-background", "bg-page"] {
+            if let Some(v) = vars.get(k).and_then(|v| resolve(v)) {
+                cands.push(v);
+            }
+        }
+    }
+    cands.into_iter().find(|c| parse_color(c).is_some_and(|(r, g, b)| is_paper(r, g, b)))
+}
+
+/// 去掉深色模式的定义：`@media (prefers-color-scheme: dark) {…}` 整块，和 `[data-theme=dark]` / `.dark` 开头的规则。
+fn strip_dark(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(i) = rest.find("@media") {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let Some(open) = tail.find('{') else { rest = ""; break };
+        let dark = tail[..open].replace(' ', "").contains("prefers-color-scheme:dark");
+        let mut depth = 0usize;
+        let mut end = tail.len();
+        for (j, ch) in tail[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + j + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !dark {
+            // 别的 media 块原样保留（只去掉外层，里面的规则照常参与）
+            out.push_str(&tail[open + 1..end.saturating_sub(1).max(open + 1)]);
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 平铺的 `选择器 { 声明 }`；暗色主题的选择器跳过。
+fn css_rules(css: &str) -> Vec<(String, String)> {
+    let mut v = Vec::new();
+    let mut rest = css;
+    while let Some(o) = rest.find('{') {
+        let sel = rest[..o].rsplit(['}', ';']).next().unwrap_or("").trim().to_string();
+        let Some(c) = rest[o..].find('}') else { break };
+        let body = rest[o + 1..o + c].to_string();
+        rest = &rest[o + c + 1..];
+        let s = sel.to_ascii_lowercase();
+        if s.contains("dark") {
+            continue;
+        }
+        v.push((s, body));
+    }
+    v
+}
+
+fn decls(body: &str) -> Vec<(String, String)> {
+    body.split(';')
+        .filter_map(|d| {
+            let (k, v) = d.split_once(':')?;
+            Some((k.trim().to_ascii_lowercase(), v.trim().trim_end_matches("!important").trim().to_string()))
+        })
+        .collect()
+}
+
+/// `#rgb` / `#rrggbb` / `rgb()` / `hsl()`（background 简写里取第一个颜色）。
+fn parse_color(v: &str) -> Option<(u8, u8, u8)> {
+    let v = v.trim().to_ascii_lowercase();
+    if let Some(i) = v.find('#') {
+        let hex: String = v[i + 1..].chars().take_while(|c| c.is_ascii_hexdigit()).collect();
+        let h = |s: &str| u8::from_str_radix(s, 16).ok();
+        return match hex.len() {
+            3 | 4 => {
+                let d: Vec<u8> = hex.chars().take(3).map(|c| h(&c.to_string()).unwrap_or(0) * 17).collect();
+                Some((d[0], d[1], d[2]))
+            }
+            6 | 8 => Some((h(&hex[0..2])?, h(&hex[2..4])?, h(&hex[4..6])?)),
+            _ => None,
+        };
+    }
+    let nums = |s: &str| -> Vec<f64> { s.split(|c: char| c == ',' || c == ' ' || c == '/').filter_map(|x| x.trim().trim_end_matches(['%', ')']).trim_end_matches("deg").parse::<f64>().ok()).collect() };
+    if let Some(i) = v.find("rgb") {
+        let inner = v[i..].split_once('(')?.1.split(')').next()?;
+        let n = nums(inner);
+        return (n.len() >= 3).then(|| (n[0] as u8, n[1] as u8, n[2] as u8));
+    }
+    if let Some(i) = v.find("hsl") {
+        let inner = v[i..].split_once('(')?.1.split(')').next()?;
+        let n = nums(inner);
+        if n.len() < 3 {
+            return None;
+        }
+        let (h, s, l) = (n[0].rem_euclid(360.0), n[1] / 100.0, n[2] / 100.0);
+        let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let m = l - c / 2.0;
+        let (r, g, b) = match (h / 60.0) as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        let f = |v: f64| ((v + m) * 255.0).round() as u8;
+        return Some((f(r), f(g), f(b)));
+    }
+    None
+}
+
+/// 很亮、偏暖黄（色相 20°–75°）、又不是纯白 / 中性灰：就是那种米黄 / 奶油纸色。
+fn is_paper(r: u8, g: u8, b: u8) -> bool {
+    let (mx, mn) = (r.max(g).max(b) as f64, r.min(g).min(b) as f64);
+    let chroma = mx - mn;
+    let light = (mx + mn) / 2.0 / 255.0;
+    if light < 0.86 || !(5.0..=60.0).contains(&chroma) {
+        return false;
+    }
+    let (r, g, b) = (r as f64, g as f64, b as f64);
+    let hue = if mx == r {
+        60.0 * ((g - b) / chroma).rem_euclid(6.0)
+    } else if mx == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    (20.0..=75.0).contains(&hue)
+}
+
+pub const PAPER_HINT: &str = "这是 AI 建站最常见的套路底色。换成纯白、中性浅灰、深色或从品牌色来的底色，连同纸张、票据、印章这类配套装饰一起换掉（设计方向写进 .pilot/site.md）";
+
 /// 扫构建产物，给出上线前检查的结果。
 pub fn readiness(out: &Path) -> Vec<Check> {
     if !out.join("index.html").is_file() {
@@ -822,6 +1010,10 @@ pub fn readiness(out: &Path) -> Vec<Check> {
         Check { key: "h1", label: "一级标题", level: lvl(!no_h1.is_empty(), "warn"), detail: if no_h1.is_empty() { "每页都有".into() } else { format!("{} 个页面没有 h1", no_h1.len()) }, items: no_h1 },
         Check { key: "thin", label: "内容厚度", level: lvl(!thin.is_empty(), "warn"), detail: if thin.is_empty() { format!("内容页正文都在 {THIN_UNITS} 字以上") } else { format!("{} 个内容页正文不到 {THIN_UNITS} 字，容易被搜索引擎当成薄内容", thin.len()) }, items: thin },
         Check { key: "seo_files", label: "sitemap.xml / robots.txt", level: lvl(!seo_files.is_empty(), "warn"), detail: if seo_files.is_empty() { "都有".into() } else { format!("缺：{}", seo_files.join("、")) }, items: vec![] },
+        match paper_background(out) {
+            Some(c) => Check { key: "paper_bg", label: "页面底色", level: "warn", detail: format!("底色是米黄 / 奶油色（{c}）：{PAPER_HINT}"), items: vec![] },
+            None => Check { key: "paper_bg", label: "页面底色", level: "ok", detail: "不是套路的米黄纸色".into(), items: vec![] },
+        },
         Check { key: "basics", label: "语言标记和网站图标", level: lvl(no_lang > 0 || !favicon, "warn"), detail: match (no_lang > 0, favicon) { (false, true) => "都有".into(), (true, true) => format!("{no_lang} 个页面的 <html> 没有 lang"), (false, false) => "没有网站图标（favicon）".into(), (true, false) => format!("没有网站图标；{no_lang} 个页面没有 lang") }, items: vec![] },
     ]
 }
@@ -832,6 +1024,33 @@ mod tests {
 
     fn req() -> CreateSiteRequest {
         CreateSiteRequest { name: "Coffee Notes".into(), about: "手冲咖啡入门指南".into(), stack: "astro".into(), parent_dir: "/tmp".into(), goals: vec!["广告变现".into()], ..Default::default() }
+    }
+
+    #[test]
+    fn spots_the_cream_paper_background() {
+        assert!(is_paper(0xf4, 0xf1, 0xe9) && is_paper(0xfa, 0xf7, 0xf0) && is_paper(0xf5, 0xf0, 0xe6));
+        assert!(!is_paper(255, 255, 255) && !is_paper(0xf5, 0xf5, 0xf4) && !is_paper(0xf3, 0xf4, 0xf6), "白和中性灰不算");
+        assert!(!is_paper(0x15, 0x17, 0x1b) && !is_paper(0xe8, 0xf0, 0xfe), "深色、冷色不算");
+        assert_eq!(parse_color("hsl(44 32% 93%)").map(|(r, g, b)| is_paper(r, g, b)), Some(true));
+        assert_eq!(parse_color("rgb(244, 241, 233)"), Some((244, 241, 233)));
+        assert_eq!(parse_color("#fff url(x.png) no-repeat"), Some((255, 255, 255)));
+
+        let t = tempfile::tempdir().unwrap();
+        let out = t.path();
+        std::fs::write(out.join("index.html"), "<html><body>x</body></html>").unwrap();
+        std::fs::create_dir_all(out.join("_astro")).unwrap();
+        let css = ":root{--paper:#f4f1e9;--ink:#15171b}@media (prefers-color-scheme:dark){:root{--paper:#111}}body{background:var(--paper);color:var(--ink)}";
+        std::fs::write(out.join("_astro/a.css"), css).unwrap();
+        assert_eq!(paper_background(out).as_deref(), Some("#f4f1e9"));
+        // 深色定义写在前面也不受影响
+        std::fs::write(out.join("_astro/a.css"), "@media (prefers-color-scheme: dark){:root{--bg:#f4f1e9}}:root{--bg:#ffffff}html{background-color:var(--bg)}").unwrap();
+        assert_eq!(paper_background(out), None);
+        // body 没写背景：按变量名找
+        std::fs::write(out.join("_astro/a.css"), ":root{--bg:#faf7f0}").unwrap();
+        assert!(paper_background(out).is_some());
+        std::fs::write(out.join("index.html"), "<html><head><style>body{background:#fff}</style></head><body></body></html>").unwrap();
+        std::fs::write(out.join("_astro/a.css"), "").unwrap();
+        assert_eq!(paper_background(out), None);
     }
 
     #[test]

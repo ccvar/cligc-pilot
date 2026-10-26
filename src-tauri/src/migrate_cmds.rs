@@ -1690,6 +1690,15 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
     let in_r2: Vec<String> = dynamic.as_ref().map(|d| d.large.clone()).unwrap_or_default();
     let routes_ok = dynamic.is_none() || built.out.join("_routes.json").is_file();
     let mut checks = tokio::task::spawn_blocking(move || mx::parity(&out, &map2, &inv2, &refs, &assets, &in_r2)).await.map_err(|e| e.to_string())?;
+    if let Some(c) = crate::site_make::paper_background(&built.out) {
+        checks.push(mx::ParityCheck {
+            key: "paper_bg".into(),
+            label: "页面底色".into(),
+            level: "warn".into(),
+            detail: format!("底色是米黄 / 奶油色（{c}）：{}", crate::site_make::PAPER_HINT),
+            items: Vec::new(),
+        });
+    }
     if !routes_ok {
         checks.push(mx::ParityCheck {
             key: "routes".into(),
