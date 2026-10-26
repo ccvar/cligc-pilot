@@ -1,85 +1,113 @@
 # Cligc Pilot
 
-本地 AI 工作台 —— 桌面客户端（Tauri 2 + Svelte 5，macOS / Windows）。用本地 Claude Code / Codex / Grok
-客户端，或自备 API Key 的模型服务，在三类工作区里干活：
+**本地 AI 工作台**：一个桌面客户端（macOS / Windows），让 AI 帮你做网站、上线、看数据、持续运营，也能管理你的服务器。
 
-- **本地对话**：不连接任何服务，可接入一个本地文件夹。首次打开即可用。
-- **Cloudflare**：连接一个 Cloudflare 账号，边聊边建站，本地预览后部署到 Pages / Workers；
-  可把做好的项目存成模板复用。
-- **远程连接（SSH）**：终端、SFTP 文件管理与传输，以及让模型在这台机器上执行命令的 AI 桥。
+AI 用你电脑上已经登录的 **Claude Code / Codex / Grok**，或者你自己填的 **API Key**（Anthropic、OpenAI 及兼容接口）。所有账号密钥只存在系统钥匙串里，不经过任何第三方服务器。
 
-API 服务由对应供应商独立计费，不使用本地客户端的订阅额度。
+[下载最新版](https://github.com/ccvar/cligc-pilot/releases/latest) · [发版说明](RELEASE.md) · [许可协议](LICENSE.md)
 
-> 本项目从 gcms Pilot 0.2.64 拆分而来，去掉了全部 gcms 能力（技能包、站点、托管、定时任务、
-> gcms 服务器安装与迁移等），保留界面设计与上面三类工作区。新旧客户端可以同时安装：
-> 标识（`com.cligc.pilot`）、数据目录、钥匙串条目、升级地址与签名密钥都是独立的。
+---
 
-## 功能
+## 能做什么
 
-- **模型服务 · 本地客户端**：自动检测 claude / codex / grok CLI 的安装与登录状态；未登录一键「去授权」
-  （打开终端跑官方登录命令，自动带上系统代理）。缺 Node 时可一键自举便携版 Node。
-- **权限档位**：每个对话选「计划 / 询问 / 自动 / 全自动」，映射到各 CLI 的权限参数，并经 PreToolUse
-  钩子把需要确认的操作回传界面批准。本地对话默认全自动；Cloudflare / SSH 会话默认降为自动。
-- **API 服务**：设置 → API 服务 → 添加。支持 OpenAI Responses、Anthropic Messages 和
-  OpenAI 兼容 Chat Completions，可配置多个独立账号、读取或手填模型 ID。密钥只存系统凭据库。
-- **API 用量与账单**：展开 API 连接下的「用量与账单」，单独配置查询凭据后手动刷新（官方 OpenAI / Claude）。
-- **Cloudflare 建站**：API Token 只进钥匙串，运行时以 `CLOUDFLARE_API_TOKEN` 注入 wrangler；
-  内置起始模板与建站设计规范，静态项目无需 wrangler 即可本地预览。
-- **远程连接**：密码 / 私钥口令只在内存与钥匙串里流转，绝不进模型子进程；主机指纹 TOFU 校验。
-  AI 桥让模型通过随附脚本把命令交给 Pilot 代为执行，每条命令按档位确认。
-- **远程文件传输**：上传、下载、取消与最近 100 条传输记录；macOS 支持与 Finder 双向拖放。
-- **分屏对话**：拖动侧栏对话即可分屏，多个对话并行运行互不抢焦点。
-- **自动升级**：设置 → 关于 → 检查更新。更新包 ed25519 验签后安装并重启（见 [RELEASE.md](RELEASE.md)）。
-- 关窗隐藏到托盘，后台对话继续跑；完成时系统通知。
+### 网站：从零做到持续运营
 
-## 开发
+- **制作站点**：一句话说清是个什么站，AI 自己定类型、语言、栏目和技术栈，直接在对话里搭出第一版；想自己把关也可以用「详细设置」逐项选。内置写作和视觉标准，可以加自己的补充要求。
+- **导入已有站点**：选本地文件夹或 GitHub 仓库（可一次选多个），自动识别框架、域名和部署方式。
+- **迁移旧站**：给一个线上域名，盘点 → 抓取内容 → AI 用新设计重做 → 逐页核对 → 切换域名。保留原来的网址和内容，切换前记下 DNS，可一键回退。
+- **上线**：部署到 Cloudflare Pages / Workers，或者你自己的服务器（Caddy + Go + SQLite，Pilot 帮你配好）。上线向导一步步接好 GA4、Search Console、Bing 和 IndexNow，能自动处理的会列出来，你确认后才做。
+- **看数据**：把 GA4、Search Console、Bing 的数据汇总到一个看板，按查询词和页面找出运营机会。
+- **托管运营**：给站点定一个方案（做哪些事、多大自主度、每周额度），AI 定期出计划、写新页面、改标题描述、修技术问题。每条改动单独提交，可以回滚。
+- **表单和评论**：给静态站加联系表单、评论，数据存在你自己的 Cloudflare 账号里，在 Pilot 里收件和审核。
+- **分发**：把文章同步发到 Blogger、WordPress.com。
+
+### 本地对话
+
+不连接任何服务也能用：选一个本地文件夹，让 AI 在里面读写文件、跑命令。首次打开即可用。
+
+### 远程服务器（SSH）
+
+终端、文件管理（上传下载、在 Finder 里拖进拖出），以及让 AI 在这台机器上执行命令。每条命令按你选的权限档位确认，服务器密码永远不交给 AI。
+
+### 手机和邮箱验证码
+
+接上一台安卓手机，AI 可以帮你在 App 里完成注册：填邮箱、点发送、自动去你的邮箱取验证码填回去。居住地、密码、同意协议、最终确认这些步骤留给你自己点。
+
+### 其他
+
+- **权限档位**：每个对话可选「计划 / 询问 / 自动 / 全自动」。危险命令（删除、推送、上线、改 DNS 等）和会被执行的文件改动，在「自动」档也会弹卡片让你确认。
+- **分屏**：把侧栏里的对话拖出来分屏，多个对话同时跑。
+- **模板与提示词库**：做好的项目存成模板，常用的话存成提示词。
+- **后台运行**：关掉窗口会缩到托盘，对话继续跑，完成时发系统通知。
+- **自动升级**：设置 → 关于 → 检查更新，更新包验签后安装。
+
+---
+
+## 安装
+
+到 [Releases](https://github.com/ccvar/cligc-pilot/releases/latest) 下载：
+
+| 系统 | 文件 | 要求 |
+| --- | --- | --- |
+| macOS | `Cligc-Pilot_x.y.z_aarch64.dmg` | macOS 11 及以上，Apple 芯片（M 系列） |
+| Windows | `Cligc-Pilot_x.y.z_x64-setup.exe` | Windows 10 / 11，64 位 |
+
+**macOS 第一次打开**：应用还没有经过 Apple 公证，第一次打开会提示「已损坏，无法打开」（并不是真的损坏）。把应用拖进「应用程序」后，在终端执行一次：
+
+```bash
+xattr -cr "/Applications/Cligc Pilot.app"
+```
+
+然后正常双击打开。以后通过「检查更新」升级不用再做这一步。
+
+**用之前**：至少准备一种 AI，二选一即可。
+
+- 在电脑上装好并登录 Claude Code、Codex 或 Grok 的命令行客户端。Pilot 会自动检测，没登录可以一键去授权；缺 Node.js 时也能一键装好。
+- 或者在「设置 → API 服务」里填自己的 API Key。API 服务由对应厂商单独计费。
+
+---
+
+## 安全与隐私
+
+- 所有密钥和令牌（Cloudflare、GitHub、Google、SSH 密码、API Key）只存在系统钥匙串（macOS 钥匙串 / Windows 凭据管理器）里，不写进文件，不交给 AI。
+- SSH 首次连接先让你核对主机指纹，核对后才发送密码；指纹变了会直接拒绝连接。
+- 删除、下线、改 DNS、推送到默认分支等不可撤销的操作都要你确认。无人值守的托管任务不会自动做需要确认的事。
+- Pilot 没有自己的服务器，你的数据只在你的电脑和你自己的账号里。
+
+---
+
+## 从源码构建
+
+依赖：Rust ≥ 1.88、Node.js ≥ 20、Go ≥ 1.23（编译随附的站点小服务）。
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri dev          # 开发版
 ```
-
-依赖：Rust ≥ 1.88、Node ≥ 20；运行模型时需要至少一个已登录的本地客户端或已配置的 API 服务。
 
 ```bash
-npm run check                                   # svelte-check
-cd src-tauri && cargo test                      # Rust 单元测试
-node --test src/lib/*.test.mjs                  # 前端单元测试（*Browser / editMenu 需另装 playwright）
+npm run check                      # 前端类型检查
+cd src-tauri && cargo test         # Rust 单元测试
+node --test src/lib/*.test.mjs     # 前端单元测试（*Browser 那几个需要另装 playwright）
 ```
 
-### 前端结构
+本地打包：`scripts/package-macos.sh`（.app + .dmg）、`scripts/package-windows.cmd`（NSIS 安装器）。正式发版走 GitHub Actions，见 [RELEASE.md](RELEASE.md)。
 
-- `src/routes/+page.svelte`：应用外壳（标题栏、主区视图切换、根层弹窗）与全局样式；按原顺序调用各模块的 `init*()` 注册副作用。
-- `src/lib/state/`：按领域拆分的 rune store 与逻辑（`app`、`connections`、`panes`、`turns`、`composer`、`launcher`、`sftp`、`workbench`……）。
-  共享状态是类上的 `$state` / `$derived` 字段，组件直接读写 `app.conns`、`launcher.lPerm` 等，不层层传 props。
-- `src/lib/components/`：侧栏、启动页、对话视图、远程工作台、设置、更新中心、各类弹窗与图标。
-- 样式是各组件的作用域样式：祖先或运行时类不在本组件里的选择器要把那一段包进 `:global(...)`
-  （如 `:global(.app.rail-collapsed) .thread-head`、`.thread-head:global(.elevated)`）。
-  只导出 snippet、从不渲染默认导出的组件，其样式会被 Vite 摇掉，所以图标做成了独立组件。
-- 部分测试在 vm 里执行 `src/lib/state` 中的真实函数，读取方式见 `src/lib/testing/appSource.mjs`。
+代码结构：
 
-### API 服务边界
+- `src-tauri/src/`：Rust 后端，包括连接与钥匙串、AI 执行器（本地客户端与 API）、站点（制作、导入、迁移、部署、数据、托管运营）、SSH / SFTP。
+- `src/lib/state/`：前端按领域拆分的状态与逻辑（Svelte 5 runes）。
+- `src/lib/components/`：界面组件。
 
-- 「测试连接」只验证认证及模型列表，不会付费生成内容，也不代表已验证工具能力。模型需支持工具调用。
-- 原生 API 执行支持流式文本、本地文件与 SSH 工具。图片 / PDF 识别、Cloudflare 授权操作暂用本地客户端。
-- API Key 不传给工具子进程。计划模式禁止写入；询问 / 自动模式下通用本机命令逐次确认；
-  全自动模式允许用户已授权的本机命令，**不是操作系统级文件沙箱**。
-- 工具执行前持久化中断状态，全部工具结果原子保存后形成安全检查点；不自动重放工具，
-  不自动重试断网、鉴权失败或其他错误。单轮最多 32 次模型请求。
-- Claude 明确返回 `max_tokens` 时丢弃当次不完整工具调用，最多按原输出上限重新生成一次。
-- 账单查询凭据与模型调用 Key 独立保存在系统凭据库，只用于官方报表接口，不用于模型生成。
+---
 
-## 本地打包
+## 许可协议
 
-```bash
-scripts/package-macos.sh        # macOS：.app + .dmg（不出更新包）
-scripts/package-windows.cmd     # Windows：NSIS 安装器
-```
+本项目源码公开，采用 **[PolyForm Noncommercial 1.0.0](LICENSE.md)** 协议：
 
-正式发版走 GitHub Actions，见 [RELEASE.md](RELEASE.md)。
+- ✅ 个人学习、研究、自用、爱好项目，以及学校、公益组织、政府机构等非营利用途，都可以免费使用、修改和分发。
+- ❌ **不允许商业用途**，包括把它（或改过的版本）作为商业产品或服务提供、在公司里用于营利业务、二次打包售卖等。
 
-## 安全要点
+分发时需要保留 LICENSE.md 里的版权声明。需要商业授权请到 [Issues](https://github.com/ccvar/cligc-pilot/issues) 联系。
 
-- 密钥仅存系统凭据库（macOS 钥匙串 / Windows 凭据管理器），service = `com.cligc.pilot`。
-- 取消对话时对整个进程组 SIGKILL，避免孙进程带着凭据继续运行。
-- SSH 凭据永远不进模型子进程的环境变量；AI 桥只下发本轮租约目录与令牌（`PILOT_SSH_DIR` / `PILOT_SSH_TOKEN`）。
+注意：这是「源码公开」协议，不属于 OSI 定义的开源协议。
