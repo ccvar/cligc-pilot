@@ -16,7 +16,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, setPaused, newGroup, editGroup, setGroupPaused, setAllGroupsPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setGroupPaused, setAllGroupsPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -115,15 +115,13 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
-      <h1>托管运营 {#if paused}<span class="pill warn" data-tip="AI 不做计划、不改任何站点；各方案和站点的开关都保留着，点「恢复托管」照原样接着做">已全部暂停</span>{/if}</h1>
+      <h1>托管运营 {#if groups.length && groups.every((g) => g.paused)}<span class="pill warn">全部方案已暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
       <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
       {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
-      <!-- 旧版的「全部暂停」开关：还停着就给个恢复，恢复后不再出现；以后暂停都在方案上 -->
-      {#if o && paused}<button class="btn small primary" onclick={() => setPaused(false)}><Icon name="play" size={12} />恢复托管</button>
-      {:else if o && groups.length}
+      {#if o && groups.length}
         {@const allPaused = groups.every((g) => g.paused)}
         <button class="ic-btn" onclick={() => setAllGroupsPaused(groups, !allPaused)} aria-label={allPaused ? '恢复全部方案' : '暂停全部方案'} data-tip={allPaused ? '恢复全部托管方案' : '暂停全部托管方案（之后可以一个个恢复）'}><Icon name={allPaused ? 'play' : 'pause'} size={15} /></button>
       {/if}

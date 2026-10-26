@@ -194,7 +194,14 @@ export async function setSiteActive(siteId: string, active: boolean) {
 
 export async function loadManaged() {
   try {
-    const [o, a] = await Promise.all([invoke<ManagedOverview>('managed_overview'), invoke<ManagedActivity[]>('managed_activity', { limit: 300 })]);
+    let [o, a] = await Promise.all([invoke<ManagedOverview>('managed_overview'), invoke<ManagedActivity[]>('managed_activity', { limit: 300 })]);
+    // 旧版的「全部暂停」总开关：换成把每个方案都暂停（效果一样，什么都不跑），再关掉总开关；以后暂停只记在方案上
+    if (o.config.paused) {
+      for (const g of o.config.groups.filter((x) => !x.paused)) await invoke('set_group_paused', { id: g.id, paused: true });
+      await invoke('set_managed_paused', { paused: false });
+      o = await invoke<ManagedOverview>('managed_overview');
+      if (managed.draft) managed.draft.paused = false;
+    }
     managed.overview = o; managed.activity = a;
     if (!managed.draft) managed.draft = JSON.parse(JSON.stringify(o.config));
   } catch (e) { say(String(e), 'err'); }
