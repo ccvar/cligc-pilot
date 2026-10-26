@@ -1,6 +1,7 @@
 <script lang="ts">
   // 新建 / 编辑托管方案：选站点（一个或多个）+ 这组站点自己的规则。
   import './site.css';
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -31,9 +32,13 @@
 
   let q = $state('');
   const otherOf = (id: string) => groups.find((x) => x.id !== g?.id && x.sites.includes(id));
+  // 排序按打开时的选中状态算一次：勾选时那一行不会跳到最上面（选了哪些看上面的标签）
+  let chosenAtOpen = $state<Set<string>>(new Set());
+  let openedFor = '';
+  $effect(() => { const k = `${g?.id ?? ''}:${managed.editor ? 1 : 0}`; if (k !== openedFor) { openedFor = k; chosenAtOpen = new Set(untrack(() => g?.sites ?? [])); } });
   const list = $derived.by(() => {
     const needle = q.trim().toLowerCase();
-    const chosen = new Set(g?.sites ?? []);
+    const chosen = chosenAtOpen;
     return [...sites.list]
       .filter((s) => !needle || `${s.name} ${s.domain} ${s.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(needle))
       // 已选的排前面，其次是还没进任何方案的
@@ -104,7 +109,16 @@
       <div class="field"><label for="ge-name">方案名称</label><input id="ge-name" class="tin" bind:value={g.name} placeholder="例如：中文站点 · 只改标题描述" maxlength="40" /></div>
 
       <div class="field">
-        <span class="lbl">站点 <span class="faint cnt">已选 {g.sites.length} 个</span></span>
+        <span class="lbl">站点 <span class="faint cnt">已选 {g.sites.length} 个</span>{#if g.sites.length}<button class="link-btn clear" onclick={() => g && (g.sites = [])}>清空</button>{/if}</span>
+        <!-- 选了哪些一眼看到，不用在列表里上下翻 -->
+        {#if g.sites.length}
+          <div class="chosen">
+            {#each g.sites as id (id)}
+              {@const s = sites.list.find((x) => x.id === id)}
+              <span class="chip"><SiteIcon {id} size={13} /><span class="chip-n">{s?.name ?? id}</span><button class="chip-x" onclick={() => toggle(id)} aria-label="去掉 {s?.name ?? id}" data-tip="不托管这个站点">×</button></span>
+            {/each}
+          </div>
+        {/if}
         <div class="picker">
           <div class="pk-search"><Icon name="search" size={13} /><input bind:value={q} placeholder={`在 ${sites.list.length} 个站点里搜索`} spellcheck="false" /></div>
           <div class="pk-list">
@@ -230,6 +244,12 @@
   .ge { width: min(640px, calc(100vw - 32px)); }
   .cnt { font-weight: 400; font-size: 11.5px; margin-left: 4px; }
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
+  .chosen { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 4px 0 8px; border: 1px solid var(--border2); border-radius: 7px; background: var(--card, #fff); font-size: 12.5px; color: var(--text); }
+  .chip-n { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip-x { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 5px; background: none; color: var(--faint); font-size: 14px; line-height: 1; cursor: pointer; }
+  .chip-x:hover { background: var(--su-hover); color: var(--text); }
+  .clear { margin-left: 8px; font-size: 12px; font-weight: 400; }
   .pk-search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .pk-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }
   .pk-list { max-height: min(340px, 44vh); overflow-y: auto; padding: 4px; }
