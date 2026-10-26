@@ -235,7 +235,7 @@ export function useText(u: HostUse): string {
   return `${u.host} 正在用：打开是${what}`;
 }
 
-export async function cutover(id: string, host: string, vps = false, cfAuto = false, oldHost = '') {
+export async function cutover(id: string, host: string, vps = false, cfAuto = false, oldHost = '', oldOwned = true) {
   const u = await hostUse(id, host);
   const moved = !!oldHost && host.replace(/^www\./, '') !== oldHost.replace(/^www\./, '');
   const now = !u ? '' : u.ours ? '' : !u.records.length ? `${host} 现在没在用，` : u.old_site ? `现在打开 ${host} 看到的是旧站，` : `注意：${useText(u)}，上线后那里原来的内容就打不开了。`;
@@ -243,13 +243,13 @@ export async function cutover(id: string, host: string, vps = false, cfAuto = fa
     ? `${now}上线后 ${host} 会打开你服务器上的新站，Pilot 会${cfAuto ? '自动改好域名指向，并' : ''}自动申请免费的 HTTPS 证书（Let's Encrypt）。`
     : `${now}上线后打开 ${host} 就是新站。`;
   const back = u && !u.records.length ? '' : '原来的设置已经存好，出问题点「退回旧站」就能恢复。';
-  const keep = moved ? `旧域名 ${oldHost} 还是打开旧站，等新站稳定了再让它跳转到新域名。` : '旧站的服务器先别关，新站稳定后（建议两周）再停。';
+  const keep = !moved ? '旧站的服务器先别关，新站稳定后（建议两周）再停。' : oldOwned ? `旧域名 ${oldHost} 还是打开旧站，等新站稳定了再让它跳转到新域名。` : `旧站 ${oldHost} 不受影响。`;
   if (!await confirmDialog(`${how}${back}${keep}`, { title: `正式上线到 ${host}`, kind: u && u.records.length && !u.old_site && !u.ours ? 'danger' : 'warning', confirmText: '上线' })) return;
   await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, `已正式上线到 ${host}，一般几分钟内生效`);
 }
 
 /** 改正式域名（空＝恢复成旧站的域名）。先查这个域名有没有在用，在用的要你确认 */
-export async function setFormal(id: string, host: string, old: string) {
+export async function setFormal(id: string, host: string, old: string, oldOwned = true) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
   if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '')) {
     migrate.busy[id] = 'formal';
@@ -257,12 +257,25 @@ export async function setFormal(id: string, host: string, old: string) {
     migrate.busy[id] = '';
     if (!u) { say(`「${h}」不是有效的域名`, 'err'); return false; }
     const inUse = u.records.length > 0 && !u.ours;
-    const lines = [
-      inUse ? `${useText(u)}。用它当正式域名，上线时它会改为打开新站，那里原来的内容就打不开了（设置会存好，能退回）。` : `${useText(u)}，可以用。`,
-      u.in_cf ? '' : `它不在你的 Cloudflare 账号里，上线前要先接进来（后面会一步步带你做）。`,
-      `换了正式域名，搜索引擎会把新站算在 ${h} 上；旧域名 ${old} 要另外设置跳转到新域名，不然原来的搜索排名会丢。`,
-    ].filter(Boolean);
-    if (!await confirmDialog(lines.join('\n\n'), { title: inUse ? `${h} 正在使用中` : `正式域名改成 ${h}`, kind: inUse ? 'danger' : 'warning', confirmText: inUse ? '仍然用它' : '改成新域名', cancelText: inUse ? '换一个' : '取消' })) return false;
+    const seo = oldOwned
+      ? `换了正式域名，搜索引擎会把新站算在 ${h} 上；新站稳定后记得让旧域名 ${old} 跳转到新域名，原来的搜索排名才能带过来。`
+      : `旧站 ${old} 不在你的账号里，没法让它跳转过来：搜索排名要在 ${h} 上重新积累。`;
+    let title: string, lines: string[], ok: string;
+    if (!u.in_cf) {
+      // 不在你的 Cloudflare 账号里：可能是你在别处的域名，也可能是别人的
+      title = `${h} 是你的域名吗？`;
+      lines = [`它不在你的 Cloudflare 账号里${u.records.length ? `，而且${useText(u).replace(`${h} `, '')}` : ''}。`, `是你的：接着往下，上线前按提示把它接进 Cloudflare（要去买域名的地方改两项名称服务器）。不是你的：没法上线到它，换一个你自己的域名。`, seo];
+      ok = '是我的，继续';
+    } else if (inUse) {
+      title = `${h} 正在使用中`;
+      lines = [`${h} 在你的 Cloudflare 账号里，现在${useText(u).replace(`${h} 正在用：`, '')}。`, `用它当正式域名，上线时它会改为打开新站，那里原来的内容就打不开了（设置会存好，能退回）。`, seo];
+      ok = '仍然用它';
+    } else {
+      title = `正式域名改成 ${h}`;
+      lines = [`${h} 在你的 Cloudflare 账号里，现在没在用，可以直接用。`, seo];
+      ok = '改成新域名';
+    }
+    if (!await confirmDialog(lines.join('\n\n'), { title, kind: inUse || !u.in_cf ? 'danger' : 'warning', confirmText: ok, cancelText: '换一个' })) return false;
   }
   await run(id, 'formal', () => invoke('migrate_set_formal', { id, host: h }), h ? `正式域名改成了 ${h}` : '正式域名恢复成旧站的域名');
   return true;

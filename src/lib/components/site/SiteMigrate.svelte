@@ -48,6 +48,7 @@
   let formalUse = $state<import('$lib/state/migrate.svelte.js').HostUse | null>(null);
   $effect(() => {
     const h = moved ? host : '';
+    void v?.meta.dns.zone_status; // 接进 Cloudflare、生效以后重新查
     formalUse = null;
     if (h) untrack(() => void hostUse(site.id, h).then((u) => { if (host === h) formalUse = u; }));
   });
@@ -153,22 +154,30 @@
     return last && last.role !== 'user' && last.error ? last.text.split('\n')[0].slice(0, 160) : '';
   });
   const aiMins = $derived(aiStarted ? Math.max(1, Math.round((Date.now() - aiStarted) / 60000)) : 0);
+  // 「是你的」看要上线的那个域名：旧站域名看所有权确认；换了新域名，看它在不在你的 Cloudflare 账号里
+  const oldOwned = $derived(!!own?.verified);
+  // 上线会替换掉的东西：旧站域名上是旧站；新域名在用就是那里原来的内容；没在用就没什么可退的
+  const goneText = $derived(!moved ? '；原来的设置存着，随时能退回旧站' : formalUse?.records.length && !formalUse.ours ? '；那里原来的内容会打不开（设置存着，能退回）' : '');
+  const mine = $derived(moved ? !!formalUse?.in_cf : oldOwned);
   // 切换这一步现在该做什么：只剩一个动作，写在最上面
   const cutNext = $derived.by<{ text: string; spin?: boolean; ready?: boolean; act?: 'addcf' | 'fix' | 'own' } | null>(() => {
     if (!v || v.stage !== 'cutover') return null;
     const apex = host.replace(/^www\./, '');
-    if (!own?.verified) return { text: `先确认 ${oldHost.replace(/^www\./, '')} 是你的：按下面第 1 条加一条 TXT 记录，或者在设置里接上 Search Console`, act: 'own' };
+    if (moved && !formalUse) return { text: `正在查 ${host} 是不是你的…`, spin: true };
+    // 已经加进 Cloudflare、在等名称服务器生效的，交给下面 DNS 那几种情况说
+    if (moved && !mine && !dns?.zone_id) return { text: `${host} 不在你的 Cloudflare 账号里。是你的域名就按下面第 2 条接进来；不是你的没法上线到它，点上面「修改」换一个。`, act: isVps ? undefined : 'addcf' };
+    if (!moved && !mine) return { text: `先确认 ${oldHost.replace(/^www\./, '')} 是你的：按下面第 1 条加一条 TXT 记录，或者在设置里接上 Search Console`, act: 'own' };
     if (isVps) {
       if (!vd) return { text: `正在检查 ${host} 指向哪里…`, spin: true };
       if (!(vd.points || vd.cf_auto)) return { text: `只差一步要你自己做：到域名的 DNS 服务商把 ${host} 指向服务器 ${vd.ip}（见下面第 2 条），Pilot 会自动检查` };
-      return { text: `都准备好了。点「正式上线」，${host} 就会打开新站；原来的记录存着，随时能回退。`, ready: true };
+      return { text: `都准备好了。点「正式上线」，${host} 就会打开新站${goneText}。`, ready: true };
     }
     if (!dns?.at || busy === 'dns') return { text: `正在检查 ${apex} 的 DNS…`, spin: true };
     if (!dns.zone_id) return { text: `${apex} 还不在你的 Cloudflare 账号里。点「接进 Cloudflare」：Pilot 自动加进去、照原样补齐现有记录（邮件等），之后只剩改名称服务器要你做。`, act: 'addcf' };
     if (dns.missing.length) return { text: `原有的 ${dns.missing.length} 条记录还没进 Cloudflare，改名称服务器前要补上（见下面第 2 条）。`, act: 'fix' };
     if (dns.zone_status !== 'active') return { text: `只差一步要你自己做：去域名注册商把名称服务器改成下面第 2 条里的两个。Pilot 每分钟自动检查一次，生效了这里会变。` };
     const tip = stg?.host && stg.status !== 'active' ? `测试域名 ${stg.host} 还在生效中，可以等它好了先看看。` : '';
-    return { text: `都准备好了。点「正式上线」，${host} 就会打开新站；原来的记录存着，随时能回退。${tip}`, ready: true };
+    return { text: `都准备好了。点「正式上线」，${host} 就会打开新站${goneText}。${tip}`, ready: true };
   });
   // 上线 / 发布成功过：实测不用重新构建，直接测
   const deployedOk = $derived(!!sites.status[site.id]?.last_deploy?.ok);
@@ -427,7 +436,7 @@
           <div class="act next" class:ready={cutNext.ready}>
             {#if cutNext.spin}<span class="spin"></span>{/if}
             <span class="grow"><b>{cutNext.ready ? '可以正式上线了' : '下一步'}</b>{cutNext.text}</span>
-            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto, oldHost)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '上线中…' : '正式上线'}</button>
+            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto, oldHost, oldOwned)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '上线中…' : '正式上线'}</button>
             {:else if cutNext.act === 'addcf'}<button class="btn small primary" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>接进 Cloudflare</button>
             {:else if cutNext.act === 'fix' && dns}<button class="btn small primary" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 条</button>
             {:else if cutNext.act === 'own'}<button class="btn small" onclick={() => checkOwnership(site.id)} disabled={!!busy}>{busy === 'own' ? '检查中…' : '重新检查'}</button>{/if}
@@ -437,18 +446,21 @@
           <div class="dm">
             <span class="dk">正式域名</span>
             {#if editFormal}
-              <input class="tin" bind:value={formalIn} placeholder={oldHost} spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter') void setFormal(site.id, formalIn, oldHost).then((ok) => { if (ok) editFormal = false; }); }} />
-              <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
+              <input class="tin" bind:value={formalIn} placeholder={oldHost} spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter') void setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; }); }} />
+              <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
               <button class="btn tiny quiet" onclick={() => (editFormal = false)}>取消</button>
             {:else}
               <b class="mono">{host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
               {#if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
-              {#if moved}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>恢复成 {oldHost}</button>{/if}
+              {#if moved && oldOwned}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>改回 {oldHost}</button>{/if}
             {/if}
           </div>
           {#if moved}
-            {#if formalUse}<small class="desc" class:warn-text={formalUse.records.length > 0 && !formalUse.ours}>{useText(formalUse)}{formalUse.records.length && !formalUse.ours ? '：正式上线时会改为打开新站，那里原来的内容就打不开了' : ''}{formalUse.in_cf ? '' : '；它不在你的 Cloudflare 账号里，下面第 2 条会带你接进来'}。</small>{/if}
-            <small class="desc warn-text">换了域名：搜索引擎会把新站算在 {host} 上；旧域名 {oldHost} 要另外设置跳转到新域名，不然原来的搜索排名会丢。</small>
+            {#if !formalUse}<small class="desc">正在查 {host} 是不是你的、现在有没有在用…</small>
+            {:else if !formalUse.in_cf}<small class="desc warn-text">{host} 不在你的 Cloudflare 账号里：是你的域名就按下面第 2 条接进来；不是你的没法上线到它，换一个。</small>
+            {:else}<small class="desc" class:warn-text={formalUse.records.length > 0 && !formalUse.ours}>{host} 在你的 Cloudflare 账号里 · {useText(formalUse).replace(`${host} `, '')}{formalUse.records.length && !formalUse.ours ? '：正式上线时会改为打开新站，那里原来的内容就打不开了' : ''}。</small>{/if}
+            {#if oldOwned}<small class="desc warn-text">旧域名 {oldHost} 也是你的：新站稳定后，记得让它跳转到 {host}，原来的搜索排名才能带过来。</small>
+            {:else}<small class="desc warn-text">旧站 {oldHost} 不在你的账号里，没法让它跳转过来：搜索排名要在 {host} 上重新积累；旧站要是一直开着，两边内容一样，搜索引擎可能只收录其中一个。</small>{/if}
           {/if}
           {#if !isVps && (v.meta.live.base || lastUrl)}
             <div class="dm"><span class="dk">预览地址</span><button class="link-btn mono" onclick={() => openUrl(v.meta.live.base || lastUrl)}>{(v.meta.live.base || lastUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</button><small class="faint">Cloudflare 自带的地址，现在就能打开看新站 · 不让搜索引擎收录</small></div>
@@ -478,6 +490,15 @@
           {/if}
         </div>
         <ol class="cut">
+          {#if moved}
+          <li class:ok={mine}>
+            <span class="lv">{mine ? '✓' : '1'}</span>
+            <div class="cb">
+              <span><b>确认 {host} 是你的</b>{#if mine}<small>在你的 Cloudflare 账号里</small>{/if}</span>
+              {#if !mine}<small class="desc">能接进你的 Cloudflare 账号，就说明域名是你的（下面第 2 条会带你做）。不是你的域名没法上线到它。</small>{/if}
+            </div>
+          </li>
+          {:else}
           <li class:ok={own?.verified}>
             <span class="lv">{own?.verified ? '✓' : '1'}</span>
             <div class="cb">
@@ -489,6 +510,7 @@
               {/if}
             </div>
           </li>
+          {/if}
           {#if isVps}
           <li class:ok={!!vd?.points}>
             <span class="lv">{vd?.points ? '✓' : '2'}</span>

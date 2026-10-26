@@ -2140,10 +2140,11 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     if stage(Some(&inv), plan.as_ref(), &meta) != "cutover" {
         return Err("核对还没全部通过（包括预览地址实测），先处理完再正式上线".into());
     }
-    if !inv.ownership.verified {
+    let host = formal_host(&inv, &site, &meta);
+    // 上线到旧站的域名：要先确认旧站是你的。换了新域名：新域名在你的 Cloudflare 账号里就算确认（下面 zone_for 会查）
+    if host == origin_host(&inv, &site) && !inv.ownership.verified {
         return Err("还没确认这个站是你的：先完成「确认这个站是你的」".into());
     }
-    let host = formal_host(&inv, &site, &meta);
     if crate::site_vps_host::managed(&site) {
         return cutover_vps(&state, &site, &dir, &host).await;
     }
