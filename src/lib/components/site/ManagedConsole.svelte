@@ -96,6 +96,7 @@
   }).filter((x) => x.why));
   // 暂停只看站点自己的开关：所有站点都关着＝全部已暂停
   const allOff = $derived(groups.some((g) => g.sites.length) && groups.every((g) => g.sites.every((x) => g.stopped.includes(x))));
+  let moreOpen = $state(false);
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
@@ -122,9 +123,19 @@
     </div>
     <div class="row">
       <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
-      {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
-      {#if o && groups.some((g) => g.sites.length)}
-        <button class="ic-btn" onclick={() => setSitesActive(groups, allOff, '全部托管站点')} aria-label={allOff ? '恢复全部站点的托管' : '暂停全部站点的托管'} data-tip={allOff ? '恢复全部站点的托管' : '暂停全部站点的托管（之后可以一个个恢复）'}><Icon name={allOff ? 'play' : 'pause'} size={15} /></button>
+      <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
+      {#if o?.sites.length}
+        <div class="more-wrap">
+          <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="更多操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '更多操作'}><Icon name="sliders" size={15} /></button>
+          {#if moreOpen}
+            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+            <div class="more-mask" onclick={() => (moreOpen = false)}></div>
+            <div class="more-pop" role="menu">
+              <button role="menuitem" onclick={() => { moreOpen = false; void digestNow(); }}><Icon name="news" size={14} /><span><b>生成今日日报</b><small>把今天各站点做了什么汇总成一份</small></span></button>
+              <button role="menuitem" onclick={() => { moreOpen = false; void setSitesActive(groups, allOff, '全部托管站点'); }}><Icon name={allOff ? 'play' : 'pause'} size={14} /><span><b>{allOff ? '恢复全部站点的托管' : '暂停全部站点的托管'}</b><small>{allOff ? '把所有站点的托管开关都打开' : '把所有站点的托管开关都关掉，之后可以一个个恢复'}</small></span></button>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   </header>
@@ -335,6 +346,16 @@
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
+  .more-wrap { position: relative; }
+  .ic-btn.on { background: var(--su-hover); color: var(--text); }
+  .more-mask { position: fixed; inset: 0; z-index: 30; }
+  .more-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: 280px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
+  .more-pop button { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: none; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer; }
+  .more-pop button:hover { background: var(--su-hover); }
+  .more-pop button :global(svg) { flex: none; margin-top: 2px; color: var(--dim); }
+  .more-pop span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .more-pop b { font-size: 13px; font-weight: 500; }
+  .more-pop small { font-size: 11.5px; color: var(--faint); line-height: 1.45; }
   .goal { display: flex; align-items: baseline; gap: 8px; width: 100%; margin: -6px 0 10px; padding: 0; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--dim); line-height: 1.6; text-align: left; cursor: pointer; }
   .goal-t { flex: 1; min-width: 0; max-width: 90ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .goal.open .goal-t { white-space: normal; color: var(--text); }
