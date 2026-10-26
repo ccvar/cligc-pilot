@@ -13,6 +13,7 @@
   let editing = $state('');
   let val = $state('');
   let newKey = $state('');
+  let adding = $state(false);
   let newVal = $state('');
   let syncing = $state(false);
 
@@ -82,14 +83,19 @@
     <p class="hint">这个站点还没有声明配置变量（仓库里没有 <code>.env.example</code>）。需要的话可以在下面手动添加。</p>
   {/if}
 
-  <div class="add">
-    <span class="lbl">添加其他变量</span>
-    <div class="row">
-      <input class="tin mono" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
-      <input class="tin mono" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
-      <button class="btn small" onclick={addNew} disabled={!newKey.trim() || !newVal.trim() || sites.saving}>保存</button>
+  {#if adding}
+    <div class="add">
+      <span class="lbl">添加其他变量</span>
+      <div class="row">
+        <input class="tin mono" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
+        <input class="tin mono" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
+        <button class="btn small primary" onclick={() => { void addNew(); adding = false; }} disabled={!newKey.trim() || !newVal.trim() || sites.saving}>保存</button>
+        <button class="btn small ghost" onclick={() => (adding = false)}>取消</button>
+      </div>
     </div>
-  </div>
+  {:else}
+    <button class="link-btn add-link" onclick={() => (adding = true)}>+ 添加其他变量</button>
+  {/if}
 </div>
 
 <style>
@@ -115,6 +121,7 @@
   .acts .link-btn.danger { color: var(--err); }
   .grow { flex: 1; }
   .add { display: flex; flex-direction: column; gap: 6px; }
+  .add-link { font-size: 12px; align-self: flex-start; }
   .add .lbl { font-size: 12px; color: var(--dim); }
   .spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border2); border-top-color: var(--dim); border-radius: 50%; animation: cfg-spin .7s linear infinite; }
   @keyframes cfg-spin { to { transform: rotate(360deg); } }

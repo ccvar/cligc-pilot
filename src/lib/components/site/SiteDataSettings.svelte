@@ -12,7 +12,8 @@
   import { launch, verifyBing } from '$lib/state/launch.svelte.js';
   import { datasrc, openDataConnect, loadGoogleRes, loadBingSites } from '$lib/state/datasrc.svelte.js';
 
-  let { site, draft }: { site: Site; draft: Site } = $props();
+  // editing：点了「修改」才出编辑框（保存 / 取消由设置页统一处理）；locked：别的卡片在改
+  let { site, draft, editing = false, locked = false, onedit, oncancel, onsave, saving = false, dirty = false }: { site: Site; draft: Site; editing?: boolean; locked?: boolean; onedit?: () => void; oncancel?: () => void; onsave?: () => void; saving?: boolean; dirty?: boolean } = $props();
   const googleConns = $derived(app.conns.filter((c) => c.kind === 'google'));
   const bingConns = $derived(app.conns.filter((c) => c.kind === 'bing'));
   const gres = $derived(draft.data.google_conn_id ? datasrc.googleRes[draft.data.google_conn_id] : undefined);
@@ -33,6 +34,7 @@
   // 按域名自动挑选：选了连接、还没选资源时，挑最匹配的那个。
   const bare = $derived(draft.domain.replace(/^www\./, ''));
   $effect(() => {
+    if (!editing) return;
     if (sres && draft.domain && !draft.data.gsc_site) {
       const hit = sres.sites.find((s) => s.url === `sc-domain:${bare}`) ?? sres.sites.find((s) => s.url === `https://${draft.domain}/`) ?? sres.sites.find((s) => s.url.includes(bare));
       if (hit) draft.data.gsc_site = hit.url;
@@ -44,7 +46,7 @@
     }
   });
   $effect(() => {
-    if (!bsites || draft.data.bing_site || !draft.domain) return;
+    if (!editing || !bsites || draft.data.bing_site || !draft.domain) return;
     const hit = bsites.find((s) => s.url.includes(bare));
     if (hit) draft.data.bing_site = hit.url;
   });
@@ -63,8 +65,23 @@
   }
 </script>
 
-<div class="card">
-  <h3><Icon name="database" />数据源</h3>
+<div class="card" class:editing>
+  <h3><Icon name="database" />数据源<span class="grow"></span>{#if !editing}<button class="btn tiny" onclick={onedit} disabled={locked}>修改</button>{/if}</h3>
+  {#if !editing}
+    <dl class="kv">
+      <dt><span class="dt-ic"><GoogleMark size={13} />GA4</span></dt><dd>{site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未接入'}</dd>
+      <dt><span class="dt-ic"><GoogleMark size={13} />Search Console</span></dt><dd>{site.data.gsc_site || '未接入'}</dd>
+      <dt><span class="dt-ic"><BingMark size={13} />Bing</span></dt><dd>{site.data.bing_site || (site.data.bing_auth ? '已加到 Bing，正在验证' : '未接入')}</dd>
+      <dt>IndexNow</dt><dd>{site.data.indexnow_key ? '已配置：上线后自动提交有变化的页面' : '未配置'}{#if !site.data.indexnow_key && site.domain}<button class="link-btn ix" onclick={setupIndexNow} disabled={ixBusy}>{ixBusy ? '处理中…' : '生成密钥并写入验证文件'}</button>{/if}</dd>
+      <dt>运营机会</dt><dd>近 28 天展现低于 {site.ops.min_impressions} 的页面和查询词不算</dd>
+    </dl>
+    {#if !site.data.bing_site && site.data.bing_auth}
+      <div class="bing-pending">
+        <span><b>正在验证</b> Pilot 已把 {site.domain} 加到 Bing{launch.status[site.id]?.bing_note ? `：${launch.status[site.id]?.bing_note}` : '，通过后自动绑定。'}</span>
+        <button class="btn tiny" onclick={() => verifyBing(site)} disabled={launch.busy[site.id] === 'bing'}>{launch.busy[site.id] === 'bing' ? '验证中…' : '立即验证'}</button>
+      </div>
+    {/if}
+  {:else}
   <p class="hint">Google / Bing 账号在「管理连接与模型」里统一管理，这里只选这个站点用哪个资源（按域名自动匹配）。模型只能通过只读工具查询本地缓存，拿不到凭据。</p>
 
   <div class="ds-block">
@@ -146,9 +163,16 @@
     </div>
     <small class="faint">近 28 天展现低于它的页面和查询词不算运营机会。小站可以调低（默认 100）。</small>
   </div>
+  <div class="edit-bar"><span class="grow"></span><button class="btn small ghost" onclick={oncancel} disabled={saving}>取消</button><button class="btn small primary" onclick={onsave} disabled={saving || !dirty}>{saving ? '保存中…' : '保存'}</button></div>
+  {/if}
 </div>
 
 <style>
+  .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
+  .grow { flex: 1; }
+  .dt-ic { display: inline-flex; align-items: center; gap: 6px; }
+  .link-btn.ix { margin-left: 8px; font-size: 12px; }
+  .edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .ds-block { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
   .ds-title { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
   .bing-pending { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12px; line-height: 1.55; color: #6b4a10; }

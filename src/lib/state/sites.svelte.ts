@@ -312,16 +312,17 @@ export function editSite(s: Site) {
   sites.draft = JSON.parse(JSON.stringify(s));
   void invoke<string[]>('site_env_keys', { id: s.id }).then((k) => (sites.envKeys = k)).catch(() => (sites.envKeys = []));
 }
-export async function saveSiteDraft() {
+export async function saveSiteDraft(): Promise<boolean> {
   const d = sites.draft;
-  if (!d) return;
+  if (!d) return false;
   sites.saving = true;
   try {
     const saved = await invoke<Site>('save_site', { site: d });
     sites.list = sites.list.map((s) => (s.id === saved.id ? saved : s));
     sites.draft = JSON.parse(JSON.stringify(saved));
     say('站点设置已保存');
-  } catch (e) { say(String(e), 'err'); }
+    return true;
+  } catch (e) { say(String(e), 'err'); return false; }
   finally { sites.saving = false; }
 }
 export async function setSiteEnv(id: string, set: [string, string][], remove: string[]) {

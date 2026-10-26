@@ -31,9 +31,17 @@
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
   // 站点后面的下拉：按部署方式筛选（只列出现在有站点的方式，带个数）
   const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
+  const CF_SVG = '<svg viewBox="0 0 128 128"><path fill="#f38020" d="M87.295 89.022c.763-2.617.472-5.015-.8-6.796c-1.163-1.635-3.125-2.58-5.488-2.689l-44.737-.581c-.291 0-.545-.145-.691-.363s-.182-.509-.109-.8c.145-.436.581-.763 1.054-.8l45.137-.581c5.342-.254 11.157-4.579 13.192-9.885l2.58-6.723c.109-.291.145-.581.073-.872c-2.906-13.158-14.644-22.97-28.672-22.97c-12.938 0-23.913 8.359-27.838 19.952a13.35 13.35 0 0 0-9.267-2.58c-6.215.618-11.193 5.597-11.811 11.811c-.145 1.599-.036 3.162.327 4.615C10.104 70.051 2 78.337 2 88.549c0 .909.073 1.817.182 2.726a.895.895 0 0 0 .872.763h82.57c.472 0 .909-.327 1.054-.8z"/><path fill="#faae40" d="M101.542 60.275c-.4 0-.836 0-1.236.036c-.291 0-.545.218-.654.509l-1.744 6.069c-.763 2.617-.472 5.015.8 6.796c1.163 1.635 3.125 2.58 5.488 2.689l9.522.581c.291 0 .545.145.691.363s.182.545.109.8c-.145.436-.581.763-1.054.8l-9.924.582c-5.379.254-11.157 4.579-13.192 9.885l-.727 1.853c-.145.363.109.727.509.727h34.089c.4 0 .763-.254.872-.654c.581-2.108.909-4.325.909-6.614c0-13.447-10.975-24.422-24.458-24.422"/></svg>';
+  const line = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const MODE_SVG: Record<string, string> = {
+    '': line('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+    direct: CF_SVG, workers: CF_SVG, pages_git: CF_SVG,
+    vps: line('<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>'),
+    none: line('<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>'),
+  };
   const modeOpts = $derived([
-    { value: '', label: `全部部署方式 · ${rows.length}`, short: '全部部署方式' },
-    ...MODE_ORDER.filter((m) => rows.some((r) => r.deploy_mode === m)).map((m) => ({ value: m, label: `${MODE[m]} · ${rows.filter((r) => r.deploy_mode === m).length}`, short: MODE[m] })),
+    { value: '', label: `全部 · ${rows.length}`, short: '部署方式', svg: MODE_SVG[''] },
+    ...MODE_ORDER.filter((m) => rows.some((r) => r.deploy_mode === m)).map((m) => ({ value: m, label: `${MODE[m]} · ${rows.filter((r) => r.deploy_mode === m).length}`, short: MODE[m], svg: MODE_SVG[m] })),
   ]);
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
@@ -95,8 +103,8 @@
    {#key fleet.tab}
    <div class="pane">
     {#if fleet.tab === 'sites'}
-      {#if fleet.filter !== 'all' || fleet.tag || fleet.mode}
-        <div class="only">只看：{[onlyLabel, fleet.tag ? `#${fleet.tag}` : '', fleet.mode ? MODE[fleet.mode] : ''].filter(Boolean).join(' · ')}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; fleet.mode = ''; }}>看全部</button></div>
+      {#if fleet.filter !== 'all' || fleet.tag}
+        <div class="only">只看：{onlyLabel}{onlyLabel && fleet.tag ? ' · ' : ''}{fleet.tag ? `#${fleet.tag}` : ''}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; }}>看全部</button></div>
       {/if}
       {#if !fleet.loaded && !rows.length}
         <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>

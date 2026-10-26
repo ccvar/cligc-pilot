@@ -5,7 +5,8 @@
   // closest('[title],[data-tip]') 代理，共享 .ui-tip 会按真实尺寸避让视口并保留 \n）—— 比塞进
   // sub 强：菜单 compact 时才 240px 宽，长文案会把那一行撑成七八行。
   // tone：给 sub 上风险色（'danger'/'warn'）。组件原有的 tone 只染触发器，够不到菜单里的选项行。
-  interface Opt { value: string; label: string; short?: string; sub?: string; disabled?: boolean; icon?: string; img?: string; tip?: string; tone?: string; }
+  // svg：选项前面的小图标（整段内联 SVG，调用方给的固定字符串）
+  interface Opt { value: string; label: string; short?: string; sub?: string; disabled?: boolean; icon?: string; img?: string; svg?: string; tip?: string; tone?: string; }
   // 站点图标：有 logo 用 logo，否则用 slug 首字母做圆形占位。
 
   let {
@@ -190,7 +191,8 @@
 </div>
 
 {#snippet lead(o: Opt)}
-  {#if o.icon}<BrainIcon brain={o.icon} size={16} />
+  {#if o.svg}<span class="dd-svg">{@html o.svg}</span>
+  {:else if o.icon}<BrainIcon brain={o.icon} size={16} />
   {:else if o.img && !failed.has(o.img)}<img class="dd-fav" src={o.img} alt="" loading="lazy" onerror={() => markFailed(o.img!)} />
   {:else if 'img' in o}<span class="dd-fav ph">{(o.label || '?').slice(0, 1).toUpperCase()}</span>{/if}
 {/snippet}
@@ -198,6 +200,8 @@
 <style>
   .dd { position: relative; width: 100%; }
   .dd.compact { width: auto; }
+  .dd-svg { flex: none; display: inline-flex; width: 14px; height: 14px; color: var(--dim, #6b675f); }
+  .dd-svg :global(svg) { width: 14px; height: 14px; }
   /* 表单控件统一尺度（与 .tin/.btn 同基准）：13px 字 + 8px 圆角 + 显式统一高 --ctl-h，
      内容 flex 垂直居中；compact/bare 是行内 chip 形态，height 回落 auto。 */
   .dd-trigger {
