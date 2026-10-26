@@ -166,7 +166,8 @@
 
 <style>
   .iss-wrap { position: relative; }
-  .iss { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border: none; border-radius: 999px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; font-weight: 550; cursor: pointer; }
+  /* 和后面的小按钮（.btn.small，26px、8px 圆角）一样高、一样的圆角 */
+  .iss { display: inline-flex; align-items: center; gap: 6px; height: 26px; box-sizing: border-box; padding: 0 10px; border: none; border-radius: 8px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12px; line-height: 1; font-weight: 550; cursor: pointer; }
   .iss .chev { transition: transform .15s; }
   .iss .chev.open { transform: rotate(180deg); }
   .iss.soft { background: var(--su-hover); color: var(--dim); font-weight: 500; }
@@ -182,7 +183,7 @@
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
-  .tagsel { width: auto; height: var(--ctl-h); padding: 0 8px; }
+  .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
   .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; transition: color .12s; }

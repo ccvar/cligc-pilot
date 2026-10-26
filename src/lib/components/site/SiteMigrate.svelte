@@ -356,7 +356,7 @@
               </div>
               <div class="redo-dirs">
                 <input class="tin" bind:value={dirFeedback} placeholder="都不满意？说说哪里不对，比如「太花了，想要更干净的」" />
-                <button class="btn tiny" onclick={() => { void askDirections(site, dirFeedback); dirFeedback = ''; }} disabled={!dirFeedback.trim()}>重新画</button>
+                <button class="btn small" onclick={() => { void askDirections(site, dirFeedback); dirFeedback = ''; }} disabled={!dirFeedback.trim()}>重新画</button>
                 <button class="link-btn" onclick={() => pickDirection(site, 'auto')}>跳过，让 AI 自己定</button>
               </div>
             {/if}
@@ -514,8 +514,8 @@
             {#if editFormal}
               <small class="desc warn-text formal-warn">换正式域名等于整站搬家：新站会上到新域名，搜索引擎也会把它当成正式站。只是想先看看效果的话，不用换，用下面的预览地址或「在自己的域名下先看看」。</small>
               <input class="tin" bind:value={formalIn} placeholder={oldHost} spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter') void setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; }); }} />
-              <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
-              <button class="btn tiny quiet" onclick={() => (editFormal = false)}>取消</button>
+              <button class="btn small primary" onclick={() => setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
+              <button class="btn small quiet" onclick={() => (editFormal = false)}>取消</button>
             {:else}
               <b class="mono">{launched ? v.meta.cutover.host : host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
               {#if launched}<small class="faint">已经正式上线，要换域名先「撤下新站」</small>
@@ -547,8 +547,8 @@
                 <button class="btn tiny quiet" onclick={() => stagingRemove(site.id, stg.host)} disabled={!!busy || jobRunning}>删除</button>
               {:else}
                 <input class="tin" bind:value={stagingIn} placeholder={`new.${host.replace(/^www\./, '')}`} spellcheck="false" autocapitalize="off" />
-                <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '部署中…' : '部署到测试域名'}</button>
-                <button class="btn tiny quiet" onclick={() => (showStaging = false)} disabled={busy === 'staging'}>收起</button>
+                <button class="btn small" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '部署中…' : '部署到测试域名'}</button>
+                <button class="btn small quiet" onclick={() => (showStaging = false)} disabled={busy === 'staging'}>收起</button>
               {/if}
             </div>
             {#if !stg?.host}<small class="desc">在一个没在用的子域名上打开新站，旧站不受影响，页面不让搜索引擎收录。</small>{/if}
@@ -709,7 +709,7 @@
   .act.next.ready { background: var(--su-ok-soft); }
   .act.next .spin { flex: none; }
   .dm b { font-weight: 600; font-size: 13px; }
-  .dm .tin { flex: 1; min-width: 180px; max-width: 320px; height: 28px; font-size: 12.5px; }
+  .dm .tin { flex: 1; min-width: 180px; max-width: 320px; height: 26px; font-size: 12.5px; }
   .dm .grow { flex: 1; }
   .domains .desc { font-size: 12px; color: var(--faint); line-height: 1.55; }
   .warn-text, .domains .desc.warn-text, .cb .desc.warn-text { color: var(--su-warn-ink, #8a5a08); }
@@ -733,7 +733,7 @@
   .swatches i { width: 16px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
   .dacts { display: flex; gap: 6px; justify-content: flex-end; padding: 0 4px 2px; }
   .redo-dirs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .redo-dirs .tin { flex: 1; min-width: 220px; height: 28px; font-size: 12.5px; }
+  .redo-dirs .tin { flex: 1; min-width: 220px; height: 26px; font-size: 12.5px; }
   .hint.doing { margin-top: -4px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }
@@ -766,7 +766,7 @@
   .items { margin: 2px 0; padding: 6px 10px; list-style: none; background: var(--rail); border-radius: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow-y: auto; }
   .items li { font-size: 11.5px; color: var(--dim); overflow-wrap: anywhere; }
   .dd { width: 200px; }
-  .proj { width: 180px !important; }
+  .proj { width: 180px !important; height: 26px !important; }
   .cut > li { padding: 10px 0; border-top: 1px solid var(--border); }
   .cut > li:first-child { border-top: none; padding-top: 2px; }
   .txt { display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; border-radius: 8px; background: var(--rail); }
