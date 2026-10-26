@@ -4676,6 +4676,7 @@ pub fn run() {
             site_cmds::list_sites,
             site_cmds::import_site,
             site_cmds::create_site,
+            site_cmds::site_standards,
             migrate_cmds::create_migration,
             migrate_cmds::create_migrations,
             migrate_cmds::migrate_state,

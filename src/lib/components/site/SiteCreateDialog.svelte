@@ -8,6 +8,7 @@
   import ModelFx from '$lib/ModelFx.svelte';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
   import Icon from './Icon.svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, pickCombo, persistLauncherEffort, setFast, STYLE_OPTS } from '$lib/state/launcher.svelte.js';
   import { brainUsable, brainSetupHint } from '$lib/state/models';
@@ -20,9 +21,41 @@
   const quickStack = $derived(recommendedStack('', f.about));
   const quickTarget = $derived(f.parent ? `${f.parent.replace(/[\\/]+$/, '')}${sep}${folderName(f.domain, f.name)}` : '');
   const canQuick = $derived(!!f.about.trim() && !!f.parent && !f.busy);
+  // 内容 / 视觉：内置标准不改，可以另加这个站点的补充要求；展开时顺便能看内置标准全文
+  const STD = {
+    content: { label: '内容', sum: '按读者真实的搜索问法写，信息讲透不注水，不编造数据，配真实截图', ph: '比如：每篇文末列参考资料；评测写清测试条件和日期；不写医疗建议' },
+    visual: { label: '视觉', sum: '按获奖网站的品质做原创设计，不套模板、不用米黄纸色底，各种屏幕宽度都适配', ph: '比如：主色用品牌绿 #1f8a4c；参考 linear.app 的克制感；要有深色模式' },
+  } as const;
+  type StdKey = keyof typeof STD;
+  let editing = $state<StdKey | ''>('');
+  let full = $state<{ content: string; visual: string } | null>(null);
+  function extraOf(k: StdKey) { return k === 'content' ? f.contentExtra : f.visualExtra; }
+  function setExtra(k: StdKey, v: string) { if (k === 'content') f.contentExtra = v; else f.visualExtra = v; }
+  function editStd(k: StdKey) {
+    editing = editing === k ? '' : k;
+    if (!full) Promise.resolve().then(() => invoke<{ content: string; visual: string }>('site_standards')).then((r) => (full = r)).catch(() => {});
+  }
   function quickKey(e: KeyboardEvent) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canQuick) { e.preventDefault(); void createSite(); } }
   function toggleGoal(g: string) { f.goals = f.goals.includes(g) ? f.goals.filter((x) => x !== g) : [...f.goals, g]; }
 </script>
+
+{#snippet stdRow(k: StdKey)}
+  {@const extra = extraOf(k).trim()}
+  <div class="std" class:open={editing === k}><dt>{STD[k].label}</dt><dd>
+    <div class="std-line">
+      <span class="std-sum"><em>内置标准</em>{STD[k].sum}</span>
+      <button class="ic-btn ic-sm" class:on={editing === k} onclick={() => editStd(k)} disabled={f.busy} title={extra ? `改${STD[k].label}的补充要求` : `加${STD[k].label}的补充要求（内置标准照常带上）`} aria-label={`${STD[k].label}的补充要求`}><Icon name="pencil" size={13} /></button>
+    </div>
+    {#if editing === k}
+      <!-- svelte-ignore a11y_autofocus -->
+      <textarea class="tin" rows="3" value={extraOf(k)} oninput={(e) => setExtra(k, e.currentTarget.value)} placeholder={STD[k].ph} autofocus></textarea>
+      <small class="std-note">补充要求接在内置标准后面一起交给 AI，冲突时以你写的为准。</small>
+      <details class="std-full"><summary>看内置的{STD[k].label}标准全文</summary><pre>{full ? full[k] : '读取中…'}</pre></details>
+    {:else if extra}
+      <div class="std-extra" title={extra}><b>另加</b>{extra}</div>
+    {/if}
+  </dd></div>
+{/snippet}
 
 {#if f.open}
   <div class="su-mask" role="presentation" onclick={closeSiteCreate}></div>
@@ -56,8 +89,8 @@
         <dl class="plan">
           <div><dt>技术栈</dt><dd>{STACKS.find((x) => x.value === quickStack)?.label}<small>按描述推荐</small></dd></div>
           <div><dt>第一版</dt><dd>首页 + 8 个核心页面 + 关于、联系、隐私政策</dd></div>
-          <div><dt>内容</dt><dd><em>内置标准</em>按读者真实的搜索问法写，信息讲透不注水，不编造数据，配真实截图</dd></div>
-          <div><dt>视觉</dt><dd><em>内置标准</em>按获奖网站的品质做原创设计，不套模板、不用米黄纸色底，各种屏幕宽度都适配</dd></div>
+          {@render stdRow('content')}
+          {@render stdRow('visual')}
           <div><dt>存放位置</dt><dd class="loc"><span class="mono path" title={quickTarget}>{quickTarget || '还没选'}</span><button class="ic-btn ic-sm" onclick={pickParent} disabled={f.busy} title="换个存放位置" aria-label="换个存放位置"><Icon name="pencil" size={13} /></button></dd></div>
         </dl>
         <small class="more">想自己定类型、读者、技术栈和风格？切到<button class="link" onclick={() => setCreateMode('full')} disabled={f.busy}>详细设置</button></small>
@@ -100,10 +133,13 @@
           <small>不管选哪个，都会生成一份站点约定（<code>.pilot/site.md</code>）：内容放哪、新增一页要改哪些地方。以后加内容、改页面都按它来。</small>
         </div>
         <div class="grid2">
-          <div class="field"><span class="lbl">视觉风格</span><Dropdown bind:value={f.style} options={STYLE_OPTS} /><small>选哪种风格，内容标准和视觉标准都会照常带上</small></div>
+          <div class="field"><span class="lbl">视觉风格</span><Dropdown bind:value={f.style} options={STYLE_OPTS} /></div>
           <div class="field"><span class="lbl">首批核心页面</span>
             <Dropdown value={String(f.pages)} onchange={(v: string) => (f.pages = Number(v))} options={PAGE_COUNTS.map((n) => ({ value: String(n), label: `${n} 页`, sub: '另加首页、关于、联系、隐私政策' }))} />
           </div>
+        </div>
+        <div class="field"><span class="lbl">内容与视觉 <small class="opt">选哪种风格都照常带上内置标准，可以另加要求</small></span>
+          <dl class="plan">{@render stdRow('content')}{@render stdRow('visual')}</dl>
         </div>
         <div class="field"><span class="lbl">存放位置</span>
           <div class="row">
@@ -184,6 +220,18 @@
   .plan dd small { margin-left: 6px; color: var(--faint); font-size: 11.5px; }
   .plan dd em { font-style: normal; font-size: 10.5px; font-weight: 500; padding: 1px 6px; margin-right: 6px; border-radius: 999px; background: var(--su-ok-soft, #e6f4ea); color: var(--ok); }
   .plan .loc { display: flex; align-items: center; gap: 6px; }
+  .std-line { display: flex; align-items: flex-start; gap: 6px; }
+  .std-sum { flex: 1; min-width: 0; }
+  .std-line .ic-btn { margin-top: -3px; }
+  .std-line .ic-btn.on { background: var(--su-hover); color: var(--text); }
+  .std textarea { margin-top: 6px; width: 100%; box-sizing: border-box; font-size: 12.5px; }
+  .std-note { display: block; margin-top: 4px; font-size: 11.5px; color: var(--faint); }
+  .std-extra { margin-top: 4px; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .std-extra b { font-weight: 500; color: var(--faint); margin-right: 6px; }
+  .std-full { margin-top: 4px; font-size: 11.5px; color: var(--faint); }
+  .std-full summary { cursor: pointer; width: fit-content; }
+  .std-full summary:hover { color: var(--text); }
+  .std-full pre { margin: 6px 0 0; max-height: 180px; overflow: auto; padding: 8px 10px; border-radius: 8px; background: var(--su-soft, #f6f6f4); white-space: pre-wrap; font: inherit; font-size: 11.5px; line-height: 1.6; color: var(--dim); }
   .more { display: block; margin-top: 8px; font-size: 11.5px; color: var(--faint); }
   .link { border: none; background: none; padding: 0 2px; font: inherit; color: var(--accent, #b4541a); cursor: pointer; }
   .link:hover { text-decoration: underline; }

@@ -424,6 +424,19 @@ pub async fn create_site(state: tauri::State<'_, AppState>, mut req: crate::site
     Ok(CreatedSite { message: mk::first_message(&req), site })
 }
 
+#[derive(Serialize)]
+pub struct Standards {
+    pub content: &'static str,
+    pub visual: &'static str,
+}
+
+/// 内置的内容标准和视觉标准全文（制作站点时可以展开看，再写补充要求）。
+#[tauri::command]
+pub fn site_standards() -> Standards {
+    let (content, visual) = crate::site_make::standards();
+    Standards { content, visual }
+}
+
 /// 快速制作建的站点：等 AI 写回 `.pilot/profile.json`（站点数据目录里的标记，读回一次就删掉）。
 const PROFILE_PENDING: &str = "profile-pending.json";
 

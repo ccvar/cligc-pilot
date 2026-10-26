@@ -104,6 +104,26 @@ pub struct CreateSiteRequest {
     /// 快速制作没填名称：先用占位名，让 AI 起名（create_site 里设置，不从前端读）。
     #[serde(skip)]
     pub auto_name: bool,
+    /// 在内置内容标准之外，这个站点另加的要求（空＝只用内置标准）。
+    #[serde(default)]
+    pub content_extra: String,
+    /// 在内置视觉标准之外，这个站点另加的要求（品牌色、参考网站、想要的感觉……）。
+    #[serde(default)]
+    pub visual_extra: String,
+}
+
+/// 内置标准后面接上这个站点的补充要求：冲突时以补充为准。
+fn with_extra(standard: &str, label: &str, extra: &str) -> String {
+    let extra = extra.trim();
+    if extra.is_empty() {
+        return standard.to_string();
+    }
+    format!("{standard}\n【我对{label}的补充要求】和上面冲突时以这里为准，并在 `.pilot/site.md` 写明：\n{extra}")
+}
+
+/// 给前端看的内置标准全文（制作站点弹窗里「看内置标准」）。
+pub fn standards() -> (&'static str, &'static str) {
+    (CONTENT_STANDARD, VISUAL_STANDARD)
 }
 
 pub fn pages_of(req: &CreateSiteRequest) -> u32 {
@@ -132,11 +152,16 @@ pub fn positioning_text(req: &CreateSiteRequest) -> String {
 pub fn brief_md(req: &CreateSiteRequest) -> String {
     let stack = STACKS.iter().find(|s| s.0 == req.stack).map(|s| s.1).unwrap_or(&req.stack);
     format!(
-        "# {name}\n\n{domain}## 定位\n\n{pos}\n\n## 技术栈\n\n{stack}\n\n## 第一版\n\n首页 + {n} 个核心页面 + 关于 / 联系 / 隐私政策。\n",
+        "# {name}\n\n{domain}## 定位\n\n{pos}\n\n## 技术栈\n\n{stack}\n\n## 第一版\n\n首页 + {n} 个核心页面 + 关于 / 联系 / 隐私政策。\n{extra}",
         name = req.name.trim(),
         domain = if req.domain.trim().is_empty() { String::new() } else { format!("域名：{}\n\n", req.domain.trim()) },
         pos = positioning_text(req),
         n = pages_of(req),
+        extra = [("内容的补充要求", &req.content_extra), ("视觉的补充要求", &req.visual_extra)]
+            .iter()
+            .filter(|(_, v)| !v.trim().is_empty())
+            .map(|(k, v)| format!("\n## {k}\n\n{}\n", v.trim()))
+            .collect::<String>(),
     )
 }
 
@@ -269,8 +294,8 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
 不要部署——上线由 Pilot 负责。",
         guide = stack_guide(&req.stack),
         n = pages_of(req),
-        content = CONTENT_STANDARD,
-        visual = VISUAL_STANDARD,
+        content = with_extra(CONTENT_STANDARD, "内容", &req.content_extra),
+        visual = with_extra(VISUAL_STANDARD, "视觉", &req.visual_extra),
         config = CONFIG_SPEC,
         todo = TODO_SPEC,
     )
@@ -1151,6 +1176,19 @@ mod tests {
         let t = profile_positioning(&p);
         assert!(t.starts_with("讲手冲") && t.contains("语言：简体中文") && t.contains("商业目标：广告变现") && t.contains("类型："));
         assert!(profile_positioning(&Profile::default()).is_empty());
+    }
+
+    #[test]
+    fn extra_requirements_follow_the_built_in_standards() {
+        let r = CreateSiteRequest { content_extra: "每篇文末加参考资料".into(), visual_extra: "主色用品牌绿 #1f8a4c".into(), ..req() };
+        let m = first_message(&r);
+        assert!(m.contains("【内容标准】") && m.contains("【视觉标准】"), "补充要求不替换内置标准");
+        let c = m.find("【我对内容的补充要求】").unwrap();
+        assert!(c > m.find("【内容标准】").unwrap() && m[c..].contains("每篇文末加参考资料"));
+        assert!(m.contains("【我对视觉的补充要求】") && m.contains("#1f8a4c"));
+        let b = brief_md(&r);
+        assert!(b.contains("## 内容的补充要求") && b.contains("## 视觉的补充要求"));
+        assert!(!first_message(&req()).contains("补充要求") && !brief_md(&req()).contains("补充要求"));
     }
 
     fn write(root: &Path, rel: &str, body: &str) {

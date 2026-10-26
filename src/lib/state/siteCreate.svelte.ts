@@ -55,6 +55,7 @@ function blank() {
     open: false, mode: 'quick' as CreateMode, step: 'brief' as 'brief' | 'build',
     name: '', domain: '', about: '', kind: '', audience: '', language: '', goals: [] as string[],
     stack: '', stackTouched: false, style: '', pages: 8, parent: '',
+    contentExtra: '', visualExtra: '',
     busy: false, err: '',
   };
 }
@@ -164,9 +165,11 @@ export async function createSite() {
   f.busy = true; f.err = '';
   // 快速制作：只带定位、名称、域名；类型、语言、风格交给 AI，技术栈按描述推荐，内容和视觉标准照常写进第一条消息
   const quick = f.mode === 'quick';
+  const extra = { content_extra: f.contentExtra.trim(), visual_extra: f.visualExtra.trim() };
   const req = quick
-    ? { name: f.name.trim(), domain: f.domain.trim(), about: f.about.trim(), stack: recommendedStack('', f.about), pages: 8, parent_dir: f.parent, quick: true }
+    ? { name: f.name.trim(), domain: f.domain.trim(), about: f.about.trim(), stack: recommendedStack('', f.about), pages: 8, parent_dir: f.parent, quick: true, ...extra }
     : {
+        ...extra,
         name: f.name.trim(), domain: f.domain.trim(), about: f.about.trim(), kind: f.kind,
         audience: f.audience.trim(), language: f.language, goals: f.goals, stack: f.stack,
         style: f.style ? STYLE_DIRECTIVES[f.style] ?? '' : '', pages: f.pages, parent_dir: f.parent,
