@@ -73,8 +73,7 @@ pub fn load(site_dir: &Path) -> Option<Dynamic> {
 }
 
 pub fn save(site_dir: &Path, d: &Dynamic) -> Result<(), String> {
-    std::fs::create_dir_all(site_dir).map_err(|e| e.to_string())?;
-    std::fs::write(path(site_dir), serde_json::to_vec_pretty(d).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    crate::sites::write_json(&path(site_dir), d, true)
 }
 
 /// `_routes.json`：只让 `/api/*` 和 R2 大文件进 Functions。大文件太多时按所在目录合并成 `目录/*`。

@@ -25,11 +25,9 @@ export interface LaunchStatus {
   deployed: boolean;
   /** Pilot 会随上线放进去、但线上还没有的文件：再上线一次才生效 */
   needs_redeploy?: string[];
-  /** 刚自动开始补验证文件 */
-  republishing?: boolean;
   google_manage_conn: string;
-  /** 这次检查按域名自动绑定上的资源。 */
-  auto_bound: string[];
+  /** 按域名在已连接账号里找到、可以一键处理的事（读状态时只查不做，点「自动处理这些」才执行） */
+  can_auto: string[];
   errors: string[];
   /** 配置变量：声明了几个、哪些还没填、有没有改动没同步、同步到哪 */
   config_vars?: number;
@@ -104,8 +102,8 @@ export function toggleLaunchOpen(id: string) {
 
 function remember(id: string, v: LaunchStatus) {
   launch.status = { ...launch.status, [id]: v };
-  // 一次性提示（自动绑定说明、错误）不进缓存，下次打开不再重复出现
-  try { localStorage.setItem(STATUS_KEY, JSON.stringify(Object.fromEntries(Object.entries(launch.status).map(([k, x]) => [k, { ...x, auto_bound: [], errors: [] }])))); } catch { /* */ }
+  // 一次性提示（错误）不进缓存，下次打开不再重复出现
+  try { localStorage.setItem(STATUS_KEY, JSON.stringify(Object.fromEntries(Object.entries(launch.status).map(([k, x]) => [k, { ...x, errors: [] }])))); } catch { /* */ }
   const site = sites.list.find((x) => x.id === id);
   if (!site) return;
   const all = launchSteps(site, v).every((x) => x.done);
@@ -116,7 +114,7 @@ function remember(id: string, v: LaunchStatus) {
 }
 
 /** 读向导状态：先只读当前状态（快），再在后台按域名去已连接的 Google / Bing 账号里找资源，
- *  唯一命中就绑上（force=手动刷新：直接带上查找，不受 10 分钟节流）。 */
+ *  找到能处理的列进 can_auto，等你点「自动处理这些」（force=手动刷新：直接带上查找，不受 10 分钟节流）。只读，不改任何东西。 */
 const loadSeq: Record<string, number> = {};
 export async function loadLaunch(id: string, force = false) {
   // 同一站点可能同时被 $effect、刷新按钮和 step() 调起：只认最后一次的结果，早的那次不再写回、也不提前收掉转圈
@@ -129,10 +127,27 @@ export async function loadLaunch(id: string, force = false) {
     const v = await invoke<LaunchStatus>('launch_status', { id, force, probe: true });
     if (!latest()) return;
     remember(id, v);
-    if (v.auto_bound?.length) { await refreshSites(); say(`已自动处理：${v.auto_bound.join('、')}`); }
-    else if (force) say('状态已是最新');
+    if (force) say(v.can_auto?.length ? `状态已是最新，有 ${v.can_auto.length} 件事可以自动处理` : '状态已是最新');
   } catch (e) { if (latest()) say(String(e), 'err'); }
   finally { if (latest()) launch.checking = { ...launch.checking, [id]: false }; }
+}
+
+/** 「自动处理这些」：把 can_auto 里列的事（绑定 GA4 / Search Console、加到 Bing 并验证、补验证文件）做了。
+ *  先把清单原样给你确认——会改 Bing、Cloudflare DNS 和站点绑定。 */
+export async function autoBind(site: Site) {
+  const list = launch.status[site.id]?.can_auto ?? [];
+  if (!list.length) return;
+  const ok = await confirmDialog(`Pilot 将执行：\n${list.map((x) => `· ${x}`).join('\n')}\n\n确定？`, { title: '自动处理', confirmText: '执行' });
+  if (!ok) return;
+  launch.busy = { ...launch.busy, [site.id]: 'auto' };
+  try {
+    const r = await invoke<{ done: string[]; errors: string[]; republishing: boolean }>('launch_auto_bind', { id: site.id });
+    if (r.done.length) say(`已处理：${r.done.join('、')}`);
+    for (const e of r.errors) say(e, 'err');
+    await refreshSites();
+    await loadLaunch(site.id, true);
+  } catch (e) { say(String(e), 'err'); }
+  finally { launch.busy = { ...launch.busy, [site.id]: '' }; }
 }
 
 function note(id: string, step: string, text: string) {
@@ -151,7 +166,8 @@ async function step<T>(id: string, key: string, fn: () => Promise<T>, done: (r: 
 }
 
 /** 查一下域名现在由谁在回应：和这次上线的 pages.dev 比页面标题，再找抢在 Pages 前面的东西。 */
-/** quick：只比页面（概览、列表上自动跑）；不一致时接着查原因，明确在抢这个域名的直接处理掉。 */
+/** quick：只比页面（概览、列表上自动跑）；不一致时接着查原因，明确在抢这个域名的列出来、你确认后才处理掉。
+ *  这是 Pilot 唯一会删 Worker 路由 / 解绑域名的地方（上线时只查不改），所以一定先把要删的清单给你看。 */
 export async function checkDomain(site: Site, quick = false) {
   if (launch.checkingDomain[site.id]) return;
   launch.checkingDomain = { ...launch.checkingDomain, [site.id]: true };
@@ -159,7 +175,14 @@ export async function checkDomain(site: Site, quick = false) {
     let r = await invoke<DomainCheck>('site_domain_check', { id: site.id, quick });
     if (quick && r.compared && !r.same) {
       launch.domainCheck = { ...launch.domainCheck, [site.id]: r };
-      r = await invoke<DomainCheck>('site_domain_check', { id: site.id, auto: true });
+      // 先查清是谁在抢（不改），再把能直接处理的列给你确认
+      r = await invoke<DomainCheck>('site_domain_check', { id: site.id, quick: false });
+      launch.domainCheck = { ...launch.domainCheck, [site.id]: r };
+      const autos = r.issues.filter((i) => i.auto);
+      if (autos.length) {
+        const ok = await confirmDialog(`${site.domain} 打开的还不是这次上线的版本。Pilot 将：\n${autos.map((i) => `· ${i.fix}：${i.text}`).join('\n')}\n\n${[...new Set(autos.map((i) => FIX_CONFIRM[i.kind]).filter(Boolean))].join('')}确定处理？`, { title: '处理占用域名的东西', kind: 'danger', confirmText: '处理' });
+        if (ok) r = await invoke<DomainCheck>('site_domain_check', { id: site.id, auto: true });
+      }
     }
     launch.domainCheck = { ...launch.domainCheck, [site.id]: r };
   } catch (e) { note(site.id, 'domain', `失败：${String(e)}`); }
@@ -170,6 +193,7 @@ const FIX_CONFIRM: Record<string, string> = {
   route: '删掉后，这条路由原来交给的 Worker 不再回应这个地址。',
   worker_domain: '解绑后，那个 Worker 不再回应这个域名（Worker 本身不删）。',
   pages: '去掉后，那个 Pages 项目不再用这个域名（项目本身和它的 pages.dev 地址都还在）。',
+  cache: '',
 };
 export async function fixDomain(site: Site, issue: DomainIssue) {
   if (issue.kind !== 'cache') {

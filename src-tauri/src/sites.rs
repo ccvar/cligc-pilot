@@ -62,6 +62,39 @@ impl DataBinding {
     }
 }
 
+/// 任何自动流程都不许碰的站点：上线 / 下线 / 切换域名 / 托管运营 / 迁移切换前都要先查。
+/// 之前只靠「别去导入它」，代码里没有任何保护。
+pub const PROTECTED_HOSTS: &[&str] = &["tt.cligx.com"];
+
+/// 这个站点受保护时返回给用户看的原因，否则 None。按主域名和 www. 变体比对；
+/// 迁移中的站点正式域名还没填（在 `migrate_from` 里），也一并查。
+pub fn protected_reason(site: &Site) -> Option<String> {
+    let bare = |d: &str| d.trim().trim_start_matches("www.").to_ascii_lowercase();
+    [site.domain.as_str(), site.migrate_from.as_str()]
+        .into_iter()
+        .map(bare)
+        .filter(|h| !h.is_empty())
+        .find(|h| PROTECTED_HOSTS.contains(&h.as_str()))
+        .map(|h| format!("{h} 是受保护的站点，Pilot 不会对它执行上线、下线、改域名或自动运营；请在 Cloudflare 后台手动处理"))
+}
+
+/// 先写到旁边的临时文件再改名：写到一半崩了（断电、强退）原文件还是完整的，不会留下半截 JSON。
+pub fn write_atomic(p: &Path, raw: &[u8]) -> Result<(), String> {
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp = p.with_file_name(format!("{name}.tmp"));
+    fs::write(&tmp, raw).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, p).map_err(|e| e.to_string())
+}
+
+/// 把一个值序列化成 JSON 原子写入（`pretty`＝带缩进）。
+pub fn write_json<T: serde::Serialize>(p: &Path, v: &T, pretty: bool) -> Result<(), String> {
+    let raw = if pretty { serde_json::to_vec_pretty(v) } else { serde_json::to_vec(v) }.map_err(|e| e.to_string())?;
+    write_atomic(p, &raw)
+}
+
 impl Site {
     /// 站点自己的目录（代码目录下的 build.root 子目录；没有子目录就是代码目录本身）。
     pub fn app_dir(&self, code: &Path) -> std::path::PathBuf {
@@ -1061,6 +1094,28 @@ pub fn delete_env(site_id: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    /// 受保护的站点：正式域名、www 变体、迁移中的旧域名都认得出来。
+    #[test]
+    fn protected_site_is_recognised_by_domain_or_migrate_from() {
+        let mk = |domain: &str, from: &str| -> Site { serde_json::from_value(serde_json::json!({"id":"x","name":"x","domain":domain,"migrate_from":from,"source":"local","created_at":0,"updated_at":0})).unwrap() };
+        assert!(super::protected_reason(&mk("tt.cligx.com", "")).is_some());
+        assert!(super::protected_reason(&mk("www.tt.cligx.com", "")).is_some());
+        assert!(super::protected_reason(&mk("", "tt.cligx.com")).is_some());
+        assert!(super::protected_reason(&mk("example.com", "")).is_none());
+        assert!(super::protected_reason(&mk("", "")).is_none());
+    }
+
+    /// 原子写：写完文件完整，旁边不留临时文件。
+    #[test]
+    fn write_atomic_leaves_no_temp_file() {
+        let d = std::env::temp_dir().join(format!("sites-w-{}", uuid::Uuid::new_v4()));
+        let p = d.join("sub").join("vps.json");
+        super::write_json(&p, &serde_json::json!({"a": 1}), true).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap().trim(), "{\n  \"a\": 1\n}");
+        assert!(!d.join("sub").join("vps.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn gsc_conn_falls_back_to_the_ga4_connection() {

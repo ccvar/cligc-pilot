@@ -301,7 +301,8 @@ switch (cmd) {
       if (focused && focused.password) fail('password_field', '当前是密码输入框，不能往里填验证码。');
       if (!focused) fail('no_input_focused', '先点一下验证码输入框（tap），再取验证码；确实是输入框但认不出时加 --force。');
     }
-    pilotMail({ op: cmd === 'mail-code' ? 'code' : 'link', from: String(from), serial: serialOpt(), wait, reuse: !!opt('reuse', false) }, (wait + 60) * 1000);
+    // 第一次取某个网站的验证码，Pilot 会在对话里先请用户点「允许」（最多等两分钟），再去邮箱里等邮件：总超时按这两段算
+    pilotMail({ op: cmd === 'mail-code' ? 'code' : 'link', from: String(from), serial: serialOpt(), wait, reuse: !!opt('reuse', false) }, (wait + 180) * 1000);
     break;
   }
   default:

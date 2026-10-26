@@ -97,12 +97,11 @@ pub struct LaunchStatus {
     pub deployed: bool,
     /// Pilot 会随上线放进去、但线上还没有的文件（IndexNow / Bing 验证文件）：要再「构建并上线」一次才生效
     pub needs_redeploy: Vec<String>,
-    /// 刚自动开始补验证文件（不重新构建的那种上传）
-    pub republishing: bool,
     /// 有没有一条授予了管理权限的 Google OAuth 连接（自动建 GA4 / 验证 Search Console 需要）。
     pub google_manage_conn: String,
-    /// 这次检查时按域名自动绑定上的资源（「Search Console sc-domain:x.com」这类说明）。
-    pub auto_bound: Vec<String>,
+    /// 按域名在已连接账号里找到、可以一键处理的事（「绑定 Search Console 资源 sc-domain:x.com（账号 …）」这类说明）。
+    /// 读状态时只查不做；用户点了「自动处理这些」才执行（`launch_auto_bind`）。
+    pub can_auto: Vec<String>,
     pub errors: Vec<String>,
 }
 
@@ -118,9 +117,6 @@ struct LaunchCache {
     /// 上次自动验证 Bing 时每一步的结果
     #[serde(default)]
     bing_note: String,
-    /// 上次自动补验证文件的时间
-    #[serde(default)]
-    republished: u64,
 }
 
 #[derive(Serialize, serde::Deserialize, Default, Clone)]
@@ -150,23 +146,28 @@ fn update_cache(state: &AppState, id: &str, f: impl FnOnce(&mut LaunchCache)) {
     }
 }
 
-/// 站点还没绑 Search Console / Bing 时，到已连接的账号里按域名找一遍，唯一命中就直接绑上。
+/// 站点还没绑 Search Console / Bing 时，到已连接的账号里按域名找一遍，唯一命中就绑上。
 /// 规则和「按域名绑定」一致；Google 只在站点已用的那个账号里找（一个站点的 GA4 和 Search Console 共用一条连接），
 /// 站点还没选 Google 连接时才在所有账号里找。
 /// 迁移中的站点还没填正式域名（`migrate_from` 是旧站域名）：按旧站域名找 GA4 / Search Console，不碰 Bing（等切换后再接）。
-pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -> (Vec<String>, Vec<String>) {
+///
+/// `apply=false` 只查不改（打开向导时跑的就是它）：返回「可以自动处理的事」一条条说明，什么都不动——
+/// 以前打开向导就会把站点加进 Bing、在 Cloudflare 加 DNS 记录、改站点绑定，用户没点过任何东西。
+/// `apply=true` 才真的做（用户在向导里点了「自动处理这些」，见 `launch_auto_bind`），返回做成了哪些。
+pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool, apply: bool) -> (Vec<String>, Vec<String>) {
     let migrating = site.domain.is_empty() && !site.migrate_from.is_empty();
     let site = &if migrating { Site { domain: site.migrate_from.clone(), ..site.clone() } } else { site.clone() };
-    let (mut bound, mut errs) = (Vec::new(), Vec::new());
+    let (mut out, mut errs): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     // Pilot 自己加到 Bing 的站点（有 bing_auth）每次都核对一下验证状态
     if site.domain.is_empty() || (!site.data.ga4_property.is_empty() && !site.data.gsc_site.is_empty() && !site.data.bing_site.is_empty() && site.data.bing_auth.is_empty()) {
-        return (bound, errs);
+        return (out, errs);
     }
     let now = crate::now_secs();
     if !force && now.saturating_sub(read_cache(state, &site.id).probed) < 600 {
-        return (bound, errs);
+        return (out, errs);
     }
     update_cache(state, &site.id, |c| c.probed = now);
+    let acct = |c: &crate::conns::Connection| if c.login.is_empty() { c.name.clone() } else { c.login.clone() };
     if site.data.ga4_property.is_empty() {
         // GA4：按媒体资源里网页数据流的网址匹配域名。站点已在用的账号先找；名字里带域名的媒体资源先查，命中即停。
         let mut conns: Vec<_> = state.conns.list().into_iter().filter(|c| c.kind == "google").collect();
@@ -178,16 +179,20 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
             let Ok(cred) = crate::google::parse_credential(&c.key_kind, &raw) else { continue };
             let token = match crate::google::access_token(&c.id, &cred, &crate::google::read_scopes()).await {
                 Ok(t) => t,
-                Err(e) => { errs.push(format!("GA4（{}）：{e}", if c.login.is_empty() { &c.name } else { &c.login })); continue }
+                Err(e) => { errs.push(format!("GA4（{}）：{e}", acct(&c))); continue }
             };
             let mut props = match crate::google::list_ga4_properties(&token).await {
                 Ok(p) => p,
-                Err(e) => { errs.push(format!("GA4（{}）：{e}", if c.login.is_empty() { &c.name } else { &c.login })); continue }
+                Err(e) => { errs.push(format!("GA4（{}）：{e}", acct(&c))); continue }
             };
             props.sort_by_key(|p| !p.name.to_lowercase().contains(&label));
             for p in props {
                 let hosts = crate::google::ga4_stream_hosts(&token, &p.property).await.unwrap_or_default();
                 if !hosts.iter().any(|h| crate::google::same_host(h, &site.domain)) { continue }
+                if !apply {
+                    out.push(format!("绑定 GA4 媒体资源「{}」（账号 {}）", p.name, acct(&c)));
+                    break 'acct;
+                }
                 let (cid, prop, name) = (c.id.clone(), p.property.clone(), p.name.clone());
                 if state.sites.update(&site.id, crate::now_secs(), |x| {
                     // 换 GA4 账号时，原来跟着旧账号的 Search Console 改记成它自己的账号
@@ -199,7 +204,7 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
                     x.data.ga4_property_name = name;
                     Ok(())
                 }).is_ok() {
-                    bound.push(format!("GA4 {}（{}）", p.name, if c.login.is_empty() { &c.name } else { &c.login }));
+                    out.push(format!("GA4 {}（{}）", p.name, acct(&c)));
                 }
                 break 'acct;
             }
@@ -222,6 +227,10 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
             match list {
                 Ok(list) => {
                     if let Some(g) = crate::google::match_gsc_site(&list, &site.domain) {
+                        if !apply {
+                            out.push(format!("绑定 Search Console 资源 {}（账号 {}）", g.url, acct(&c)));
+                            break;
+                        }
                         let (cid, url) = (c.id.clone(), g.url.clone());
                         if state.sites.update(&site.id, crate::now_secs(), |x| {
                             if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid.clone(); }
@@ -229,7 +238,7 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
                             x.data.gsc_site = url;
                             Ok(())
                         }).is_ok() {
-                            bound.push(format!("Search Console {}（{}）", g.url, if c.login.is_empty() { c.name.clone() } else { c.login.clone() }));
+                            out.push(format!("Search Console {}（{}）", g.url, acct(&c)));
                         }
                         break;
                     }
@@ -239,7 +248,7 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
         }
     }
     if migrating {
-        return (bound, errs);
+        return (out, errs);
     }
     // 绑着但 Bing 里其实没验证（以前的自动绑定不看验证状态）：先解绑，下面接着自动验证
     let mut site = site.clone();
@@ -248,7 +257,11 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
             if let Ok(key) = crate::keychain::get_key(&c.id) {
                 if let Ok(list) = crate::bing::list_sites(&key).await {
                     if list.iter().any(|b| b.url == site.data.bing_site && !b.verified) {
-                        if let Ok(s2) = state.sites.update(&site.id, crate::now_secs(), |x| {
+                        if !apply {
+                            out.push(format!("Bing 里的 {} 还没验证通过：解绑后重新验证", site.data.bing_site));
+                            site.data.bing_site.clear();
+                            site.data.bing_conn_id.clear();
+                        } else if let Ok(s2) = state.sites.update(&site.id, crate::now_secs(), |x| {
                             x.data.bing_site.clear();
                             x.data.bing_conn_id.clear();
                             Ok(())
@@ -273,11 +286,19 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
                         found = true;
                         // 加过但还没验证（多半是 Pilot 上次加的）：接着验证，过了才绑
                         if !b.verified {
+                            if !apply {
+                                out.push(bing_verify_plan(site, b));
+                                break;
+                            }
                             match bing_verify(state, site, &c.id, &key, b).await {
-                                Ok(true) => bound.push(format!("Bing {}（已验证）", b.url)),
+                                Ok(true) => out.push(format!("Bing {}（已验证）", b.url)),
                                 Ok(false) => {}
                                 Err(e) => errs.push(format!("Bing：{e}")),
                             }
+                            break;
+                        }
+                        if !apply {
+                            out.push(format!("绑定 Bing Webmaster 里的 {}（账号 {}）", b.url, c.name));
                             break;
                         }
                         let (cid, url) = (c.id.clone(), b.url.clone());
@@ -286,7 +307,7 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
                             x.data.bing_site = url;
                             Ok(())
                         }).is_ok() {
-                            bound.push(format!("Bing {}", b.url));
+                            out.push(format!("Bing {}", b.url));
                         }
                         break;
                     }
@@ -297,13 +318,15 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
         // 哪个 Bing 账号里都没有：用第一条 Bing 连接直接加进去，再自动验证（DNS 记录 + 上线时放验证文件）
         if !found {
             if let Some(c) = bings.first() {
-                if let Ok(key) = crate::keychain::get_key(&c.id) {
+                if !apply {
+                    out.push(format!("把 https://{}/ 加到 Bing Webmaster（账号 {}）并验证：域名在已连接的 Cloudflare 里时会加一条 DNS 验证记录", site.domain, c.name));
+                } else if let Ok(key) = crate::keychain::get_key(&c.id) {
                     let url = format!("https://{}/", site.domain);
                     let added = crate::bing::add_site(&key, &url).await;
                     match crate::bing::list_sites(&key).await.map(|l| l.into_iter().find(|b| crate::sites::normalize_domain(&b.url).is_ok_and(|h| crate::google::same_host(&h, &site.domain)))) {
                         Ok(Some(b)) => match bing_verify(state, site, &c.id, &key, &b).await {
-                            Ok(true) => bound.push(format!("Bing {}（已加入并验证）", b.url)),
-                            Ok(false) => bound.push(format!("已把 {} 加到 Bing，等验证通过后自动绑定", site.domain)),
+                            Ok(true) => out.push(format!("Bing {}（已加入并验证）", b.url)),
+                            Ok(false) => out.push(format!("已把 {} 加到 Bing，等验证通过后自动绑定", site.domain)),
                             Err(e) => errs.push(format!("Bing：{e}")),
                         },
                         Ok(None) => errs.push(format!("Bing：没能把 {} 加进去{}", site.domain, added.err().map(|e| format!("（{e}）")).unwrap_or_default())),
@@ -313,7 +336,24 @@ pub(crate) async fn probe_bindings(state: &AppState, site: &Site, force: bool) -
             }
         }
     }
-    (bound, errs)
+    (out, errs)
+}
+
+/// Bing 的 DNS 验证记录名：接口给的 DnsVerificationCode 已经是完整主机名（`<码>.<域名>`），没给时才用验证文件那个码拼。
+fn bing_dns_name(domain: &str, code: &str) -> String {
+    let domain = domain.to_ascii_lowercase();
+    let c = code.trim().trim_end_matches('.').to_ascii_lowercase();
+    if c.ends_with(&format!(".{domain}")) { c } else { format!("{c}.{domain}") }
+}
+
+/// 「验证 Bing 里的站点」会做什么（只查不改时给用户看的说明）。
+fn bing_verify_plan(site: &Site, b: &crate::bing::BingSite) -> String {
+    let code = if !b.dns_code.is_empty() { b.dns_code.as_str() } else { b.auth_code.as_str() };
+    if code.is_empty() {
+        format!("让 Bing 验证 {}（Bing 没给验证码，只能靠上线时放进去的验证文件）", b.url)
+    } else {
+        format!("验证 Bing 里的 {}：在 Cloudflare 给 {} 加 DNS 记录 {} → verify.bing.com（写错的旧记录会删掉），再让 Bing 验证", b.url, site.domain, bing_dns_name(&site.domain, code))
+    }
 }
 
 /// 自动验证 Bing 里的站点：域名在已连接的 Cloudflare 里就加 DNS 验证记录（`<码>.<域名>` CNAME → verify.bing.com），
@@ -328,12 +368,8 @@ async fn bing_verify(state: &AppState, site: &Site, conn_id: &str, key: &str, b:
             Ok(())
         });
     }
-    // Bing 的 DNS 验证：接口给的 DnsVerificationCode 已经是完整主机名（`<码>.<域名>`），没给时才用验证文件那个码拼。
     let domain = site.domain.to_ascii_lowercase();
-    let dns_name = |code: &str| {
-        let c = code.trim().trim_end_matches('.').to_ascii_lowercase();
-        if c.ends_with(&format!(".{domain}")) { c } else { format!("{c}.{domain}") }
-    };
+    let dns_name = |code: &str| bing_dns_name(&domain, code);
     let want = if !b.dns_code.is_empty() { Some(dns_name(&b.dns_code)) } else if !b.auth_code.is_empty() { Some(dns_name(&b.auth_code)) } else { None };
     // 以前拼错的名字（码后面又拼了一遍域名、或用错了码）：指向 verify.bing.com 的就删掉
     let mut wrong: Vec<String> = Vec::new();
@@ -438,12 +474,13 @@ pub async fn site_bing_verify(state: tauri::State<'_, AppState>, id: String) -> 
 #[tauri::command]
 /// `probe=false` 只读当前状态（快，打开页面先用它）；默认会按域名去已连接账号里找资源（较慢，有 10 分钟节流）；
 /// `force=true` 是手动刷新，不受节流。
-pub async fn launch_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
+/// 只读：不碰 Bing、Cloudflare 和站点的数据绑定，找到能处理的事列在 `can_auto` 里等用户点（`launch_auto_bind`）。
+pub async fn launch_status(state: tauri::State<'_, AppState>, id: String, force: Option<bool>, probe: Option<bool>) -> Result<LaunchStatus, String> {
     let site = state.sites.get(&id)?;
     let force = force.unwrap_or(false);
     let quick = !force && !probe.unwrap_or(true);
-    let (auto_bound, probe_errs) = if force || probe.unwrap_or(true) { probe_bindings(&state, &site, force).await } else { (Vec::new(), Vec::new()) };
-    let mut site = if auto_bound.is_empty() { site } else { state.sites.get(&id)? };
+    let (mut can_auto, probe_errs) = if force || probe.unwrap_or(true) { probe_bindings(&state, &site, force, false).await } else { (Vec::new(), Vec::new()) };
+    let mut site = site;
     // IndexNow 不用点：Pilot 构建上传的站点没有密钥就直接生成（只是一串随机字符），验证文件随下次上线放进构建产物
     if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
         let key = crate::bing::new_indexnow_key();
@@ -462,33 +499,19 @@ pub async fn launch_status(app: tauri::AppHandle, state: tauri::State<'_, AppSta
         bing_pending: site.data.bing_site.is_empty() && !site.data.bing_auth.is_empty(),
         bing_note: if site.data.bing_site.is_empty() { read_cache(&state, &id).bing_note } else { String::new() },
         deployed: crate::site_deploy::load_history(&state.sites.data_dir(&id)).iter().any(|r| r.ok),
-        auto_bound,
         errors: probe_errs,
         ..Default::default()
     };
     // Pilot 自己构建上传的站点：IndexNow / Bing 验证文件是上线时放进去的，线上没有就提醒再上线一次
-    if !quick && st.deployed && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
-        let mut files = Vec::new();
-        if !site.data.indexnow_key.is_empty() {
-            files.push((format!("{}.txt", site.data.indexnow_key), "IndexNow 验证文件"));
-        }
-        if !site.data.bing_auth.is_empty() && site.data.bing_site.is_empty() {
-            files.push(("BingSiteAuth.xml".to_string(), "Bing 验证文件"));
-        }
-        for (f, label) in files {
-            if !url_ok(&format!("https://{}/{f}", site.domain)).await {
-                st.needs_redeploy.push(label.to_string());
-            }
-        }
+    if !quick && st.deployed {
+        st.needs_redeploy = missing_verify_files(&site).await;
     }
-    // 缺的只是验证文件、上次上线的构建产物还原样在：自动补上再传一次（不重新构建，页面内容不变）。
-    // 一小时最多自动试一次，免得文件一直出不来时反复上传。
-    if !st.needs_redeploy.is_empty() && site.deploy.mode == "direct" && crate::now_secs().saturating_sub(read_cache(&state, &id).republished) > 3600 {
-        update_cache(&state, &id, |c| c.republished = crate::now_secs());
-        if crate::site_cmds::start_publish_files(&app, &state, &id, false).await.is_ok() {
-            st.republishing = true;
-        }
+    // 缺的只是验证文件、上次上线的构建产物还原样在：可以不重新构建、原样补上文件再传一次。
+    // 以前打开向导就自动传，现在列进「可以自动处理」，用户点了才传（上传也是在改线上的东西）。
+    if !st.needs_redeploy.is_empty() && site.deploy.mode == "direct" && crate::site_deploy::live_build(&site, &state.sites.data_dir(&id)).await.is_ok() {
+        can_auto.push(republish_plan(&st.needs_redeploy));
     }
+    st.can_auto = can_auto;
     if matches!(site.deploy.mode.as_str(), "workers" | "vps") {
         // Workers / VPS 的路由、域名由项目自己的配置管，不走 Pages 这一步。 / 自定义域名在仓库的 wrangler 配置里管理，不走 Pages 这一步。
         st.pages = true;
@@ -540,6 +563,64 @@ pub async fn launch_status(app: tauri::AppHandle, state: tauri::State<'_, AppSta
         st.config_target = cs.target_label;
     }
     Ok(st)
+}
+
+/// 线上缺的 Pilot 验证文件（IndexNow / Bing）：Pilot 自己构建上传的站点才查。
+async fn missing_verify_files(site: &Site) -> Vec<String> {
+    let mut out = Vec::new();
+    if site.domain.is_empty() || !matches!(site.deploy.mode.as_str(), "direct" | "workers") {
+        return out;
+    }
+    let mut files = Vec::new();
+    if !site.data.indexnow_key.is_empty() {
+        files.push((format!("{}.txt", site.data.indexnow_key), "IndexNow 验证文件"));
+    }
+    if !site.data.bing_auth.is_empty() && site.data.bing_site.is_empty() {
+        files.push(("BingSiteAuth.xml".to_string(), "Bing 验证文件"));
+    }
+    for (f, label) in files {
+        if !url_ok(&format!("https://{}/{f}", site.domain)).await {
+            out.push(label.to_string());
+        }
+    }
+    out
+}
+
+fn republish_plan(missing: &[String]) -> String {
+    format!("补上线上缺的{}：把上次上线的构建产物原样再传到 Pages 一次（不重新构建，页面内容不变）", missing.join("、"))
+}
+
+#[derive(Serialize, Default)]
+pub struct AutoBindResult {
+    /// 做成了的（「GA4 xxx（账号）」这类说明）
+    pub done: Vec<String>,
+    pub errors: Vec<String>,
+    /// 开始补验证文件了（后台作业）
+    pub republishing: bool,
+}
+
+/// 向导里「自动处理这些」：把 `launch_status` 列在 `can_auto` 里的事真的做了——按域名绑定 GA4 / Search Console、
+/// 把站点加到 Bing 并验证（会加 DNS 记录）、补验证文件再传一次。界面上先把清单给用户确认过才调用。
+/// 这里不接受前端传清单：重新按域名查一遍再做，免得一份改过的清单让 Pilot 去动别的东西。
+#[tauri::command]
+pub async fn launch_auto_bind(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<AutoBindResult, String> {
+    let site = state.sites.get(&id)?;
+    if let Some(r) = crate::sites::protected_reason(&site) {
+        return Err(r);
+    }
+    let (done, errors) = probe_bindings(&state, &site, true, true).await;
+    let mut out = AutoBindResult { done, errors, republishing: false };
+    let site = state.sites.get(&id)?;
+    if site.deploy.mode == "direct" && !missing_verify_files(&site).await.is_empty() {
+        match crate::site_cmds::start_publish_files(&app, &state, &id, false).await {
+            Ok(_) => {
+                out.republishing = true;
+                out.done.push("开始补上验证文件（不重新构建）".into());
+            }
+            Err(e) => out.errors.push(format!("补验证文件：{e}")),
+        }
+    }
+    Ok(out)
 }
 
 /// 把站点代码放到 GitHub：新建仓库（Token 有账号级 Administration 权限时）或用一个已有的空仓库，
@@ -718,11 +799,11 @@ pub struct DomainIssue {
 }
 
 async fn url_ok(url: &str) -> bool {
-    reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(10)).send().await.map(|r| r.status().is_success()).unwrap_or(true)
+    crate::cf::http().get(url).timeout(std::time::Duration::from_secs(10)).send().await.map(|r| r.status().is_success()).unwrap_or(true)
 }
 
 async fn page_title(url: &str) -> Result<String, String> {
-    let resp = reqwest::Client::new()
+    let resp = crate::cf::http()
         .get(url)
         .header("Cache-Control", "no-cache")
         .timeout(std::time::Duration::from_secs(15))
@@ -741,7 +822,7 @@ async fn page_title(url: &str) -> Result<String, String> {
 
 /// 公网上这个域名现在用的名称服务器（走 1.1.1.1 的 DoH，不看本机缓存）。
 async fn live_ns(name: &str) -> Vec<String> {
-    let Ok(resp) = reqwest::Client::new()
+    let Ok(resp) = crate::cf::http()
         .get(format!("https://cloudflare-dns.com/dns-query?name={name}&type=NS"))
         .header("Accept", "application/dns-json")
         .timeout(std::time::Duration::from_secs(10))
@@ -764,12 +845,16 @@ pub async fn site_domain_check(state: tauri::State<'_, AppState>, id: String, qu
         return Err("站点没有填写域名".into());
     }
     if auto.unwrap_or(false) {
+        // 会删路由、解绑域名：受保护的站点不碰；界面上已经把清单给用户确认过
+        if let Some(r) = crate::sites::protected_reason(&site) {
+            return Err(r);
+        }
         return Ok(domain_settle(&state.conns, &site).await);
     }
     Ok(domain_check(&state.conns, &site, quick.unwrap_or(false)).await)
 }
 
-/// 查一遍，有能直接处理的就处理掉，处理过再查一次。上线后（Pages）也会跑这个。
+/// 查一遍，有能直接处理的就处理掉，处理过再查一次。只在用户在向导里确认过清单后调用（上线时只查不改）。
 pub(crate) async fn domain_settle(conns: &crate::conns::ConnStore, site: &Site) -> DomainCheck {
     let first = domain_check(conns, site, false).await;
     if !first.compared || first.same {
@@ -950,6 +1035,9 @@ pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, q
 #[tauri::command]
 pub async fn site_domain_fix(state: tauri::State<'_, AppState>, id: String, kind: String, conn: String, target: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = crate::sites::protected_reason(&site) {
+        return Err(r);
+    }
     domain_fix(&state.conns, &site, &kind, &conn, &target).await
 }
 
@@ -1180,7 +1268,7 @@ pub async fn gsc_setup_domain(state: tauri::State<'_, AppState>, id: String, con
     let mut sitemap_note = String::new();
     for name in ["sitemap-index.xml", "sitemap.xml"] {
         let url = format!("https://{}/{name}", site.domain);
-        let ok = reqwest::Client::new().head(&url).timeout(std::time::Duration::from_secs(15)).send().await.map(|r| r.status().is_success()).unwrap_or(false);
+        let ok = crate::cf::http().head(&url).timeout(std::time::Duration::from_secs(15)).send().await.map(|r| r.status().is_success()).unwrap_or(false);
         if ok {
             match crate::google::gsc_submit_sitemap(&token, &site_url, &url).await {
                 Ok(_) => sitemap_note = format!("，已提交 {name}"),
@@ -1209,4 +1297,21 @@ pub async fn ga4_accounts(state: tauri::State<'_, AppState>, conn_id: String) ->
         .as_array()
         .map(|a| a.iter().filter_map(|x| Some((x["account"].as_str()?.to_string(), x["displayName"].as_str().unwrap_or("").to_string()))).collect())
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bing_dns_record_name_is_not_doubled() {
+        assert_eq!(bing_dns_name("Example.com", "abc123"), "abc123.example.com");
+        assert_eq!(bing_dns_name("example.com", "abc123.example.com."), "abc123.example.com");
+    }
+
+    #[test]
+    fn republish_plan_names_the_missing_files() {
+        let p = republish_plan(&["IndexNow 验证文件".into(), "Bing 验证文件".into()]);
+        assert!(p.contains("IndexNow 验证文件、Bing 验证文件") && p.contains("不重新构建"));
+    }
 }

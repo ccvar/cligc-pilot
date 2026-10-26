@@ -429,14 +429,20 @@ pub async fn migrate_hosting(state: tauri::State<'_, AppState>, id: String, feat
 
 // ───────────────────────── 抓取工具 ─────────────────────────
 
+/// 抓旧站用的客户端（不跟随跳转、带 UA）：全局一个，连接池复用，不用每次盘点都新建。
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(UA)
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(25))
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .unwrap_or_default()
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .user_agent(UA)
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(25))
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_default()
+        })
+        .clone()
 }
 
 struct Fetched {
@@ -505,7 +511,7 @@ async fn fetch_follow(c: &reqwest::Client, url: &str) -> Result<(Url, Fetched), 
 /// 用 DoH 查公开的 DNS 记录。
 async fn doh(name: &str, kind: &str) -> Vec<FullRec> {
     let Ok(u) = Url::parse_with_params("https://cloudflare-dns.com/dns-query", &[("name", name), ("type", kind)]) else { return Vec::new() };
-    let Ok(r) = reqwest::Client::new()
+    let Ok(r) = crate::cf::http()
         .get(u)
         .header("accept", "application/dns-json")
         .timeout(Duration::from_secs(10))
@@ -932,8 +938,9 @@ async fn run_survey(site: Site, job: &Job) -> Result<(), String> {
     let origin = Url::parse(&format!("{}://{}/", home_url.scheme(), home_url.host_str().unwrap_or(&domain))).map_err(|e| e.to_string())?;
     job.step("origin", "ok", origin.as_str());
 
-    // 顺手按旧站域名接上 Search Console / GA4（同一个账号里找到就绑）
-    let _ = crate::launch_cmds::probe_bindings(&state, &site, true).await;
+    // 顺手按旧站域名接上 Search Console / GA4（同一个账号里找到就绑）。盘点是用户点的；迁移中的站点不碰 Bing，
+    // 这里只是把 Pilot 自己的数据绑定填上，不改任何外部服务
+    let _ = crate::launch_cmds::probe_bindings(&state, &site, true, true).await;
     let site = state.sites.get(&site.id).unwrap_or(site);
 
     let mut cr = Crawl {
@@ -2347,6 +2354,9 @@ pub async fn migrate_dns_fix(state: tauri::State<'_, AppState>, id: String) -> R
 #[tauri::command]
 pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<Cutover, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = crate::sites::protected_reason(&site) {
+        return Err(r);
+    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let plan: Option<Plan> = read_json(&dir.join("plan.json"));
@@ -2592,6 +2602,9 @@ pub async fn migrate_host_use(state: tauri::State<'_, AppState>, id: String, hos
 #[tauri::command]
 pub async fn migrate_staging(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, host: String) -> Result<Staging, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = crate::sites::protected_reason(&site) {
+        return Err(r);
+    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let meta = load_meta(&dir);
@@ -2717,7 +2730,7 @@ pub async fn migrate_staging_status(app: tauri::AppHandle, state: tauri::State<'
     let token = crate::keychain::get_key(&cf.id)?;
     let status = crate::cf::pages_domain_status(&token, &cf.account_id, &site.deploy.project, &st.host).await?.unwrap_or_else(|| "pending".into());
     // Pages 说生效了还不够：真能打开才算（证书刚签好的那一会儿还会 522）
-    let opens = status == "active" && reqwest::Client::new().head(format!("https://{}/", st.host)).timeout(Duration::from_secs(10)).send().await.is_ok_and(|r| r.status().as_u16() < 500);
+    let opens = status == "active" && crate::cf::http().head(format!("https://{}/", st.host)).timeout(Duration::from_secs(10)).send().await.is_ok_and(|r| r.status().as_u16() < 500);
     let status = if opens { "active".to_string() } else { "pending".to_string() };
     save_meta(&dir, |m| m.staging.status = status.clone())?;
     if opens && st.live.at == 0 {
@@ -2739,6 +2752,9 @@ pub fn noindex_hosts(site_dir: &Path) -> Vec<String> {
 #[tauri::command]
 pub async fn migrate_old_redirect(state: tauri::State<'_, AppState>, id: String) -> Result<OldRedirect, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = crate::sites::protected_reason(&site) {
+        return Err(r);
+    }
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     let meta = load_meta(&dir);

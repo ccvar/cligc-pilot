@@ -82,9 +82,26 @@ pub fn effective_values(site: &Site, code: &Path) -> Vec<(String, String)> {
     v
 }
 
+/// 按框架约定会打进前端包的前缀：这种变量不可能是密钥。
+fn public_prefix(u: &str) -> bool {
+    ["PUBLIC_", "NEXT_PUBLIC_", "VITE_", "NUXT_PUBLIC_", "REACT_APP_", "GATSBY_"].iter().any(|p| u.starts_with(p))
+}
+
+/// `.env.example` 里声明了、但没标 [secret] / [public] 的变量：按名字猜。
+/// 名字里带这些词的都当密钥（DATABASE_URL、SENTRY_DSN、SMTP_PASS 这类连接串、凭据也算）。
 fn guess_secret(k: &str) -> bool {
     let u = k.to_ascii_uppercase();
-    !u.starts_with("PUBLIC_") && ["KEY", "TOKEN", "SECRET", "PASSWORD", "PRIVATE"].iter().any(|w| u.contains(w))
+    // 站点地址类（SITE_URL）是 Pilot 自动给的公开值，名字里的 URL 不算
+    let site_url = u.ends_with("SITE_URL") || u == "SITE" || u == "PUBLIC_SITE";
+    !public_prefix(&u) && !site_url && SECRET_WORDS.iter().any(|w| u.contains(w))
+}
+
+const SECRET_WORDS: [&str; 15] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PRIVATE", "URL", "DSN", "CRED", "AUTH", "CERT", "SIGNING", "SALT", "HASH"];
+
+/// 没在 `.env.example` 里声明、在 Pilot 里手动加的变量：一律按密钥处理（不进命令行、Pages 里存成 secret_text），
+/// 只有框架约定会打进前端包的前缀（PUBLIC_ 等）例外——那种值本来就在页面源码里。
+fn undeclared_secret(k: &str) -> bool {
+    !public_prefix(&k.to_ascii_uppercase())
 }
 
 /// `.env.example` 在哪：站点子目录优先，其次仓库根目录。
@@ -101,10 +118,15 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
         .collect();
     for k in &site.build.env_keys {
         if !out.iter().any(|v| &v.key == k) {
-            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: guess_secret(k), declared: false, set: true, auto: String::new() });
+            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new() });
         }
     }
     out
+}
+
+/// 变量名 → 是不是密钥（声明的按声明 / 名字猜，没声明的按 `undeclared_secret`）。查不到的一律当密钥。
+pub fn secret_map(site: &Site, code: &Path) -> std::collections::HashMap<String, bool> {
+    vars(site, code).into_iter().map(|v| (v.key, v.secret)).collect()
 }
 
 /// .env.example 里声明的 GA4 衡量 ID 变量（优先 PUBLIC_GA_ID，其次名字像 GA_MEASUREMENT_ID / GA4_ID 的）。
@@ -165,8 +187,7 @@ pub fn load_sync(site_dir: &Path) -> SyncRecord {
 }
 
 fn save_sync(site_dir: &Path, r: &SyncRecord) -> Result<(), String> {
-    std::fs::create_dir_all(site_dir).map_err(|e| e.to_string())?;
-    std::fs::write(site_dir.join("config_sync.json"), serde_json::to_vec(r).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    sites::write_json(&site_dir.join("config_sync.json"), r, false)
 }
 
 /// 值的指纹（不存值本身）：目标 + 排好序的 键=值。
@@ -250,8 +271,8 @@ pub async fn sync(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path) 
     let values = effective_values(site, code);
     let rec = load_sync(site_dir);
     let remove: Vec<String> = if rec.target == target { rec.keys.iter().filter(|k| !values.iter().any(|(v, _)| v == *k)).cloned().collect() } else { vec![] };
-    let secret_of: std::collections::HashMap<String, bool> = vars(site, code).into_iter().map(|v| (v.key, v.secret)).collect();
-    let is_secret = |k: &str| secret_of.get(k).copied().unwrap_or_else(|| guess_secret(k));
+    let secret_of = secret_map(site, code);
+    let is_secret = |k: &str| secret_of.get(k).copied().unwrap_or(true);
     let note = match target {
         "pages" | "workers" => {
             let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
@@ -348,6 +369,19 @@ mod tests {
         assert_eq!(v[2], ("GA_ID".into(), "统计 ID".into(), false));
         assert_eq!(v[3], ("API_TOKEN".into(), "".into(), true), "没标的按名字猜");
         assert_eq!(v.len(), 4);
+    }
+
+    #[test]
+    fn connection_strings_and_credentials_count_as_secrets() {
+        for k in ["DATABASE_URL", "SMTP_PASS", "SENTRY_DSN", "GOOGLE_CREDENTIALS", "AUTH_SECRET", "TLS_CERT", "JWT_SIGNING_KEY", "DB_PASSWD"] {
+            assert!(guess_secret(k), "{k}");
+        }
+        for k in ["SITE_URL", "PUBLIC_SITE_URL", "PUBLIC_API_URL", "NEXT_PUBLIC_KEY", "GA_ID", "CONTACT_EMAIL"] {
+            assert!(!guess_secret(k), "{k}");
+        }
+        // 没声明的变量一律当密钥，只有前端前缀例外
+        assert!(undeclared_secret("CONTACT_EMAIL") && undeclared_secret("FOO"));
+        assert!(!undeclared_secret("PUBLIC_GA_ID") && !undeclared_secret("VITE_TITLE"));
     }
 
     #[test]

@@ -10,7 +10,8 @@ class PermitsState {
   // 命令一律默认收起（说明才是给人看的重点），点「查看具体命令」再展开。
   permitCmdOpen = $state(new Set<string>());
   pendingPermits = $state<Permit[]>([]);
-  activePermits = $derived(this.pendingPermits.filter((p) => p.conv === app.activeConvId));
+  // conv 为 "mail" 的是 Pilot 自己发的「允许读取某网站的验证码邮件？」（mail.rs），不属于哪条对话：在当前看着的对话里显示
+  activePermits = $derived(this.pendingPermits.filter((p) => p.conv === app.activeConvId || p.conv === 'mail'));
   permConvs = $derived(new Set(this.pendingPermits.map((p) => p.conv))); // 哪些对话有待批（含后台的，侧栏标出来）
 }
 

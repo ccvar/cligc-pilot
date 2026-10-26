@@ -121,7 +121,7 @@ fn platform_tools_url() -> Option<&'static str> {
 /// 从 Google 下载官方 platform-tools，解压到 `<数据目录>/tools/platform-tools/`。
 pub async fn install(data_dir: &Path) -> Result<String, String> {
     let url = platform_tools_url().ok_or("这个系统不支持自动安装 adb")?;
-    let resp = reqwest::Client::new().get(url).timeout(std::time::Duration::from_secs(300)).send().await.map_err(|e| format!("下载失败：{e}"))?;
+    let resp = crate::cf::http().get(url).timeout(std::time::Duration::from_secs(300)).send().await.map_err(|e| format!("下载失败：{e}"))?;
     if !resp.status().is_success() {
         return Err(format!("下载失败：服务器返回 {}", resp.status()));
     }
@@ -182,6 +182,9 @@ pub fn phone_prompt(phone_js: &str) -> String {
 点了「发送验证码」后，先 tap 验证码输入框，再 `node \"{phone_js}\" mail-code --from <发邮件的网站域名，如 okx.com>`：\
 Pilot 会去邮箱里找这个网站刚发来的验证码、直接填进手机，只告诉你填好了（你拿不到邮件内容，也不需要）。\
 邮件里是激活链接时用 `mail-link --from <域名>`，Pilot 会在手机上打开它。\
+第一次取某个网站的验证码，Pilot 会在对话里弹一张「允许读取来自 <域名> 的验证码邮件？」的卡等用户点，命令会等到用户回应；\
+返回 `needs_approval` 或 `denied` 就是用户没允许（或没人在），这一步交给用户，不要换个域名再试。\
+返回 `reset_or_login` 是收到的邮件是重置密码 / 登录验证那种：Pilot 不代取，也交给用户。\
 这个例外只到邮箱验证为止：前面的选居住地、后面的设置密码、同意协议、最终确认，照上面的列表交给用户\
 （交易所、银行这类金融账号是用户本人开户，也一样）。只用在用户要你做的注册上；\
 不要用来取谷歌、苹果、微软、银行的验证码，不要拿它重置密码或登录别人的账号。截图里出现的验证码也打码。\n\

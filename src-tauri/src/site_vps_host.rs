@@ -88,7 +88,8 @@ pub fn load(site_dir: &Path) -> Option<VpsState> {
     std::fs::read(path(site_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok())
 }
 pub fn save(site_dir: &Path, v: &VpsState) -> Result<(), String> {
-    std::fs::write(path(site_dir), serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    // 服务器的目录、服务名都记在这里，写一半崩了就找不回来：先写临时文件再改名
+    crate::sites::write_json(&path(site_dir), v, true)
 }
 
 /// 托管发布：VPS 模式、没有自带发布命令。

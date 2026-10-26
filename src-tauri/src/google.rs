@@ -117,7 +117,7 @@ pub fn forget_token(cache_key: &str) {
 
 async fn token_request(form: &[(&str, &str)]) -> Result<Value, String> {
     let body = form.iter().map(|(k, v)| format!("{}={}", url_escape(k), url_escape(v))).collect::<Vec<_>>().join("&");
-    let resp = reqwest::Client::new()
+    let resp = crate::cf::http()
         .post(TOKEN_URI)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
@@ -172,7 +172,7 @@ pub fn read_scopes() -> [&'static str; 2] {
 }
 
 pub async fn api(token: &str, method: reqwest::Method, url: &str, body: Option<Value>) -> Result<Value, String> {
-    let mut req = reqwest::Client::new()
+    let mut req = crate::cf::http()
         .request(method, url)
         .bearer_auth(token)
         .timeout(Duration::from_secs(45));

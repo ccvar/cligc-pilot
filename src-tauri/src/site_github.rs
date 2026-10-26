@@ -19,7 +19,7 @@ pub struct Pr {
 }
 
 async fn call(token: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
-    let mut req = reqwest::Client::new()
+    let mut req = crate::cf::http()
         .request(method, format!("{API}{path}"))
         .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/vnd.github+json")

@@ -414,27 +414,71 @@ pub struct Activity {
 
 static LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// 动态最多留这么多条：文件超过两倍就只留最新的这些（界面一次最多也只看 2000 条）。
+const ACTIVITY_KEEP: usize = 2000;
+/// 文件小于这个字节数时不用数行（一条动态几百字节，远不到 2 × ACTIVITY_KEEP 条）。
+const ACTIVITY_CHECK_BYTES: u64 = 512 * 1024;
+
+fn activity_path(data_dir: &Path) -> PathBuf {
+    dir(data_dir).join("activity.jsonl")
+}
+
 pub fn log(data_dir: &Path, a: Activity) {
     let _g = LOG_LOCK.lock().unwrap();
     let d = dir(data_dir);
     let _ = std::fs::create_dir_all(&d);
+    let p = activity_path(data_dir);
     if let Ok(line) = serde_json::to_string(&a) {
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(d.join("activity.jsonl")) {
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
             let _ = writeln!(f, "{line}");
+        }
+    }
+    // 只追加的话文件会一直长，每次读动态都要整个解析一遍：长过头就只留最新的一段
+    if std::fs::metadata(&p).map(|m| m.len() > ACTIVITY_CHECK_BYTES).unwrap_or(false) {
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            let _ = rotate_activity(&p, &text, ACTIVITY_KEEP);
         }
     }
 }
 
-/// 最近的动态（新的在前）。
+/// 超过 2 × keep 行就只留最新的 keep 行（先写临时文件再改名）。返回有没有改写。
+fn rotate_activity(p: &Path, text: &str, keep: usize) -> Result<bool, String> {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() <= keep * 2 {
+        return Ok(false);
+    }
+    let mut out = lines[lines.len() - keep..].join("\n");
+    out.push('\n');
+    crate::sites::write_atomic(p, out.as_bytes())?;
+    Ok(true)
+}
+
+/// 最近的动态（新的在前）。只读文件尾部：一条动态几百字节，按 limit 估算要读多少，不整个文件读进来解析。
 pub fn activity(data_dir: &Path, limit: usize) -> Vec<Activity> {
-    let Ok(text) = std::fs::read_to_string(dir(data_dir).join("activity.jsonl")) else {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(activity_path(data_dir)) else {
         return Vec::new();
     };
-    let mut v: Vec<Activity> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
-    v.reverse();
-    v.truncate(limit);
-    v
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    // 每条按 2KB 估（实际大多几百字节），不够再整个读
+    let want = (limit as u64).saturating_mul(2048).max(64 * 1024);
+    let mut text = String::new();
+    let tail_only = len > want;
+    if tail_only && f.seek(SeekFrom::Start(len - want)).is_err() {
+        return Vec::new();
+    }
+    if f.read_to_string(&mut text).is_err() {
+        // 从中间切进去可能切在多字节字符里，读不成就整个读
+        text.clear();
+        if f.seek(SeekFrom::Start(0)).is_err() || f.read_to_string(&mut text).is_err() {
+            return Vec::new();
+        }
+    } else if tail_only {
+        // 第一行多半是半截，丢掉
+        text = text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_default();
+    }
+    text.lines().rev().filter_map(|l| serde_json::from_str(l).ok()).take(limit).collect()
 }
 
 pub fn digests_dir(data_dir: &Path) -> PathBuf {
@@ -1006,6 +1050,29 @@ mod group_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 动态文件长过两倍上限就只留最新的一段；读的时候只看尾部，新的在前。
+    #[test]
+    fn activity_log_rotates_and_reads_from_the_tail() {
+        let d = std::env::temp_dir().join(format!("managed-a-{}", uuid::Uuid::new_v4()));
+        let p = dir(&d).join("activity.jsonl");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let text: String = (0..25).map(|i| format!("{}\n", serde_json::json!({ "ts": i, "site_id": "s", "site_name": "n", "kind": "shipped", "title": format!("t{i}") }))).collect();
+        std::fs::write(&p, &text).unwrap();
+        assert!(!rotate_activity(&p, &text, 20).unwrap(), "没超过两倍不动");
+        assert!(rotate_activity(&p, &text, 10).unwrap());
+        let kept = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(kept.lines().count(), 10);
+        assert!(kept.lines().next().unwrap().contains("\"ts\":15"), "{kept}");
+        let v = activity(&d, 3);
+        assert_eq!(v.iter().map(|a| a.ts).collect::<Vec<_>>(), vec![24, 23, 22]);
+        // 很长的文件：只读尾部也能拿到最新的
+        let big: String = (0..5000).map(|i| format!("{}\n", serde_json::json!({ "ts": i, "site_id": "s", "site_name": "n", "kind": "shipped", "title": format!("标题 {i}") }))).collect();
+        std::fs::write(&p, &big).unwrap();
+        let v = activity(&d, 2);
+        assert_eq!(v.iter().map(|a| a.ts).collect::<Vec<_>>(), vec![4999, 4998]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn defaults_are_safe() {

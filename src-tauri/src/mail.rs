@@ -12,6 +12,9 @@
 //!   谁都能给你发邮件，邮件里的话不能有机会带偏 AI。
 //! - 只读：IMAP 用 EXAMINE + BODY.PEEK，Gmail API 只申请 gmail.readonly；不标已读、不删不移。
 //! - 不取谷歌 / 苹果 / 微软和邮箱所在域发来的邮件：那是接管邮箱本身和这些账号的钥匙。
+//! - 其它网站第一次取时要用户在对话里点「允许」（见 `sender_approval`）：网页里一句注入的话就能让 AI 来要
+//!   「某某网站的验证码」，不能让它拿到用户在别处账号的登录码。允许过的网站记在 `mail_senders.json`；
+//!   没人在的无人值守任务一律不给新网站放行。看着像重置密码 / 登录验证的邮件也不取。
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -150,6 +153,116 @@ pub fn normalize_domain(from: &str) -> Option<String> {
 fn sender_matches(addr: &str, domain: &str) -> bool {
     let d = email_domain(addr);
     d == domain || d.ends_with(&format!(".{domain}"))
+}
+
+/// 重置密码、登录验证这类邮件不代取：注册教程只会收到注册验证码，这种邮件说明 AI 要的不是注册码。
+const RESET_LOGIN_WORDS: [&str; 16] = [
+    "重置密码", "重设密码", "找回密码", "密码重置", "重置您的密码", "登录验证", "登入验证", "登录验证码", "登录确认",
+    "reset your password", "password reset", "reset password", "login code", "sign-in code", "signin code", "verify your login",
+];
+
+/// 标题或正文看着像「重置密码 / 登录验证」而不是注册验证。
+pub fn looks_like_reset_or_login(subject: &str, body: &str) -> bool {
+    let s = format!("{subject}\n{body}").to_lowercase();
+    RESET_LOGIN_WORDS.iter().any(|w| s.contains(w))
+}
+
+// ---------------------------------------------------------------------------------------------
+// 发件网站的放行：第一次取某个网站的验证码要用户点「允许」
+
+/// 允许过的发件网站：域名 → 允许的时间（秒）。文件在 `<数据目录>/mail_senders.json`。
+#[derive(Serialize, Deserialize, Default)]
+struct Senders {
+    #[serde(default)]
+    approved: std::collections::BTreeMap<String, i64>,
+}
+
+fn senders_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("mail_senders.json")
+}
+
+fn load_senders(data_dir: &Path) -> Senders {
+    std::fs::read(senders_path(data_dir)).ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default()
+}
+
+pub fn is_sender_approved(data_dir: &Path, domain: &str) -> bool {
+    load_senders(data_dir).approved.contains_key(domain)
+}
+
+fn approve_sender(data_dir: &Path, domain: &str) {
+    let mut v = load_senders(data_dir);
+    v.approved.insert(domain.to_string(), now());
+    let _ = crate::sites::write_json(&senders_path(data_dir), &v, true);
+}
+
+/// 这一次运行里用户拒绝过的网站：同一会话里不再弹卡，直接拒。
+static DENIED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 等用户点卡最多这么久（phone.js 那头的总超时按 wait + 180 秒算，够等）。
+const APPROVAL_WAIT: Duration = Duration::from_secs(120);
+
+/// 现在有没有人在对话里（有正在跑的、不是无人值守的会话）。
+fn interactive_conversation() -> bool {
+    use tauri::Manager;
+    let Some(app) = crate::APP.get() else { return false };
+    let state = app.state::<crate::AppState>();
+    state.convos.list().iter().any(|c| c.status == "running" && !crate::site_runner::is_unattended(&c.id))
+}
+
+/// 这个网站的验证码邮件能不能读：允许过的直接过；这次拒绝过的直接拒；没人在（无人值守）一律拒；
+/// 否则在对话里出一张「允许读取来自 <域名> 的验证码邮件？」的卡，等用户点。
+/// 走的是权限卡那套文件（`<数据目录>/permit/pending/<id>.req.json` ↔ `.resp.json`），界面照常轮询、渲染、应答。
+async fn sender_approval(data_dir: &Path, domain: &str) -> Result<(), serde_json::Value> {
+    if is_sender_approved(data_dir, domain) {
+        return Ok(());
+    }
+    if DENIED.lock().map(|d| d.contains(domain)).unwrap_or(false) {
+        return Err(err("denied", format!("用户这次拒绝了读取 {domain} 的验证码邮件：这一步交给用户自己在手机上完成。")));
+    }
+    if !interactive_conversation() {
+        return Err(err("needs_approval", format!("{domain} 还没被允许过：读它的验证码邮件要用户在对话里点一次「允许」，无人值守的任务不能自己放行。把这一步留给用户。")));
+    }
+    let pending = data_dir.join("permit").join("pending");
+    let _ = std::fs::create_dir_all(&pending);
+    let id = format!("mail_{}", uuid::Uuid::new_v4().simple());
+    let req = pending.join(format!("{id}.req.json"));
+    let resp = pending.join(format!("{id}.resp.json"));
+    // conv 写成 "mail"：不属于任何会话，界面在当前看着的对话里显示它（见 permits.svelte.ts），
+    // 也不会被「全自动档的会话就地放行」那条规则放掉——第一次取某个网站的验证码必须有人点。
+    let payload = serde_json::json!({
+        "id": id, "conv": "mail", "tool": "邮箱验证码", "cmd": "", "input": {},
+        "desc": format!("允许读取来自 {domain} 的验证码邮件？"), "arg": domain,
+        "dangerous": true, "mode": "ask", "ts": chrono::Utc::now().timestamp_millis(),
+    });
+    if std::fs::write(&req, payload.to_string()).is_err() {
+        return Err(err("needs_approval", "没能发出确认请求，请用户稍后再试。"));
+    }
+    let deadline = std::time::Instant::now() + APPROVAL_WAIT;
+    let decision = loop {
+        if let Ok(raw) = std::fs::read(&resp) {
+            let allow = serde_json::from_slice::<serde_json::Value>(&raw).ok().and_then(|v| v["decision"].as_str().map(|d| d == "allow")).unwrap_or(false);
+            break Some(allow);
+        }
+        if std::time::Instant::now() > deadline {
+            break None;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    };
+    let _ = std::fs::remove_file(&req);
+    let _ = std::fs::remove_file(&resp);
+    match decision {
+        Some(true) => {
+            approve_sender(data_dir, domain);
+            Ok(())
+        }
+        Some(false) => {
+            if let Ok(mut d) = DENIED.lock() {
+                d.insert(domain.to_string());
+            }
+            Err(err("denied", format!("用户没有允许读取 {domain} 的验证码邮件：这一步交给用户自己在手机上完成。")))
+        }
+        None => Err(err("needs_approval", format!("等了两分钟，用户还没在对话里回应「允许读取来自 {domain} 的验证码邮件」：提醒用户看一下，等用户说好了再重试。"))),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -576,7 +689,7 @@ pub async fn google_connect(data_dir: &Path, client: (String, String), open: imp
     if !t.granted.iter().any(|s| s == GMAIL_SCOPE) {
         return Err("授权时要勾上「查看你的电子邮件」那一项，再点一次「用 Google 登录」".into());
     }
-    let p = reqwest::Client::new()
+    let p = crate::cf::http()
         .get(format!("{GMAIL_API}/profile"))
         .bearer_auth(&t.access)
         .timeout(Duration::from_secs(30))
@@ -674,7 +787,7 @@ enum Source {
 impl Source {
     async fn open(cfg: &MailConfig) -> Result<Self, serde_json::Value> {
         if cfg.auth == "google" {
-            let http = reqwest::Client::new();
+            let http = crate::cf::http().clone();
             let token = gmail_token(&http).await.map_err(|e| err("mail_login", e))?;
             return Ok(Source::Gmail(Gmail { http, token, cache: HashMap::new() }));
         }
@@ -819,6 +932,11 @@ async fn dispatch(data_dir: &Path, req: Req) -> serde_json::Value {
     if blocked_sender(&domain, &cfg.email) {
         return err("blocked", format!("{domain} 的邮件不代取：谷歌、苹果、微软和邮箱服务商自己的验证码管着你的主账号，请用户自己处理。"));
     }
+    // 第一次取这个网站的要用户点「允许」（无人值守时直接拒）
+    if let Err(e) = sender_approval(data_dir, &domain).await {
+        push_log(data_dir, LogEntry { ts: now(), from: domain.clone(), kind: kind.into(), ok: false, note: e.get("detail").and_then(|n| n.as_str()).unwrap_or("").chars().take(120).collect() });
+        return e;
+    }
     if !req.serial.is_empty() && !req.serial.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')) {
         return err("bad_args", "--serial 不对");
     }
@@ -857,6 +975,8 @@ async fn fetch_and_fill(
     let mut src = Source::open(cfg).await?;
     let parser = mail_parser::MessageParser::default();
     let mut saw_mail = false;
+    // 看到过像「重置密码 / 登录验证」的邮件（AI 指定网站时才过滤；用户自己点「填验证码」按钮不管）
+    let mut saw_reset = false;
     let found = 'poll: loop {
         let mut msgs = match src.recent(domain, since).await {
             Ok(m) => m,
@@ -882,9 +1002,13 @@ async fn fetch_and_fill(
             } else if !sender_matches(from, domain) {
                 continue;
             }
-            saw_mail = true;
             let subject = msg.subject().unwrap_or("");
             let text = msg.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+            if !domain.is_empty() && looks_like_reset_or_login(subject, &text) {
+                saw_reset = true;
+                continue;
+            }
+            saw_mail = true;
             let hit = if kind == "code" {
                 extract_code(subject, &text)
             } else {
@@ -897,7 +1021,9 @@ async fn fetch_and_fill(
         }
         if std::time::Instant::now() + POLL > deadline {
             src.close().await;
-            return Err(if saw_mail && kind == "code" {
+            return Err(if saw_reset && !saw_mail {
+                err("reset_or_login", format!("收到的 {who} 邮件是重置密码 / 登录验证那种，不是注册验证：Pilot 不代取这类验证码，这一步交给用户自己做。"))
+            } else if saw_mail && kind == "code" {
                 err("no_code_in_mail", format!("收到了 {who} 的邮件，但没认出验证码：可能是激活链接（改用 mail-link），否则请用户看一下邮件。"))
             } else if saw_mail {
                 err("no_link_in_mail", format!("收到了 {who} 的邮件，但里面没有 {who} 的验证 / 激活链接：请用户看一下邮件。"))
@@ -1026,6 +1152,41 @@ mod tests {
         assert!(blocked_sender("accounts.google.com", "a@gmail.com"));
         assert!(blocked_sender("corp.example", "me@corp.example"));
         assert!(!blocked_sender("okx.com", "a@gmail.com"));
+    }
+
+    #[test]
+    fn reset_and_login_mails_are_refused() {
+        assert!(looks_like_reset_or_login("Reset your password", "Click here to reset"));
+        assert!(looks_like_reset_or_login("", "您正在重置密码，验证码 123456"));
+        assert!(looks_like_reset_or_login("Your sign-in code", "Use 482913 to sign in"));
+        assert!(looks_like_reset_or_login("登录验证", "验证码 482913"));
+        assert!(!looks_like_reset_or_login("Welcome to OKX", "Your verification code is 482913"));
+        assert!(!looks_like_reset_or_login("注册验证码", "您的验证码是 482913"));
+    }
+
+    /// 允许过的网站记在文件里，重启还在；没允许过的查不到。
+    #[test]
+    fn approved_senders_are_remembered() {
+        let d = std::env::temp_dir().join(format!("mail-s-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(!is_sender_approved(&d, "okx.com"));
+        approve_sender(&d, "okx.com");
+        assert!(is_sender_approved(&d, "okx.com"));
+        assert!(!is_sender_approved(&d, "binance.com"));
+        assert!(load_senders(&d).approved["okx.com"] > 0);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 没人在对话里（测试进程里没有 Pilot 的应用状态）：新网站一律拒，不出卡、不放行。
+    #[tokio::test]
+    async fn unattended_runs_never_get_a_new_sender_approved() {
+        let d = std::env::temp_dir().join(format!("mail-u-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let e = sender_approval(&d, "okx.com").await.err().unwrap();
+        assert_eq!(e["code"], "needs_approval");
+        assert!(!is_sender_approved(&d, "okx.com"));
+        assert!(!d.join("permit").join("pending").exists(), "无人值守不该写确认请求");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

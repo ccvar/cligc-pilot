@@ -10,6 +10,13 @@ use std::time::Duration;
 
 const API: &str = "https://api.cloudflare.com/client/v4";
 
+/// 全局共用一个 HTTP 客户端（连接池复用）：以前每个请求都新建一个，列 DNS 记录、Pages 项目、查 DoH 时
+/// 一次几十上百个请求就是几十上百次握手。超时还是由每个请求自己设，行为不变。
+pub fn http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
+}
+
 #[derive(Serialize, Default, Clone)]
 pub struct CfAccount {
     pub id: String,
@@ -39,7 +46,7 @@ async fn cf_get_query(token: &str, path: &str, query: &[(&str, &str)]) -> Result
             pairs.append_pair(key, value);
         }
     }
-    let client = reqwest::Client::new();
+    let client = http();
     let request = client
         .get(url)
         .header("Authorization", format!("Bearer {token}"))
@@ -138,7 +145,7 @@ pub async fn verify_token(token: &str) -> Result<CfVerify, String> {
 
 async fn cf_send(token: &str, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, String> {
     let url = format!("{API}{path}");
-    let client = reqwest::Client::new();
+    let client = http();
     let mut req = client
         .request(method, url)
         .header("Authorization", format!("Bearer {token}"))
@@ -746,7 +753,7 @@ pub async fn r2_bucket_ensure(token: &str, account_id: &str, name: &str) -> Resu
 pub async fn r2_put(token: &str, account_id: &str, bucket: &str, key: &str, bytes: Vec<u8>, content_type: &str) -> Result<(), String> {
     let enc: Vec<String> = key.split('/').map(|s| s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()).collect();
     let url = format!("{API}/accounts/{account_id}/r2/buckets/{bucket}/objects/{}", enc.join("/"));
-    let r = reqwest::Client::new()
+    let r = http()
         .put(url)
         .header("Authorization", format!("Bearer {token}"))
         .header("content-type", if content_type.is_empty() { "application/octet-stream" } else { content_type })

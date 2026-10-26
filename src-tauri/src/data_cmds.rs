@@ -224,8 +224,14 @@ pub async fn setup_indexnow(state: tauri::State<'_, AppState>, id: String) -> Re
             crate::site_git::git_ok(&wt, &["add", &rel], "").await?;
             let (name, email) = crate::github::commit_identity(&gh.login, &gh.account_id);
             crate::site_git::git_ok(&wt, &["-c", &format!("user.name={name}"), "-c", &format!("user.email={email}"), "commit", "-qm", "chore: add IndexNow key file"], "").await?;
-            crate::site_git::git_ok(&wt, &["push", "--force", "-u", "origin", branch], &token).await?;
-            let pr = crate::site_github::create_pr(&token, &site.repo, branch, &site.default_branch, "Add IndexNow key file", "Adds the IndexNow verification file so Pilot can notify search engines about updated pages after each deploy.").await?;
+            // 不用 --force 盖掉远端同名分支（可能是用户自己的）：带租约推，远端已经有这个分支就换一个带后缀的名字
+            let mut branch = branch.to_string();
+            if crate::site_git::git_ok(&wt, &["push", "--force-with-lease", "-u", "origin", &branch], &token).await.is_err() {
+                let unique = format!("pilot/indexnow-key-{}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+                crate::site_git::git_ok(&wt, &["push", "-u", "origin", &format!("HEAD:refs/heads/{unique}")], &token).await?;
+                branch = unique;
+            }
+            let pr = crate::site_github::create_pr(&token, &site.repo, &branch, &site.default_branch, "Add IndexNow key file", "Adds the IndexNow verification file so Pilot can notify search engines about updated pages after each deploy.").await?;
             out.pr_url = pr.url;
             crate::site_git::remove_worktree(&main, &wt).await;
             out.note = "已开 PR，合并并上线后生效。".into();

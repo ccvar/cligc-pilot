@@ -132,7 +132,9 @@ fn match_cf_deploy(all: &[(crate::conns::Connection, Vec<crate::cf::PagesProject
 #[tauri::command]
 pub async fn detect_cf_deploy(state: tauri::State<'_, AppState>, id: String) -> Result<Option<DetectedDeploy>, String> {
     let site = state.sites.get(&id)?;
-    Ok(match_cf_deploy(&all_pages_projects(&state.conns).await, &site))
+    let all = all_pages_projects(&state.conns).await;
+    // 匹配时会跑 git 读 origin（阻塞），别占着异步线程
+    tauri::async_runtime::spawn_blocking(move || match_cf_deploy(&all, &site)).await.map_err(|e| e.to_string())
 }
 
 /// 没配置部署的站点，在 Cloudflare 里按域名 / 仓库识别出来的直接填上（只填没配置的，不改你设过的）。返回填了几个。
@@ -144,8 +146,11 @@ pub async fn autodetect_cf_deploys(state: tauri::State<'_, AppState>) -> Result<
         return Ok(filled);
     }
     let all = all_pages_projects(&state.conns).await;
-    for site in todo {
-        let Some(d) = match_cf_deploy(&all, &site) else { continue };
+    // 每个站点都要跑一次 git 读 origin：整批放到阻塞线程里做
+    let matched: Vec<(crate::sites::Site, DetectedDeploy)> = tauri::async_runtime::spawn_blocking(move || todo.into_iter().filter_map(|s| match_cf_deploy(&all, &s).map(|d| (s, d))).collect())
+        .await
+        .map_err(|e| e.to_string())?;
+    for (site, d) in matched {
         let ok = state.sites.update(&site.id, crate::now_secs(), |s| {
             if s.deploy.mode == "none" {
                 s.deploy.mode = d.mode.clone();
@@ -287,7 +292,7 @@ pub fn list_sites(state: tauri::State<'_, AppState>) -> Vec<Site> {
 }
 
 #[tauri::command]
-pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Result<Site, String> {
+pub async fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Result<Site, String> {
     let t = now();
     let mut site = Site {
         id: String::new(),
@@ -316,12 +321,12 @@ pub fn import_site(state: tauri::State<'_, AppState>, req: ImportRequest) -> Res
             .to_string_lossy()
             .into_owned();
         if site.repo.is_empty() {
-            if let Ok(out) = std::process::Command::new("git")
-                .args(["-C", &site.local_dir, "remote", "get-url", "origin"])
-                .output()
-            {
-                site.repo = sites::github_repo_from_url(&String::from_utf8_lossy(&out.stdout)).unwrap_or_default();
-            }
+            let dir = PathBuf::from(&site.local_dir);
+            // 跑 git 是阻塞的，放到阻塞线程里
+            site.repo = tauri::async_runtime::spawn_blocking(move || sites::git_out(&dir, &["remote", "get-url", "origin"]).and_then(|u| sites::github_repo_from_url(&u)))
+                .await
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
         }
     }
     validate(&mut site, &state)?;
@@ -608,13 +613,13 @@ pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, 
     next.repo = if current.source == "github" { current.repo.clone() } else { next.repo };
     next.local_dir = current.local_dir.clone();
     next.build.env_keys = current.build.env_keys.clone();
-    // 迁移状态只由迁移流程改（切换 / 回退），设置里存不动；迁移中不能填正式域名，不然预览上线会把线上域名切过来
-    if matches!(current.origin.as_str(), "migrating" | "migrated") {
-        next.origin = current.origin.clone();
-        next.migrate_from = current.migrate_from.clone();
-        if current.origin == "migrating" && !next.domain.trim().is_empty() {
-            return Err("这个站点还在迁移：正式域名会在「切换到新站」时自动填上，现在先留空".into());
-        }
+    // 来源（created / migrating / migrated / 导入）只由建站、迁移流程改，设置里存不动：
+    // 前端要是把导入的站点传成 created，「放弃站点」就会把用户自己的文件夹扔进废纸篓。
+    // 迁移中不能填正式域名，不然预览上线会把线上域名切过来。
+    next.origin = current.origin.clone();
+    next.migrate_from = current.migrate_from.clone();
+    if current.origin == "migrating" && !next.domain.trim().is_empty() {
+        return Err("这个站点还在迁移：正式域名会在「切换到新站」时自动填上，现在先留空".into());
     }
     validate(&mut next, &state)?;
     state.sites.update(&current.id, now(), move |s| {
@@ -643,6 +648,9 @@ pub fn remove_site(state: tauri::State<'_, AppState>, id: String) -> Result<(), 
 #[tauri::command]
 pub async fn site_takedown(state: tauri::State<'_, AppState>, id: String, trash_folder: bool) -> Result<Vec<String>, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = sites::protected_reason(&site) {
+        return Err(r);
+    }
     if state.site_jobs.running(&id) {
         return Err("站点有任务正在运行，请先停止".into());
     }
@@ -791,6 +799,9 @@ pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id:
 
 pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) -> Result<String, String> {
     let mut site = state.sites.get(&id)?;
+    if let Some(r) = sites::protected_reason(&site) {
+        return Err(r);
+    }
     // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
     if site.data.indexnow_key.is_empty() && !site.domain.is_empty() && matches!(site.deploy.mode.as_str(), "direct" | "workers") {
         let key = crate::bing::new_indexnow_key();
@@ -828,6 +839,9 @@ pub async fn site_publish_files(app: tauri::AppHandle, state: tauri::State<'_, A
 
 pub(crate) async fn start_publish_files(app: &tauri::AppHandle, state: &AppState, id: &str, fallback: bool) -> Result<String, String> {
     let site = state.sites.get(id)?;
+    if let Some(r) = sites::protected_reason(&site) {
+        return Err(r);
+    }
     let site_dir = state.sites.data_dir(id);
     match crate::site_deploy::live_build(&site, &site_dir).await {
         Ok(_) => {
@@ -866,8 +880,13 @@ pub(crate) async fn deploy_and_wait(site_id: &str) -> Result<serde_json::Value, 
     use tauri::Manager;
     let app = crate::APP.get().ok_or("Pilot 还没准备好")?.clone();
     let state = app.state::<AppState>();
+    let started_secs = crate::now_secs();
     let job_id = start_deploy(app.clone(), &state, site_id.to_string())?;
     let started = std::time::Instant::now();
+    let site_dir = state.sites.data_dir(site_id);
+    // 作业槽位每站只有一个：我们的跑完后别的任务可能马上接上，槽位里就不是我们的了。
+    // 部署记录（开始时间不早于发起时刻）是这次上线留下的凭据，槽位被顶掉就从它读结果。
+    let our_record = || crate::site_deploy::load_history(&site_dir).into_iter().find(|r| r.ts >= started_secs);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         let Some(j) = state.site_jobs.snapshot(site_id) else { return Err("上线作业不见了".into()) };
@@ -877,6 +896,15 @@ pub(crate) async fn deploy_and_wait(site_id: &str) -> Result<serde_json::Value, 
                 "status": j.status, "url": j.url, "error": j.error, "failed_steps": failed,
                 "log_tail": j.log.iter().rev().take(12).rev().cloned().collect::<Vec<_>>(),
             }));
+        }
+        if j.id != job_id {
+            return match our_record() {
+                Some(r) => Ok(serde_json::json!({
+                    "status": if r.ok { "ok" } else { "failed" }, "url": r.url, "error": r.error,
+                    "note": "上线已结束，站点随后又开始了别的任务；这是这次上线的结果",
+                })),
+                None => Err("上线作业被别的任务顶掉了，没留下部署记录".into()),
+            };
         }
         if started.elapsed() > std::time::Duration::from_secs(900) {
             return Ok(serde_json::json!({ "status": "running", "note": "上线还在跑，进度在 Pilot 站点页" }));
@@ -888,6 +916,9 @@ pub(crate) async fn deploy_and_wait(site_id: &str) -> Result<serde_json::Value, 
 #[tauri::command]
 pub fn check_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let site = state.sites.get(&id)?;
+    if let Some(r) = sites::protected_reason(&site) {
+        return Err(r);
+    }
     let job = state.site_jobs.start(Some(app), &id, "check", "构建预检", crate::site_deploy::CHECK_STEPS)?;
     let job_id = job.id.clone();
     let conns = state.conns.clone();

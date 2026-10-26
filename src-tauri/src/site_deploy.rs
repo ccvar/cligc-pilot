@@ -72,12 +72,7 @@ fn push_history(site_dir: &Path, rec: &DeployRecord) {
     let mut all = load_history(site_dir);
     all.insert(0, rec.clone());
     all.truncate(100);
-    if let Ok(raw) = serde_json::to_vec_pretty(&all) {
-        let tmp = history_path(site_dir).with_extension("json.tmp");
-        if std::fs::write(&tmp, raw).is_ok() {
-            let _ = std::fs::rename(&tmp, history_path(site_dir));
-        }
-    }
+    let _ = crate::sites::write_json(&history_path(site_dir), &all, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,9 +144,7 @@ pub fn load_manifest(site_dir: &Path) -> Manifest {
 }
 
 fn save_manifest(site_dir: &Path, m: &Manifest) {
-    if let Ok(raw) = serde_json::to_vec(m) {
-        let _ = std::fs::write(manifest_path(site_dir), raw);
-    }
+    let _ = crate::sites::write_json(&manifest_path(site_dir), m, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -364,10 +357,12 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
         // Workers：名称、路由、绑定都在仓库的 wrangler 配置里，Pilot 只负责在构建检查通过后执行一次。
         let (prog, mut args) = wrangler_cmd(&b.dir)?;
         args.push("deploy".into());
-        // 公开的配置变量随部署带上（密钥另外写进 Worker 的密钥，不放进命令行）
-        let secret_of: std::collections::HashMap<String, bool> = crate::site_config::vars(site, &b.dir).into_iter().map(|v| (v.key, v.secret)).collect();
+        // 公开的配置变量随部署带上；密钥另外写进 Worker 的密钥（见 sync_config），绝不放进命令行——
+        // 命令行参数 `ps` 里谁都看得到。拿不准是不是密钥的（没声明的）一律当密钥。
+        let secret_of = crate::site_config::secret_map(site, &b.dir);
         for (k, v) in crate::site_config::effective_values(site, &b.dir) {
-            if !secret_of.get(&k).copied().unwrap_or(false) {
+            if !secret_of.get(&k).copied().unwrap_or(true) {
+                job.add_secret(&v);
                 args.push("--var".into());
                 args.push(format!("{k}:{v}"));
             }
@@ -528,6 +523,9 @@ pub async fn run_republish(site: Site, conns: ConnStore, site_dir: PathBuf, job:
     let started = now();
     let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: "files".into(), ..Default::default() };
     let result = async {
+        if let Some(r) = crate::sites::protected_reason(&site) {
+            return Err(r);
+        }
         job.step("prepare", "running", "");
         let (built, last) = live_build(&site, &site_dir).await.inspect_err(|_| job.step("prepare", "failed", ""))?;
         rec.commit = last.commit.clone();
@@ -585,6 +583,9 @@ pub const CHECK_STEPS: &[(&str, &str)] = &[
 /// 预检：只跑「准备代码 → 安装 → 构建 → 检查」，不上传。GitHub 来源检查的是生产分支的最新代码。
 pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job) -> Result<(), String> {
     let result = async {
+        if let Some(r) = crate::sites::protected_reason(&site) {
+            return Err(r);
+        }
         job.step("prepare", "running", "");
         let (dir, stamp) = match site.source.as_str() {
             "github" => {
@@ -602,6 +603,10 @@ pub async fn run_check(site: Site, conns: ConnStore, site_dir: PathBuf, job: Job
 }
 
 async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord, mut spec: crate::site_verify::Spec) -> Result<(), String> {
+    // 受保护的站点：不管是谁发起的（手动、运营任务、回滚）都不上线
+    if let Some(r) = crate::sites::protected_reason(site) {
+        return Err(r);
+    }
     if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err("这个站点不是由 Pilot 直接上传部署的".into());
     }
@@ -655,18 +660,18 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
     job.step("upload", "ok", &url);
     job.set_url(&url);
     rec.url = url;
-    // Pages：域名打开要真是这一版。旧的 Worker 路由、别的项目绑着这个域名都会抢在 Pages 前面回应，
-    // 查到明确在抢这个域名的就直接处理掉（Worker / 旧项目本身不删），再验收
+    // Pages：域名打开要真是这一版。旧的 Worker 路由、别的项目绑着这个域名都会抢在 Pages 前面回应。
+    // 这里只查、只报，**不动** Cloudflare 里的任何东西（无人值守的运营上线也会走到这）：
+    // 删路由、解绑域名要用户在上线向导里看着清单确认（launch_cmds::site_domain_check auto=true）。
+    let mut domain_notes = Vec::new();
     if site.deploy.mode == "direct" && !site.domain.is_empty() {
-        let dc = crate::launch_cmds::domain_settle(conns, site).await;
-        for m in &dc.fixed {
-            job.line(&format!("域名：{m}"));
-        }
+        let dc = crate::launch_cmds::domain_check(conns, site, false).await;
         if dc.compared && !dc.same {
             job.line(&format!("域名：{} 打开还是「{}」，不是这次上线的「{}」", site.domain, dc.live_title, dc.pages_title));
-            for i in dc.issues.iter().filter(|i| !i.auto) {
-                job.line(&format!("  · {}", i.text));
+            for i in &dc.issues {
+                job.line(&format!("  · {}{}", i.text, if i.fix.is_empty() { String::new() } else { format!("（可在上线向导里「{}」）", i.fix) }));
             }
+            domain_notes.push(format!("{} 打开的还不是这次上线的版本：到上线向导里检查域名，确认后再处理占用它的路由或项目", site.domain));
         }
     }
     // Workers：密钥要 Worker 已经存在才写得进去，所以放在部署之后（公开变量已经随 --var 带上）
@@ -700,7 +705,10 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         job.step("upload", "ok", &url);
         rep = crate::site_verify::run(&spec, job, true).await;
     }
-    finish_verify(job, rec, &rep)?;
+    // 域名被别的东西占着也算「待核对」（finish_verify 会把 attention 整个换成验收结果，所以在它之后补）
+    let verified = finish_verify(job, rec, &rep);
+    rec.attention.extend(domain_notes);
+    verified?;
     // IndexNow：只提交内容有变化、并且验收通过的页面（有页面级问题的先不提交）
     let held: Vec<&String> = spec.pages.iter().chain(&spec.new_pages).filter(|u| !rep.passed.contains(u)).collect();
     let mut changed: Vec<String> = changed_all.into_iter().filter(|u| !held.contains(&u)).collect();

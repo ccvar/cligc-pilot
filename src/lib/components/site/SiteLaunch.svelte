@@ -14,7 +14,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { sites, deploySite, pilotDeploys, refreshSites } from '$lib/state/sites.svelte.js';
   import { openDataConnect } from '$lib/state/datasrc.svelte.js';
-  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns, verifyBing } from '$lib/state/launch.svelte.js';
+  import { launch, loadLaunch, launchSteps, toggleLaunchOpen, toGithub, setupPages, setupGsc, setupIndexNow, askAiForGa4, syncConfig, replacePagesDns, verifyBing, autoBind } from '$lib/state/launch.svelte.js';
   import { ga4ToConfig, gaReady, loadMake } from '$lib/state/siteMake.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -107,7 +107,14 @@
       <span class="grow"></span>
       <button class="ic-btn" onclick={(e) => { e.stopPropagation(); void loadLaunch(site.id, true); }} disabled={checking} aria-label="重新检查" data-tip={checking ? '检查中…' : '重新检查：读取最新状态，并按域名到已连接的 Google / Bing 账号里找现成的资源绑上'}><RefreshIcon spinning={checking} /></button>
     </div>
-    {#if st.auto_bound?.length}<p class="ok-note">已按域名自动绑定：{st.auto_bound.join('、')}</p>{/if}
+    {#if st.can_auto?.length}
+      <!-- 按域名在已连接账号里找到的、可以一键处理的事：只列出来，点了（并确认清单）才做 -->
+      <div class="can-auto">
+        <p class="ok-note">按域名找到 {st.can_auto.length} 件可以自动处理的事：</p>
+        <ul>{#each st.can_auto as a (a)}<li>{a}</li>{/each}</ul>
+        <div class="row"><button class="btn tiny primary" onclick={() => autoBind(site)} disabled={!!busy}><Icon name="wand" size={11} />{busy === 'auto' ? '处理中…' : '自动处理这些'}</button></div>
+      </div>
+    {/if}
     {#if isOpen}
     <div class="lbody">
     {#each st.errors as e (e)}<p class="hint warn-text">{e}</p>{/each}
@@ -274,7 +281,9 @@
   .meter i { display: block; height: 100%; border-radius: 4px; background: var(--ok); transition: width .4s var(--su-ease); }
   .next { font-size: 12px; color: var(--dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lbody { margin-top: 8px; animation: su-in .18s var(--su-ease) backwards; }
-  .launch > .ok-note { margin-top: 8px; }
+  .can-auto > .ok-note { margin-top: 8px; }
+  .can-auto ul { margin: 4px 0 6px; padding-left: 22px; font-size: 12px; color: var(--dim); line-height: 1.55; overflow-wrap: anywhere; }
+  .can-auto > .row { padding-left: 6px; }
   .skel .bars { display: flex; flex-direction: column; gap: 8px; padding: 12px 0 4px 26px; }
   .skel .bars i { display: block; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--accent-soft) 25%, #f6f5f1 50%, var(--accent-soft) 75%); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
   @keyframes shimmer { to { background-position: -200% 0; } }

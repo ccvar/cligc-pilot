@@ -128,10 +128,7 @@ pub async fn icon_for(site: &Site, site_dir: &Path, code_dir: Option<PathBuf>) -
         }
     }
     let url = fetch_remote(&site.domain).await;
-    let _ = std::fs::create_dir_all(site_dir);
-    if let Ok(raw) = serde_json::to_vec(&RemoteCache { checked: crate::now_secs(), url: url.clone() }) {
-        let _ = std::fs::write(&file, raw);
-    }
+    let _ = crate::sites::write_json(&file, &RemoteCache { checked: crate::now_secs(), url: url.clone() }, false);
     url
 }
 
