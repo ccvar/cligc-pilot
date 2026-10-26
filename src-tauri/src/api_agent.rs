@@ -804,10 +804,12 @@ fn image_dims(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// 一次请求最多带多少张图、多少字节（接口单次请求上限 32 MB、100 张图）。
-/// 超过就只带最近的：更早的图换成一句说明，历史本身一张不丢。
-const MAX_IMAGES: usize = 40;
-/// 超过上限时一次放掉的张数：成批放，带上的图在 20 张里才变一次，前缀缓存不用每轮重建
-const IMAGE_STEP: usize = 20;
+/// 接口不记得上一轮，每次请求都要把历史重发一遍；截图大多只在看的那一两步有用（核对页面、找按钮），
+/// 一直带着既占上下文、又每次都要计费（缓存命中也按一成算）。所以只带最近的，
+/// 更早的换成一句说明（写明文件在哪，需要时 AI 重新查看），历史本身一张不丢。
+const MAX_IMAGES: usize = 20;
+/// 超过上限时一次放掉的张数：成批放，带上的图在一批里才变一次，前缀缓存不用每轮重建
+const IMAGE_STEP: usize = 10;
 const MAX_IMAGE_TOTAL: u64 = 24 * 1024 * 1024;
 
 /// 历史里按时间顺序引用的每张图的文件大小。
@@ -1919,18 +1921,18 @@ mod image_tests {
 
     #[test]
     fn old_images_are_left_out_in_batches_instead_of_stopping() {
-        let small = vec![1000u64; 40];
-        assert_eq!(image_skip(&small), 0, "40 张以内全带上");
-        assert_eq!(image_skip(&vec![1000; 41]), 20, "超过就放掉最早的一批");
-        assert_eq!(image_skip(&vec![1000; 60]), 20, "同一批里不变，前缀缓存稳定");
-        assert_eq!(image_skip(&vec![1000; 61]), 40);
+        let small = vec![1000u64; 20];
+        assert_eq!(image_skip(&small), 0, "20 张以内全带上");
+        assert_eq!(image_skip(&vec![1000; 21]), 10, "超过就放掉最早的一批");
+        assert_eq!(image_skip(&vec![1000; 30]), 10, "同一批里不变，前缀缓存稳定");
+        assert_eq!(image_skip(&vec![1000; 31]), 20);
         let big = vec![5 * 1024 * 1024u64; 10];
         assert_eq!(image_skip(&big), 6, "按字节再放到 24 MB 以内");
         // 被放掉的图换成一句说明，不再是图片块
-        let items: Vec<Value> = (0..41).map(|i| json!({"role":"user","content":[{"type":"pilot_image","file":format!("/nope/{i}.png"),"media_type":"image/png"}]})).collect();
+        let items: Vec<Value> = (0..21).map(|i| json!({"role":"user","content":[{"type":"pilot_image","file":format!("/nope/{i}.png"),"media_type":"image/png"}]})).collect();
         let sent = expand_images("anthropic_messages", &items);
         assert!(sent[0]["content"][0]["text"].as_str().unwrap().contains("这次没有再附上"));
-        assert!(sent[40]["content"][0]["text"].as_str().unwrap().contains("文件已不在了"), "最近的照常处理");
+        assert!(sent[20]["content"][0]["text"].as_str().unwrap().contains("文件已不在了"), "最近的照常处理");
     }
 
     #[test]
