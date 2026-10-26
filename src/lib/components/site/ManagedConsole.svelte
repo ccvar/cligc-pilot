@@ -113,7 +113,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
-      <h1>托管运营 {#if paused}<span class="pill warn">已暂停</span>{/if}</h1>
+      <h1>托管运营 {#if paused}<span class="pill warn" data-tip="AI 不做计划、不改任何站点；各方案和站点的开关都保留着，点「恢复托管」照原样接着做">已全部暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
@@ -208,16 +208,13 @@
         {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
     {:else}
-      {#if paused}
-        <div class="paused-bar"><Icon name="pause" size={13} /><span class="grow"><b>托管已全部暂停</b>AI 不做计划、不改任何站点。下面各方案、各站点的开关都保留着，恢复后照原样接着做。</span><button class="btn small primary" onclick={() => setPaused(false)}><Icon name="play" size={12} />恢复托管</button></div>
-      {/if}
       <div class="gbar">
         <p class="hint">每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。方案和站点都能单独暂停。</p>
       </div>
       {#each groups as g (g.id)}
         <div class="card grp" class:off={g.paused || paused}>
-          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if g.paused}<span class="pill warn">已暂停</span>{:else if paused}<span class="pill warn" data-tip="托管已全部暂停，这个方案也不会运行">随全部暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
-            <button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>
+          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if g.paused}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
+            {#if !paused}<button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>{/if}
             <button class="ic-btn ic-sm" onclick={() => editGroup(g)} aria-label="编辑托管方案" data-tip="编辑托管方案"><Icon name="pencil" size={14} /></button>
           </h3>
           {#if g.goal?.trim()}<p class="goal">{g.goal}</p>{/if}
@@ -255,7 +252,7 @@
                       { value: '__out', label: '退出托管', sub: '改为自己运营' },
                     ]} />
                   </div>
-                  <span class="gs-state" class:on={on && !g.paused && !paused} class:wait={on && !g.paused && paused}>{g.paused ? '方案已暂停' : !on ? '已停止' : paused ? '已开启 · 全部暂停中' : '托管中'}</span>
+                  <span class="gs-state" class:on={on && !g.paused && !paused} >{g.paused ? '方案已暂停' : !on ? '已停止' : paused ? '暂停中' : '托管中'}</span>
                   <button class="switch" class:on class:dim={g.paused || paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
                 {#if progress.has(id) && sites.jobs[id]}
@@ -360,10 +357,6 @@
   .gs .grow { flex: 1; }
   .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
   .gs-state.on { color: var(--ok); }
-  .gs-state.wait { color: var(--su-warn-ink, #8a5a08); }
-  .paused-bar { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 14px; margin-bottom: 12px; border-radius: 10px; background: var(--su-warn-soft, #fdf3dc); border: 1px solid #f0e4c4; color: var(--su-warn-ink, #8a5a08); font-size: 12.5px; line-height: 1.55; }
-  .paused-bar b { margin-right: 8px; font-weight: 600; }
-  .paused-bar .grow { flex: 1; min-width: 0; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
   .switch.on { background: var(--ok); }
