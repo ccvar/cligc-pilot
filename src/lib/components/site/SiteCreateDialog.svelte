@@ -1,6 +1,8 @@
 <script lang="ts">
-  // 制作站点：两步。① 定位（是什么站、给谁看、想靠它做什么）② 技术栈、风格、首批页面数、存放位置。
-  // 点「开始制作」后在新站点里开第一版对话，AI 照着需求从空仓库做出能预览的第一版。
+  // 制作站点，两种填法：
+  // 快速制作（默认）：一句话说清是个什么站，名称、域名可空，其余交给 AI 判断，点开始就在新站点的对话里开工；
+  // 详细设置：两步。① 定位（是什么站、给谁看、想靠它做什么）② 技术栈、风格、首批页面数、存放位置。
+  // 两种都在新站点里开第一版对话，内容标准和视觉标准都内置在第一条消息里（site_make::first_message）。
   import './site.css';
   import Dropdown from '$lib/Dropdown.svelte';
   import ModelFx from '$lib/ModelFx.svelte';
@@ -9,11 +11,16 @@
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, pickCombo, persistLauncherEffort, setFast, STYLE_OPTS } from '$lib/state/launcher.svelte.js';
   import { brainUsable, brainSetupHint } from '$lib/state/models';
-  import { siteCreate as f, closeSiteCreate, toBuildStep, createSite, pickParent, folderName, recommendedStack, SITE_KINDS, STACKS, LANGUAGES, GOALS, PAGE_COUNTS } from '$lib/state/siteCreate.svelte.js';
+  import { siteCreate as f, closeSiteCreate, setCreateMode, toBuildStep, createSite, pickParent, folderName, recommendedStack, SITE_KINDS, STACKS, LANGUAGES, GOALS, PAGE_COUNTS } from '$lib/state/siteCreate.svelte.js';
 
   const rec = $derived(recommendedStack(f.kind, f.about));
   const sep = $derived(f.parent.includes('\\') && !f.parent.includes('/') ? '\\' : '/');
   const target = $derived(f.parent ? `${f.parent.replace(/[\\/]+$/, '')}${sep}${folderName(f.domain, f.name)}` : '');
+  const quick = $derived(f.mode === 'quick');
+  const quickStack = $derived(recommendedStack('', f.about));
+  const quickTarget = $derived(f.parent ? `${f.parent.replace(/[\\/]+$/, '')}${sep}${folderName(f.domain, f.name)}` : '');
+  const canQuick = $derived(!!f.about.trim() && !!f.parent && !f.busy);
+  function quickKey(e: KeyboardEvent) { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canQuick) { e.preventDefault(); void createSite(); } }
   function toggleGoal(g: string) { f.goals = f.goals.includes(g) ? f.goals.filter((x) => x !== g) : [...f.goals, g]; }
 </script>
 
@@ -22,15 +29,40 @@
   <div class="su modal sc" role="dialog" aria-modal="true" aria-label="制作站点">
     <header class="sheet-head">
       <b><SiteMark size={15} /> 制作站点</b>
-      <ol class="stepper" aria-label="步骤">
-        <li class:on={f.step === 'brief'} class:done={f.step === 'build'}><span class="n">{f.step === 'build' ? '✓' : 1}</span>定位</li>
-        <li class="bar" aria-hidden="true"></li>
-        <li class:on={f.step === 'build'}><span class="n">2</span>技术栈与风格</li>
-      </ol>
+      <div class="seg" role="tablist" aria-label="填法">
+        <button role="tab" aria-selected={quick} class:on={quick} onclick={() => setCreateMode('quick')} disabled={f.busy} title="一句话说清是个什么站，其余交给 AI">快速制作</button>
+        <button role="tab" aria-selected={!quick} class:on={!quick} onclick={() => setCreateMode('full')} disabled={f.busy} title="自己定类型、读者、技术栈、风格和页数">详细设置</button>
+      </div>
+      {#if !quick}
+        <ol class="stepper" aria-label="步骤">
+          <li class:on={f.step === 'brief'} class:done={f.step === 'build'}><span class="n">{f.step === 'build' ? '✓' : 1}</span>定位</li>
+          <li class="bar" aria-hidden="true"></li>
+          <li class:on={f.step === 'build'}><span class="n">2</span>技术栈与风格</li>
+        </ol>
+      {/if}
       <button class="x" onclick={closeSiteCreate} disabled={f.busy}>×</button>
     </header>
     <div class="sheet-body">
-      {#if f.step === 'brief'}
+      {#if quick}
+        <p class="hint">说一句这是个什么站，剩下的交给 AI：站点类型、语言、风格由它判断，写在规划里，做完你都能看到、能改。</p>
+        <div class="field"><label for="sc-q-about">这是个什么站</label>
+          <!-- svelte-ignore a11y_autofocus -->
+          <textarea id="sc-q-about" class="tin" rows="4" bind:value={f.about} onkeydown={quickKey} autofocus placeholder="写什么内容、给谁看、帮他们解决什么问题。例如：面向刚入门的咖啡爱好者，讲清楚手冲器具怎么选、豆子怎么挑、每种冲法的参数和常见问题。"></textarea>
+        </div>
+        <div class="grid2">
+          <div class="field"><label for="sc-q-name">站点名称 <small class="opt">不填就让 AI 起</small></label><input id="sc-q-name" class="tin" bind:value={f.name} placeholder="如 手冲咖啡笔记" /></div>
+          <div class="field"><label for="sc-q-domain">主域名 <small class="opt">可以先空着</small></label><input id="sc-q-domain" class="tin" bind:value={f.domain} placeholder="example.com" spellcheck="false" autocapitalize="off" /></div>
+        </div>
+        <dl class="plan">
+          <div><dt>技术栈</dt><dd>{STACKS.find((x) => x.value === quickStack)?.label}<small>按描述推荐</small></dd></div>
+          <div><dt>第一版</dt><dd>首页 + 8 个核心页面 + 关于、联系、隐私政策</dd></div>
+          <div><dt>内容</dt><dd><em>内置标准</em>按读者真实的搜索问法写，信息讲透不注水，不编造数据，配真实截图</dd></div>
+          <div><dt>视觉</dt><dd><em>内置标准</em>按获奖网站的品质做原创设计，不套模板、不用米黄纸色底，各种屏幕宽度都适配</dd></div>
+          <div><dt>存放位置</dt><dd class="loc"><span class="mono path" title={quickTarget}>{quickTarget || '还没选'}</span><button class="ic-btn ic-sm" onclick={pickParent} disabled={f.busy} title="换个存放位置" aria-label="换个存放位置"><Icon name="pencil" size={13} /></button></dd></div>
+        </dl>
+        <small class="more">想自己定类型、读者、技术栈和风格？切到<button class="link" onclick={() => setCreateMode('full')} disabled={f.busy}>详细设置</button></small>
+        {#if !brainUsable(launcher.lBrain)}<p class="hint warn-text">{brainSetupHint(launcher.lBrain)}</p>{/if}
+      {:else if f.step === 'brief'}
         <p class="hint">说清楚这是个什么站，AI 会据此规划栏目、写出第一批页面。这段定位也会存下来，以后托管运营挑选题时照着它来。</p>
         <div class="grid2">
           <div class="field"><label for="sc-name">站点名称</label><input id="sc-name" class="tin" bind:value={f.name} placeholder="如 手冲咖啡笔记" /></div>
@@ -68,7 +100,7 @@
           <small>不管选哪个，都会生成一份站点约定（<code>.pilot/site.md</code>）：内容放哪、新增一页要改哪些地方。以后加内容、改页面都按它来。</small>
         </div>
         <div class="grid2">
-          <div class="field"><span class="lbl">视觉风格</span><Dropdown bind:value={f.style} options={STYLE_OPTS} /></div>
+          <div class="field"><span class="lbl">视觉风格</span><Dropdown bind:value={f.style} options={STYLE_OPTS} /><small>选哪种风格，内容标准和视觉标准都会照常带上</small></div>
           <div class="field"><span class="lbl">首批核心页面</span>
             <Dropdown value={String(f.pages)} onchange={(v: string) => (f.pages = Number(v))} options={PAGE_COUNTS.map((n) => ({ value: String(n), label: `${n} 页`, sub: '另加首页、关于、联系、隐私政策' }))} />
           </div>
@@ -85,7 +117,11 @@
       {#if f.err}<div class="err-note">{f.err}</div>{/if}
     </div>
     <footer class="sheet-foot">
-      {#if f.step === 'brief'}
+      {#if quick}
+        <span class="grow"></span>
+        <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
+        <button class="btn small primary" onclick={createSite} disabled={!canQuick} title="⌘ Enter">{f.busy ? '正在建站点…' : '开始制作'}</button>
+      {:else if f.step === 'brief'}
         <button class="btn small primary" onclick={toBuildStep} disabled={!(f.name.trim() || f.domain.trim()) || !f.about.trim()}>下一步</button>
       {:else}
         <button class="btn small ghost" onclick={() => (f.step = 'brief')} disabled={f.busy}>上一步</button>
@@ -137,6 +173,20 @@
   .st-main small { font-size: 11.5px; color: var(--faint); }
   .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dim); }
   .grow { flex: 1; }
+  .seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--su-soft, #f1f0ec); }
+  .seg button { height: 24px; padding: 0 10px; border: none; border-radius: 6px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .seg button.on { background: #fff; color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+  .plan { margin: 2px 0 0; border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; }
+  .plan > div { display: flex; gap: 12px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; }
+  .plan > div:first-child { border-top: none; }
+  .plan dt { flex: none; width: 56px; color: var(--faint); }
+  .plan dd { margin: 0; min-width: 0; flex: 1; color: var(--text); }
+  .plan dd small { margin-left: 6px; color: var(--faint); font-size: 11.5px; }
+  .plan dd em { font-style: normal; font-size: 10.5px; font-weight: 500; padding: 1px 6px; margin-right: 6px; border-radius: 999px; background: var(--su-ok-soft, #e6f4ea); color: var(--ok); }
+  .plan .loc { display: flex; align-items: center; gap: 6px; }
+  .more { display: block; margin-top: 8px; font-size: 11.5px; color: var(--faint); }
+  .link { border: none; background: none; padding: 0 2px; font: inherit; color: var(--accent, #b4541a); cursor: pointer; }
+  .link:hover { text-decoration: underline; }
   .sheet-foot { display: flex; align-items: center; gap: 8px; }
   @media (max-width: 520px) { .kinds { grid-template-columns: 1fr; } }
 </style>

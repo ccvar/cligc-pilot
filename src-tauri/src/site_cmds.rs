@@ -346,8 +346,13 @@ pub struct CreatedSite {
 }
 
 #[tauri::command]
-pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_make::CreateSiteRequest) -> Result<CreatedSite, String> {
+pub async fn create_site(state: tauri::State<'_, AppState>, mut req: crate::site_make::CreateSiteRequest) -> Result<CreatedSite, String> {
     use crate::site_make as mk;
+    // 快速制作可以不填名称：有域名先用域名，否则用占位名，等 AI 起好名字再改（见 apply_profile）
+    if req.quick && req.name.trim().is_empty() {
+        req.auto_name = true;
+        req.name = if req.domain.trim().is_empty() { "新站点".into() } else { req.domain.trim().to_string() };
+    }
     if req.name.trim().is_empty() {
         return Err("请填写站点名称".into());
     }
@@ -356,12 +361,26 @@ pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_mak
     }
     let build = mk::stack_build(&req.stack).ok_or("请选择技术栈")?;
     let parent = Path::new(req.parent_dir.trim());
+    // 快速制作没有已有站点可参考时默认放 ~/Sites，第一次用还没有这个文件夹
+    if req.quick && parent.is_absolute() && !parent.exists() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("建不了文件夹 {}：{e}", parent.display()))?;
+    }
     if !parent.is_absolute() || !parent.is_dir() {
         return Err("存放位置不存在".into());
     }
     let domain = sites::normalize_domain(&req.domain)?;
-    let dir = parent.join(mk::folder_name(&domain, &req.name));
-    if dir.exists() && std::fs::read_dir(&dir).map(|mut d| d.next().is_some()).unwrap_or(true) {
+    let taken = |d: &Path| d.exists() && std::fs::read_dir(d).map(|mut d| d.next().is_some()).unwrap_or(true);
+    let base = mk::folder_name(&domain, if req.auto_name { "" } else { &req.name });
+    let mut dir = parent.join(&base);
+    // 快速制作不让你回头改名：重名就自动加序号
+    if req.quick {
+        let mut n = 2;
+        while taken(&dir) && n < 100 {
+            dir = parent.join(format!("{base}-{n}"));
+            n += 1;
+        }
+    }
+    if taken(&dir) {
         return Err(format!("{} 已经存在且不是空文件夹，换个名字或位置", dir.display()));
     }
     let t = now();
@@ -395,11 +414,35 @@ pub async fn create_site(state: tauri::State<'_, AppState>, req: crate::site_mak
     crate::launch_cmds::init_repo(&dir).await.map_err(cleanup)?;
     validate(&mut site, &state).map_err(cleanup)?;
     let site = state.sites.insert(site).map_err(cleanup)?;
-    let _ = crate::site_stage::save_positioning(
-        &state.sites.data_dir(&site.id),
-        &crate::site_stage::Positioning { text: mk::positioning_text(&req).chars().take(1200).collect(), by: "user".into(), updated: t },
-    );
+    let data = state.sites.data_dir(&site.id);
+    // 快速制作的定位只是一句话，记成 AI 的：AI 写回站点资料后用更完整的那份替换
+    let by = if req.quick { "ai" } else { "user" };
+    let _ = crate::site_stage::save_positioning(&data, &crate::site_stage::Positioning { text: mk::positioning_text(&req).chars().take(1200).collect(), by: by.into(), updated: t });
+    if req.quick {
+        let _ = std::fs::write(data.join(PROFILE_PENDING), serde_json::json!({ "auto_name": req.auto_name }).to_string());
+    }
     Ok(CreatedSite { message: mk::first_message(&req), site })
+}
+
+/// 快速制作建的站点：等 AI 写回 `.pilot/profile.json`（站点数据目录里的标记，读回一次就删掉）。
+const PROFILE_PENDING: &str = "profile-pending.json";
+
+/// 读回 AI 写的站点资料：没填名称的换成 AI 起的名字；定位没被人改过就换成更完整的那份。
+fn apply_profile(state: &AppState, site: &Site, code: &Path) -> bool {
+    let data = state.sites.data_dir(&site.id);
+    let mark = data.join(PROFILE_PENDING);
+    let Ok(raw) = std::fs::read(&mark) else { return false };
+    let Some(p) = crate::site_make::load_profile(code) else { return false };
+    let auto_name = serde_json::from_slice::<serde_json::Value>(&raw).ok().and_then(|v| v["auto_name"].as_bool()).unwrap_or(false);
+    let name: String = p.name.trim().chars().take(60).collect();
+    if auto_name && !name.is_empty() {
+        let _ = state.sites.update(&site.id, now(), |s| {
+            s.name = name;
+            Ok(())
+        });
+    }
+    crate::site_stage::update_from_ai(&data, &crate::site_make::profile_positioning(&p));
+    std::fs::remove_file(mark).is_ok()
 }
 
 /// 站点制作的状态：站点约定写了没有、第一版进度、上线前检查（扫构建产物）。
@@ -414,6 +457,8 @@ pub struct MakeState {
     pub checks: Vec<crate::site_make::Check>,
     /// 构建产物的时间（index.html 的修改时间，秒）；0＝还没构建
     pub built_at: u64,
+    /// 这次读回了 AI 写的站点资料（名称可能变了，前端刷新站点列表）
+    pub profile: bool,
 }
 
 #[tauri::command]
@@ -433,11 +478,12 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
         0
     };
     let built_at = crate::static_server::built_at(&out).unwrap_or(0);
+    let profile = apply_profile(&state, &site, &code);
     let todos = mk::load_todos(&code);
     let config = crate::site_config::vars(&site, &code);
     // 不要 full：只看站点约定和待办（站点看板每次打开都会问，别去扫整个构建产物）
     if !full.unwrap_or(true) {
-        return Ok(MakeState { conventions: mk::has_conventions(&code), todos, config, steps: vec![], checks: vec![], built_at });
+        return Ok(MakeState { conventions: mk::has_conventions(&code), todos, config, steps: vec![], checks: vec![], built_at, profile });
     }
     let (steps, mut checks) = tokio::task::spawn_blocking(move || (mk::progress(&app, &code, &built_app, &site.build.out_dir, commits), mk::readiness(&out)))
         .await
@@ -447,7 +493,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
             checks.push(mk::todo_check(t));
         }
     }
-    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), todos, config, steps, checks, built_at })
+    Ok(MakeState { conventions: steps.iter().any(|s| s.key == "conventions" && s.done), todos, config, steps, checks, built_at, profile })
 }
 
 /// 「继续制作」的消息：按当前进度列出还没完成的项，带上最新标准。

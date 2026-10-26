@@ -98,6 +98,12 @@ pub struct CreateSiteRequest {
     pub pages: u32,
     /// 新站点文件夹放在哪个目录下。
     pub parent_dir: String,
+    /// 快速制作：只给了定位（和可选的名称、域名），其余让 AI 判断，判断结果写回 `.pilot/profile.json`。
+    #[serde(default)]
+    pub quick: bool,
+    /// 快速制作没填名称：先用占位名，让 AI 起名（create_site 里设置，不从前端读）。
+    #[serde(skip)]
+    pub auto_name: bool,
 }
 
 pub fn pages_of(req: &CreateSiteRequest) -> u32 {
@@ -177,16 +183,57 @@ pub const TODO_SPEC: &str = "【待我处理的事】凡是需要我提供信息
 - title 和 why 用不懂技术的人也看得懂的话写（不用 FAQPage、canonical、schema、环境变量这类词；必须提到时用一句话解释），技术细节放在 where 里。\n\
 - 汇报里简要提一句有几件事要我处理即可，不用再长篇列出。";
 
+/// 快速制作：AI 判断出的站点资料写成 Pilot 能读的文件，Pilot 读回来更新站点名称和定位（托管运营选题照着定位来）。
+const PROFILE_SPEC: &str = "【站点资料】规划时把你判断的站点资料写进 `.pilot/profile.json`，Pilot 会读回来更新站点名称和定位（以后托管运营挑选题照着这份定位）：\n\
+{\"name\":\"站点名称（读者看得到的品牌名）\",\"kind\":\"content|docs|landing|tool\",\"language\":\"页面语言\",\"audience\":\"目标读者\",\"goals\":[\"广告变现|联盟推广|获客留资|品牌展示|卖产品，可多个\"],\"positioning\":\"两三句话：写什么内容、给谁看、帮他们解决什么问题\"}";
+
+#[derive(Deserialize, Default)]
+pub struct Profile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub audience: String,
+    #[serde(default)]
+    pub goals: Vec<String>,
+    #[serde(default)]
+    pub positioning: String,
+}
+
+pub fn load_profile(code: &Path) -> Option<Profile> {
+    serde_json::from_slice(&std::fs::read(code.join(".pilot/profile.json")).ok()?).ok()
+}
+
+/// AI 写回的资料拼成定位（和 positioning_text 同样的格式）。
+pub fn profile_positioning(p: &Profile) -> String {
+    let req = CreateSiteRequest {
+        about: p.positioning.clone(),
+        kind: p.kind.clone(),
+        audience: p.audience.clone(),
+        language: p.language.clone(),
+        goals: p.goals.clone(),
+        ..Default::default()
+    };
+    if req.about.trim().is_empty() { String::new() } else { positioning_text(&req) }
+}
+
 /// 第一版对话的第一条消息：照着它，AI 从空仓库做出能预览的第一版。
 pub fn first_message(req: &CreateSiteRequest) -> String {
     let stack = STACKS.iter().find(|s| s.0 == req.stack).map(|s| s.1).unwrap_or(&req.stack);
-    let mut head = format!("请从零搭建这个新站点，做出第一版。\n\n【站点】{}", req.name.trim());
+    let site = if req.auto_name { "还没起名".to_string() } else { req.name.trim().to_string() };
+    let mut head = format!("请从零搭建这个新站点，做出第一版。\n\n【站点】{site}");
     if !req.domain.trim().is_empty() {
         head.push_str(&format!("（{}）", req.domain.trim()));
     }
     head.push_str(&format!("\n【定位】{}", positioning_text(req)));
     // 类型、语言没指定：让 AI 按定位和读者判断，判断结果写进站点约定
     let mut judge = vec![];
+    if req.auto_name {
+        judge.push("站点名称");
+    }
     if kind_label(&req.kind).is_none() {
         judge.push("站点类型（内容站、文档、落地页还是工具站）");
     }
@@ -194,7 +241,13 @@ pub fn first_message(req: &CreateSiteRequest) -> String {
         judge.push("页面语言");
     }
     if !judge.is_empty() {
-        head.push_str(&format!("\n【需要你判断】{}没有指定：按上面的定位和读者判断，在规划里写明你的判断和理由。", judge.join("和")));
+        head.push_str(&format!("\n【需要你判断】{}没有指定：按上面的定位和读者判断，在规划里写明你的判断和理由。", judge.join("、")));
+    }
+    if req.quick {
+        if req.about.trim().chars().count() < 15 {
+            head.push_str("\n【定位很简短】先用一两个问题跟我确认最关键的（主要写什么、给谁看），我回答后再动手；不要一次问一长串。");
+        }
+        head.push_str(&format!("\n{PROFILE_SPEC}"));
     }
     let style = if req.style.trim().is_empty() { "风格方向按定位和读者自己定。".to_string() } else { format!("风格方向：{}", req.style.trim()) };
     format!(
@@ -1082,6 +1135,22 @@ mod tests {
         let set = first_message(&CreateSiteRequest { kind: "docs".into(), language: "English".into(), ..req() });
         assert!(!set.contains("需要你判断") && set.contains("类型：文档 / 知识库") && set.contains("\n语言：English") && !set.contains("读者："));
         assert_eq!(pages_of(&CreateSiteRequest { pages: 50, ..req() }), 20);
+    }
+
+    #[test]
+    fn quick_message_keeps_standards_and_asks_for_profile() {
+        let q = CreateSiteRequest { quick: true, auto_name: true, name: "新站点".into(), about: "咖啡".into(), ..req() };
+        let m = first_message(&q);
+        assert!(m.contains("【内容标准】") && m.contains("【视觉标准】") && m.contains("不要部署"), "快速制作也带内置标准");
+        assert!(m.contains("还没起名") && m.contains("站点名称") && m.contains(".pilot/profile.json"));
+        assert!(m.contains("【定位很简短】"));
+        let long = first_message(&CreateSiteRequest { about: "面向刚入门的咖啡爱好者，讲清楚手冲器具怎么选、豆子怎么挑".into(), auto_name: false, name: "手冲笔记".into(), ..q });
+        assert!(!long.contains("【定位很简短】") && !long.contains("还没起名") && long.contains("手冲笔记"));
+        assert!(!first_message(&req()).contains("profile.json"), "详细设置不需要写回资料");
+        let p: Profile = serde_json::from_str(r#"{"name":"手冲笔记","kind":"content","language":"简体中文","goals":["广告变现"],"positioning":"讲手冲"}"#).unwrap();
+        let t = profile_positioning(&p);
+        assert!(t.starts_with("讲手冲") && t.contains("语言：简体中文") && t.contains("商业目标：广告变现") && t.contains("类型："));
+        assert!(profile_positioning(&Profile::default()).is_empty());
     }
 
     fn write(root: &Path, rel: &str, body: &str) {

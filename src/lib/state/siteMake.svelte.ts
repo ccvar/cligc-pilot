@@ -36,6 +36,8 @@ export async function loadMake(id: string, full = true) {
     // 轻量读取不扫构建产物：已有完整结果时只更新约定 / 待办 / 配置，别把进度和检查清空
     const prev = untrack(() => siteMake.state[id]);
     siteMake.state[id] = !full && prev?.steps.length ? { ...prev, conventions: got.conventions, todos: got.todos, config: got.config, built_at: got.built_at } : got;
+    // 快速制作的站点：AI 写回了站点资料，名称可能换成了 AI 起的
+    if (got.profile) void refreshSites();
   }
   catch { /* 站点文件夹不在了之类：卡片不出现就行 */ }
   finally { siteMake.loading[id] = false; }

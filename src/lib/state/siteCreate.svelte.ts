@@ -1,5 +1,5 @@
 // 站点制作：在「站点」里从零做一个新站。
-// 填定位 → 选技术栈和风格 → create_site 建好文件夹 / git / 站点 / 定位 → 在新站点里开第一版对话。
+// 快速制作：一句话定位，其余交给 AI；详细设置：填定位 → 选技术栈和风格。都由 create_site 建好文件夹 / git / 站点 / 定位，再在新站点里开第一版对话。
 // 技术栈不固定；每个新站都会写一份站点约定 .pilot/site.md，以后加内容、改页面都按它来（见 site_make.rs）。
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -13,6 +13,7 @@ import { savePrefs } from '$lib/defaults';
 import { composer } from './composer.svelte.js';
 import { brainUsable } from './models';
 import { startChat } from './turns.svelte.js';
+import { homeDir } from '@tauri-apps/api/path';
 
 export const SITE_KINDS = [
   { value: '', label: '让 AI 判断', sub: '按上面的描述判断是哪类站', stack: '' },
@@ -36,10 +37,22 @@ export const GOALS = ['广告变现', '联盟推广', '获客留资', '品牌展
 export const PAGE_COUNTS = [5, 8, 12, 16];
 
 const PARENT_KEY = 'cligc.pilot.newSiteParent';
+const MODE_KEY = 'cligc.pilot.newSiteMode';
+let homeSites = '';
+void homeDir().then((h) => { homeSites = `${h.replace(/[\\/]+$/, '')}/Sites`; }).catch(() => {});
+
+export type CreateMode = 'quick' | 'full';
+function savedMode(): CreateMode {
+  try { return localStorage.getItem(MODE_KEY) === 'full' ? 'full' : 'quick'; } catch { return 'quick'; }
+}
+export function setCreateMode(m: CreateMode) {
+  siteCreate.mode = m; siteCreate.err = '';
+  try { localStorage.setItem(MODE_KEY, m); } catch { /* */ }
+}
 
 function blank() {
   return {
-    open: false, step: 'brief' as 'brief' | 'build',
+    open: false, mode: 'quick' as CreateMode, step: 'brief' as 'brief' | 'build',
     name: '', domain: '', about: '', kind: '', audience: '', language: '', goals: [] as string[],
     stack: '', stackTouched: false, style: '', pages: 8, parent: '',
     busy: false, err: '',
@@ -56,12 +69,12 @@ function defaultParent(): string {
     const p = s.local_dir.replace(/[\\/][^\\/]+[\\/]?$/, '');
     if (p) count.set(p, (count.get(p) ?? 0) + 1);
   }
-  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? homeSites;
 }
 
 export function openSiteCreate() {
   connections.switcherOpen = false;
-  Object.assign(siteCreate, blank(), { open: true, parent: defaultParent() });
+  Object.assign(siteCreate, blank(), { open: true, mode: savedMode(), parent: defaultParent() });
 }
 export function closeSiteCreate() { if (!siteCreate.busy) Object.assign(siteCreate, blank()); }
 
@@ -149,14 +162,17 @@ export async function createSite() {
   const f = siteCreate;
   if (f.busy) return;
   f.busy = true; f.err = '';
-  try {
-    const r = await invoke<{ site: Site; message: string }>('create_site', {
-      req: {
+  // 快速制作：只带定位、名称、域名；类型、语言、风格交给 AI，技术栈按描述推荐，内容和视觉标准照常写进第一条消息
+  const quick = f.mode === 'quick';
+  const req = quick
+    ? { name: f.name.trim(), domain: f.domain.trim(), about: f.about.trim(), stack: recommendedStack('', f.about), pages: 8, parent_dir: f.parent, quick: true }
+    : {
         name: f.name.trim(), domain: f.domain.trim(), about: f.about.trim(), kind: f.kind,
         audience: f.audience.trim(), language: f.language, goals: f.goals, stack: f.stack,
         style: f.style ? STYLE_DIRECTIVES[f.style] ?? '' : '', pages: f.pages, parent_dir: f.parent,
-      },
-    });
+      };
+  try {
+    const r = await invoke<{ site: Site; message: string }>('create_site', { req });
     try { localStorage.setItem(PARENT_KEY, f.parent); } catch { /* */ }
     f.busy = false;
     closeSiteCreate();
