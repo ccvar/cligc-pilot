@@ -341,7 +341,7 @@
               <span><b>{isVps ? '发布到服务器，实测每个旧地址' : '上线到预览地址，实测每个旧地址'}</b>
                 {#if v.meta.live.at}<small>{v.meta.live.bad.length ? `${v.meta.live.checked} 个里 ${v.meta.live.bad.length} 个不对` : `${v.meta.live.checked} 个旧地址都能正常打开或跳转`}</small>{/if}
               </span>
-              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '上线'}，还没实测：点「实测每个旧地址」（不用重新构建）。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
+              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '上线'}，还没实测：点「实测每个旧地址」（不用重新构建，一两分钟），都通过就进入「切换」。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
               {#if v.meta.live.bad.length}
                 <button class="link-btn sm al" onclick={() => toggleItem('live')}>{openItems.has('live') ? '收起' : '查看不对的地址'}</button>
                 {#if openItems.has('live')}<ul class="items">{#each v.meta.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
