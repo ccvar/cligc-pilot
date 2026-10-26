@@ -386,10 +386,7 @@ pub fn queue_path(site_dir: &Path) -> PathBuf {
 static QUEUE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn load_queue(site_dir: &Path) -> Vec<QueueItem> {
-    std::fs::read(queue_path(site_dir))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    crate::store_file::read_or_quarantine(&queue_path(site_dir))
 }
 
 fn save_queue(site_dir: &Path, q: &[QueueItem]) -> Result<(), String> {
@@ -411,14 +408,11 @@ pub fn with_queue<R>(site_dir: &Path, f: impl FnOnce(&mut Vec<QueueItem>) -> R) 
 
 /// 撤掉 key 以 prefix 开头、还没处理（open）的条目，返回撤掉几条。
 pub fn drop_open_with_prefix(site_dir: &Path, prefix: &str) -> Result<usize, String> {
-    let q = load_queue(site_dir);
-    let before = q.len();
-    let kept: Vec<QueueItem> = q.into_iter().filter(|i| !(i.status == "open" && i.opp.key.starts_with(prefix))).collect();
-    let n = before - kept.len();
-    if n > 0 {
-        save_queue(site_dir, &kept)?;
-    }
-    Ok(n)
+    with_queue(site_dir, |q| {
+        let before = q.len();
+        q.retain(|i| !(i.status == "open" && i.opp.key.starts_with(prefix)));
+        before - q.len()
+    })
 }
 
 pub fn update_item(site_dir: &Path, id: &str, now: u64, f: impl FnOnce(&mut QueueItem)) -> Result<Option<QueueItem>, String> {
@@ -529,7 +523,7 @@ fn description_value(line: &str) -> Option<String> {
         let i = low.find("content=")?;
         let rest = &t[i + 8..];
         let q = rest.chars().next()?;
-        let body = &rest[1..];
+        let body = &rest[q.len_utf8()..];
         return body.find(q).map(|end| body[..end].to_string());
     }
     None
@@ -584,7 +578,7 @@ fn strip_internal_links(line: &str) -> (String, Vec<String>) {
                 out.push_str(rest);
                 break;
             };
-            let Some(end) = rest[pos..].find("</a>") else {
+            let Some(end) = rest[pos..].find("</a>").filter(|end| *end > gt) else {
                 out.push_str(rest);
                 break;
             };

@@ -188,7 +188,7 @@ fn file_path(site_dir: &Path) -> PathBuf {
 }
 
 fn load(site_dir: &Path) -> File {
-    let mut f: File = std::fs::read(file_path(site_dir)).ok().and_then(|r| serde_json::from_slice(&r).ok()).unwrap_or_default();
+    let mut f: File = crate::store_file::read_or_quarantine(&file_path(site_dir));
     migrate(&mut f);
     // 老记录没有 target：按渠道补上
     for d in f.deliveries.iter_mut().filter(|d| d.target.is_empty()) {

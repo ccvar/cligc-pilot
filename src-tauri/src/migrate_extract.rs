@@ -114,6 +114,23 @@ fn esc_attr(s: &str) -> String {
 }
 
 /// 百分号解码（文件落盘用；URL 里还是原样）。
+/// 旧站网页里的资源路径 → 新站 public/ 下的相对路径。解码后逐段检查：
+/// 带 `..`、盘符、空段的一律不要——`%2F..%2F..%2FLibrary` 这种能写到仓库外面去。
+pub fn safe_rel_path(local: &str) -> Option<std::path::PathBuf> {
+    let decoded = pct_decode(local.trim_start_matches('/'));
+    let mut out = std::path::PathBuf::new();
+    for seg in decoded.split(['/', '\\']) {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." || seg.contains(':') || seg.contains('\0') {
+            return None;
+        }
+        out.push(seg);
+    }
+    (out.as_os_str().len() > 0).then_some(out)
+}
+
 pub fn pct_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

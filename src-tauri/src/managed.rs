@@ -265,7 +265,7 @@ fn dir(data_dir: &Path) -> PathBuf {
 }
 
 pub fn load(data_dir: &Path) -> ManagedConfig {
-    std::fs::read(dir(data_dir).join("config.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    crate::store_file::read_or_quarantine(&dir(data_dir).join("config.json"))
 }
 
 pub fn save(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {

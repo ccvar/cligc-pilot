@@ -300,10 +300,7 @@ impl SiteStore {
     }
 
     fn read(&self) -> Vec<Site> {
-        let Ok(raw) = fs::read(&self.file) else {
-            return Vec::new();
-        };
-        serde_json::from_slice(&raw).unwrap_or_default()
+        crate::store_file::read_or_quarantine(&self.file)
     }
 
     fn write(&self, sites: &[Site]) -> Result<(), String> {

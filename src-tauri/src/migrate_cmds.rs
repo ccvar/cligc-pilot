@@ -717,6 +717,10 @@ fn start_survey(app: tauri::AppHandle, state: &AppState, id: &str) -> Result<Str
     if site.migrate_from.is_empty() {
         return Err("这个站点不在迁移中".into());
     }
+    let meta = load_meta(&mdir(state, id));
+    if meta.cutover.at > 0 || !meta.staging.host.is_empty() || meta.old_redirect.at > 0 {
+        return Err("域名已经切过来（或已上到测试域名），不能再重新盘点：重新盘点会清掉切换前的 DNS 记录，之后就没法回退了".into());
+    }
     let job = state.site_jobs.start(Some(app), id, "migrate:survey", "盘点旧站", SURVEY_STEPS)?;
     let job_id = job.id.clone();
     tauri::async_runtime::spawn(async move {
@@ -894,8 +898,8 @@ async fn render_batch(origin: &Url, paths: &[String], job: &Job) -> HashMap<Stri
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
                 if v["ok"].as_bool() == Some(true) {
                     if let Some(i) = v["i"].as_u64() {
-                        if let Ok(html) = std::fs::read_to_string(tmp.path().join("out").join(format!("{i}.html"))) {
-                            out.insert(paths[i as usize].clone(), html);
+                        if let (Some(p), Ok(html)) = (paths.get(i as usize), std::fs::read_to_string(tmp.path().join("out").join(format!("{i}.html")))) {
+                            out.insert(p.clone(), html);
                         }
                     }
                 } else if v.get("i").is_none() {
@@ -1435,18 +1439,22 @@ async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: 
         for (url, local) in chunk {
             let (c, url, local, public, large) = (c.clone(), url.clone(), local.clone(), public.clone(), dir.join("large"));
             set.spawn(async move {
-                let dest = public.join(mx::pct_decode(local.trim_start_matches('/')));
+                // 路径来自旧站网页（<img src> 等），解码后可能带 ..：只许落在 public/ 或 large/ 里
+                let Some(rel) = mx::safe_rel_path(&local) else {
+                    return (local, Err::<bool, String>("路径不安全，没有保存".into()));
+                };
+                let dest = public.join(&rel);
                 if dest.is_file() {
                     return (local, Ok::<bool, String>(false));
                 }
-                if large.join(mx::pct_decode(local.trim_start_matches('/'))).is_file() {
+                if large.join(&rel).is_file() {
                     return (local, Ok(true));
                 }
                 let r = async {
                     let (_, f) = fetch_follow_bytes(&c, &url).await?;
                     // 超过 25 MB 的 Pages 放不下：先存在站点数据里，配置动态功能时传到 R2
                     let big = f.len() as u64 > sm::CF_MAX_FILE;
-                    let dest = if big { large.join(mx::pct_decode(local.trim_start_matches('/'))) } else { dest };
+                    let dest = if big { large.join(&rel) } else { dest };
                     if let Some(d) = dest.parent() {
                         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
                     }

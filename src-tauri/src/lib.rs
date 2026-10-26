@@ -1,4 +1,5 @@
 mod acp;
+mod store_file;
 mod agent;
 mod bing;
 mod api_agent;
@@ -3829,14 +3830,21 @@ async fn send_message(
     match turn_start {
         convo::TurnStart::NotFound => return Err("会话不存在".into()),
         convo::TurnStart::Busy => return Err("上一轮还在进行中，请稍候".into()),
+        convo::TurnStart::Failed(e) => return Err(format!("保存会话失败，这条消息没有发出：{e}")),
         convo::TurnStart::StartedFresh => {
             // 老对话的底层会话不存在（当年首轮 401 就崩 / 换厂商清空）——不再死路一条：
             // 按重建口径新起 session（同款系统提示 + 历史摘要）原地续跑这条新消息。
-            return run_fresh_turn(&state, conv_id, message.trim().to_string(), on_event).await;
+            return run_fresh_turn(&state, conv_id, message.trim().to_string(), true, on_event).await;
         }
         convo::TurnStart::Started => {}
     }
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
+    let (conn, work_dir) = match conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv) {
+        Ok(v) => v,
+        Err(e) => {
+            abort_turn(&state, &conv_id, true);
+            return Err(e);
+        }
+    };
 
     let res = agent::run_turn(
         state.runs.clone(),
@@ -3879,7 +3887,13 @@ async fn retry_turn(
     let now = now_secs();
     let message = state.convos.begin_retry(&conv_id, now)?;
     let conv = state.convos.get(&conv_id).ok_or("会话不存在")?;
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
+    let (conn, work_dir) = match conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv) {
+        Ok(v) => v,
+        Err(e) => {
+            abort_turn(&state, &conv_id, false);
+            return Err(e);
+        }
+    };
 
     let res = agent::run_turn(
         state.runs.clone(),
@@ -3923,7 +3937,20 @@ async fn rebuild_session(
 ) -> Result<Conversation, String> {
     let now = now_secs();
     let last_user = state.convos.begin_rebuild(&conv_id, now)?;
-    run_fresh_turn(&state, conv_id, last_user, on_event).await
+    run_fresh_turn(&state, conv_id, last_user, false, on_event).await
+}
+
+/// 这一轮还没真正跑起来就失败了（连接被删、工作文件夹不可用、站点不存在…）：
+/// 把 begin_* 已经写进磁盘的 running 收回，不然会话会一直显示「上一轮还在进行中」，
+/// 只能重启 Pilot。`pop_user`＝这一轮刚追加的用户消息也一并撤掉（重试 / 重建没有追加，不撤）。
+fn abort_turn(state: &AppState, conv_id: &str, pop_user: bool) {
+    let _ = state.convos.mutate(conv_id, now_secs(), |c| {
+        c.status = "idle".into();
+        c.messages.retain(|m| !m.partial);
+        if pop_user && c.messages.last().is_some_and(|m| m.role == "user") {
+            c.messages.pop();
+        }
+    });
 }
 
 /// 新会话首轮续跑——rebuild_session 与 send_message「复活老对话」的共用核心：
@@ -3933,13 +3960,26 @@ async fn run_fresh_turn(
     state: &tauri::State<'_, AppState>,
     conv_id: String,
     last_user: String,
+    pop_user: bool,
     on_event: Channel<agent::TurnEvent>,
 ) -> Result<Conversation, String> {
-    let conv = state.convos.get(&conv_id).ok_or("会话不存在")?;
-    let (conn, work_dir) = conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv)?;
+    // 跑起来之前的任何失败都要把 running 收回（见 abort_turn）
+    macro_rules! prep {
+        ($e:expr) => {
+            match $e {
+                Ok(v) => v,
+                Err(e) => {
+                    abort_turn(state, &conv_id, pop_user);
+                    return Err(e.into());
+                }
+            }
+        };
+    }
+    let conv = prep!(state.convos.get(&conv_id).ok_or("会话不存在"));
+    let (conn, work_dir) = prep!(conversation_runtime(&state.conns, &state.sites, &state.data_dir, &conv));
     let is_workspace = conv.task_type == "workspace";
     let sys = if conv.task_type == "site" {
-        let site = state.sites.get(&conv.site_slug)?;
+        let site = prep!(state.sites.get(&conv.site_slug));
         site_prompt(&site, &conn, &state.data_dir, &state.sites)
     } else {
         conversation_system_prompt(
@@ -3965,8 +4005,7 @@ async fn run_fresh_turn(
     };
     let session_seed = fresh_session_seed(&conv.brain);
     if conv.brain.starts_with("api:") {
-        state.convos.mutate(&conv_id, now_secs(), |c| c.session_ref = session_seed.clone())?
-            .ok_or("会话丢失")?;
+        prep!(state.convos.mutate(&conv_id, now_secs(), |c| c.session_ref = session_seed.clone()));
     }
 
     let res = agent::run_turn(

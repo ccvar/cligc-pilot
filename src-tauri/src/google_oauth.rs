@@ -53,7 +53,7 @@ fn unesc(s: &str) -> String {
         match bytes[i] {
             b'+' => out.push(b' '),
             b'%' if i + 2 < bytes.len() => {
-                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                if let Ok(v) = s.get(i + 1..i + 3).ok_or(()).and_then(|h| u8::from_str_radix(h, 16).map_err(|_| ())) {
                     out.push(v);
                     i += 2;
                 } else {

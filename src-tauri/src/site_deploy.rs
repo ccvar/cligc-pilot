@@ -486,6 +486,10 @@ fn with_noindex(existing: &str, hosts: &[String]) -> String {
         s.push('\n');
     }
     for h in hosts {
+        // 产物目录就是源码目录（纯 HTML 站）时 _headers 会被反复追加，先看有没有
+        if s.contains(&format!("https://{h}/*")) {
+            continue;
+        }
         s.push_str(&format!("https://{h}/*\n  X-Robots-Tag: noindex\n"));
     }
     s

@@ -99,6 +99,13 @@ impl History {
         if want <= self.images_skipped {
             return 0;
         }
+        // 工具循环中途不放图：最后一条助手消息（带 tool_use）的思考块必须原样跟着
+        // tool_result 一起发回去，改了前面的图就得去掉它，API 会报
+        // "a final assistant message must start with a thinking block"。等这轮结束、
+        // 下一条用户消息进来再放。
+        if self.protocol == "anthropic_messages" && ends_with_tool_result(&self.items) {
+            return 0;
+        }
         let first = image_item(&self.items, self.images_skipped);
         self.images_skipped = want;
         if self.protocol != "anthropic_messages" {
@@ -109,6 +116,16 @@ impl History {
             None => 0,
         }
     }
+}
+
+/// 历史是否停在一组工具结果上（正处于工具循环中途）。
+fn ends_with_tool_result(items: &[Value]) -> bool {
+    items.last().is_some_and(|item| {
+        item["role"] == "user"
+            && item["content"]
+                .as_array()
+                .is_some_and(|blocks| blocks.iter().any(|b| b["type"] == "tool_result"))
+    })
 }
 
 /// 第 `nth` 张图（从 0 数，按历史顺序）在哪条消息里。
@@ -1213,11 +1230,13 @@ impl Accumulator {
                     for call in calls {
                         let idx = call["index"].as_u64().ok_or("API 工具调用缺少序号")? as usize;
                         let target=self.items.entry(idx).or_insert_with(||json!({"id":"","type":"function","function":{"name":"","arguments":""}}));
-                        if let Some(id) = call["id"].as_str() {
-                            append(target, "id", id);
+                        // OpenAI 只在第一块带 id / name，但不少兼容网关每块都重复发：
+                        // 直接覆盖，拼接会得到 "call_abccall_abc" / "read_fileread_file"
+                        if let Some(id) = call["id"].as_str().filter(|s| !s.is_empty()) {
+                            target["id"] = json!(id);
                         }
-                        if let Some(name) = call["function"]["name"].as_str() {
-                            append(&mut target["function"], "name", name);
+                        if let Some(name) = call["function"]["name"].as_str().filter(|s| !s.is_empty()) {
+                            target["function"]["name"] = json!(name);
                         }
                         if let Some(args) = call["function"]["arguments"].as_str() {
                             append(&mut target["function"], "arguments", args);

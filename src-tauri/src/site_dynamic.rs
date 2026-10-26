@@ -255,10 +255,15 @@ async fn run_setup(site: crate::sites::Site, conns: crate::conns::ConnStore, dir
 
     // 代码
     job.step("code", "running", "");
-    let code = crate::site_git::code_dir(&site, None)?;
+    let gh = conns.get(&site.gh_conn_id).ok();
+    let code = crate::site_git::code_dir(&site, gh.as_ref())?;
     let app_dir = site.app_dir(&code);
     let written = write_code(&app_dir, &d)?;
-    let _ = crate::site_git::git_ok(&code, &["add", "-A"], "").await;
+    // 只提交 Pilot 自己写的文件：add -A 会把用户没提交的改动一起卷进来
+    let paths: Vec<String> = written.iter().map(|rel| app_dir.join(rel).to_string_lossy().to_string()).collect();
+    let mut add: Vec<&str> = vec!["add", "--"];
+    add.extend(paths.iter().map(String::as_str));
+    let _ = crate::site_git::git_ok(&code, &add, "").await;
     let _ = crate::site_git::git_commit_ok(&code, &["commit", "-qm", &format!("动态功能：{}", feature_names(&d))]).await;
     job.step("code", "ok", &format!("{} 个文件", written.len()));
 
@@ -328,8 +333,11 @@ async fn run_setup(site: crate::sites::Site, conns: crate::conns::ConnStore, dir
         let todo: Vec<String> = d.large.iter().filter(|p| !d.uploaded.contains(p)).cloned().collect();
         for (i, p) in todo.iter().enumerate() {
             job.step("r2", "running", &format!("{} / {}  {p}", i + 1, todo.len()));
-            let f = large_dir.join(crate::migrate_extract::pct_decode(p.trim_start_matches('/')));
-            let Ok(bytes) = std::fs::read(&f) else {
+            let Some(rel) = crate::migrate_extract::safe_rel_path(p) else {
+                d.notes.push(format!("{p} 路径不安全，没传到 R2"));
+                continue;
+            };
+            let Ok(bytes) = std::fs::read(large_dir.join(&rel)) else {
                 d.notes.push(format!("{p} 本地没有文件，没传到 R2"));
                 continue;
             };

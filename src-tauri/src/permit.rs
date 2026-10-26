@@ -55,8 +55,19 @@ const DANGER: &[&str] = &[
     " delete",  // 前导空格避免误伤 deleted_at 之类
     "rm -rf",
     "rm -fr",
+    "rm -r",       // rm -r -f / rm -r dir：递归删除
+    "--recursive", // rm --recursive --force
+    "-delete",     // find … -delete
     "git push",
     "--force",
+    "git reset --hard", // 丢弃未提交的改动
+    "git clean",        // 删掉没跟踪的文件
+    "git checkout -- ", // 丢弃工作区改动
+    "git restore",
+    "git stash drop",
+    "truncate ", // 把文件清空
+    "mkfs",
+    "dd if=",
     "dns",
     "route",
     "purge",

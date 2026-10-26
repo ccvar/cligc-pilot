@@ -31,6 +31,8 @@ pub enum TurnStart {
     StartedFresh,
     Busy,
     NotFound,
+    /// 用户消息和 running 状态没能写进磁盘（磁盘满 / 没权限）：这一轮不能跑，否则回复会对不上提问。
+    Failed(String),
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -118,10 +120,7 @@ impl ConvStore {
     }
 
     fn read(&self) -> Vec<Conversation> {
-        let mut v: Vec<Conversation> = match fs::read(&self.file) {
-            Ok(raw) => serde_json::from_slice(&raw).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+        let mut v: Vec<Conversation> = crate::store_file::read_or_quarantine(&self.file);
         v.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         v
     }
@@ -192,7 +191,9 @@ impl ConvStore {
         slot.messages.push(user);
         slot.status = "running".into();
         slot.updated_at = now;
-        let _ = self.save(&list);
+        if let Err(e) = self.save(&list) {
+            return TurnStart::Failed(e);
+        }
         if fresh {
             TurnStart::StartedFresh
         } else {

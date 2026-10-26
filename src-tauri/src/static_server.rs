@@ -268,6 +268,8 @@ pub fn built_at(out: &Path) -> Option<u64> {
 pub async fn serve(root: PathBuf, listener: TcpListener) {
     loop {
         let Ok((mut sock, _)) = listener.accept().await else {
+            // 句柄用尽之类的错误会连续发生：歇一下再试，别空转把 CPU 吃满
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             continue;
         };
         let root = root.clone();

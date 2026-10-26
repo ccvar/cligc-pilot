@@ -202,7 +202,22 @@ fn cfg() -> Arc<client::Config> {
 
 /// 建立已认证的会话。expect=Some(指纹) 时做 TOFU 校验。
 /// 返回 (handle, 实际看到的指纹)。
+/// 建连 + 认证的总时限：主机不通 / 防火墙丢包时系统自己的 TCP 超时能到一两分钟，
+/// 按钮会一直转着没法取消；这里统一收口。
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+
 async fn connect_auth(
+    host: &str,
+    port: u16,
+    auth: &SshAuth,
+    expect: Option<String>,
+) -> Result<(client::Handle<Client>, String), String> {
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_auth_inner(host, port, auth, expect))
+        .await
+        .map_err(|_| format!("连接 {host}:{port} 超时（{} 秒）：主机没开、端口不对或网络不通", CONNECT_TIMEOUT.as_secs()))?
+}
+
+async fn connect_auth_inner(
     host: &str,
     port: u16,
     auth: &SshAuth,

@@ -436,6 +436,9 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
         let stdout = child.stdout.take().ok_or("缺少标准输出")?;
         let stderr = child.stderr.take().ok_or("缺少错误输出")?;
         let run = async {
+            // 任一路超过上限就立刻报错：不然进程卡在写满的管道上，另一路永远等不到 EOF，
+            // 要等到超时才报，而且报的是「超时」不是「输出过大」
+            const TOO_BIG: &str = "工具输出过大，已停止进程；请缩小查询范围";
             let out = async {
                 let mut b = Vec::new();
                 stdout
@@ -443,6 +446,9 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                     .read_to_end(&mut b)
                     .await
                     .map_err(|e| e.to_string())?;
+                if b.len() > MAX_OUTPUT as usize {
+                    return Err(TOO_BIG.to_string());
+                }
                 Ok::<_, String>(b)
             };
             let err = async {
@@ -452,12 +458,18 @@ run_command 为本机 shell，不是沙箱：Plan 禁用，Ask/Auto 每条都必
                     .read_to_end(&mut b)
                     .await
                     .map_err(|e| e.to_string())?;
+                if b.len() > MAX_OUTPUT as usize {
+                    return Err(TOO_BIG.to_string());
+                }
                 Ok::<_, String>(b)
             };
-            let (out, err) = tokio::try_join!(out, err)?;
-            if out.len() > MAX_OUTPUT as usize || err.len() > MAX_OUTPUT as usize {
-                return Err("工具输出过大，已停止进程；请缩小查询范围".into());
-            }
+            let (out, err) = match tokio::try_join!(out, err) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = child.start_kill();
+                    return Err(e);
+                }
+            };
             let status = child.wait().await.map_err(|e| e.to_string())?;
             Ok::<_, String>((status, out, err))
         };
