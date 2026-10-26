@@ -1,8 +1,9 @@
 name: Release
 
 # 推形如 v0.1.0 的 tag 时：在 macOS + Windows runner 上各自打包 Cligc Pilot，
-# ed25519 签更新包。各平台直接上传到本仓库的 Release，避免依赖 GitHub Actions
-# 临时产物存储额度；最后由 publish 作业合成同时含两平台的 latest.json。
+# ed25519 签更新包。各平台直接上传到本仓库的 Release，最后由 publish 作业合成同时含两平台的 latest.json。
+# 不占 GitHub 存储：不用 upload-artifact（Actions 产物），也不用任何 Actions 缓存（Rust / Go / npm 都现编现装），
+# 每次都是干净构建，慢一些但仓库里除了 Release 的安装包什么都不留。
 on:
   push:
     tags:
@@ -48,15 +49,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache-dependency-path: src-tauri/pilot-site/go.sum
+          cache: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: 安装前端依赖
         run: npm ci

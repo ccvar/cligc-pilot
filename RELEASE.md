@@ -9,6 +9,8 @@
 - **打包**：推 `v*` tag → `.github/workflows/release.yml` 分别构建 macOS arm64 和 Windows x64；
   macOS 产出 `.dmg` 与签名更新包，Windows 产出签名 NSIS 安装器。两个平台完成后合并 `latest.json`，
   发布到 `ccvar/cligc-pilot` 的 Releases（工作流用内置 `GITHUB_TOKEN`，权限 `contents: write`）。
+  **不占 GitHub 存储**：不用 Actions 产物（upload-artifact），也不开 Rust / Go / npm 的 Actions 缓存，
+  安装包只在 Release 里；代价是每次都是干净构建，两个平台各要 15～25 分钟。
 - **升级**：app 里「连接与模型 → 关于 → 检查更新」调用 Tauri updater，拉
   `https://github.com/ccvar/cligc-pilot/releases/latest/download/latest.json`，比版本 → ed25519 验签 →
   下载安装 → 重启。公钥已内置在 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
