@@ -35,6 +35,10 @@ export interface MMeta {
   extract: { pages: number; lists: number; assets: number; assets_failed: string[]; low_coverage: string[]; collections: Record<string, number>; large: string[]; comments: number; features: string[] };
   parity: MParity[];
   live: { at: number; base: string; checked: number; bad: string[] };
+  /** 正式域名（空＝旧站的域名） */
+  formal: string;
+  /** 切换前先上线到的测试域名 */
+  staging: { host: string; at: number; live: { at: number; base: string; checked: number; bad: string[] } };
   dns: MDns;
   cutover: { at: number; host: string; zone_id: string; cf_conn: string; manual_dns: boolean; before: MRec[]; notes: string[]; rolled_back_at: number };
   track: { at: number; checked: number; bad: string[]; base_clicks: number; after_clicks: number; after_days: number; sitemap_submitted: boolean; indexnow_submitted: boolean; notes: string[] };
@@ -42,7 +46,7 @@ export interface MMeta {
 export type MStage = 'survey' | 'plan' | 'extract' | 'rebuild' | 'verify' | 'cutover' | 'track' | 'done';
 export interface MVps { slug: string; root: string; host: string; alias: string; ip: string; os: string; arch: string; api_port: number; https: boolean; https_at: number; setup_at: number; releases: string[]; current: string; notes: string[] }
 export interface MVpsDns { host: string; ip: string; host_ips: string[]; alias: string; alias_ips: string[]; points: boolean; alias_points: boolean; cf_auto: boolean }
-export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean; dynamic: Dynamic | null; hosting: MHosting | null; vps: MVps | null }
+export interface MView { stage: MStage; domain: string; survey: MSummary | null; plan: MPlan | null; meta: MMeta; preview: string; deploy_ready: boolean; dynamic: Dynamic | null; hosting: MHosting | null; vps: MVps | null; origin_host: string; formal: string }
 
 export const STAGES: { key: MStage; label: string }[] = [
   { key: 'survey', label: '盘点' },
@@ -214,6 +218,29 @@ export async function cutover(id: string, host: string, vps = false, cfAuto = fa
   if (!await confirmDialog(msg, { title: '切换到新站', kind: 'danger', confirmText: '切换' })) return;
   await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, '已切换到新站，DNS 和证书生效一般要几分钟');
 }
+
+/** 改正式域名（空＝恢复成旧站的域名） */
+export async function setFormal(id: string, host: string, old: string) {
+  const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+  if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '') && !await confirmDialog(`正式域名改成 ${h}，等于连域名一起搬家：切换时 ${h} 指向新站，canonical 和 sitemap 改用新域名；旧域名 ${old} 的每个地址要另外做 301 跳到新域名的同一路径，不然搜索排名会丢。`, { title: '换正式域名', kind: 'warning', confirmText: '改成新域名' })) return false;
+  await run(id, 'formal', () => invoke('migrate_set_formal', { id, host: h }), h ? `正式域名改成了 ${h}` : '正式域名恢复成旧站的域名');
+  return true;
+}
+
+/** 先上线到测试域名：绑到 Pages 项目、加一条 CNAME，页面不让收录 */
+export async function stagingUp(id: string, host: string) {
+  const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+  if (!h) return;
+  if (!await confirmDialog(`Pilot 会先重新上线一次（给 ${h} 加上「不让搜索引擎收录」），再把 ${h} 绑到新站的 Pages 项目，并在 Cloudflare 里加一条 CNAME。${h} 现在已经有 DNS 记录的话不会动它。旧站不受影响。`, { title: '上线到测试域名', kind: 'info', confirmText: '上线' })) return;
+  await run(id, 'staging', () => invoke('migrate_staging', { id, host: h }), `已上线到 ${h}，证书签好一般要几分钟，之后点「实测测试域名」`);
+}
+
+export async function stagingRemove(id: string, host: string) {
+  if (!await confirmDialog(`解除 ${host} 和新站的绑定，删掉它指向新站的那条 CNAME。正式域名不受影响。`, { title: '删除测试域名', kind: 'danger', confirmText: '删除' })) return;
+  await run(id, 'staging', async () => { say(await invoke<string>('migrate_staging_remove', { id }), 'ok'); });
+}
+
+export const stagingCheck = (id: string) => run(id, 'staging', () => invoke('migrate_staging_check', { id }));
 
 export async function rollback(id: string, host: string) {
   if (!await confirmDialog(`把 ${host} 的 DNS 恢复成切换前的记录，打开的又会是旧站；新站和抓好的内容都保留，可以改好后再切换。`, { title: '回退到旧站', kind: 'danger', confirmText: '回退' })) return;

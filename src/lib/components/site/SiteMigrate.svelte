@@ -19,7 +19,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, stagingUp, stagingRemove, stagingCheck, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -36,7 +36,14 @@
   const warns = $derived(v?.meta.parity.filter((c) => c.level === 'warn') ?? []);
   const own = $derived(v?.survey?.ownership);
   const dns = $derived(v?.meta.dns);
-  const host = $derived(v?.survey ? v.survey.origin.replace(/^https?:\/\//, '') : v?.domain ?? '');
+  // 切换要指过去的正式域名（默认就是旧站的）；所有权确认看的是旧站的域名
+  const oldHost = $derived(v?.origin_host || (v?.survey ? v.survey.origin.replace(/^https?:\/\//, '').replace(/\/.*$/, '') : v?.domain ?? ''));
+  const host = $derived(v?.formal || oldHost);
+  const moved = $derived(!!v?.meta.formal);
+  let editFormal = $state(false);
+  let formalIn = $state('');
+  let stagingIn = $state('');
+  const stg = $derived(v?.meta.staging);
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
   let cfConn = $state('');
   let project = $state('');
@@ -92,11 +99,12 @@
   const shownIdx = $derived(STAGES.findIndex((s) => s.key === shown));
   const isCurrent = $derived(shown === current && v?.stage !== 'done');
   // 后台任务属于哪一步
-  const JOB_STEP: Record<string, MStage> = { 'migrate:survey': 'survey', 'migrate:extract': 'extract', 'migrate:verify': 'verify', 'migrate:live': 'verify', 'vps:setup': 'verify', 'dynamic:setup': 'verify', deploy: 'verify', 'migrate:track': 'track' };
+  const JOB_STEP: Record<string, MStage> = { 'migrate:survey': 'survey', 'migrate:extract': 'extract',  'migrate:verify': 'verify', 'migrate:live': 'verify', 'migrate:staging': 'cutover', 'vps:setup': 'verify', 'dynamic:setup': 'verify', deploy: 'verify', 'migrate:track': 'track' };
   const jobStep = $derived.by<MStage | ''>(() => {
     if (!job) return '';
     const st = JOB_STEP[job.kind] ?? '';
-    return job.kind === 'deploy' && ['cutover', 'track', 'done'].includes(v?.stage ?? '') ? 'track' : st;
+    if (job.kind === 'deploy' || job.kind === 'migrate:live') return ['track', 'done'].includes(v?.stage ?? '') ? 'track' : v?.stage === 'cutover' ? 'cutover' : st;
+    return st;
   });
   const recentFail = $derived(!!job && job.status === 'failed' && job.finished_at > Date.now() / 1000 - 3600);
   const runHere = $derived(jobRunning && jobStep === shown);
@@ -363,6 +371,41 @@
         {/if}
 
       {:else if shown === 'cutover'}
+        <div class="domains">
+          <div class="dm">
+            <span class="dk">正式域名</span>
+            {#if editFormal}
+              <input class="tin" bind:value={formalIn} placeholder={oldHost} spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter') void setFormal(site.id, formalIn, oldHost).then((ok) => { if (ok) editFormal = false; }); }} />
+              <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
+              <button class="btn tiny quiet" onclick={() => (editFormal = false)}>取消</button>
+            {:else}
+              <b class="mono">{host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
+              {#if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
+              {#if moved}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>恢复成 {oldHost}</button>{/if}
+            {/if}
+          </div>
+          {#if moved}<small class="desc warn-text">换了域名：切换后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
+          {#if !isVps}
+            <div class="dm">
+              <span class="dk">测试域名</span>
+              {#if stg?.host}
+                <button class="link-btn mono" onclick={() => openUrl(`https://${stg.host}`)}>{stg.host}</button>
+                <small class="faint">{stg.live.at ? (stg.live.bad.length ? `${stg.live.checked} 个里 ${stg.live.bad.length} 个不对` : `${stg.live.checked} 个旧地址都正常`) : '已绑定 · 不让搜索引擎收录'}</small>
+                <span class="grow"></span>
+                <button class="btn tiny" onclick={() => stagingCheck(site.id)} disabled={!!busy || jobRunning}>{runHere && job.kind === 'migrate:staging' ? '实测中…' : '实测测试域名'}</button>
+                <button class="btn tiny quiet" onclick={() => stagingRemove(site.id, stg.host)} disabled={!!busy || jobRunning}>删除</button>
+              {:else}
+                <input class="tin" bind:value={stagingIn} placeholder={`new.${host.replace(/^www\./, '')}`} spellcheck="false" autocapitalize="off" />
+                <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '上线中…' : '上线到测试域名'}</button>
+              {/if}
+            </div>
+            {#if !stg?.host}<small class="desc">可选：先在一个测试域名上看新站（旧站不受影响，页面不让搜索引擎收录），没问题再切正式域名。要用 Cloudflare 里已经生效的域名，没在用的子域名最合适。</small>{/if}
+            {#if stg?.live.bad.length}
+              <button class="link-btn sm al" onclick={() => toggleItem('stg')}>{openItems.has('stg') ? '收起' : '查看不对的地址'}</button>
+              {#if openItems.has('stg')}<ul class="items">{#each stg.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
+            {/if}
+          {/if}
+        </div>
         <ol class="cut">
           <li class:ok={own?.verified}>
             <span class="lv">{own?.verified ? '✓' : '1'}</span>
@@ -370,7 +413,7 @@
               <span><b>确认这个站是你的</b>{#if own?.verified}<small>{OWN_BY[own.by] ?? '已确认'}</small>{/if}</span>
               {#if !own?.verified}
                 <small class="desc">满足一条即可：域名在你的 Cloudflare 账号里；或者 Search Console 里验证过这个站；或者在域名的 DNS 里加一条 TXT 记录：</small>
-                <div class="txt"><code>{own?.txt_token}</code><small>主机 <code>{host.replace(/^www\./, '')}</code>（根域）· 类型 TXT</small></div>
+                <div class="txt"><code>{own?.txt_token}</code><small>主机 <code>{oldHost.replace(/^www\./, '')}</code>（根域）· 类型 TXT</small></div>
                 <div class="row"><button class="btn tiny" onclick={() => checkOwnership(site.id)} disabled={!!busy}>{busy === 'own' ? '检查中…' : '重新检查'}</button></div>
               {/if}
             </div>
@@ -475,6 +518,14 @@
   .act .grow { line-height: 1.55; }
   .act.sub { padding: 0; background: none; }
   .req { display: flex; flex-direction: column; gap: 6px; }
+  .domains { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--rail); }
+  .dm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; min-height: 28px; }
+  .dm .dk { flex: none; width: 64px; color: var(--dim); }
+  .dm b { font-weight: 600; font-size: 13px; }
+  .dm .tin { flex: 1; min-width: 180px; max-width: 320px; height: 28px; font-size: 12.5px; }
+  .dm .grow { flex: 1; }
+  .domains .desc { font-size: 12px; color: var(--faint); line-height: 1.55; }
+  .warn-text, .domains .desc.warn-text, .cb .desc.warn-text { color: var(--su-warn-ink, #8a5a08); }
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }
   .todo-box > b small { margin-left: 6px; font-weight: 400; color: var(--faint); }

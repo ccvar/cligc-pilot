@@ -165,6 +165,44 @@ pub struct Meta {
     pub cutover: Cutover,
     #[serde(default)]
     pub track: Track,
+    /// 正式域名（空＝旧站的域名）。和旧站不一样就是连域名一起搬家，旧域名的 301 要另外做
+    #[serde(default)]
+    pub formal: String,
+    /// 切换前先上线到的测试域名
+    #[serde(default)]
+    pub staging: Staging,
+}
+
+/// 测试域名：绑在同一个 Pages 项目上，页面不让搜索引擎收录（canonical 仍指向正式域名）。
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct Staging {
+    pub host: String,
+    pub at: u64,
+    pub zone_id: String,
+    pub cf_conn: String,
+    #[serde(default)]
+    pub live: LiveCheck,
+}
+
+/// 旧站实际用的主机名（盘点时跟随跳转后的那个，比如 www.example.com）。
+fn origin_host(inv: &Inventory, site: &Site) -> String {
+    origin_host_or(inv, &site.migrate_from)
+}
+
+fn origin_host_or(inv: &Inventory, fallback: &str) -> String {
+    Url::parse(&inv.origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(fallback.to_string())
+}
+
+/// 正式域名：改过就用改的，没改就是旧站的主机名。
+fn formal_host(inv: &Inventory, site: &Site, m: &Meta) -> String {
+    if m.formal.is_empty() { origin_host(inv, site) } else { m.formal.clone() }
+}
+
+/// 主机名的基本格式检查（小写、去掉协议和路径）。
+fn clean_host(h: &str) -> Result<String, String> {
+    let h = h.trim().trim_start_matches("https://").trim_start_matches("http://").split(['/', '?', '#']).next().unwrap_or("").trim_end_matches('.').to_ascii_lowercase();
+    let ok = h.contains('.') && h.split('.').all(|l| !l.is_empty() && l.len() <= 63 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && !l.starts_with('-') && !l.ends_with('-'));
+    if ok { Ok(h) } else { Err(format!("「{h}」不是有效的域名")) }
 }
 
 fn load_meta(dir: &Path) -> Meta {
@@ -297,6 +335,9 @@ pub struct View {
     pub hosting: Option<sm::Hosting>,
     /// 部署到自己服务器时：服务器的状态（Pilot 托管）
     pub vps: Option<crate::site_vps_host::VpsState>,
+    /// 旧站的主机名 / 切换要指过去的正式域名（默认一样）
+    pub origin_host: String,
+    pub formal: String,
 }
 
 #[tauri::command]
@@ -317,7 +358,11 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
     } else {
         String::new()
     };
+    let origin = inv.as_ref().map(|i| origin_host(i, &site)).unwrap_or(site.migrate_from.clone());
+    let formal = if meta.formal.is_empty() { origin.clone() } else { meta.formal.clone() };
     Ok(View {
+        origin_host: origin,
+        formal,
         stage: stage(inv.as_ref(), plan.as_ref(), &meta).into(),
         domain: if site.migrate_from.is_empty() { site.domain.clone() } else { site.migrate_from.clone() },
         survey: inv.as_ref().map(summarize),
@@ -1552,6 +1597,11 @@ pub async fn migrate_rebuild_message(state: tauri::State<'_, AppState>, id: Stri
     // 抓取早于这个功能的站点也补上
     seed_ga(&state, &id, &inv)?;
     save_meta(&dir, |m| m.rebuild_at = now())?;
+    let mut inv = inv;
+    // 正式域名改过：canonical、站点地址按新的写
+    if !meta.formal.is_empty() {
+        inv.origin = format!("https://{}/", meta.formal);
+    }
     Ok(rebuild_message(&site.name, &inv, &plan, &meta, again))
 }
 
@@ -1989,8 +2039,13 @@ pub async fn migrate_dns_prepare(state: tauri::State<'_, AppState>, id: String, 
     let site = state.sites.get(&id)?;
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
-    let apex = apex_of(&site.migrate_from);
-    let mut prep = load_meta(&dir).dns;
+    let meta = load_meta(&dir);
+    let apex = apex_of(&formal_host(&inv, &site, &meta));
+    let mut prep = meta.dns;
+    // 正式域名换了：之前那份快照是别的域名的
+    if !prep.snapshot.is_empty() && prep.snapshot.iter().all(|r| !r.name.eq_ignore_ascii_case(&apex) && !r.name.to_ascii_lowercase().ends_with(&format!(".{apex}"))) {
+        prep = DnsPrep::default();
+    }
     if prep.snapshot.is_empty() {
         let hosts: Vec<String> = inv.assets.keys().filter_map(|u| Url::parse(u).ok().and_then(|u| u.host_str().map(String::from))).collect::<HashSet<_>>().into_iter().collect();
         prep.snapshot = dns_snapshot(&apex, &hosts).await;
@@ -2070,7 +2125,7 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     if !inv.ownership.verified {
         return Err("还没确认这个站是你的：先完成「确认这个站是你的」".into());
     }
-    let host = Url::parse(&inv.origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(site.migrate_from.clone());
+    let host = formal_host(&inv, &site, &meta);
     if crate::site_vps_host::managed(&site) {
         return cutover_vps(&state, &site, &dir, &host).await;
     }
@@ -2106,6 +2161,23 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     cut.notes.push(format!("{host} 已指向新站（{target}）。DNS 和证书生效一般要几分钟"));
     cut.notes.push(format!("另一个写法 {other} 还按原来的记录走：如果原来是跳到 {host} 的，停掉旧主机前要在 Cloudflare 里加一条跳转规则"));
     cut.notes.push("旧主机先别停：确认新站稳定（建议跟踪满 2 周）再停".into());
+    let old_host = origin_host(&inv, &site);
+    if host != old_host {
+        // 换了域名：站点地址变量（AI 按【配置变量】写的）改成新域名，canonical / sitemap 跟着变
+        let code = PathBuf::from(&site.local_dir);
+        let declared = std::fs::read_to_string(site.app_dir(&code).join(".env.example")).unwrap_or_default();
+        if let Some(key) = ["PUBLIC_SITE_URL", "SITE_URL", "PUBLIC_SITE", "SITE"].iter().find(|k| declared.lines().any(|l| l.trim_start().starts_with(&format!("{k}=")))) {
+            let keys = crate::sites::save_env(&id, &[(key.to_string(), format!("https://{host}"))], &[])?;
+            state.sites.update(&id, now(), |s| {
+                s.build.env_keys = keys;
+                Ok(())
+            })?;
+            cut.notes.push(format!("配置变量 {key} 已改成 https://{host}，这次上线后 canonical 和 sitemap 都用新域名"));
+        } else {
+            cut.notes.push(format!("没找到站点地址的配置变量：canonical 可能还指向 {old_host}，让 AI 改成 {host}"));
+        }
+        cut.notes.push(format!("换了域名：旧域名 {old_host} 的每个地址要 301 到 {host} 的同一路径，否则搜索排名会丢——在旧域名的 Cloudflare 里加一条重定向规则"));
+    }
     if crate::site_dynamic::load(&state.sites.data_dir(&id)).is_some_and(|d| d.setup_at > 0 && d.needs_db()) {
         cut.notes.push("表单和评论在正式域名上照常可用（人机验证一开始就加了这个域名）；提交和评论在概览的「表单和评论」里看".into());
     }
@@ -2154,6 +2226,148 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
         m.track = Track::default();
     })?;
     Ok(format!("{} 已恢复成切换前的 {} 条记录，打开的又是旧站了（DNS 缓存可能要几分钟）", cut.host, cut.before.len()))
+}
+
+// ───────────────────────── ⑥ 切换前：正式域名 / 测试域名 ─────────────────────────
+
+/// 改正式域名（空＝恢复成旧站的域名）。切换前才能改；自己的服务器暂不支持换域名。
+#[tauri::command]
+pub async fn migrate_set_formal(state: tauri::State<'_, AppState>, id: String, host: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
+    if load_meta(&dir).cutover.at > 0 {
+        return Err("已经切换过了：先回退再改正式域名".into());
+    }
+    let host = if host.trim().is_empty() { String::new() } else { clean_host(&host)? };
+    let old = origin_host(&inv, &site);
+    let host = if host == old { String::new() } else { host };
+    if !host.is_empty() && crate::site_vps_host::managed(&site) {
+        return Err("部署在自己的服务器上的站点暂时不支持换域名".into());
+    }
+    save_meta(&dir, |m| {
+        if m.formal != host {
+            m.dns = DnsPrep::default();
+        }
+        m.formal = host.clone();
+    })?;
+    Ok(if host.is_empty() { old } else { host })
+}
+
+/// 先上线到测试域名：绑到同一个 Pages 项目，加一条 CNAME。这个主机名已经有记录就不碰。
+/// 页面不让收录：上线时 Pilot 给测试域名和 pages.dev 加 `X-Robots-Tag: noindex`（见 site_deploy::add_verify_files）。
+#[tauri::command]
+pub async fn migrate_staging(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, host: String) -> Result<Staging, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
+    let meta = load_meta(&dir);
+    if crate::site_vps_host::managed(&site) {
+        return Err("部署在自己的服务器上的站点暂时不支持测试域名".into());
+    }
+    if site.deploy.mode != "direct" || site.deploy.project.is_empty() {
+        return Err("先在核对里「准备预览地址」".into());
+    }
+    let host = clean_host(&host)?;
+    let formal = formal_host(&inv, &site, &meta);
+    let bare = |h: &str| h.trim_start_matches("www.").to_string();
+    if bare(&host) == bare(&formal) || bare(&host) == bare(&origin_host(&inv, &site)) {
+        return Err(format!("{host} 是正式域名本身：测试域名要用另一个，比如 new.{}", bare(&formal)));
+    }
+    if !meta.staging.host.is_empty() && meta.staging.host != host {
+        return Err(format!("已经有测试域名 {}：先删掉再换", meta.staging.host));
+    }
+    let (cf, token, zone) = cf_zone_for(&state, &host).await.ok_or_else(|| format!("{host} 的 DNS 不在已连接的 Cloudflare 账号里（或者还没生效）：测试域名要用 Cloudflare 里已经生效的域名"))?;
+    let have: Vec<FullRec> = crate::cf::all_dns_records(&token, &zone.id).await?.into_iter().filter(|r| r.name.eq_ignore_ascii_case(&host)).collect();
+    let pages_cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在".to_string())?;
+    let pages_token = crate::keychain::get_key(&pages_cf.id)?;
+    let target = crate::cf::pages_subdomain(&pages_token, &pages_cf.account_id, &site.deploy.project).await?;
+    if have.iter().any(|r| !(r.kind == "CNAME" && r.content.eq_ignore_ascii_case(&target))) {
+        return Err(format!("{host} 已经有 DNS 记录（{}），为了不影响现有服务没有动它：换一个没在用的子域名", have.iter().map(|r| format!("{} {}", r.kind, r.content)).collect::<Vec<_>>().join("、")));
+    }
+    let st = Staging { host: host.clone(), at: now(), zone_id: zone.id.clone(), cf_conn: cf.id.clone(), live: LiveCheck::default() };
+    // 先记下来、再上线一次（带上 noindex），最后才把域名指过来：不会有一刻能被收录
+    save_meta(&dir, |m| m.staging = st.clone())?;
+    let job_id = crate::site_cmds::start_deploy(app.clone(), &state, id.clone())?;
+    wait_job(&state, &id, &job_id).await?;
+    crate::cf::add_pages_domain(&pages_token, &pages_cf.account_id, &site.deploy.project, &host).await?;
+    crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &host, &target, true).await?;
+    Ok(st)
+}
+
+/// 等一次上线结束（成功才算）。上线成功后会紧接着开始实测作业，那时就看部署记录。
+async fn wait_job(state: &AppState, site_id: &str, job_id: &str) -> Result<(), String> {
+    let started = now();
+    for _ in 0..1800 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        match state.site_jobs.snapshot(site_id) {
+            Some(j) if j.id == job_id && j.status == "running" => continue,
+            Some(j) if j.id == job_id && j.status == "ok" => return Ok(()),
+            Some(j) if j.id == job_id => return Err(format!("上线没成功：{}", j.error.lines().next().unwrap_or(""))),
+            _ => {
+                let last = crate::site_deploy::load_history(&state.sites.data_dir(site_id)).into_iter().next();
+                return match last {
+                    Some(r) if r.ok && r.ts >= started.saturating_sub(5) => Ok(()),
+                    _ => Err("上线没成功".into()),
+                };
+            }
+        }
+    }
+    Err("上线超时".into())
+}
+
+/// 删掉测试域名：解除 Pages 绑定、删掉那条 CNAME（只删指向这个 Pages 项目的）。
+#[tauri::command]
+pub async fn migrate_staging_remove(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let st = load_meta(&dir).staging;
+    if st.host.is_empty() {
+        return Err("没有测试域名".into());
+    }
+    if let Ok(pages_cf) = state.conns.get(&site.deploy.cf_conn_id) {
+        if let Ok(t) = crate::keychain::get_key(&pages_cf.id) {
+            let _ = crate::cf::delete_pages_domain(&t, &pages_cf.account_id, &site.deploy.project, &st.host).await;
+        }
+    }
+    let cf = state.conns.get(&st.cf_conn)?;
+    let token = crate::keychain::get_key(&cf.id)?;
+    for r in crate::cf::all_dns_records(&token, &st.zone_id).await? {
+        if r.name.eq_ignore_ascii_case(&st.host) && r.kind == "CNAME" && r.content.ends_with(".pages.dev") {
+            crate::cf::delete_dns_record(&token, &st.zone_id, &r.id).await?;
+        }
+    }
+    save_meta(&dir, |m| m.staging = Staging::default())?;
+    Ok(format!("已删掉测试域名 {}", st.host))
+}
+
+/// 在测试域名上把每个旧地址打开一遍（只是给你看，不影响能不能切换）。
+#[tauri::command]
+pub async fn migrate_staging_check(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let st = load_meta(&dir).staging;
+    if st.host.is_empty() {
+        return Err("还没有测试域名".into());
+    }
+    let map: mx::UrlMap = read_json(&PathBuf::from(&site.local_dir).join(".pilot/migrate/urls.json")).ok_or("仓库里没有 .pilot/migrate/urls.json")?;
+    let job = state.site_jobs.start(Some(app), &id, "migrate:staging", "测试域名实测", LIVE_STEPS)?;
+    let job_id = job.id.clone();
+    tauri::async_runtime::spawn(async move {
+        job.step("live", "running", &st.host);
+        let live = live_check(&format!("https://{}", st.host), &map, false, &job).await;
+        let bad = live.bad.len();
+        let _ = save_meta(&dir, |m| m.staging.live = live);
+        job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
+        job.finish(&if bad > 0 { Err(format!("{bad} 个地址不对（刚绑的域名证书要几分钟才签好，稍后再测）")) } else { Ok(()) });
+    });
+    Ok(job_id)
+}
+
+/// 上线时不让搜索引擎收录的主机名：迁移中的测试域名。
+pub fn noindex_hosts(site_dir: &Path) -> Vec<String> {
+    let st: Meta = read_json(&site_dir.join("migrate/meta.json")).unwrap_or_default();
+    if st.staging.host.is_empty() { Vec::new() } else { vec![st.staging.host] }
 }
 
 // ───────────────────────── ⑥ 切换（自己的服务器） ─────────────────────────
@@ -2424,6 +2638,15 @@ mod tests {
         assert!(m.contains("GA4（G-ABC123）Pilot 已经存成配置变量 `PUBLIC_GA_ID`"));
         let m = rebuild_message("旧站", &Inventory { domain: "old.example".into(), ..Default::default() }, &Plan::default(), &Meta::default(), false);
         assert!(m.contains("正式域名就是 old.example") && m.contains("旧站没有 GA4"));
+    }
+
+    #[test]
+    fn hosts_are_cleaned_and_formal_defaults_to_the_old_one() {
+        assert_eq!(clean_host(" https://New.Example.com/path ").unwrap(), "new.example.com");
+        assert!(clean_host("localhost").is_err() && clean_host("a..b").is_err() && clean_host("-a.com").is_err());
+        let inv = Inventory { origin: "https://www.old.example/".into(), ..Default::default() };
+        assert_eq!(origin_host_or(&inv, "old.example"), "www.old.example");
+        assert_eq!(origin_host_or(&Inventory::default(), "old.example"), "old.example", "盘点里没有地址就用旧域名");
     }
 
     #[test]

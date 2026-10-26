@@ -443,7 +443,8 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
 }
 
 /// Pilot 随上线放进构建产物的验证文件（只在这次上传的产物里，不改代码）：IndexNow 密钥文件、Bing 的 BingSiteAuth.xml。
-fn add_verify_files(site: &Site, out: &Path, job: &Job) {
+fn add_verify_files(site: &Site, site_dir: &Path, out: &Path, job: &Job) {
+    add_noindex_headers(site, site_dir, out, job);
     if !site.data.indexnow_key.is_empty() {
         let f = out.join(format!("{}.txt", site.data.indexnow_key));
         if !f.exists() && std::fs::write(&f, &site.data.indexnow_key).is_ok() {
@@ -457,6 +458,37 @@ fn add_verify_files(site: &Site, out: &Path, job: &Job) {
             job.line("已把 Bing 验证文件放进构建产物");
         }
     }
+}
+
+/// Pages 直传：pages.dev 预览地址和迁移的测试域名不让搜索引擎收录（追加到产物的 `_headers`，按主机名生效，不影响正式域名）。
+/// 站点还没有正式域名、又不是迁移中的（pages.dev 就是它唯一的地址）不加。
+fn add_noindex_headers(site: &Site, site_dir: &Path, out: &Path, job: &Job) {
+    if site.deploy.mode != "direct" || site.deploy.project.is_empty() {
+        return;
+    }
+    let mut hosts = crate::migrate_cmds::noindex_hosts(site_dir);
+    if !site.domain.is_empty() || site.origin == "migrating" {
+        // 预览部署（分支 / 哈希地址）Cloudflare 默认就带 noindex，只管生产的 pages.dev
+        hosts.push(format!("{}.pages.dev", site.deploy.project));
+    }
+    if hosts.is_empty() {
+        return;
+    }
+    let f = out.join("_headers");
+    if std::fs::write(&f, with_noindex(&std::fs::read_to_string(&f).unwrap_or_default(), &hosts)).is_ok() {
+        job.line(&format!("预览地址不让搜索引擎收录：{}", hosts.join("、")));
+    }
+}
+
+fn with_noindex(existing: &str, hosts: &[String]) -> String {
+    let mut s = existing.to_string();
+    if !s.is_empty() && !s.ends_with('\n') {
+        s.push('\n');
+    }
+    for h in hosts {
+        s.push_str(&format!("https://{h}/*\n  X-Robots-Tag: noindex\n"));
+    }
+    s
 }
 
 pub const REPUBLISH_STEPS: &[(&str, &str)] = &[("prepare", "核对构建产物"), ("upload", "上传"), ("indexnow", "提交 IndexNow")];
@@ -497,7 +529,7 @@ pub async fn run_republish(site: Site, conns: ConnStore, site_dir: PathBuf, job:
         rec.commit = last.commit.clone();
         rec.message = last.message.clone();
         job.step("prepare", "ok", &format!("和线上同一版 {}，不重新构建", last.commit.get(..7).unwrap_or_default()));
-        add_verify_files(&site, &built.out, &job);
+        add_verify_files(&site, &site_dir, &built.out, &job);
         let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
         job.step("upload", "running", &site.deploy.project);
         let url = upload(&site, &cf, &built, &rec.commit, &rec.message, false, &job).await.inspect_err(|_| job.step("upload", "failed", ""))?;
@@ -605,7 +637,7 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         },
     );
     let built = build_and_check(site, &dir, stamp.as_deref(), job).await?;
-    add_verify_files(site, &built.out, job);
+    add_verify_files(site, site_dir, &built.out, job);
     let manifest = build_manifest(&built.out);
     // 上传
     job.step("upload", "running", &site.deploy.project);
@@ -791,6 +823,12 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn noindex_rules_are_per_host_and_keep_existing_headers() {
+        let h = super::with_noindex("/*\n  X-Frame-Options: DENY", &["new.example.com".into(), "proj.pages.dev".into()]);
+        assert_eq!(h, "/*\n  X-Frame-Options: DENY\nhttps://new.example.com/*\n  X-Robots-Tag: noindex\nhttps://proj.pages.dev/*\n  X-Robots-Tag: noindex\n");
+    }
+
     use super::*;
 
     #[test]
