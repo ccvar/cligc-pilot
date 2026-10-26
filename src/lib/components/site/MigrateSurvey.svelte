@@ -45,6 +45,15 @@
   const PTYPE: Record<string, string> = { home: '首页', article: '文章', list: '列表', page: '单页' };
   let showBroken = $state(false);
   let showTop = $state(false);
+  // 盘点那一步回头看时：建议是当时的，下面写新站现在实际在哪，免得以为还有事没做
+  const nowText = $derived.by(() => {
+    const preview = v.preview.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    const where = v.plan?.deploy === 'vps' ? `你的服务器${v.vps?.ip ? ` ${v.vps.ip}` : ''}` : `Cloudflare Pages${v.deploy_ready && preview ? `（${preview}）` : ''}`;
+    if (v.meta.cutover.at) return `新站现在就在 ${where}，已经正式上线到 ${v.meta.cutover.host}`;
+    if (v.meta.live.at) return `新站已经部署到 ${where}，还没正式上线（旧站照常）`;
+    if (v.deploy_ready) return `预览用的地方已经建好（${where}），到「核对」这一步会部署上去`;
+    return '新站还没部署：到「核对」这一步会自动建好、部署上去，不用另外操作';
+  });
   const groupLabel = (k: string) => (k === '/' ? '首页' : k === '/*' ? '一级页面' : k);
 </script>
 
@@ -170,9 +179,10 @@
   </p>
 
   <div class="host" class:ok={host.supported}>
-    <div class="hh"><b>建议放在：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
+    <div class="hh"><b>盘点时的建议：放在 {host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
     <ul>{#each host.reasons as r (r)}<li>{r}</li>{/each}</ul>
     {#if !host.supported}<small>部署到 VPS 还不支持。{s.features.some((f) => f.key === 'login' || f.key === 'cart') ? '登录、购物车这类功能可以在下面选「去掉」，就能放到 Cloudflare。' : ''}</small>{/if}
+    <p class="now"><Icon name="info" size={12} />{nowText}</p>
   </div>
 
   {#if s.features.length}
@@ -237,6 +247,7 @@
   .hh { display: flex; align-items: center; gap: 8px; }
   .host ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.6; }
   .host small { display: block; margin-top: 6px; }
+  .host .now { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; padding-top: 8px; border-top: 1px solid currentColor; border-top-color: rgba(31, 90, 55, .15); font-weight: 600; }
   .blk { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .bt { font-size: 12.5px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
   .bt small { font-weight: 400; color: var(--faint); font-size: 11.5px; }
