@@ -252,8 +252,8 @@
                       { value: '__out', label: '退出托管', sub: '改为自己运营' },
                     ]} />
                   </div>
-                  <span class="gs-state" class:on={on && !g.paused && !paused} >{g.paused ? '方案已暂停' : !on ? '已停止' : paused ? '暂停中' : '托管中'}</span>
-                  <button class="switch" class:on class:dim={g.paused || paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
+                  <span class="gs-state" class:on={on && !g.paused && !paused} >{g.paused ? '方案已暂停' : !on ? '已停止' : paused ? '已开启' : '托管中'}</span>
+                  <button class="switch" class:on class:dim={g.paused || paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={paused ? (on ? '这个站点的托管是开着的；现在托管全部暂停，点右上角「恢复托管」后它会接着运行' : '恢复这个站点的托管（全部暂停结束后生效）') : on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
                 {#if progress.has(id) && sites.jobs[id]}
                   {@const conv = opsConvOf(id, sites.jobs[id].started_at)}
