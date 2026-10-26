@@ -171,7 +171,30 @@ pub struct Meta {
     /// 切换前先上线到的测试域名
     #[serde(default)]
     pub staging: Staging,
+    /// 换了域名以后，旧域名跳转到新域名
+    #[serde(default)]
+    pub old_redirect: OldRedirect,
 }
+
+/// 旧域名 → 新域名的 301（Cloudflare 重定向规则）。撤销时要原样恢复。
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct OldRedirect {
+    pub at: u64,
+    /// 跳转的旧主机名（根域名和 www 一起）
+    pub from: Vec<String>,
+    pub to: String,
+    pub zone_id: String,
+    pub cf_conn: String,
+    /// 为了让规则生效、被 Pilot 打开代理的记录（撤销时关回去）
+    pub proxied: Vec<String>,
+    /// 设置完实测：旧地址真的 301 到新域名的同一地址
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+const REDIRECT_TAG: &str = "pilot-migrate";
 
 /// 测试域名：绑在同一个 Pages 项目上，页面不让搜索引擎收录（canonical 仍指向正式域名）。
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -364,7 +387,7 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
     let mut meta = meta;
     if meta.cutover.at > 0 && !crate::site_vps_host::managed(&site) {
         if let Some(i) = &inv {
-            meta.cutover.notes = direct_notes(&state, &site, i, &meta.cutover.host);
+            meta.cutover.notes = direct_notes(&state, &site, i, &meta.cutover.host, &meta);
         }
     }
     let origin = inv.as_ref().map(|i| origin_host(i, &site)).unwrap_or(site.migrate_from.clone());
@@ -2210,7 +2233,7 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
             })?;
         }
     }
-    cut.notes = direct_notes(&state, &site, &inv, &host);
+    cut.notes = direct_notes(&state, &site, &inv, &host, &load_meta(&dir));
     save_meta(&dir, |m| m.cutover = cut.clone())?;
     // 生效检查 + 补上 IndexNow 验证文件：上线一次（这次带着正式域名）
     let _ = crate::site_cmds::start_deploy(app, &state, site.id.clone());
@@ -2218,7 +2241,7 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
 }
 
 /// 上线到 Cloudflare 以后给你看的几句话（按现在的情况算，界面每次打开都重新算）。
-fn direct_notes(state: &AppState, site: &Site, inv: &Inventory, host: &str) -> Vec<String> {
+fn direct_notes(state: &AppState, site: &Site, inv: &Inventory, host: &str, m: &Meta) -> Vec<String> {
     let old = origin_host(inv, site);
     let mut n = vec![format!("{host} 已经打开新站，几分钟内全部生效")];
     // 只有根域名 / www 才有「另一种写法」
@@ -2237,7 +2260,9 @@ fn direct_notes(state: &AppState, site: &Site, inv: &Inventory, host: &str) -> V
         } else {
             n.push(format!("站点里的网址可能还写着 {old}：让 AI 改成 {host}"));
         }
-        n.push(if inv.ownership.verified {
+        n.push(if m.old_redirect.at > 0 {
+            format!("旧域名 {old} 的每个地址都会跳到 {host} 的同一地址，原来的搜索排名会慢慢转过来")
+        } else if inv.ownership.verified {
             format!("旧域名 {old} 还在打开旧站。等新站稳定了，让它跳转到 {host}，原来的搜索排名才能带过来")
         } else {
             format!("旧站 {old} 不受影响；搜索排名要在 {host} 上重新积累")
@@ -2261,6 +2286,10 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
     }
     if cut.host.is_empty() || cut.zone_id.is_empty() {
         return Err("还没正式上线过".into());
+    }
+    // 旧域名正跳到新站：先撤掉，不然退回以后旧域名会跳到一个不再打开新站的地址
+    if meta.old_redirect.at > 0 {
+        undo_old_redirect(&state, &dir, &meta.old_redirect).await?;
     }
     let cf = state.conns.get(&site.deploy.cf_conn_id)?;
     let token = crate::keychain::get_key(&cf.id)?;
@@ -2529,6 +2558,105 @@ pub async fn migrate_staging_status(app: tauri::AppHandle, state: tauri::State<'
 pub fn noindex_hosts(site_dir: &Path) -> Vec<String> {
     let st: Meta = read_json(&site_dir.join("migrate/meta.json")).unwrap_or_default();
     if st.staging.host.is_empty() { Vec::new() } else { vec![st.staging.host] }
+}
+
+// ───────────────────────── ⑦ 上线后：旧域名跳到新域名 ─────────────────────────
+
+/// 换了域名上线以后：让旧域名（根域名和 www）的每个地址 301 到新域名的同一地址。
+/// 用旧域名所在 Cloudflare 区域的重定向规则；规则只对经过代理的访问生效，没开代理的记录会打开代理（撤销时关回去）。
+#[tauri::command]
+pub async fn migrate_old_redirect(state: tauri::State<'_, AppState>, id: String) -> Result<OldRedirect, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
+    let meta = load_meta(&dir);
+    if meta.cutover.at == 0 {
+        return Err("还没正式上线".into());
+    }
+    let to = meta.cutover.host.clone();
+    let old = origin_host(&inv, &site);
+    if old.trim_start_matches("www.") == to.trim_start_matches("www.") {
+        return Err("正式域名就是旧站的域名，不用跳转".into());
+    }
+    let apex = apex_of(&old);
+    let (cf, token, zone) = cf_zone_for(&state, &apex).await.ok_or_else(|| format!("{apex} 不在你的 Cloudflare 账号里（或者还没生效），Pilot 没法替你设置跳转"))?;
+    // 根域名和 www：有记录的才跳（没记录的本来就打不开）
+    let recs = crate::cf::all_dns_records(&token, &zone.id).await?;
+    let mut from = Vec::new();
+    let mut flipped = Vec::new();
+    for name in [apex.clone(), format!("www.{apex}")] {
+        let mine: Vec<&FullRec> = recs.iter().filter(|r| r.name.eq_ignore_ascii_case(&name) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME")).collect();
+        if mine.is_empty() || name.eq_ignore_ascii_case(&to) {
+            continue;
+        }
+        from.push(name);
+        for r in mine.into_iter().filter(|r| !r.proxied) {
+            flipped.push(r.id.clone());
+        }
+    }
+    if from.is_empty() {
+        return Err(format!("{apex} 没有指向任何地方的记录，不用跳转"));
+    }
+    let expr = from.iter().map(|h| format!("http.host eq \"{h}\"")).collect::<Vec<_>>().join(" or ");
+    let rule = serde_json::json!({
+        "description": format!("{REDIRECT_TAG}: {} → {to}", from.join(" / ")),
+        "expression": format!("({expr})"),
+        "action": "redirect",
+        "action_parameters": { "from_value": { "status_code": 301, "preserve_query_string": true, "target_url": { "expression": format!("concat(\"https://{to}\", http.request.uri.path)") } } },
+        "enabled": true,
+    });
+    let mut rules: Vec<serde_json::Value> = crate::cf::redirect_rules(&token, &zone.id).await?.into_iter().filter(|r| !r["description"].as_str().unwrap_or("").starts_with(REDIRECT_TAG)).collect();
+    rules.push(rule);
+    crate::cf::put_redirect_rules(&token, &zone.id, rules).await?;
+    for rid in &flipped {
+        crate::cf::set_dns_proxied(&token, &zone.id, rid, true).await?;
+    }
+    let mut r = OldRedirect { at: now(), from: from.clone(), to: to.clone(), zone_id: zone.id.clone(), cf_conn: cf.id.clone(), proxied: flipped, verified: false, note: String::new() };
+    save_meta(&dir, |m| m.old_redirect = r.clone())?;
+    // 实测：拿一个旧地址看是不是 301 到新域名的同一地址（规则生效要几秒）
+    let probe = read_json::<mx::UrlMap>(&PathBuf::from(&site.local_dir).join(".pilot/migrate/urls.json"))
+        .and_then(|m| m.entries.into_iter().find(|e| e.action == "keep" && e.old != "/").map(|e| e.old))
+        .unwrap_or_else(|| "/".into());
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
+    for _ in 0..6 {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if let Ok(resp) = client.get(format!("https://{}{probe}", from[0])).send().await {
+            let loc = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            if resp.status().as_u16() == 301 && loc == format!("https://{to}{probe}") {
+                r.verified = true;
+                break;
+            }
+            r.note = format!("https://{}{probe} 现在返回 {} {loc}", from[0], resp.status().as_u16());
+        }
+    }
+    if r.verified {
+        r.note.clear();
+    }
+    save_meta(&dir, |m| m.old_redirect = r.clone())?;
+    Ok(r)
+}
+
+#[tauri::command]
+pub async fn migrate_old_redirect_undo(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let dir = mdir(&state, &id);
+    let r = load_meta(&dir).old_redirect;
+    if r.at == 0 {
+        return Err("没有设置过跳转".into());
+    }
+    undo_old_redirect(&state, &dir, &r).await?;
+    Ok(format!("{} 不再跳转，又会打开旧站了", r.from.join("、")))
+}
+
+async fn undo_old_redirect(state: &AppState, dir: &Path, r: &OldRedirect) -> Result<(), String> {
+    let cf = state.conns.get(&r.cf_conn)?;
+    let token = crate::keychain::get_key(&cf.id)?;
+    let rules: Vec<serde_json::Value> = crate::cf::redirect_rules(&token, &r.zone_id).await?.into_iter().filter(|x| !x["description"].as_str().unwrap_or("").starts_with(REDIRECT_TAG)).collect();
+    crate::cf::put_redirect_rules(&token, &r.zone_id, rules).await?;
+    for rid in &r.proxied {
+        let _ = crate::cf::set_dns_proxied(&token, &r.zone_id, rid, false).await;
+    }
+    save_meta(dir, |m| m.old_redirect = OldRedirect::default())?;
+    Ok(())
 }
 
 // ───────────────────────── ⑥ 切换（自己的服务器） ─────────────────────────

@@ -38,6 +38,7 @@ export interface MMeta {
   /** 正式域名（空＝旧站的域名） */
   formal: string;
   /** 切换前先上线到的测试域名 */
+  old_redirect: { at: number; from: string[]; to: string; verified: boolean; note: string };
   staging: { host: string; at: number; status: string; live: { at: number; base: string; checked: number; bad: string[] } };
   dns: MDns;
   cutover: { at: number; host: string; zone_id: string; cf_conn: string; manual_dns: boolean; before: MRec[]; notes: string[]; rolled_back_at: number };
@@ -303,8 +304,25 @@ export async function stagingStatus(id: string) {
 }
 
 
-export async function rollback(id: string, host: string) {
-  if (!await confirmDialog(`把 ${host} 恢复成上线前的设置，打开的又会是旧站；新站和抓好的内容都保留，改好后可以再上线。`, { title: '退回旧站', kind: 'danger', confirmText: '退回' })) return;
+/** 让旧域名跳到新域名（换了域名上线以后） */
+export async function oldRedirect(id: string, old: string, to: string) {
+  if (!await confirmDialog(`之后有人打开 ${old} 的任何地址，都会被带到 ${to} 的同一地址，旧站就看不到了。搜索引擎会把 ${old} 积累的排名慢慢转给 ${to}。\n\n建议新站稳定了再做；想反悔随时能取消。`, { title: `让 ${old} 跳到新站`, kind: 'warning', confirmText: '设置跳转' })) return;
+  await run(id, 'redirect', async () => {
+    const r = await invoke<{ verified: boolean; note: string }>('migrate_old_redirect', { id });
+    say(r.verified ? `${old} 已经跳到 ${to}，实测通过` : `跳转已设置，还在生效中${r.note ? `（${r.note}）` : ''}，过几分钟再看`, r.verified ? 'ok' : undefined);
+  });
+}
+
+export async function oldRedirectUndo(id: string, old: string) {
+  if (!await confirmDialog(`${old} 不再跳转，又会打开旧站。`, { title: '取消跳转', kind: 'warning', confirmText: '取消跳转', cancelText: '先不' })) return;
+  await run(id, 'redirect', async () => { say(await invoke<string>('migrate_old_redirect_undo', { id }), 'ok'); });
+}
+
+export async function rollback(id: string, host: string, moved = false) {
+  const msg = moved
+    ? `${host} 恢复成上线前的样子，不再打开新站；旧域名要是设置了跳转，也会一起取消。新站和抓好的内容都保留，改好后可以再上线。`
+    : `${host} 恢复成上线前的设置，打开的又会是旧站。新站和抓好的内容都保留，改好后可以再上线。`;
+  if (!await confirmDialog(msg, { title: moved ? `撤下 ${host} 上的新站` : '退回旧站', kind: 'danger', confirmText: moved ? '撤下' : '退回旧站' })) return;
   await run(id, 'rollback', async () => { const m = await invoke<string>('migrate_rollback', { id }); say(m, 'ok'); await refreshSites(); });
 }
 

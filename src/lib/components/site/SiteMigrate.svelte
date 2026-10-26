@@ -20,7 +20,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, hostUse, useText, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, hostUse, useText, oldRedirect, oldRedirectUndo, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -567,21 +567,37 @@
 
       {:else if shown === 'track'}
         {@const t = v.meta.track}
-        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 28 天了，迁移完成。' : '上线后会定期检查；打开站点时超过 12 小时没查过也会自动查一次。'}<small class="faint"> 上线于 <span data-tip={full(v.meta.cutover.at)}>{ago(v.meta.cutover.at)}</span>{t.at ? ` · 上次检查 ${ago(t.at)}` : ''}</small></span>
-          <button class="btn small primary" onclick={() => track(site.id)} disabled={jobRunning || !!busy}><Icon name="play" size={12} />立即检查</button>
-          <button class="btn small danger" onclick={() => rollback(site.id, v.meta.cutover.host)} disabled={jobRunning || !!busy}><Icon name="undo" size={12} />退回旧站</button>
+        {@const liveHost = v.meta.cutover.host}
+        {@const movedLive = liveHost.replace(/^www\./, '') !== oldHost.replace(/^www\./, '')}
+        {@const rd = v.meta.old_redirect}
+        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 4 周了，迁移完成。' : `新站上线 ${ago(v.meta.cutover.at)}。Pilot 会盯 4 周：旧地址在新站上能不能打开、搜索流量有没有掉；打开站点时超过 12 小时没查过会自动查一次。`}{#if t.at}<small class="faint"> 上次检查 <span data-tip={full(t.at)}>{ago(t.at)}</span></small>{/if}</span>
+          <button class="btn small" onclick={() => track(site.id)} disabled={jobRunning || !!busy} data-tip="马上把旧地址在新站上打开一遍，再看一下搜索流量"><Icon name="play" size={12} />{runHere && job.kind === 'migrate:track' ? '检查中…' : '现在查一次'}</button>
         </div>
+        {#if movedLive && oldOwned}
+          <div class="act" class:ok-bar={rd.at > 0 && rd.verified}>
+            {#if rd.at}
+              <span class="grow"><b>{oldHost.replace(/^www\./, '')} 已经跳到 {liveHost}</b>{rd.verified ? '：打开旧域名的任何地址，都会带到新站的同一地址' : `：还在生效中${rd.note ? `（${rd.note}）` : ''}`}</span>
+              <button class="link-btn" onclick={() => oldRedirectUndo(site.id, oldHost.replace(/^www\./, ''))} disabled={!!busy}>取消跳转</button>
+            {:else}
+              <span class="grow"><b>旧域名 {oldHost.replace(/^www\./, '')} 还在打开旧站</b>新站稳定了，就让它跳到 {liveHost}：原来的搜索排名才能带过来，访客也不会看到两个站。</span>
+              <button class="btn small" onclick={() => oldRedirect(site.id, oldHost.replace(/^www\./, ''), liveHost)} disabled={!!busy || jobRunning}>{busy === 'redirect' ? '设置中…' : `让 ${oldHost.replace(/^www\./, '')} 跳到新站`}</button>
+            {/if}
+          </div>
+        {/if}
         <ul class="mini">
-          {#each v.meta.cutover.notes as n (n)}<li><span class="lv info">i</span><span>{n}</span></li>{/each}
+          {#each v.meta.cutover.notes.filter((n) => !(movedLive && oldOwned && /^旧域名 /.test(n))) as n (n)}<li><span class="lv info">i</span><span>{n}</span></li>{/each}
           {#if t.at}
             <li><span class="lv {t.bad.length ? 'block' : 'ok'}">{t.bad.length ? '✕' : '✓'}</span><span>{t.bad.length ? `${t.checked} 个旧地址里 ${t.bad.length} 个在正式域名上不对` : `${t.checked} 个旧地址在正式域名上都正常`}{#if t.bad.length} <button class="link-btn" onclick={() => toggleItem('tb')}>{openItems.has('tb') ? '收起' : '查看'}</button>{/if}</span></li>
             {#if openItems.has('tb')}<ul class="items">{#each t.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
-            {#if t.after_days}<li><span class="lv {t.base_clicks > 5 && t.after_clicks < t.base_clicks * 0.7 ? 'warn' : 'ok'}">{t.base_clicks > 5 && t.after_clicks < t.base_clicks * 0.7 ? '!' : '✓'}</span><span>搜索点击：切换前日均 {t.base_clicks.toFixed(1)}，切换后 {t.after_clicks.toFixed(1)}（{t.after_days} 天）</span></li>{/if}
-            <li><span class="lv {t.sitemap_submitted && t.indexnow_submitted ? 'ok' : 'info'}">{t.sitemap_submitted && t.indexnow_submitted ? '✓' : 'i'}</span><span>sitemap {t.sitemap_submitted ? '已提交到 Search Console' : '还没提交'} · IndexNow {t.indexnow_submitted ? '已推送全部页面' : '等验证文件生效后推送'}</span></li>
+            {#if t.after_days}<li><span class="lv {t.base_clicks > 5 && t.after_clicks < t.base_clicks * 0.7 ? 'warn' : 'ok'}">{t.base_clicks > 5 && t.after_clicks < t.base_clicks * 0.7 ? '!' : '✓'}</span><span>搜索点击：上线前每天 {t.base_clicks.toFixed(1)} 次，上线后每天 {t.after_clicks.toFixed(1)} 次（{t.after_days} 天）</span></li>{/if}
+            <li><span class="lv {t.sitemap_submitted && t.indexnow_submitted ? 'ok' : 'info'}">{t.sitemap_submitted && t.indexnow_submitted ? '✓' : 'i'}</span><span>{t.sitemap_submitted && t.indexnow_submitted ? '已经通知搜索引擎来收录新站（Google、Bing 都提交了）' : `通知搜索引擎：Google ${t.sitemap_submitted ? '已提交' : '还没提交'} · Bing ${t.indexnow_submitted ? '已提交' : '等验证生效后提交'}`}</span></li>
             {#each t.notes as n (n)}<li><span class="lv warn">!</span><span>{n}</span></li>{/each}
           {/if}
         </ul>
         <p class="hint">接下来的内容更新可以交给托管运营：在下面的「托管」里加入一个托管方案。</p>
+        <div class="act sub danger-row"><span class="grow faint">{movedLive ? `新站有问题？可以先撤下，${liveHost} 恢复成上线前的样子。` : `新站有问题？可以退回旧站，${liveHost} 马上恢复成上线前的设置。`}</span>
+          <button class="link-btn danger-link" onclick={() => rollback(site.id, liveHost, movedLive)} disabled={jobRunning || !!busy}><Icon name="undo" size={11} />{movedLive ? '撤下新站' : '退回旧站'}</button>
+        </div>
       {/if}
 
       {#if todos.length && !aiRunning && ['rebuild', 'verify', 'cutover'].includes(shown)}
@@ -630,6 +646,10 @@
   .dm .grow { flex: 1; }
   .domains .desc { font-size: 12px; color: var(--faint); line-height: 1.55; }
   .warn-text, .domains .desc.warn-text, .cb .desc.warn-text { color: var(--su-warn-ink, #8a5a08); }
+  .act.ok-bar { background: var(--su-ok-soft); }
+  .act b { margin-right: 6px; color: var(--text); font-weight: 600; }
+  .danger-row { border-top: 1px solid var(--border); padding-top: 10px !important; }
+  .danger-link { color: var(--err); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }
   .todo-box > b small { margin-left: 6px; font-weight: 400; color: var(--faint); }

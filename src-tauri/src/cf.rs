@@ -516,6 +516,48 @@ pub async fn delete_worker_domain(token: &str, account_id: &str, id: &str) -> Re
 }
 
 /// 从 Pages 项目里去掉一个自定义域名。
+/// 区域的重定向规则（Single Redirects）：现有的规则，只留可以原样写回去的字段；还没建过就是空。
+pub async fn redirect_rules(token: &str, zone_id: &str) -> Result<Vec<Value>, String> {
+    match cf_get(token, &format!("/zones/{zone_id}/rulesets/phases/http_request_dynamic_redirect/entrypoint")).await {
+        Ok(b) => Ok(b["result"]["rules"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| {
+                let mut o = serde_json::Map::new();
+                for k in ["description", "expression", "action", "action_parameters", "enabled", "ref"] {
+                    if let Some(v) = r.get(k) {
+                        o.insert(k.into(), v.clone());
+                    }
+                }
+                Value::Object(o)
+            })
+            .collect()),
+        Err(e) if e.contains("404") => Ok(Vec::new()),
+        Err(e) => Err(redirect_err(e)),
+    }
+}
+
+pub async fn put_redirect_rules(token: &str, zone_id: &str, rules: Vec<Value>) -> Result<(), String> {
+    cf_send(token, reqwest::Method::PUT, &format!("/zones/{zone_id}/rulesets/phases/http_request_dynamic_redirect/entrypoint"), Some(serde_json::json!({ "rules": rules })))
+        .await
+        .map(|_| ())
+        .map_err(redirect_err)
+}
+
+fn redirect_err(e: String) -> String {
+    if e.contains("403") || e.to_ascii_lowercase().contains("authentication") || e.contains("permission") {
+        format!("{e}（Cloudflare 令牌缺「区域 → 单一重定向（Single Redirect）→ 编辑」权限：到 Cloudflare 后台给这个令牌加上，或者换一个有这个权限的令牌）")
+    } else {
+        e
+    }
+}
+
+/// 打开 / 关掉一条记录的 Cloudflare 代理（重定向规则只对经过代理的访问生效）。
+pub async fn set_dns_proxied(token: &str, zone_id: &str, record_id: &str, proxied: bool) -> Result<(), String> {
+    cf_send(token, reqwest::Method::PATCH, &format!("/zones/{zone_id}/dns_records/{record_id}"), Some(serde_json::json!({ "proxied": proxied }))).await.map(|_| ())
+}
+
 pub async fn delete_pages_domain(token: &str, account_id: &str, project: &str, domain: &str) -> Result<(), String> {
     cf_send(token, reqwest::Method::DELETE, &format!("/accounts/{account_id}/pages/projects/{project}/domains/{domain}"), None).await.map(|_| ())
 }

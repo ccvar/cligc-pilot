@@ -4680,6 +4680,8 @@ pub fn run() {
             migrate_cmds::migrate_live,
             migrate_cmds::migrate_set_formal,
             migrate_cmds::migrate_host_use,
+            migrate_cmds::migrate_old_redirect,
+            migrate_cmds::migrate_old_redirect_undo,
             migrate_cmds::migrate_staging,
             migrate_cmds::migrate_staging_remove,
             migrate_cmds::migrate_staging_check,
