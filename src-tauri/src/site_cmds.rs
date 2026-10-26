@@ -687,12 +687,15 @@ pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) 
             "请先在站点设置里配置部署方式".into()
         });
     }
-    let job = state.site_jobs.start(Some(app), &id, "deploy", "构建并上线", crate::site_deploy::DEPLOY_STEPS)?;
+    let job = state.site_jobs.start(Some(app.clone()), &id, "deploy", "构建并上线", crate::site_deploy::DEPLOY_STEPS)?;
     let job_id = job.id.clone();
     let conns = state.conns.clone();
     let site_dir = state.sites.data_dir(&id);
     tauri::async_runtime::spawn(async move {
-        let _ = crate::site_deploy::run_deploy(site, conns, site_dir, job, "manual").await;
+        // 迁移中的站点：上线到预览地址 / 发布到服务器成功后接着实测每个旧地址
+        if crate::site_deploy::run_deploy(site, conns, site_dir, job, "manual").await.is_ok() {
+            crate::migrate_cmds::live_after_deploy(app, id).await;
+        }
     });
     Ok(job_id)
 }

@@ -1716,32 +1716,41 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
     })?;
     job.step("parity", if blocks > 0 { "failed" } else { "ok" }, &format!("{blocks} 项必须修，{warns} 项提醒"));
 
-    // 预览地址实测：要先上线到 pages.dev（站点还没填正式域名，上线不会碰线上域名）
-    let deployed = crate::site_deploy::load_history(&dir.parent().map(Path::to_path_buf).unwrap_or_default()).iter().any(|r| r.ok);
+    let bad = run_live(&site, &dir, &map, dynamic.as_ref(), &conns, job).await?;
+    match bad {
+        Some(bad) if blocks > 0 || bad > 0 => Err(format!("核对没通过：{blocks} 项必须修，{}上 {bad} 个地址不对", if crate::site_vps_host::managed(&site) { "服务器" } else { "预览地址" })),
+        _ if blocks > 0 => Err(format!("{blocks} 项必须修")),
+        _ => Ok(()),
+    }
+}
+
+/// 预览地址实测（作业里的 `live` 这一步）：Cloudflare 在 pages.dev 上测，自己的服务器带 Host 头在服务器上测。
+/// 返回不对的地址数；还没上线过就是 None（这一步跳过）。
+async fn run_live(site: &Site, dir: &Path, map: &mx::UrlMap, dynamic: Option<&crate::site_dynamic::Dynamic>, conns: &crate::conns::ConnStore, job: &Job) -> Result<Option<usize>, String> {
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    // 要先上线到 pages.dev（站点还没填正式域名，上线不会碰线上域名）
+    let deployed = crate::site_deploy::load_history(&site_dir).iter().any(|r| r.ok);
     // 自己的服务器：在服务器上带 Host 头自测
-    if crate::site_vps_host::managed(&site) {
+    if crate::site_vps_host::managed(site) {
         let v = crate::site_vps_host::load(&site_dir).filter(|v| v.setup_at > 0 && !v.current.is_empty());
         let Some(v) = v.filter(|_| deployed) else {
             job.step("live", "skipped", "还没发布到服务器：配好服务器后点「发布到服务器」");
-            save_meta(&dir, |m| m.live = LiveCheck::default())?;
-            return if blocks > 0 { Err(format!("{blocks} 项必须修")) } else { Ok(()) };
+            save_meta(dir, |m| m.live = LiveCheck::default())?;
+            return Ok(None);
         };
         job.step("live", "running", &format!("在服务器 {} 上自测", v.ip));
         let conn = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "部署用的 SSH 连接不存在".to_string())?;
-        let health = dynamic.as_ref().is_some_and(|d| d.needs_db());
-        let live = vps_check(&conn, &v, &map, health).await?;
+        let health = dynamic.is_some_and(|d| d.needs_db());
+        let live = vps_check(&conn, &v, map, health).await?;
         let bad = live.bad.len();
-        save_meta(&dir, |m| m.live = live)?;
+        save_meta(dir, |m| m.live = live)?;
         job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
-        if blocks > 0 || bad > 0 {
-            return Err(format!("核对没通过：{blocks} 项必须修，服务器上 {bad} 个地址不对"));
-        }
-        return Ok(());
+        return Ok(Some(bad));
     }
     if site.deploy.mode != "direct" || site.deploy.project.is_empty() || !deployed {
         job.step("live", "skipped", "还没上线到预览地址：配好 Cloudflare 后点「上线到预览地址」");
-        save_meta(&dir, |m| m.live = LiveCheck::default())?;
-        return if blocks > 0 { Err(format!("{blocks} 项必须修")) } else { Ok(()) };
+        save_meta(dir, |m| m.live = LiveCheck::default())?;
+        return Ok(None);
     }
     job.step("live", "running", "");
     let base = match conns.get(&site.deploy.cf_conn_id) {
@@ -1751,20 +1760,65 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
         },
         Err(_) => format!("https://{}.pages.dev", site.deploy.project),
     };
-    let health = dynamic.as_ref().is_some_and(|d| d.needs_db() || d.needs_r2());
-    if health && dynamic.as_ref().is_some_and(|d| d.setup_at == 0) {
+    let health = dynamic.is_some_and(|d| d.needs_db() || d.needs_r2());
+    if health && dynamic.is_some_and(|d| d.setup_at == 0) {
         job.step("live", "failed", "动态功能还没配置：先点「配置动态功能」建数据库，再上线到预览地址");
-        save_meta(&dir, |m| m.live = LiveCheck { at: now(), base: base.clone(), checked: 0, bad: vec!["动态功能还没配置（数据库、人机验证），表单和评论的接口不通".into()] })?;
+        save_meta(dir, |m| m.live = LiveCheck { at: now(), base: base.clone(), checked: 0, bad: vec!["动态功能还没配置（数据库、人机验证），表单和评论的接口不通".into()] })?;
         return Err("动态功能还没配置".into());
     }
-    let live = live_check(&base, &map, health, job).await;
+    let live = live_check(&base, map, health, job).await;
     let bad = live.bad.len();
-    save_meta(&dir, |m| m.live = live)?;
+    save_meta(dir, |m| m.live = live)?;
     job.step("live", if bad > 0 { "failed" } else { "ok" }, &if bad > 0 { format!("{bad} 个地址不对") } else { "旧地址都能正常打开或跳转".into() });
-    if blocks > 0 || bad > 0 {
-        return Err(format!("核对没通过：{blocks} 项必须修，预览地址上 {bad} 个地址不对"));
+    Ok(Some(bad))
+}
+
+const LIVE_STEPS: &[(&str, &str)] = &[("live", "预览地址实测")];
+
+/// 迁移中的站点上线 / 发布成功以后自动实测，不用再点「重新核对」（那会重新安装、构建一遍）。
+/// 还没核对过（没有对应表）就不测。
+pub async fn live_after_deploy(app: tauri::AppHandle, id: String) {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let ready = state.sites.get(&id).is_ok_and(|s| s.origin == "migrating") && load_meta(&mdir(&state, &id)).parity_at > 0;
+    if ready {
+        if let Ok(job) = start_live(&app, &state, &id) {
+            run_live_job(app.clone(), id, job).await;
+        }
     }
-    Ok(())
+}
+
+/// 只做「预览地址实测」这一步（已经上线过、不用重新构建）。
+#[tauri::command]
+pub async fn migrate_live(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let job = start_live(&app, &state, &id)?;
+    let job_id = job.id.clone();
+    tauri::async_runtime::spawn(run_live_job(app, id, job));
+    Ok(job_id)
+}
+
+fn start_live(app: &tauri::AppHandle, state: &AppState, id: &str) -> Result<Job, String> {
+    state.sites.get(id)?;
+    state.site_jobs.start(Some(app.clone()), id, "migrate:live", "预览地址实测", LIVE_STEPS)
+}
+
+async fn run_live_job(app: tauri::AppHandle, id: String, job: Job) {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let r = async {
+        let site = state.sites.get(&id)?;
+        let dir = mdir(&state, &id);
+        let map: mx::UrlMap = read_json(&PathBuf::from(&site.local_dir).join(".pilot/migrate/urls.json")).ok_or("仓库里没有 .pilot/migrate/urls.json")?;
+        let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+        let dynamic = crate::site_dynamic::load(&site_dir).filter(|d| !d.features.is_empty());
+        match run_live(&site, &dir, &map, dynamic.as_ref(), &state.conns, &job).await? {
+            Some(bad) if bad > 0 => Err(format!("{bad} 个地址不对")),
+            Some(_) => Ok(()),
+            None => Err("还没上线过".to_string()),
+        }
+    }
+    .await;
+    job.finish(&r);
 }
 
 /// 在某个地址上把对应表里的旧路径都请求一遍：keep 要 200，redirect 要 301/308 到新地址。

@@ -4677,6 +4677,7 @@ pub fn run() {
             migrate_cmds::migrate_extract,
             migrate_cmds::migrate_rebuild_message,
             migrate_cmds::migrate_verify,
+            migrate_cmds::migrate_live,
             migrate_cmds::migrate_ownership,
             migrate_cmds::migrate_dns_prepare,
             migrate_cmds::migrate_dns_fix,

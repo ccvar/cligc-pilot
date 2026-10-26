@@ -191,6 +191,8 @@ export async function startRebuild(site: Site) {
 }
 
 export const verify = (id: string) => run(id, 'verify', () => invoke('migrate_verify', { id }));
+/** 已经上线过：只实测每个旧地址（上线成功后 Pilot 也会自动测一次） */
+export const liveCheck = (id: string) => run(id, 'live', () => invoke('migrate_live', { id }));
 export const checkOwnership = (id: string) => run(id, 'own', () => invoke('migrate_ownership', { id }));
 export const prepareDns = (id: string, create = false) => run(id, 'dns', () => invoke('migrate_dns_prepare', { id, create }));
 
@@ -270,6 +272,7 @@ export function migrateNext(site: Site): MNext {
       if (blocks || v.meta.live.bad.length) return { text: '核对有问题要修', tone: 'warn', label: '让 AI 修', icon: 'wand', run: () => void startRebuild(site) };
       if (!v.deploy_ready) return { text: `核对通过，等你配置${v.plan?.deploy === 'vps' ? '服务器' : '预览地址'}`, tone: '', ...open('去配置') };
       if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') return { text: '等你配置动态功能', tone: '', ...open('去配置') };
+      if (!v.meta.live.at && sites.status[site.id]?.last_deploy?.ok) return { text: `已${v.plan?.deploy === 'vps' ? '发布' : '上线'}，等实测每个旧地址`, tone: '', label: '实测', icon: 'checks', run: () => void liveCheck(site.id) };
       if (!v.meta.live.at) return { text: `等${v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览地址'}实测`, tone: '', label: v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览', icon: 'rocket', run: () => void deploySite(site.id) };
       return { text: '核对中', tone: '', ...open('查看') };
     }

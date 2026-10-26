@@ -19,7 +19,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -92,7 +92,7 @@
   const shownIdx = $derived(STAGES.findIndex((s) => s.key === shown));
   const isCurrent = $derived(shown === current && v?.stage !== 'done');
   // 后台任务属于哪一步
-  const JOB_STEP: Record<string, MStage> = { 'migrate:survey': 'survey', 'migrate:extract': 'extract', 'migrate:verify': 'verify', 'vps:setup': 'verify', 'dynamic:setup': 'verify', deploy: 'verify', 'migrate:track': 'track' };
+  const JOB_STEP: Record<string, MStage> = { 'migrate:survey': 'survey', 'migrate:extract': 'extract', 'migrate:verify': 'verify', 'migrate:live': 'verify', 'vps:setup': 'verify', 'dynamic:setup': 'verify', deploy: 'verify', 'migrate:track': 'track' };
   const jobStep = $derived.by<MStage | ''>(() => {
     if (!job) return '';
     const st = JOB_STEP[job.kind] ?? '';
@@ -110,6 +110,9 @@
     return last && last.role !== 'user' && last.error ? last.text.split('\n')[0].slice(0, 160) : '';
   });
   const aiMins = $derived(aiStarted ? Math.max(1, Math.round((Date.now() - aiStarted) / 60000)) : 0);
+  // 上线 / 发布成功过：实测不用重新构建，直接测
+  const deployedOk = $derived(!!sites.status[site.id]?.last_deploy?.ok);
+  const lastUrl = $derived(sites.status[site.id]?.last_deploy?.url ?? '');
   // 核对这一步接下来该做什么（只有它是主按钮）
   const vNext = $derived.by(() => {
     if (!v) return '';
@@ -338,15 +341,16 @@
               <span><b>{isVps ? '发布到服务器，实测每个旧地址' : '上线到预览地址，实测每个旧地址'}</b>
                 {#if v.meta.live.at}<small>{v.meta.live.bad.length ? `${v.meta.live.checked} 个里 ${v.meta.live.bad.length} 个不对` : `${v.meta.live.checked} 个旧地址都能正常打开或跳转`}</small>{/if}
               </span>
-              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{isVps ? '发布后点「重新核对」：Pilot 在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，然后点「重新核对」。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
+              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '上线'}，还没实测：点「实测每个旧地址」（不用重新构建）。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
               {#if v.meta.live.bad.length}
                 <button class="link-btn sm al" onclick={() => toggleItem('live')}>{openItems.has('live') ? '收起' : '查看不对的地址'}</button>
                 {#if openItems.has('live')}<ul class="items">{#each v.meta.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
               {/if}
               {#if v.deploy_ready && (dynReady || isVps)}
                 <div class="row">
-                  <button class="btn small" class:primary={vNext === 'live'} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '上线中…') : v.meta.live.at ? (isVps ? '重新发布' : '重新上线') : (isVps ? '发布到服务器' : '上线到预览地址')}</button>
-                  {#if !isVps && v.meta.live.at}<button class="btn tiny" onclick={() => openUrl(v.meta.live.base)}><Icon name="external" size={11} />打开预览</button>{/if}
+                  {#if deployedOk && !v.meta.live.at}<button class="btn small" class:primary={vNext === 'live'} onclick={() => liveCheck(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />{runHere && job.kind === 'migrate:live' ? '实测中…' : '实测每个旧地址'}</button>{/if}
+                  <button class="btn small" class:primary={vNext === 'live' && !deployedOk} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '上线中…') : deployedOk ? (isVps ? '重新发布' : '重新上线') : (isVps ? '发布到服务器' : '上线到预览地址')}</button>
+                  {#if !isVps && (v.meta.live.base || lastUrl)}<button class="btn tiny" onclick={() => openUrl(v.meta.live.base || lastUrl)}><Icon name="external" size={11} />打开预览</button>{/if}
                 </div>
               {/if}
             </div>
