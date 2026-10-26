@@ -51,7 +51,14 @@
     const ids = done.filter((s) => pagesMode(s) && s.domain && fleet.rows.find((r) => r.id === s.id)?.last_deploy_ok).map((s) => s.id);
     untrack(() => { for (const id of ids) { const s = done.find((x) => x.id === id); if (s && !launch.domainCheck[id]) void checkDomain(s, true); } });
   });
-  $effect(() => { for (const s of list) { if (s.origin === 'migrating') { void loadMigrate(s.id); void loadMake(s.id, false); void loadDirections(s.id); } else void loadMake(s.id); } });
+  // 按 id 集合触发：sites.list 每次刷新 list 都是新数组，不能每次都把每个制作中站点的产物重新扫一遍
+  let loadedFor = '';
+  $effect(() => {
+    const key = list.map((s) => s.id + ':' + s.origin).join(',');
+    if (key === loadedFor) return;
+    loadedFor = key;
+    untrack(() => { for (const s of list) { if (s.origin === 'migrating') { void loadMigrate(s.id); void loadMake(s.id, false); void loadDirections(s.id); } else void loadMake(s.id); } });
+  });
   const migIdx = (id: string) => { const st = migrate.view[id]?.stage; return st ? Math.max(0, STAGES.findIndex((x) => x.key === st)) : 0; };
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {

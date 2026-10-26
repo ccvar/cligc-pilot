@@ -300,7 +300,7 @@
     --border: #ecebe6; --border2: #e1dfd8;
     --text: #26241f; --dim: #6f6b62; --faint: #a29d93;
     /* 强调色走暖黑/灰（Codex 式安静路线），不用蓝紫；风险色（红/琥珀）另有专用变量。 */
-    --accent: #33302a; --accent-h: #1d1b17; --accent-soft: #edece7;
+    --accent: #33302a; --accent-h: #1d1b17; --accent-soft: #edece7; --soft: #edece7;
     --user-bg: #f3f1ec;
     --ok: #12805c; --warn: #b45309; --err: #dc2626;
     --err-soft: #fef2f2; --err-border: #f4cccc;

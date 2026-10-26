@@ -126,7 +126,7 @@
   /* 单开时吃满整宽（撤掉固定宽 flex:none）；左边没东西了，左边框也去掉。 */
   .files-wrap.solo { flex: 1; min-width: 0; border-left: 0; }
   .files-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); }
-  .fpath { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .fpath { flex: 1; min-width: 0; height: 24px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; } /* 和同一行 24px 的 .fbtn 对齐，切到输入态工具栏不跳高 */
   /* 面包屑：不画框（它是一行路径，不是输入框——要输入点空白处会切成真的 input），
      撑满路径栏，路径深了横向滚动 */
   .fcrumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 1px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: text; padding: 4px 2px; }

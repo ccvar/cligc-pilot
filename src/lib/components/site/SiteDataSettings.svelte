@@ -32,21 +32,30 @@
   $effect(() => { if (draft.data.bing_conn_id) void loadBingSites(draft.data.bing_conn_id); });
 
   // 按域名自动挑选：选了连接、还没选资源时，挑最匹配的那个。
+  // 每份资源列表只挑一次（按连接 id 记）：不然用户选「不接入」把它清空，这里立刻又给填回去
   const bare = $derived(draft.domain.replace(/^www\./, ''));
+  const picked = new Set<string>();
   $effect(() => {
-    if (!editing) return;
-    if (sres && draft.domain && !draft.data.gsc_site) {
-      const hit = sres.sites.find((s) => s.url === `sc-domain:${bare}`) ?? sres.sites.find((s) => s.url === `https://${draft.domain}/`) ?? sres.sites.find((s) => s.url.includes(bare));
-      if (hit) draft.data.gsc_site = hit.url;
+    if (!editing || !draft.domain) return;
+    if (sres && !picked.has('gsc:' + scConn)) {
+      picked.add('gsc:' + scConn);
+      if (!draft.data.gsc_site) {
+        const hit = sres.sites.find((s) => s.url === `sc-domain:${bare}`) ?? sres.sites.find((s) => s.url === `https://${draft.domain}/`) ?? sres.sites.find((s) => s.url.includes(bare));
+        if (hit) draft.data.gsc_site = hit.url;
+      }
     }
-    if (!gres || !draft.domain) return;
-    if (!draft.data.ga4_property) {
-      const hit = gres.properties.find((p) => p.name.toLowerCase().includes(bare.split('.')[0]));
-      if (hit) { draft.data.ga4_property = hit.property; draft.data.ga4_property_name = hit.name; }
+    if (gres && !picked.has('ga4:' + draft.data.google_conn_id)) {
+      picked.add('ga4:' + draft.data.google_conn_id);
+      if (!draft.data.ga4_property) {
+        const hit = gres.properties.find((p) => p.name.toLowerCase().includes(bare.split('.')[0]));
+        if (hit) { draft.data.ga4_property = hit.property; draft.data.ga4_property_name = hit.name; }
+      }
     }
   });
   $effect(() => {
-    if (!editing || !bsites || draft.data.bing_site || !draft.domain) return;
+    if (!editing || !bsites || !draft.domain || picked.has('bing:' + draft.data.bing_conn_id)) return;
+    picked.add('bing:' + draft.data.bing_conn_id);
+    if (draft.data.bing_site) return;
     const hit = bsites.find((s) => s.url.includes(bare));
     if (hit) draft.data.bing_site = hit.url;
   });

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import Dropdown from '$lib/Dropdown.svelte';
   import { sshForm, sshAuthOpts, pickSshKey, saveSshEdit, testSsh, confirmSsh } from '$lib/state/ssh.svelte.js';
@@ -6,9 +7,9 @@
 </script>
 
 {#if sshForm.sshOpen}
-  <div class="mask" role="presentation" onclick={() => (sshForm.sshOpen = false)}></div>
-  <div class="modal wide ssh-modal" use:dialogGeometry={DIALOG_GEOMETRY.ssh} role="dialog" aria-modal="true" aria-label={sshForm.sshCredentialRepair ? '补录远程连接密码' : sshForm.sshEditId ? '编辑远程连接' : '新建远程连接'}>
-    <header class="sheet-head"><b>{sshForm.sshCredentialRepair ? '补录远程连接密码' : sshForm.sshEditId ? '编辑远程连接' : '新建远程连接'}</b><button class="x" onclick={() => (sshForm.sshOpen = false)}>×</button></header>
+  <div class="mask" role="presentation" onclick={() => !(sshForm.sshTesting || sshForm.sshConnecting) && (sshForm.sshOpen = false)}></div>
+  <div class="modal wide ssh-modal" use:dialogGeometry={DIALOG_GEOMETRY.ssh} use:escClose={() => !(sshForm.sshTesting || sshForm.sshConnecting) && (sshForm.sshOpen = false)} role="dialog" aria-modal="true" aria-label={sshForm.sshCredentialRepair ? '补录远程连接密码' : sshForm.sshEditId ? '编辑远程连接' : '新建远程连接'}>
+    <header class="sheet-head"><b>{sshForm.sshCredentialRepair ? '补录远程连接密码' : sshForm.sshEditId ? '编辑远程连接' : '新建远程连接'}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (sshForm.sshOpen = false)} disabled={sshForm.sshTesting || sshForm.sshConnecting}>×</button></header>
     <div class="sheet-body">
       <p class="hint">{#if sshForm.sshCredentialRepair}这条连接的密码已不在 {keystoreName} 中。输入一次密码并测试连接，保存后会自动恢复终端和文件列表。{:else if sshForm.sshEditId}改完地址 / 用户 / 认证方式后要重新「测试连接」核对指纹再保存；只改名字可以直接保存。密码 / 私钥口令留空＝沿用 {keystoreName} 里已存的那条。{:else}SSH 到一台远程机器：能开终端、管文件、让 AI 帮你干活。密码 / 私钥口令只进 {keystoreName}，绝不落盘。{/if}</p>
       <div class="trow">

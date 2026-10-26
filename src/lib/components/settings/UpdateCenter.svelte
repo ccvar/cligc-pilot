@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { sheetWidth } from '$lib/sheetWidth';
   import AppIcon from '$lib/AppIcon.svelte';
   import UpdateIcon from '$lib/components/icons/UpdateIcon.svelte';
@@ -9,7 +10,7 @@
 
 {#if updater.updateCenterOpen}
   <div class="mask update-center-mask" role="presentation" onclick={closeUpdateCenter}></div>
-  <div class="sheet update-center-sheet" use:sheetWidth={SHEET_WIDTH.updateCenter} role="dialog" aria-modal="true" aria-label="更新中心">
+  <div class="sheet update-center-sheet" use:sheetWidth={SHEET_WIDTH.updateCenter} use:escClose={() => !updater.updBusy && closeUpdateCenter()} role="dialog" aria-modal="true" aria-label="更新中心">
     <header class="sheet-head update-center-head">
       <div class="update-center-title">
         <span class="update-center-title-icon" aria-hidden="true"><UpdateIcon size={16} /></span>
@@ -27,7 +28,7 @@
           onclick={() => void checkPilotUpdate(false)}
           disabled={updater.pilotUpdateStatus === 'checking' || updater.updBusy}
         ><RefreshIcon spinning={updater.pilotUpdateStatus === 'checking'} /></button>
-        <button class="x" onclick={closeUpdateCenter} disabled={updater.updBusy}>×</button>
+        <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeUpdateCenter} disabled={updater.updBusy}>×</button>
       </div>
     </header>
     <div class="sheet-body update-center-body">

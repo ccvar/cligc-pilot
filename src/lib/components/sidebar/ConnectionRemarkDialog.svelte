@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { connections, saveConnRemark } from '$lib/state/connections.svelte.js';
   import { DIALOG_GEOMETRY } from '$lib/state/env';
@@ -6,8 +7,8 @@
 
 {#if connections.connRemarkEdit}
   <div class="mask" role="presentation" onclick={() => !connections.connRemarkEdit?.busy && (connections.connRemarkEdit = null)}></div>
-  <div class="modal conn-remark-modal" use:dialogGeometry={DIALOG_GEOMETRY.connectionRemark} role="dialog" aria-modal="true" aria-label="设置连接备注">
-    <header class="sheet-head"><div><b>设置备注</b><small class="dim">{connections.connRemarkEdit.name}</small></div><button class="x" onclick={() => (connections.connRemarkEdit = null)} disabled={connections.connRemarkEdit.busy}>×</button></header>
+  <div class="modal conn-remark-modal" use:dialogGeometry={DIALOG_GEOMETRY.connectionRemark} use:escClose={() => !connections.connRemarkEdit?.busy && (connections.connRemarkEdit = null)} role="dialog" aria-modal="true" aria-label="设置连接备注">
+    <header class="sheet-head"><div><b>设置备注</b><small class="dim">{connections.connRemarkEdit.name}</small></div><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (connections.connRemarkEdit = null)} disabled={connections.connRemarkEdit.busy}>×</button></header>
     <div class="sheet-body">
       <p class="hint">备注会替代列表里的脱敏 Key；鼠标悬停仍可查看原来的脱敏 Key。留空保存即可清除。</p>
       <!-- svelte-ignore a11y_autofocus -->

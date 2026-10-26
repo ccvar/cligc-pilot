@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   // 制作站点，两种填法：
   // 快速制作（默认）：一句话说清是个什么站，名称、域名可空，其余交给 AI 判断，点开始就在新站点的对话里开工；
   // 详细设置：两步。① 定位（是什么站、给谁看、想靠它做什么）② 技术栈、风格、首批页面数、存放位置。
@@ -28,6 +29,8 @@
   } as const;
   type StdKey = keyof typeof STD;
   let editing = $state<StdKey | ''>('');
+  // 组件一直挂着：每次重新打开都从收起的状态开始
+  $effect(() => { if (!f.open) editing = ''; });
   let full = $state<{ content: string; visual: string } | null>(null);
   function extraOf(k: StdKey) { return k === 'content' ? f.contentExtra : f.visualExtra; }
   function setExtra(k: StdKey, v: string) { if (k === 'content') f.contentExtra = v; else f.visualExtra = v; }
@@ -59,7 +62,7 @@
 
 {#if f.open}
   <div class="su-mask" role="presentation" onclick={closeSiteCreate}></div>
-  <div class="su modal sc" role="dialog" aria-modal="true" aria-label="制作站点">
+  <div class="su modal sc" use:escClose={closeSiteCreate} role="dialog" aria-modal="true" aria-label="制作站点">
     <header class="sheet-head">
       <b><SiteMark size={15} /> 制作站点</b>
       <div class="seg" role="tablist" aria-label="填法">
@@ -73,7 +76,7 @@
           <li class:on={f.step === 'build'}><span class="n">2</span>技术栈与风格</li>
         </ol>
       {/if}
-      <button class="x" onclick={closeSiteCreate} disabled={f.busy}>×</button>
+      <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeSiteCreate} disabled={f.busy}>×</button>
     </header>
     <div class="sheet-body">
       {#if quick}

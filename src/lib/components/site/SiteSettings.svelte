@@ -20,7 +20,10 @@
   const cfConns = $derived(app.conns.filter((c) => c.kind === 'cloudflare'));
   const dirty = $derived(!!d && JSON.stringify({ ...d, updated_at: 0 }) !== JSON.stringify({ ...site, updated_at: 0 }));
   let checksText = $state('');
-  $effect(() => { if (d) checksText = d.build.checks.join('\n'); });
+  // 只在换了站点 / 草稿重建时回填一次。之前每次 syncChecks 写回 d.build.checks 都会触发回填，
+  // 把刚敲的空格和换行吃掉——多个词、多行的检查命令只能粘贴、没法打字
+  let checksFor: Site | null = null;
+  $effect(() => { if (d && d !== checksFor) { checksFor = d; checksText = d.build.checks.join('\n'); } });
   function syncChecks() { if (d) d.build.checks = checksText.split('\n').map((c) => c.trim()).filter(Boolean); }
   let tagIn = $state('');
   async function addTag() {

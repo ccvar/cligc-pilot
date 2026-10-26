@@ -28,8 +28,9 @@
     untrack(() => {
       phone.focus = '';
       setFolded(f, false);
-      setTimeout(() => (f === 'phone' ? phoneEl : mailEl)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120);
     });
+    const t = setTimeout(() => (f === 'phone' ? phoneEl : mailEl)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 120);
+    return () => clearTimeout(t);
   });
   async function install() {
     installing = true;
@@ -84,7 +85,7 @@
     finally { mailBusy = false; }
     await connectGoogle();
   }
-  function cancelGoogle() { void invoke('google_oauth_cancel'); }
+  function cancelGoogle() { invoke('google_oauth_cancel').catch(() => {}); }
   // 屏幕常亮：手机开发者选项「不锁定屏幕」——连着电脑时不熄屏，AI 操作到一半就不会锁住
   let awakeBusy = $state('');
   async function toggleAwake(serial: string, on: boolean) {
@@ -174,7 +175,7 @@
         </div>
         {#if mail.log.length}
           <ul class="mail-log">
-            {#each mail.log.slice(0, 3) as l (l.ts + l.from)}
+            {#each mail.log.slice(0, 3) as l, i (`${l.ts}:${l.from}:${i}`)}
               <li class:bad={!l.ok}><span class="t">{hhmm(l.ts)}</span>{l.from} · {l.kind === 'link' ? '激活链接' : '验证码'} · {l.ok ? (l.kind === 'link' ? '已在手机上打开' : '已填到手机') : l.note || '没取到'}</li>
             {/each}
           </ul>

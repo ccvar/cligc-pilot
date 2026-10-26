@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import Icon from './Icon.svelte';
   import type { ConfigState, ConfigVar, Site } from '$lib/types';
-  import { say } from '$lib/state/app.svelte.js';
+  import { say, confirmDialog } from '$lib/state/app.svelte.js';
   import { sites, setSiteEnv } from '$lib/state/sites.svelte.js';
   import { ago, full } from './fmt';
 
@@ -28,12 +28,20 @@
     editing = ''; val = '';
     await load();
   }
-  async function clear(k: string) { await setSiteEnv(site.id, [], [k]); await load(); }
+  async function clear(k: string) {
+    // 值从不显示，清了就找不回来
+    if (!(await confirmDialog(`清除 ${k} 的值？清掉以后找不回来，需要时得重新填。`, { title: '清除配置', kind: 'danger', confirmText: '清除' }))) return;
+    await setSiteEnv(site.id, [], [k]);
+    await load();
+  }
+  let addBusy = $state(false);
   async function addNew() {
     const k = newKey.trim();
-    if (!k || !newVal.trim()) return;
-    await save(k, newVal);
+    if (!k || !newVal.trim() || addBusy) return;
+    addBusy = true;
+    try { await save(k, newVal); } finally { addBusy = false; }
     newKey = ''; newVal = '';
+    adding = false; // 存好了才收起表单；失败时值还在、可以改了再存
   }
   async function sync() {
     syncing = true;
@@ -89,7 +97,7 @@
       <div class="row">
         <input class="tin mono" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
         <input class="tin mono" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
-        <button class="btn small primary" onclick={() => { void addNew(); adding = false; }} disabled={!newKey.trim() || !newVal.trim() || sites.saving}>保存</button>
+        <button class="btn small primary" onclick={addNew} disabled={!newKey.trim() || !newVal.trim() || sites.saving || addBusy}>{addBusy ? '保存中…' : '保存'}</button>
         <button class="btn small ghost" onclick={() => (adding = false)}>取消</button>
       </div>
     </div>

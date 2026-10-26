@@ -64,7 +64,11 @@
   async function moveSite(id: string, from: string, to: string) {
     if (to === from) return;
     if (to === '__new') { newGroup([id]); return; }
-    if (to === '__out') { await setManagedSites([id], false); return; }
+    if (to === '__out') {
+      if (!(await confirmDialog(`${siteName(id)} 退出托管后，计划里的任务不再自动执行，改为你自己运营。`, { title: '退出托管', kind: 'warning', confirmText: '退出托管' }))) return;
+      await setManagedSites([id], false);
+      return;
+    }
     await setManagedSites([id], true, to);
   }
   async function runNow(id: string) {
@@ -312,7 +316,7 @@
         {#if logOpen}
           {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{/if}
         <div class="list feed">
-          {#each managed.activity as a, i (i)}
+          {#each managed.activity as a (a.ts + ':' + a.item_id + ':' + a.kind)}
             <div class="li ev">
               <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">

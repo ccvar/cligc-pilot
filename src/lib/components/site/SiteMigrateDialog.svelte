@@ -18,7 +18,7 @@
   <div class="su modal mgd" role="dialog" aria-modal="true" aria-label="迁移已有站点">
     <header class="sheet-head">
       <b><Icon name="route" size={15} /> 迁移已有站点</b>
-      <button class="x" onclick={closeMigrate} disabled={d.busy}>×</button>
+      <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeMigrate} disabled={d.busy}>×</button>
     </header>
     <div class="sheet-body">
       <p class="hint">把线上的站点搬进 Pilot 重做：原来的 URL 和正文都保留，换成新的视觉，部署到 Cloudflare 或你自己的服务器。搬完以后由托管运营接着更新内容。</p>

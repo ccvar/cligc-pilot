@@ -11,7 +11,7 @@
   import WorkspaceMark from '$lib/components/icons/WorkspaceMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mentionedImages, mdRenderCached, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
+  import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mentionedImages, mdRenderCached, mdRenderLive, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
   import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
@@ -258,7 +258,7 @@
             {#each parts as part, pi (pi)}
               {#if part.kind === 'steps'}{@render steps(part.tools, pi === parts.length - 1 && progress.running ? { ms: thread.nowMs - progress.running.startedAt } : null)}
               {:else}<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-<div class="text md live-text" onclick={(e)=>mdClick(e,activeConv)} onauxclick={(e)=>mdClick(e,activeConv)}>{@html mdRenderCached(part.text)}</div>{/if}
+<div class="text md live-text" onclick={(e)=>mdClick(e,activeConv)} onauxclick={(e)=>mdClick(e,activeConv)}>{@html mdRenderLive(context.id, part.text)}</div>{/if}
             {/each}
             <!-- 正在跑的步骤不是工具（比如生图、思考）或还没出现在步骤里：单独一行 -->
             {#if progress.running && !lastSteps}

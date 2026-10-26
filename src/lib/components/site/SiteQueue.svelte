@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import './site.css';
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
@@ -190,8 +191,8 @@
 
 {#if ops.diff}
   <div class="su-mask" role="presentation" onclick={() => (ops.diff = null)}></div>
-  <div class="su modal diff-modal" role="dialog" aria-modal="true" aria-label="改动差异">
-    <header class="sheet-head"><b>{ops.diff.item.opp.title}</b><button class="x" onclick={() => (ops.diff = null)}>×</button></header>
+  <div class="su modal diff-modal" use:escClose={() => (ops.diff = null)} role="dialog" aria-modal="true" aria-label="改动差异">
+    <header class="sheet-head"><b>{ops.diff.item.opp.title}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (ops.diff = null)}>×</button></header>
     <div class="sheet-body"><pre class="diff">{#each ops.diff.text.split('\n') as l, n (n)}<span class={l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''}>{l}{'\n'}</span>{/each}</pre></div>
   </div>
 {/if}

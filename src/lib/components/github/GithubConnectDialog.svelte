@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import CopyLinkButton from '$lib/components/common/CopyLinkButton.svelte';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -13,8 +14,8 @@
   {@const v = gh.ghVerified}
   {@const sameAccount = !updating || (!!v && String(v.user_id) === updating.account_id)}
   <div class="mask gh-mask" role="presentation" onclick={closeGhConnect}></div>
-  <div class="modal gh-modal" use:dialogGeometry={DIALOG_GEOMETRY.github} role="dialog" aria-modal="true" aria-label={updating ? '更新 GitHub 连接' : '连接 GitHub'}>
-    <header class="sheet-head"><div><b>{updating ? '更新' : '连接'} <GhMark size={15} /> GitHub</b><small class="dim" style="margin-left:10px">token 只进钥匙串，绝不落盘</small></div><button class="x" onclick={closeGhConnect} disabled={gh.ghConnecting || gh.ghVerifying}>×</button></header>
+  <div class="modal gh-modal" use:dialogGeometry={DIALOG_GEOMETRY.github} use:escClose={() => !(gh.ghConnecting || gh.ghVerifying) && closeGhConnect()} role="dialog" aria-modal="true" aria-label={updating ? '更新 GitHub 连接' : '连接 GitHub'}>
+    <header class="sheet-head"><div><b>{updating ? '更新' : '连接'} <GhMark size={15} /> GitHub</b><small class="dim" style="margin-left:10px">token 只进钥匙串，绝不落盘</small></div><button class="x" aria-label="关闭" data-tip="关闭" onclick={closeGhConnect} disabled={gh.ghConnecting || gh.ghVerifying}>×</button></header>
     <div class="sheet-body">
       {#if updating}
         <div class="gh-update-target">

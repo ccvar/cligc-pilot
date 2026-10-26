@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import './site.css';
   import Icon from './Icon.svelte';
   import type { Site, Opportunity } from '$lib/types';
@@ -17,8 +18,9 @@
   const hasSources = $derived(!!(site.data.ga4_property || site.data.gsc_site || site.data.bing_site));
   $effect(() => { const id = site.id; void loadDashboard(id).then(() => { if (hasSources) void refreshSiteData(id, false); }); });
 
-  let qTab = $state<'gsc' | 'bing'>('gsc');
-  let pTab = $state<'gsc' | 'ga4' | 'bing'>('gsc');
+  // 默认看已经接上的那个源：只接了 GA4 的站点不该一打开就是空的 Search Console 表
+  let qTab = $state<'gsc' | 'bing'>(untrack(() => (site.data.gsc_site || !site.data.bing_site ? 'gsc' : 'bing')));
+  let pTab = $state<'gsc' | 'ga4' | 'bing'>(untrack(() => (site.data.gsc_site ? 'gsc' : site.data.ga4_property ? 'ga4' : site.data.bing_site ? 'bing' : 'gsc')));
   const n = num;
   const pct = pctF;
   const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };

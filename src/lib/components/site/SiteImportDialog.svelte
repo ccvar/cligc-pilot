@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import './site.css';
   import Dropdown from '$lib/Dropdown.svelte';
   import SiteMark from '$lib/components/icons/SiteMark.svelte';
@@ -16,6 +17,8 @@
   const d = $derived(f.preview?.detected);
   // GitHub：可以勾多个仓库
   let repoQ = $state('');
+  // 组件一直挂着：关掉再打开不该还留着上次的路径和搜索词
+  $effect(() => { if (!f.open) { pathIn = ''; repoQ = ''; } });
   const shownRepos = $derived(f.repos.filter((r) => !repoQ.trim() || r.full_name.toLowerCase().includes(repoQ.trim().toLowerCase())));
   function toggleRepo(name: string) { f.repoPicks = f.repoPicks.includes(name) ? f.repoPicks.filter((x) => x !== name) : [...f.repoPicks, name]; }
   const imported = $derived(new Set(sites.list.filter((s) => s.source === 'github').map((s) => s.repo)));
@@ -34,10 +37,10 @@
 
 {#if f.open}
   <div class="su-mask" role="presentation" onclick={closeSiteImport}></div>
-  <div class="su modal" role="dialog" aria-modal="true" aria-label="导入站点">
+  <div class="su modal" use:escClose={closeSiteImport} role="dialog" aria-modal="true" aria-label="导入站点">
     <header class="sheet-head">
       <b><SiteMark size={15} /> 导入站点</b>
-      <button class="x" onclick={closeSiteImport} disabled={f.busy}>×</button>
+      <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeSiteImport} disabled={f.busy}>×</button>
     </header>
     <div class="sheet-body">
       {#if f.step === 'source'}
@@ -51,7 +54,7 @@
           <div class="row">
             <button class="btn primary" onclick={pickImportFolder} disabled={f.busy}>{f.busy ? '正在识别…' : '选择文件夹…'}</button>
             <span class="faint" style="font-size:12px">或</span>
-            <input class="tin mono" bind:value={pathIn} placeholder="粘贴文件夹路径，回车识别" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter' && pathIn.trim()) void detectImport({ path: pathIn.trim() }); }} />
+            <input class="tin mono" bind:value={pathIn} placeholder="粘贴文件夹路径，回车识别" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter' && pathIn.trim() && !f.busy) void detectImport({ path: pathIn.trim() }); }} />
           </div>
         {:else if !ghConns.length}
           <p class="hint">还没有 GitHub 连接。先连接一个 fine-grained Token，再回来选仓库。</p>

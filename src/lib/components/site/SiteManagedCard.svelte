@@ -25,7 +25,8 @@
   async function loadStage(id: string) {
     try { const v = await invoke<SiteStageView>('site_stage_info', { id }); sv = v; posDraft = v.positioning.text; } catch { sv = null; }
   }
-  $effect(() => { if (g) void loadStage(site.id); });
+  const gid = $derived(g?.id ?? '');
+  $effect(() => { if (gid) void loadStage(site.id); }); // 跟着方案 id，不跟着每次刷新都换的对象
   const stage = $derived(site.ops.stage || sv?.auto_stage || 'new');
   async function setStage(v: string) {
     try {

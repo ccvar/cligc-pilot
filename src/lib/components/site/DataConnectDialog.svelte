@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import './site.css';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
@@ -16,10 +17,10 @@
 
 {#if f.open}
   <div class="su-mask" role="presentation" onclick={closeDataConnect}></div>
-  <div class="su modal" role="dialog" aria-modal="true" aria-label="连接数据源">
+  <div class="su modal" use:escClose={closeDataConnect} role="dialog" aria-modal="true" aria-label="连接数据源">
     <header class="sheet-head">
       <b>{#if f.kind === 'google'}<GoogleMark size={15} /> {f.updateId ? '更新' : '连接'} Google（GA4 + Search Console）{:else}<BingMark size={15} /> {f.updateId ? '更新' : '连接'} Bing Webmaster{/if}</b>
-      <button class="x" onclick={closeDataConnect} disabled={f.busy}>×</button>
+      <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeDataConnect} disabled={f.busy}>×</button>
     </header>
     <div class="sheet-body">
       {#if f.kind === 'google'}

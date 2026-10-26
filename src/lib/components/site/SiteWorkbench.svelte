@@ -41,7 +41,9 @@
     { key: 'distribute', label: '分发', icon: 'share' },
     { key: 'settings', label: '设置', icon: 'sliders' },
   ];
-  $effect(() => { if (site) { void loadSiteStatus(site.id); void loadQueue(site.id); } });
+  // 只跟着站点 id 走：站点列表每刷新一次 site 都是新对象，别跟着重读 git 状态和队列
+  const siteId = $derived(site?.id ?? '');
+  $effect(() => { const id = siteId; if (id) { void loadSiteStatus(id); void loadQueue(id); } });
   $effect(() => { if (!managed.overview) void loadManaged(); });
 </script>
 

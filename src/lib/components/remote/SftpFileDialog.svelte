@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { sftp, confirmFsAsk } from '$lib/state/sftp.svelte.js';
   import { DIALOG_GEOMETRY } from '$lib/state/env';
@@ -6,8 +7,8 @@
 
 {#if sftp.fsAsk}
   <div class="mask" role="presentation" onclick={() => !sftp.fsAsk?.busy && (sftp.fsAsk = null)}></div>
-  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.fileOperation} role="dialog" aria-modal="true" aria-label={sftp.fsAsk.mode === 'mkdir' ? '新建文件夹' : '新建文件'}>
-    <header class="sheet-head"><b>{sftp.fsAsk.mode === 'mkdir' ? '新建文件夹' : '新建文件'}</b><button class="x" onclick={() => (sftp.fsAsk = null)} disabled={sftp.fsAsk.busy}>×</button></header>
+  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.fileOperation} use:escClose={() => !sftp.fsAsk?.busy && (sftp.fsAsk = null)} role="dialog" aria-modal="true" aria-label={sftp.fsAsk.mode === 'mkdir' ? '新建文件夹' : '新建文件'}>
+    <header class="sheet-head"><b>{sftp.fsAsk.mode === 'mkdir' ? '新建文件夹' : '新建文件'}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (sftp.fsAsk = null)} disabled={sftp.fsAsk.busy}>×</button></header>
     <div class="sheet-body">
       <p class="hint">位置：<code>{sftp.fsAsk.dir}</code></p>
       <!-- svelte-ignore a11y_autofocus -->

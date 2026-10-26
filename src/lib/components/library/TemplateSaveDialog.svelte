@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { library, confirmSaveTmpl } from '$lib/state/library.svelte.js';
   import { DIALOG_GEOMETRY } from '$lib/state/env';
@@ -7,8 +8,8 @@
 <!-- 存为模板 -->
 {#if library.saveTmplOpen}
   <div class="mask" role="presentation" onclick={() => !library.saveTmplBusy && (library.saveTmplOpen = false)}></div>
-  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.templateSave} role="dialog" aria-modal="true" aria-label="存为模板">
-    <header class="sheet-head"><b>存为模板</b><button class="x" onclick={() => (library.saveTmplOpen = false)} disabled={library.saveTmplBusy}>×</button></header>
+  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.templateSave} use:escClose={() => !library.saveTmplBusy && (library.saveTmplOpen = false)} role="dialog" aria-modal="true" aria-label="存为模板">
+    <header class="sheet-head"><b>存为模板</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (library.saveTmplOpen = false)} disabled={library.saveTmplBusy}>×</button></header>
     <div class="sheet-body">
       <p class="hint">当前项目会被复制成模板（自动去掉密钥、依赖、构建产物），之后可引用它快速建站。</p>
       <input class="tin" bind:value={library.saveTmplName} placeholder="模板名，如 minimal-landing" spellcheck="false" />

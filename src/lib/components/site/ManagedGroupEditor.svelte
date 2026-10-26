@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   // 新建 / 编辑托管方案：选站点（一个或多个）+ 这组站点自己的规则。
   import './site.css';
   import { untrack } from 'svelte';
@@ -94,7 +95,7 @@
 
 {#if g}
   <div class="su-mask" role="presentation" onclick={close}></div>
-  <div class="su modal ge" role="dialog" aria-modal="true" aria-label={g.id ? '编辑托管方案' : '新建托管方案'}>
+  <div class="su modal ge" use:escClose={close} role="dialog" aria-modal="true" aria-label={g.id ? '编辑托管方案' : '新建托管方案'}>
     <header class="sheet-head">
       <b><Icon name="sparkles" />{g.id ? '编辑托管方案' : '新建托管方案'}</b>
       <nav class="stepper" aria-label="步骤">

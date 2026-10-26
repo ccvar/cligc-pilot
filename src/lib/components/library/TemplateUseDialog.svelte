@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { library, confirmUseTmpl } from '$lib/state/library.svelte.js';
   import { DIALOG_GEOMETRY } from '$lib/state/env';
@@ -8,8 +9,8 @@
 <!-- 用模板建站 -->
 {#if library.useTmplOpen}
   <div class="mask" role="presentation" onclick={() => !library.useTmplBusy && (library.useTmplOpen = false)}></div>
-  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.templateUse} role="dialog" aria-modal="true" aria-label="用模板建站">
-    <header class="sheet-head"><div><b>用模板建站</b><small class="dim" style="margin-left:10px">{library.useTmplName}</small></div><button class="x" onclick={() => (library.useTmplOpen = false)} disabled={library.useTmplBusy}>×</button></header>
+  <div class="modal" use:dialogGeometry={DIALOG_GEOMETRY.templateUse} use:escClose={() => !library.useTmplBusy && (library.useTmplOpen = false)} role="dialog" aria-modal="true" aria-label="用模板建站">
+    <header class="sheet-head"><div><b>用模板建站</b><small class="dim" style="margin-left:10px">{library.useTmplName}</small></div><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (library.useTmplOpen = false)} disabled={library.useTmplBusy}>×</button></header>
     <div class="sheet-body">
       {#if !app.isCfConn}<p class="hint warn-text">请先在左下角切到一个 Cloudflare 连接，再用模板建站。</p>{/if}
       <p class="hint">给新项目起个名，模板文件会拷进去，然后在对话里描述你的定制。</p>

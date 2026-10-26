@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { escClose } from '$lib/escClose';
   import CopyLinkButton from '$lib/components/common/CopyLinkButton.svelte';
   import { dialogGeometry } from '$lib/dialogGeometry';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -14,8 +15,8 @@
 {#if cf.cfOpen}
   {@const updatingCf = cfUpdateConnection()}
   <div class="mask cf-mask" role="presentation" onclick={closeCfConnect}></div>
-  <div class="modal cf-modal" use:dialogGeometry={DIALOG_GEOMETRY.cloudflare} role="dialog" aria-modal="true" aria-label={updatingCf ? '更新 Cloudflare 连接' : '连接 Cloudflare'}>
-    <header class="sheet-head"><div><b>{updatingCf ? '更新' : '连接'} <CfMark size={15} /> Cloudflare</b><small class="dim" style="margin-left:10px">token 只进钥匙串，绝不落盘</small></div><button class="x" onclick={closeCfConnect} disabled={cf.cfConnecting || cf.cfVerifying}>×</button></header>
+  <div class="modal cf-modal" use:dialogGeometry={DIALOG_GEOMETRY.cloudflare} use:escClose={() => !(cf.cfConnecting || cf.cfVerifying) && closeCfConnect()} role="dialog" aria-modal="true" aria-label={updatingCf ? '更新 Cloudflare 连接' : '连接 Cloudflare'}>
+    <header class="sheet-head"><div><b>{updatingCf ? '更新' : '连接'} <CfMark size={15} /> Cloudflare</b><small class="dim" style="margin-left:10px">token 只进钥匙串，绝不落盘</small></div><button class="x" aria-label="关闭" data-tip="关闭" onclick={closeCfConnect} disabled={cf.cfConnecting || cf.cfVerifying}>×</button></header>
     <div class="sheet-body">
       {#if updatingCf}
         <div class="cf-update-target">
