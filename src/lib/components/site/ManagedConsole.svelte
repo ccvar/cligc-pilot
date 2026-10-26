@@ -94,6 +94,8 @@
     const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '在方案里把它打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : '';
     return { id: x.id, name: x.name, queued: x.queued, why, fix };
   }).filter((x) => x.why));
+  let goalOpen = $state<Set<string>>(new Set());
+  function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 日报设置（全局）：只比较这两项
   const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
@@ -222,7 +224,10 @@
             {#if !paused}<button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>{/if}
             <button class="ic-btn ic-sm" onclick={() => editGroup(g)} aria-label="编辑托管方案" data-tip="编辑托管方案"><Icon name="pencil" size={14} /></button>
           </h3>
-          {#if g.goal?.trim()}<p class="goal">{g.goal}</p>{/if}
+          {#if g.goal?.trim()}
+            <!-- 运营目标默认只显示一行，点开看全文 -->
+            <button class="goal" class:open={goalOpen.has(g.id)} onclick={() => toggleGoal(g.id)} data-tip={goalOpen.has(g.id) ? null : '点开看完整的运营目标'}><span class="goal-t">{g.goal}</span><span class="goal-more">{goalOpen.has(g.id) ? '收起' : '展开'}</span></button>
+          {/if}
           <div class="rules">
             <span><Icon name="checks" size={12} />{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span>
             {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
@@ -330,7 +335,11 @@
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
-  .goal { margin: -6px 0 10px; font-size: 12.5px; color: var(--text); line-height: 1.6; max-width: 80ch; }
+  .goal { display: flex; align-items: baseline; gap: 8px; width: 100%; margin: -6px 0 10px; padding: 0; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--dim); line-height: 1.6; text-align: left; cursor: pointer; }
+  .goal-t { flex: 1; min-width: 0; max-width: 90ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .goal.open .goal-t { white-space: normal; color: var(--text); }
+  .goal-more { flex: none; font-size: 12px; color: var(--faint); }
+  .goal:hover .goal-more { color: var(--text); text-decoration: underline; }
   .rules { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; }
   .rules :global(.ico) { color: var(--faint); }
