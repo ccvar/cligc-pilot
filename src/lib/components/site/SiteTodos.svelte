@@ -40,7 +40,7 @@
         {#if t.affects_goal}<span class="tag goal">影响站点目标</span>{:else}<span class="tag">{KIND[t.kind] ?? '待处理'}</span>{/if}
       </div>
       {#if t.why}<p class="why">{t.why}</p>{/if}
-      {#if t.where}<p class="where mono">{t.where}</p>{/if}
+      {#if t.where}<p class="where"><span data-tip={t.where}>改动的位置</span></p>{/if}
       {#if t.kind === 'input' && t.inputs.length}
         <div class="fields">
           {#each t.inputs as i (i.key)}

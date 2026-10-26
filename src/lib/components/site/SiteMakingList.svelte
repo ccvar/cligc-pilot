@@ -46,7 +46,7 @@
     if (dc?.compared) return dc.same ? { text: '已上线', tone: 'ok', icon: 'rocket' } : { text: '域名待生效', tone: 'warn', icon: 'rocket' };
     return { text: launch.checkingDomain[s.id] ? '检查域名…' : '已上传', tone: '', icon: 'rocket' };
   }
-  const done = $derived(sites.list.filter((s) => (s.origin === 'created' || s.origin === 'made') && !isMaking(s.id)).sort((a, b) => b.updated_at - a.updated_at));
+  const done = $derived(sites.list.filter((s) => (s.origin === 'created' || s.origin === 'made' || s.origin === 'migrated') && !isMaking(s.id)).sort((a, b) => b.updated_at - a.updated_at));
   $effect(() => {
     const ids = done.filter((s) => pagesMode(s) && s.domain && fleet.rows.find((r) => r.id === s.id)?.last_deploy_ok).map((s) => s.id);
     untrack(() => { for (const id of ids) { const s = done.find((x) => x.id === id); if (s && !launch.domainCheck[id]) void checkDomain(s, true); } });
@@ -174,7 +174,7 @@
             <li>
               <button class="row-btn" onclick={() => openSite(s.id, 'overview')}>
                 <SiteIcon id={s.id} size={16} />
-                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
+                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'}{s.origin === 'migrated' ? ` · 迁移自 ${s.migrate_from}` : ''} · {stackName(s.framework)}</small></span>
                 <span class="state {liveState(s).tone}"><Icon name={liveState(s).icon} size={11} />{liveState(s).text}</span>
                 <span class="when" data-tip={full(s.updated_at)}>{ago(s.updated_at)}</span>
                 <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>

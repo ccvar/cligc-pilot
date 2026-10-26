@@ -174,6 +174,7 @@ pub const TODO_SPEC: &str = "【待我处理的事】凡是需要我提供信息
 - kind：input＝需要我提供值（inputs 里列出要填的项）；ai＝你能做、但要我点头（比如补截图）；confirm＝需要我确认一个决定；suggest＝可选的建议。\n\
 - affects_goal：不处理会直接影响站点目标（比如联盟推广站没有邀请链接就没有收入）。\n\
 - 正式域名固定用 id `domain`，inputs 里放一个 key 为 `domain` 的输入。\n\
+- title 和 why 用不懂技术的人也看得懂的话写（不用 FAQPage、canonical、schema、环境变量这类词；必须提到时用一句话解释），技术细节放在 where 里。\n\
 - 汇报里简要提一句有几件事要我处理即可，不用再长篇列出。";
 
 /// 第一版对话的第一条消息：照着它，AI 从空仓库做出能预览的第一版。

@@ -12,6 +12,7 @@
   const ready = $derived(!!d.parent && (d.multi ? count > 0 : !!d.domain.trim()));
 </script>
 
+<svelte:window onkeydown={(e) => { if (d.open && e.key === 'Escape') closeMigrate(); }} />
 {#if d.open}
   <div class="su-mask" role="presentation" onclick={closeMigrate}></div>
   <div class="su modal mgd" role="dialog" aria-modal="true" aria-label="迁移已有站点">
@@ -23,7 +24,7 @@
       <p class="hint">把线上的站点搬进 Pilot 重做：原来的 URL 和正文都保留，换成新的视觉，部署到 Cloudflare 或你自己的服务器。搬完以后由托管运营接着更新内容。</p>
       <ol class="flow">
         <li><b>盘点</b>找全旧站的页面，判断适合放在哪</li>
-        <li><b>确认方案</b>选部署到哪、新站的样子（大约 1 分钟）</li>
+        <li><b>确认方案</b>选放在哪、新站的样子</li>
         <li><b>抓取</b>把文字、图片和附件搬下来，地址照旧</li>
         <li><b>重做</b>先挑一个设计方向，AI 照着重做全站，文字一字不改</li>
         <li><b>核对</b>每个旧地址在新站上实际打开一遍，有问题 AI 自己修</li>
@@ -38,7 +39,7 @@
       {#if !d.multi}
         <div class="field"><label for="mg-domain">旧站域名</label>
           <input id="mg-domain" class="tin" bind:value={d.domain} placeholder="example.com" spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter' && ready) void createMigration(); }} />
-          <small>只抓公开页面，限速、遵守 robots.txt。正式上线前会确认这个站是你的。</small>
+          <small>只看公开的页面，慢慢抓、不给旧站添负担。正式上线前会确认这个站是你的。</small>
         </div>
       {:else}
         <div class="field"><label for="mg-domains">旧站域名 <small class="opt">每行一个，最多 50 个</small></label>
@@ -54,7 +55,7 @@
           <button class="btn small" onclick={pickMigrateParent} disabled={d.busy}>选择文件夹…</button>
           <span class="mono path" title={target}>{target || (d.parent ? d.parent : '还没选')}</span>
         </div>
-        <small>会在这里建一个站点文件夹并 git init；代码只在你本机。</small>
+        <small>会在这里新建一个文件夹放新站的代码，只在你的电脑上。</small>
       </div>
       {#if d.err}<div class="err-note">{d.err}</div>{/if}
     </div>

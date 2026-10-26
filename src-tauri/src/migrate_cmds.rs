@@ -1147,17 +1147,17 @@ async fn run_survey(site: Site, job: &Job) -> Result<(), String> {
     }
     let blocked = pages.iter().filter(|p| p.kind == "blocked").count();
     if blocked > 0 {
-        notes.push(format!("{blocked} 个地址被 robots.txt 禁止抓取，没有盘点"));
+        notes.push(format!("{blocked} 个地址旧站设置了不让抓（robots.txt），没有迁"));
     }
     let query = pages.iter().filter(|p| p.kind == "page" && p.path.contains('?')).count();
     if query > 0 {
-        notes.push(format!("{query} 个带查询参数的网页（如 ?page=2）：静态站按路径出页面，这类地址不迁"));
+        notes.push(format!("{query} 个带问号参数的地址（比如 ?page=2）不迁：新站按路径出页面，这类地址会打开对应的页面"));
     }
     if trailing == "mixed" {
-        notes.push("旧站的地址有的以 / 结尾、有的不以 / 结尾：新站会逐个照原样生成".into());
+        notes.push("旧站的地址写法不统一（有的末尾带 /、有的不带）：新站每个都照原样生成，不用管".into());
     }
     if !gsc_used {
-        notes.push("没有用 Search Console 补漏：没被链接到、也不在 sitemap 里的页面可能漏掉。接上 Search Console 后重新盘点更稳".into());
+        notes.push("还没接 Search Console：没有链接指向、也不在网站地图里的页面可能漏掉。接上以后重新盘点，有搜索流量的页面一个都不会漏".into());
     }
     // 所有权线索
     let mut own = sm::Ownership { txt_token: format!("pilot-verify={}", &uuid::Uuid::new_v4().simple().to_string()[..20]), ..Default::default() };

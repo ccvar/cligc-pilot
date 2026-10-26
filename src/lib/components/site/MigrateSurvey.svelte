@@ -7,7 +7,7 @@
   import { migrate, confirmPlan, resurvey, previewHosting } from '$lib/state/migrate.svelte.js';
   import type { MHosting } from '$lib/state/migrate.svelte.js';
 
-  let { id, v, editable }: { id: string; v: MView; editable: boolean } = $props();
+  let { id, v, editable, oncancel }: { id: string; v: MView; editable: boolean; oncancel?: () => void } = $props();
   const s = $derived(v.survey!);
   const busy = $derived(migrate.busy[id] ?? '');
   // 方案草稿：默认全部保留
@@ -54,18 +54,29 @@
     if (v.deploy_ready) return `预览用的地方已经建好（${where}），到「核对」这一步会部署上去`;
     return '新站还没部署：到「核对」这一步会自动建好、部署上去，不用另外操作';
   });
-  const groupLabel = (k: string) => (k === '/' ? '首页' : k === '/*' ? '一级页面' : k);
+  // 分组的通配写法（/es-ar/*/*）换成人话：「/es-ar/ 下两层的页面」
+  const DEPTH = ['', '一层', '两层', '三层', '四层', '五层'];
+  const hasClicks = $derived(s.groups.some((g) => g.clicks > 0));
+  const groupLabel = (k: string) => {
+    if (k === '/') return '首页';
+    const stars = (k.match(/\*/g) ?? []).length;
+    if (!stars) return k;
+    const prefix = k.slice(0, k.indexOf('*'));
+    return prefix === '/' ? `${DEPTH[stars] ?? stars + ' 层'}的页面` : `${prefix} 下${DEPTH[stars] ?? stars + ' 层'}的页面`;
+  };
 </script>
 
 <div class="sv">
   {#if editable}
     <!-- 确认方案：要你决定的三件事放最上面（都有默认值），盘点报告收起来 -->
     <p class="summary">找到 <b>{s.pages}</b> 个网页、<b>{s.assets}</b> 个图片和附件{#if s.gsc_used}，已用 Search Console 补全有搜索流量的页面{/if}。将迁 <b>{keepN}</b> 页，地址一个不变。</p>
+  {#if host.paid || !host.supported}
   <div class="host" class:ok={host.supported}>
     <div class="hh"><b>建议放在：{host.label}</b>{#if host.paid}<span class="pill warn">需要付费套餐</span>{/if}{#if !host.supported}<span class="pill warn">还不支持</span>{/if}</div>
     <ul>{#each host.reasons as r (r)}<li>{r}</li>{/each}</ul>
     {#if !host.supported}<small>部署到 VPS 还不支持。{s.features.some((f) => f.key === 'login' || f.key === 'cart') ? '登录、购物车这类功能可以在下面选「去掉」，就能放到 Cloudflare。' : ''}</small>{/if}
   </div>
+  {/if}
 
   {#if s.features.length}
     <div class="blk"><b class="bt">动态功能{#if editable}<small>选保留还是去掉</small>{/if}</b>
@@ -104,7 +115,9 @@
       <label class="auto-ck"><input type="checkbox" bind:checked={auto} />确认后自动往下做：抓取、画设计方向、重做、核对、部署到预览，到挑设计方向和正式上线时停下来等你</label>
       <div class="row">
         <button class="btn small primary" onclick={() => confirmPlan(id, { drop_groups: [...dropped], drop_paths: [], visual, style, features: feats, deploy: host.target === 'vps' ? 'vps' : deploy, auto })} disabled={!!busy || !host.supported || keepN === 0}>{busy === 'plan' ? '处理中…' : '确认方案，开始抓取'}</button>
-        <button class="btn small quiet" onclick={() => resurvey(id)} disabled={!!busy}>重新盘点</button>
+        {#if oncancel}<button class="btn small quiet" onclick={oncancel} disabled={!!busy}>取消，不改了</button>{/if}
+        <span class="grow"></span>
+        <button class="link-btn sm" onclick={() => resurvey(id)} disabled={!!busy} data-tip="重新找一遍旧站的页面（页面有增减时用）">重新盘点</button>
       </div>
     </div>
       <details class="report">
@@ -113,17 +126,16 @@
   <div class="stats">
     <div class="stat"><small>网页</small><b>{s.pages}</b>{#if s.truncated}<em>达到上限</em>{/if}</div>
     <div class="stat"><small>图片和附件</small><b>{s.assets}</b><em>{s.files ? `其中下载文件 ${s.files}` : ''}</em></div>
-    <div class="stat"><small>RSS / Atom</small><b>{s.feeds}</b></div>
+    <div class="stat"><small>订阅源（RSS）</small><b>{s.feeds}</b></div>
     <div class="stat"><small>旧站已有跳转</small><b>{s.redirects}</b></div>
     <div class="stat"><small>打不开的地址</small><b>{s.broken.length}</b>{#if s.broken.length}<em><button class="link-btn" onclick={() => (showBroken = !showBroken)}>{showBroken ? '收起' : '查看'}</button></em>{/if}</div>
   </div>
   {#if showBroken}<ul class="items">{#each s.broken as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
   <p class="meta-line">
     {s.origin}
-    · 路径{s.trailing_slash === 'always' ? '都以 / 结尾' : s.trailing_slash === 'never' ? '都不以 / 结尾' : '结尾有的带 / 有的不带'}
-    {#if s.js_rendered} · 浏览器端渲染（已用浏览器抓取）{/if}
+    {#if s.js_rendered} · 页面靠浏览器脚本生成（已用浏览器抓取）{/if}
     {#if s.generator} · {s.generator}{/if}
-    {#if s.analytics.length} · 统计 {s.analytics.join('、')}{/if}
+    {#if s.analytics.length} · 已装 Google Analytics（{s.analytics.join('、')}），新站沿用{/if}
     {#if s.gsc_used} · 已用 Search Console 补漏{/if}
   </p>
 
@@ -134,7 +146,7 @@
   <div class="blk">
     <b class="bt">页面分组 <small>{editable ? `勾掉不想迁的组 · 将迁 ${keepN} 页` : `${keepN} 页`}</small></b>
     <table class="tbl">
-      <thead><tr>{#if editable}<th></th>{/if}<th>分组</th><th class="num">页数</th><th>类型</th>{#if s.gsc_used}<th class="num">点击</th>{/if}<th>示例</th></tr></thead>
+      <thead><tr>{#if editable}<th></th>{/if}<th>分组</th><th class="num">页数</th><th>类型</th>{#if hasClicks}<th class="num">搜索点击</th>{/if}<th>示例</th></tr></thead>
       <tbody>
         {#each s.groups as g (g.key)}
           <tr class:off={dropped.has(g.key)}>
@@ -142,7 +154,7 @@
             <td class="mono gk">{groupLabel(g.key)}</td>
             <td class="num">{g.count}</td>
             <td>{PTYPE[g.ptype] ?? g.ptype}</td>
-            {#if s.gsc_used}<td class="num">{g.clicks || ''}</td>{/if}
+            {#if hasClicks}<td class="num">{g.clicks || ''}</td>{/if}
             <td class="trunc mono sm" title={g.samples.join('\n')}>{g.samples.slice(0, 2).join('  ')}</td>
           </tr>
         {/each}
@@ -164,17 +176,16 @@
   <div class="stats">
     <div class="stat"><small>网页</small><b>{s.pages}</b>{#if s.truncated}<em>达到上限</em>{/if}</div>
     <div class="stat"><small>图片和附件</small><b>{s.assets}</b><em>{s.files ? `其中下载文件 ${s.files}` : ''}</em></div>
-    <div class="stat"><small>RSS / Atom</small><b>{s.feeds}</b></div>
+    <div class="stat"><small>订阅源（RSS）</small><b>{s.feeds}</b></div>
     <div class="stat"><small>旧站已有跳转</small><b>{s.redirects}</b></div>
     <div class="stat"><small>打不开的地址</small><b>{s.broken.length}</b>{#if s.broken.length}<em><button class="link-btn" onclick={() => (showBroken = !showBroken)}>{showBroken ? '收起' : '查看'}</button></em>{/if}</div>
   </div>
   {#if showBroken}<ul class="items">{#each s.broken as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
   <p class="meta-line">
     {s.origin}
-    · 路径{s.trailing_slash === 'always' ? '都以 / 结尾' : s.trailing_slash === 'never' ? '都不以 / 结尾' : '结尾有的带 / 有的不带'}
-    {#if s.js_rendered} · 浏览器端渲染（已用浏览器抓取）{/if}
+    {#if s.js_rendered} · 页面靠浏览器脚本生成（已用浏览器抓取）{/if}
     {#if s.generator} · {s.generator}{/if}
-    {#if s.analytics.length} · 统计 {s.analytics.join('、')}{/if}
+    {#if s.analytics.length} · 已装 Google Analytics（{s.analytics.join('、')}），新站沿用{/if}
     {#if s.gsc_used} · 已用 Search Console 补漏{/if}
   </p>
 
@@ -212,7 +223,7 @@
   <div class="blk">
     <b class="bt">页面分组 <small>{editable ? `勾掉不想迁的组 · 将迁 ${keepN} 页` : `${keepN} 页`}</small></b>
     <table class="tbl">
-      <thead><tr>{#if editable}<th></th>{/if}<th>分组</th><th class="num">页数</th><th>类型</th>{#if s.gsc_used}<th class="num">点击</th>{/if}<th>示例</th></tr></thead>
+      <thead><tr>{#if editable}<th></th>{/if}<th>分组</th><th class="num">页数</th><th>类型</th>{#if hasClicks}<th class="num">搜索点击</th>{/if}<th>示例</th></tr></thead>
       <tbody>
         {#each s.groups as g (g.key)}
           <tr class:off={dropped.has(g.key)}>
@@ -220,7 +231,7 @@
             <td class="mono gk">{groupLabel(g.key)}</td>
             <td class="num">{g.count}</td>
             <td>{PTYPE[g.ptype] ?? g.ptype}</td>
-            {#if s.gsc_used}<td class="num">{g.clicks || ''}</td>{/if}
+            {#if hasClicks}<td class="num">{g.clicks || ''}</td>{/if}
             <td class="trunc mono sm" title={g.samples.join('\n')}>{g.samples.slice(0, 2).join('  ')}</td>
           </tr>
         {/each}
@@ -268,6 +279,7 @@
   .items { margin: 0; padding: 6px 10px; list-style: none; background: var(--rail); border-radius: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow-y: auto; }
   .items li { font-size: 11.5px; color: var(--dim); }
   .plan { padding-top: 4px; gap: 8px; }
+  .plan .row .grow { flex: 1; }
   .summary { margin: 0; font-size: 13px; color: var(--dim); line-height: 1.6; }
   .summary b { color: var(--text); font-weight: 600; }
   .report { border-top: 1px solid var(--border); padding-top: 10px; }

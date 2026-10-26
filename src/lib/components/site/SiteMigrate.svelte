@@ -128,6 +128,8 @@
   $effect(() => { const c = current; if (c !== lastStage) { lastStage = c; picked = ''; editPlan = false; } });
   const shown = $derived<MStage>(picked || current);
   const shownIdx = $derived(STAGES.findIndex((s) => s.key === shown));
+  // 已经正式上线：前面几步只给你看，不再给「重新抓取 / 修改方案 / 重新部署」这类会动到线上站的按钮
+  const launched = $derived(!!v && (v.stage === 'track' || v.stage === 'done'));
   const isCurrent = $derived(shown === current && v?.stage !== 'done');
   // 后台任务属于哪一步
   const JOB_STEP: Record<string, MStage> = { 'migrate:survey': 'survey', 'migrate:extract': 'extract',  'migrate:verify': 'verify', 'migrate:live': 'verify', 'migrate:staging': 'cutover', 'vps:setup': 'verify', 'dynamic:setup': 'verify', deploy: 'verify', 'migrate:track': 'track' };
@@ -220,7 +222,7 @@
 
 <div class="card mg">
   <h3>
-    <Icon name="route" />迁移进度<span class="sub">{v?.domain ?? site.migrate_from ?? ''}</span>
+    <Icon name="route" />迁移进度<span class="sub">{launched && v ? `从 ${v.domain} 迁到 ${v.meta.cutover.host}` : `迁移自 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
     <span class="grow"></span>
     <button class="ic-btn" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新迁移状态"><RefreshIcon spinning={loading} /></button>
   </h3>
@@ -277,15 +279,15 @@
         {:else if v.survey}
           <MigrateSurvey id={site.id} {v} editable={false} />
           <div class="act sub">
-            {#if !v.survey.gsc_used}<span class="grow hint">没接 Search Console：接上以后重新盘点，有排名的页面一个都不会漏。<button class="link-btn" onclick={() => (sites.tab = 'settings')}>去接入</button></span>{:else}<span class="grow"></span>{/if}
-            <button class="btn tiny" onclick={() => redo('重新盘点', () => resurvey(site.id))} disabled={!!busy || jobRunning}>重新盘点</button>
+            {#if !v.survey.gsc_used && !launched}<span class="grow hint">没接 Search Console：接上以后重新盘点，有排名的页面一个都不会漏。<button class="link-btn" onclick={() => (sites.tab = 'settings')}>去接入</button></span>{:else}<span class="grow"></span>{/if}
+            {#if !launched}<button class="btn tiny" onclick={() => redo('重新盘点', () => resurvey(site.id))} disabled={!!busy || jobRunning}>重新盘点</button>{/if}
           </div>
         {/if}
 
       {:else if shown === 'plan'}
         {#if isCurrent || editPlan}
           {#if !isCurrent}<p class="hint warn-text">改了方案要重新抓取，后面的步骤也要重来。</p>{/if}
-          <MigrateSurvey id={site.id} {v} editable={!jobRunning} />
+          <MigrateSurvey id={site.id} {v} editable={!jobRunning} oncancel={!isCurrent ? () => (editPlan = false) : undefined} />
         {:else if v.plan}
           {@const p = v.plan}
           <dl class="kv">
@@ -295,7 +297,7 @@
             {#if Object.keys(p.features ?? {}).length}<dt>动态功能</dt><dd>{Object.entries(p.features).map(([k, x]) => `${v.survey?.features.find((f) => f.key === k)?.label ?? k}：${x === 'drop' ? '去掉' : '保留'}`).join('；')}</dd>{/if}
             <dt>确认于</dt><dd><span data-tip={full(p.confirmed_at)}>{ago(p.confirmed_at)}</span></dd>
           </dl>
-          <div class="act sub"><span class="grow"></span><button class="btn tiny" onclick={() => (editPlan = true)} disabled={jobRunning}>修改方案</button></div>
+          {#if !launched}<div class="act sub"><span class="grow"></span><button class="btn tiny" onclick={() => (editPlan = true)} disabled={jobRunning}>修改方案</button></div>{/if}
         {/if}
 
       {:else if shown === 'extract'}
@@ -305,7 +307,7 @@
         {#if v.meta.extracted_at && !runHere}
           {@const ex = v.meta.extract}
           <div class="stats">
-            <div class="stat"><small>内容</small><b>{ex.pages}</b><em>篇</em></div>
+            <div class="stat"><small>内容页</small><b>{ex.pages}</b></div>
             <div class="stat"><small>列表页和首页</small><b>{ex.lists}</b></div>
             <div class="stat"><small>图片和附件</small><b>{ex.assets}</b>{#if ex.large?.length}<em>{ex.large.length} 个大文件另放</em>{/if}</div>
             {#if ex.comments}<div class="stat"><small>旧评论</small><b>{ex.comments}</b></div>{/if}
@@ -315,7 +317,7 @@
             <ul class="mini"><li><span class="lv warn">!</span><span>{ex.assets_failed.length} 个图片 / 附件没下载下来 <button class="link-btn" onclick={() => toggleItem('af')}>{openItems.has('af') ? '收起' : '查看'}</button></span></li></ul>
             {#if openItems.has('af')}<ul class="items">{#each ex.assets_failed as l (l)}<li class="mono">{l}</li>{/each}</ul>{/if}
           {/if}
-          <div class="act sub"><small class="grow faint">抓取于 <span data-tip={full(v.meta.extracted_at)}>{ago(v.meta.extracted_at)}</span></small><button class="btn tiny" onclick={() => redo('重新抓取', () => extract(site.id))} disabled={!!busy || jobRunning} data-tip="按确认的方案重新抓一遍（会覆盖抓下来的内容文件）">重新抓取</button></div>
+          <div class="act sub"><small class="grow faint">抓取于 <span data-tip={full(v.meta.extracted_at)}>{ago(v.meta.extracted_at)}</span></small>{#if !launched}<button class="btn tiny" onclick={() => redo('重新抓取', () => extract(site.id))} disabled={!!busy || jobRunning} data-tip="按确认的方案重新抓一遍（会覆盖抓下来的内容文件）">重新抓取</button>{/if}</div>
         {/if}
 
       {:else if shown === 'rebuild'}
@@ -383,7 +385,7 @@
         {:else if conv}
           <div class="act sub"><span class="grow faint">重做对话里有 AI 做了什么、改了哪些文件。</span><button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />打开重做对话</button></div>
         {/if}
-        {#if ex.low_coverage.length}<ul class="mini"><li><span class="lv warn">!</span><span>{ex.low_coverage.length} 页正文可能没抓全，AI 会对照旧页面补齐 <button class="link-btn" onclick={() => toggleItem('cov')}>{openItems.has('cov') ? '收起' : '查看'}</button></span></li></ul>{/if}
+        {#if ex.low_coverage.length && isCurrent}<ul class="mini"><li><span class="lv warn">!</span><span>{ex.low_coverage.length} 页正文可能没抓全，AI 会对照旧页面补齐 <button class="link-btn" onclick={() => toggleItem('cov')}>{openItems.has('cov') ? '收起' : '查看'}</button></span></li></ul>{/if}
         {#if openItems.has('cov')}<ul class="items">{#each ex.low_coverage as l (l)}<li class="mono">{l}</li>{/each}</ul>{/if}
         <details class="req">
           <summary>交给 AI 的要求</summary>
@@ -417,7 +419,7 @@
                 </ul>
               {/if}
               <div class="row">
-                <button class="btn small" class:primary={vNext === 'parity'} onclick={() => verify(site.id)} disabled={jobRunning || !!busy || aiRunning}><Icon name="play" size={12} />{v.meta.parity_at ? '重新核对' : '核对'}</button>
+                {#if !launched}<button class="btn small" class:primary={vNext === 'parity'} onclick={() => verify(site.id)} disabled={jobRunning || !!busy || aiRunning}><Icon name="play" size={12} />{v.meta.parity_at ? '重新核对' : '核对'}</button>{/if}
                 {#if built}<button class="btn small" onclick={() => previewSite(site)} data-tip="在预览窗里打开刚构建好的新站（本机，不用上线）"><Icon name="external" size={12} />本地预览</button>{/if}
               </div>
             </div>
@@ -478,14 +480,16 @@
               {#if v.deploy_ready && (dynReady || isVps)}
                 <div class="row">
                   {#if deployedOk && !v.meta.live.at}<button class="btn small" class:primary={vNext === 'live'} onclick={() => liveCheck(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />{runHere && job.kind === 'migrate:live' ? '实测中…' : '实测每个旧地址'}</button>{/if}
-                  <button class="btn small" class:primary={vNext === 'live' && !deployedOk} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '部署中…') : deployedOk ? (isVps ? '重新发布' : '重新部署') : (isVps ? '发布到服务器' : '部署到预览地址')}</button>
+                  {#if !launched}<button class="btn small" class:primary={vNext === 'live' && !deployedOk} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '部署中…') : deployedOk ? (isVps ? '重新发布' : '重新部署') : (isVps ? '发布到服务器' : '部署到预览地址')}</button>{/if}
                   {#if !isVps && (v.meta.live.base || lastUrl)}<button class="btn tiny" onclick={() => openUrl(v.meta.live.base || lastUrl)}><Icon name="external" size={11} />打开预览</button>{/if}
                 </div>
               {/if}
             </div>
           </li>
         </ol>
-        {#if vNext === 'fix'}
+        {#if launched}
+          <p class="hint">新站已经正式上线，以后改了内容用右上角的「构建并上线」更新。</p>
+        {:else if vNext === 'fix'}
           <div class="act"><span class="grow">有问题要修：交给 AI，按上面的结果改完再点「重新核对」。</span><button class="btn small primary" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={12} />{aiRunning ? 'AI 正在修…' : '让 AI 修这些问题'}</button></div>
         {:else if vNext === 'done' && warns.length && isCurrent}
           <div class="act sub"><span class="grow faint">还有 {warns.length} 项提醒，不影响上线。</span><button class="btn tiny" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={11} />让 AI 也处理掉</button></div>
@@ -511,12 +515,13 @@
               <button class="btn tiny primary" onclick={() => setFormal(site.id, formalIn, oldHost, oldOwned).then((ok) => { if (ok) editFormal = false; })} disabled={!!busy}>保存</button>
               <button class="btn tiny quiet" onclick={() => (editFormal = false)}>取消</button>
             {:else}
-              <b class="mono">{host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
-              {#if !isVps && !moved}<button class="link-btn" onclick={() => { formalIn = ''; editFormal = true; }}>要换成新域名？</button>{:else if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
-              {#if moved && oldOwned}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>改回 {oldHost}</button>{/if}
+              <b class="mono">{launched ? v.meta.cutover.host : host}</b>{#if !moved}<small class="faint">和旧站一样</small>{/if}
+              {#if launched}<small class="faint">已经正式上线，要换域名先「撤下新站」</small>
+              {:else if !isVps && !moved}<button class="link-btn" onclick={() => { formalIn = ''; editFormal = true; }}>要换成新域名？</button>{:else if !isVps}<button class="link-btn" onclick={() => { formalIn = host; editFormal = true; }}>修改</button>{/if}
+              {#if moved && oldOwned && !launched}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>改回 {oldHost}</button>{/if}
             {/if}
           </div>
-          {#if moved}
+          {#if moved && !launched}
             {#if !formalUse}<small class="desc">正在查 {host} 是不是你的、现在有没有在用…</small>
             {:else if !formalInCf && !dns?.at}<small class="desc">正在查 {host} 在不在你的 Cloudflare 账号里…</small>
             {:else if !formalInCf}<small class="desc warn-text">{host} 不在你的 Cloudflare 账号里：是你的域名就按下面第 2 条接进来；不是你的没法上线到它，换一个。</small>
@@ -527,9 +532,9 @@
           {#if !isVps && (v.meta.live.base || lastUrl)}
             <div class="dm"><span class="dk">预览地址</span><button class="link-btn mono" onclick={() => openUrl(v.meta.live.base || lastUrl)}>{(v.meta.live.base || lastUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</button><small class="faint">Cloudflare 自带的地址，现在就能打开看新站 · 不让搜索引擎收录</small></div>
           {/if}
-          {#if !isVps && !stg?.host && !showStaging}
+          {#if !launched && !isVps && !stg?.host && !showStaging}
             <div class="dm"><button class="link-btn" onclick={() => (showStaging = true)}>想在自己的域名下先看看？</button><small class="faint">可选：比如广告、统计、第三方嵌入只认你的域名时用</small></div>
-          {:else if !isVps}
+          {:else if !isVps && (!launched || stg?.host)}
             <div class="dm">
               <span class="dk">测试域名<em>可选</em></span>
               {#if stg?.host}
@@ -612,11 +617,12 @@
             </div>
           </li>
           {/if}
-          <li>
-            <span class="lv">3</span>
+          <li class:ok={launched}>
+            <span class="lv">{launched ? '✓' : '3'}</span>
             <div class="cb">
+              {#if launched}<span><b>正式上线</b><small>{ago(v.meta.cutover.at)}上线到 {v.meta.cutover.host}</small></span>{:else}
               <span><b>正式上线</b><small>{isVps ? `${host} 指向你的服务器，自动申请免费的 HTTPS 证书` : `${host} 打开新站`}{goneText}{!moved ? '。旧站的服务器先别关，新站稳定后再停' : ''}</small></span>
-              {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「正式上线」。</small>{/if}
+              {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「正式上线」。</small>{/if}{/if}
             </div>
           </li>
         </ol>
@@ -626,7 +632,7 @@
         {@const liveHost = v.meta.cutover.host}
         {@const movedLive = liveHost.replace(/^www\./, '') !== oldHost.replace(/^www\./, '')}
         {@const rd = v.meta.old_redirect}
-        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 4 周了，迁移完成。' : `新站上线 ${ago(v.meta.cutover.at)}。Pilot 会盯 4 周：旧地址在新站上能不能打开、搜索流量有没有掉；打开站点时超过 12 小时没查过会自动查一次。`}{#if t.at}<small class="faint"> 上次检查 <span data-tip={full(t.at)}>{ago(t.at)}</span></small>{/if}</span>
+        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 4 周了，迁移完成。' : `${ago(v.meta.cutover.at) === '刚刚' ? '新站刚上线' : `新站已经上线 ${ago(v.meta.cutover.at).replace(/前$/, '')}`}。Pilot 会盯 4 周：旧地址在新站上能不能打开、搜索流量有没有掉；打开站点时超过 12 小时没查过会自动查一次。`}{#if t.at}<small class="faint"> 上次检查 <span data-tip={full(t.at)}>{ago(t.at)}</span></small>{/if}</span>
           <button class="btn small" onclick={() => track(site.id)} disabled={jobRunning || !!busy} data-tip="马上把旧地址在新站上打开一遍，再看一下搜索流量"><Icon name="play" size={12} />{runHere && job.kind === 'migrate:track' ? '检查中…' : '现在查一次'}</button>
         </div>
         {#if movedLive && oldOwned}
@@ -656,7 +662,7 @@
         </div>
       {/if}
 
-      {#if todos.length && !aiRunning && ['rebuild', 'verify', 'cutover'].includes(shown)}
+      {#if todos.length && !aiRunning && isCurrent && ['rebuild', 'verify', 'cutover'].includes(shown)}
         <div class="todo-box">
           <b>需要你处理 <small>{todos.length} 件 · AI 重做时留下的</small></b>
           <SiteTodos {site} {todos} />
