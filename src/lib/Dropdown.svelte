@@ -26,6 +26,7 @@
     footer,
     onchange,
     menuMin = 132,
+    triggerIcon = true,
   }: { value: string; options: Opt[]; placeholder?: string; disabled?: boolean; compact?: boolean; menuCompact?: boolean; searchable?: boolean; keepOpenOnSelect?: boolean; tone?: string; bare?: boolean; tip?: string; ariaLabel?: string;
     /** 一个选项都没有时菜单里显示的话 */
     emptyText?: string;
@@ -33,7 +34,9 @@
     footer?: Snippet<[() => void]>;
     onchange?: (value: string) => void;
     /** 紧凑菜单的最小宽度（选项文字长时调大，免得折行） */
-    menuMin?: number } = $props();
+    menuMin?: number;
+    /** 触发器上要不要显示选中项的图标（菜单里照常显示） */
+    triggerIcon?: boolean } = $props();
   function closeMenu() { open = false; hideTipBubble(); }
 
   let open = $state(false);
@@ -164,7 +167,7 @@
        同款做法见 UsageRing.svelte 的 `use:tip={open ? '' : tipText}`。 -->
   <button type="button" class="dd-trigger" class:open class:compact class:bare class:tone-warn={tone === 'warn'} class:tone-danger={tone === 'danger'} onclick={toggle} onkeydown={onTriggerKey} {disabled} aria-label={ariaLabel || undefined} aria-haspopup="listbox" aria-expanded={open} data-tip={open ? null : tip || null}>
     <span class="dd-label" class:placeholder={!current}>
-      {#if current}{@render lead(current)}{/if}{current?.short ?? current?.label ?? placeholder}
+      {#if current && triggerIcon}{@render lead(current)}{/if}{current?.short ?? current?.label ?? placeholder}
     </span>
     <svg class="dd-chev" class:up={open} width="12" height="12" viewBox="0 0 12 12" fill="none">
       <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />

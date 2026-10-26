@@ -94,7 +94,7 @@
   <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
     {#if fleet.tab === 'sites' && modeOpts.length > 2}
-      <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
+      <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} triggerIcon={false} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
     {/if}
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
   </div>
@@ -201,7 +201,7 @@
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
-  .mode-dd { display: flex; align-items: center; margin: 0 6px 2px -4px; }
+  .mode-dd { display: flex; align-items: center; margin: 0 6px 2px 4px; }
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
