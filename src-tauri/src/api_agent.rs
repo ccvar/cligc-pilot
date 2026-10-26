@@ -438,14 +438,10 @@ async fn execute_model_loop_inner(
         policy
             .check_boundary(request_index)
             .map_err(|stop| stop.to_string())?;
-        // 文字部分（图片只算引用）不超过 2 MB；看过的图片另算，有自己的上限
+        // 文字部分（图片只算引用）不超过 2 MB；看过的图片不会撑爆请求：只带最近的，更早的换成一句说明（见 image_skip）
         let text_body = request_body_with(profile, model, effort, &instructions, &history.items, &definitions, false)?;
         if text_body.to_string().len() > MAX_HISTORY_BYTES {
             return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
-        }
-        let (images, image_bytes) = image_load(&history.items);
-        if images > MAX_IMAGES || image_bytes > MAX_IMAGE_TOTAL {
-            return Err(format!("这条会话里已经看过 {images} 张图片，再看会超过接口的请求上限，请新建会话继续；未自动丢弃历史"));
         }
         let body = request_body(
             profile,
@@ -807,36 +803,63 @@ fn image_dims(b: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// 一条会话里最多带多少张图、多少字节（接口单次请求上限 32 MB、100 张图）。
-const MAX_IMAGES: usize = 60;
+/// 一次请求最多带多少张图、多少字节（接口单次请求上限 32 MB、100 张图）。
+/// 超过就只带最近的：更早的图换成一句说明，历史本身一张不丢。
+const MAX_IMAGES: usize = 40;
+/// 超过上限时一次放掉的张数：成批放，带上的图在 20 张里才变一次，前缀缓存不用每轮重建
+const IMAGE_STEP: usize = 20;
 const MAX_IMAGE_TOTAL: u64 = 24 * 1024 * 1024;
 
-/// 历史里引用了几张图、文件一共多大。
-fn image_load(items: &[Value]) -> (usize, u64) {
-    fn walk(v: &Value, n: &mut usize, bytes: &mut u64) {
+/// 历史里按时间顺序引用的每张图的文件大小。
+fn image_sizes(items: &[Value]) -> Vec<u64> {
+    fn walk(v: &Value, out: &mut Vec<u64>) {
         if v["type"] == "pilot_image" {
-            *n += 1;
-            *bytes += v["file"].as_str().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0);
+            out.push(v["file"].as_str().and_then(|f| std::fs::metadata(f).ok()).map(|m| m.len()).unwrap_or(0));
             return;
         }
         match v {
-            Value::Array(a) => a.iter().for_each(|x| walk(x, n, bytes)),
-            Value::Object(m) => m.values().for_each(|x| walk(x, n, bytes)),
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            Value::Object(m) => m.values().for_each(|x| walk(x, out)),
             _ => {}
         }
     }
-    let (mut n, mut bytes) = (0, 0);
-    items.iter().for_each(|v| walk(v, &mut n, &mut bytes));
-    (n, bytes)
+    let mut out = Vec::new();
+    items.iter().for_each(|v| walk(v, &mut out));
+    out
+}
+
+/// 历史里引用了几张图、文件一共多大。
+#[cfg(test)]
+fn image_load(items: &[Value]) -> (usize, u64) {
+    let s = image_sizes(items);
+    (s.len(), s.iter().sum())
+}
+
+/// 这次请求要跳过最早的几张图：张数超过 MAX_IMAGES 时成批放掉，再按总字节放到不超过上限为止。
+fn image_skip(sizes: &[u64]) -> usize {
+    let n = sizes.len();
+    let mut skip = if n > MAX_IMAGES { ((n - MAX_IMAGES - 1) / IMAGE_STEP + 1) * IMAGE_STEP } else { 0 };
+    while skip < n && sizes[skip..].iter().sum::<u64>() > MAX_IMAGE_TOTAL {
+        skip += 1;
+    }
+    skip.min(n)
 }
 
 /// 发请求前把历史里的图片引用换成各协议的图片块（文件不在了就换成一句说明）。
+/// 图太多时最早的几张只留一句说明（image_skip），AI 需要的话可以重新查看那个文件。
 fn expand_images(protocol: &str, items: &[Value]) -> Vec<Value> {
-    fn walk(protocol: &str, v: &mut Value) {
+    fn walk(protocol: &str, v: &mut Value, idx: &mut usize, skip: usize) {
         if v["type"] == "pilot_image" {
             let file = v["file"].as_str().unwrap_or("").to_string();
             let media = v["media_type"].as_str().unwrap_or("image/png").to_string();
             let anthropic = protocol == "anthropic_messages";
+            let me = *idx;
+            *idx += 1;
+            if me < skip {
+                let note = format!("（之前看过的一张图片，为了不超过接口的请求上限这次没有再附上：{file}；需要的话重新查看它）");
+                *v = if anthropic { json!({"type":"text","text":note}) } else { json!({"type":"input_text","text":note}) };
+                return;
+            }
             *v = match std::fs::read(&file) {
                 Ok(bytes) => {
                     use base64::Engine;
@@ -853,13 +876,15 @@ fn expand_images(protocol: &str, items: &[Value]) -> Vec<Value> {
             return;
         }
         match v {
-            Value::Array(a) => a.iter_mut().for_each(|x| walk(protocol, x)),
-            Value::Object(m) => m.values_mut().for_each(|x| walk(protocol, x)),
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(protocol, x, idx, skip)),
+            Value::Object(m) => m.values_mut().for_each(|x| walk(protocol, x, idx, skip)),
             _ => {}
         }
     }
+    let skip = image_skip(&image_sizes(items));
+    let mut idx = 0;
     let mut out = items.to_vec();
-    out.iter_mut().for_each(|v| walk(protocol, v));
+    out.iter_mut().for_each(|v| walk(protocol, v, &mut idx, skip));
     out
 }
 
@@ -1891,6 +1916,22 @@ mod image_tests {
 
     // 2×3 的红色 PNG
     const PNG: &[u8] = &[137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,2,0,0,0,3,8,2,0,0,0,18,22,241,77,0,0,0,18,73,68,65,84,120,156,99,248,207,192,0,66,12,72,4,0,63,2,11,245,20,12,90,227,0,0,0,0,73,69,78,68,174,66,96,130];
+
+    #[test]
+    fn old_images_are_left_out_in_batches_instead_of_stopping() {
+        let small = vec![1000u64; 40];
+        assert_eq!(image_skip(&small), 0, "40 张以内全带上");
+        assert_eq!(image_skip(&vec![1000; 41]), 20, "超过就放掉最早的一批");
+        assert_eq!(image_skip(&vec![1000; 60]), 20, "同一批里不变，前缀缓存稳定");
+        assert_eq!(image_skip(&vec![1000; 61]), 40);
+        let big = vec![5 * 1024 * 1024u64; 10];
+        assert_eq!(image_skip(&big), 6, "按字节再放到 24 MB 以内");
+        // 被放掉的图换成一句说明，不再是图片块
+        let items: Vec<Value> = (0..41).map(|i| json!({"role":"user","content":[{"type":"pilot_image","file":format!("/nope/{i}.png"),"media_type":"image/png"}]})).collect();
+        let sent = expand_images("anthropic_messages", &items);
+        assert!(sent[0]["content"][0]["text"].as_str().unwrap().contains("这次没有再附上"));
+        assert!(sent[40]["content"][0]["text"].as_str().unwrap().contains("文件已不在了"), "最近的照常处理");
+    }
 
     #[test]
     fn view_image_is_stored_as_a_reference_and_expanded_per_protocol() {
