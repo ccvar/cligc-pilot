@@ -263,30 +263,56 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// 一个运营作业最多跑多久：到点就停掉里面的命令和 AI 回合，按失败收尾，不让站点被一个卡死的作业占着。
+const MAX_JOB_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
+
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {
     let st = ctx.state();
     let site = st.sites.get(site_id)?;
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
+    // 受保护的站点：任何自动流程都不碰，作业直接按失败收尾，原因给用户看
+    if let Some(why) = crate::sites::protected_reason(&site) {
+        job.finish(&Err(why.clone()));
+        return Err(why);
+    }
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
     tauri::async_runtime::spawn(async move {
         let started = now();
         let site_dir = ctx.site_dir(&site.id);
-        let r = match task.as_str() {
-            "scan" => scan(&ctx, &site, &job, &trigger).await,
-            "health" => health(&ctx, &site, &job).await,
-            "report" => report(&ctx, &site, &job).await,
-            "review" => review(&ctx, &site, &job).await,
-            "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
-            "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
-            "batch" => work_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
-            "plan" => plan(&ctx, &site, &job).await,
-            "cycle" => cycle(&ctx, &site, &job).await,
-            "watch" => watch(&ctx, &site, &job).await,
-            "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
-            "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
-            _ => Err("未知的运营任务".into()),
+        // 任务本体放进单独的协程：里面 panic 了也能走到 job.finish，不会让作业一直显示「进行中」直到重启
+        let mut body = {
+            let (ctx, site, job, task, trigger) = (ctx.clone(), site.clone(), job.clone(), task.clone(), trigger.clone());
+            tokio::spawn(async move {
+                match task.as_str() {
+                    "scan" => scan(&ctx, &site, &job, &trigger).await,
+                    "health" => health(&ctx, &site, &job).await,
+                    "report" => report(&ctx, &site, &job).await,
+                    "review" => review(&ctx, &site, &job).await,
+                    "work" => work_one(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "batch" => work_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "plan" => plan(&ctx, &site, &job).await,
+                    "cycle" => cycle(&ctx, &site, &job).await,
+                    "watch" => watch(&ctx, &site, &job).await,
+                    "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
+                    "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    _ => Err("未知的运营任务".into()),
+                }
+            })
+        };
+        let r: Result<String, String> = match tokio::time::timeout(MAX_JOB_DURATION, &mut body).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) if e.is_panic() => Err("Pilot 内部出错，这个任务已停止；详情见日志".into()),
+            Ok(Err(_)) => Err("任务被中止".into()),
+            Err(_) => {
+                // 先停掉正在跑的命令和 AI 回合，给它一点时间自己收尾（会话状态能正常落库），再强行中止
+                ctx.state().site_jobs.kill(&site.id);
+                let _ = tokio::time::timeout(Duration::from_secs(60), &mut body).await;
+                body.abort();
+                Err(format!("超过 {} 小时还没结束，已停止；详情见作业日志和会话", MAX_JOB_DURATION.as_secs() / 3600))
+            }
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         job.finish(&res);
@@ -702,6 +728,8 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
     let (primary, fallback) = models_for(site, &st.data_dir)?;
     match run_conversation_with(ctx, site, perm, work_dir, message.clone(), &primary).await {
         Ok(r) => Ok(r),
+        // 作业被用户取消：这一轮是被停掉的，不是模型失败，不换备用模型重跑
+        Err(_) if st.site_jobs.is_canceled(&site.id) => Err("已取消".into()),
         Err(e) => {
             let Some(fb) = fallback else { return Err(e) };
             crate::managed::log(&st.data_dir, crate::managed::Activity {
@@ -742,6 +770,8 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
             Ok(())
         })
     };
+    // 记在作业上：取消作业时连这一轮一起停（见 Jobs::cancel）
+    st.site_jobs.set_conversation(&site.id, &conv_id);
     let conv = crate::create_conversation(
         st.conns.clone(),
         st.sites.clone(),
@@ -763,11 +793,13 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
         st.data_dir.clone(),
         st.ssh.clone(),
         // 无人值守：写一整篇新页面要读站点、查数据、写文件、跑检查，32 次模型调用不够；
-        // 上限只防死循环，费用由每站每周 token 额度管。改动任务（auto）在独立工作树里，可以自己跑构建和提交。
-        crate::api_execution::ApiExecutionPolicy { max_requests: OPS_MAX_REQUESTS, safe_commands: perm == "auto" && !work_dir.is_empty() },
+        // 上限只防死循环，费用由每站每周 token 额度管。改动任务（auto）在独立工作树里，自动档本身就能跑构建和提交。
+        crate::api_execution::ApiExecutionPolicy { max_requests: OPS_MAX_REQUESTS },
         "ops".into(),
     )
-    .await?;
+    .await;
+    st.site_jobs.set_conversation(&site.id, "");
+    let conv = conv?;
     let _ = ctx.app.emit("conversations-changed", ());
     let failed = conv.messages.last().is_some_and(|m| m.role == "assistant" && m.error);
     if failed {
@@ -890,6 +922,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     );
     job.line(&format!("交给 AI：{}", item.opp.title));
     let (conv_id, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
+    // 用户在 AI 改的时候取消了：改动留在工作树和分支上，不再往下检查、推送
+    if job.canceled() {
+        return Err("已取消".into());
+    }
     let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(800).collect()).unwrap_or_default();
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
     let (new_pages, pages) = crate::site_verify::reported_pages(&reply, &site.domain);

@@ -23,6 +23,14 @@ mod tool_runtime;
 
 const MAX_HISTORY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 8 * 1024 * 1024;
+/// 跑一批工具之前估历史会涨多少：每个工具结果按这个数算（命令输出两路各最多 128 KiB，
+/// 但绝大多数结果远小于此；估大了会提前拒跑，估小了由 shrink_tool_results 兜底）。
+const TOOL_RESULT_ESTIMATE: usize = 64 * 1024;
+const HISTORY_FULL: &str = "API 会话已达到本地上下文上限，请新建会话；未自动截断历史";
+/// 等响应头 / 两个流事件之间最多等多久：模型长时间生成时 SSE 一直有块到，这里没字节才是真断了。
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// 一次请求的总上限：max_output_tokens 可到一百万，一口气生成几十分钟是正常的。
+const STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 static ACTIVE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 
@@ -208,7 +216,7 @@ fn ensure_new_history(path: &Path) -> Result<(), String> {
 fn save_history(path: &Path, history: &History) -> Result<(), String> {
     let body = serde_json::to_vec(history).map_err(|e| e.to_string())?;
     if body.len() > MAX_HISTORY_BYTES {
-        return Err("API 会话已达到本地上下文上限，请新建会话；未自动截断历史".into());
+        return Err(HISTORY_FULL.into());
     }
     std::fs::create_dir_all(path.parent().ok_or("会话目录无效")?).map_err(|e| e.to_string())?;
     let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
@@ -348,7 +356,6 @@ async fn execute(
         lease,
         site_key,
     )?
-    .with_safe_commands(policy.safe_commands)
     .with_vision(profile.protocol != "openai_chat");
     let mut history = if !is_first && !session_ref.is_empty() {
         let raw = std::fs::read(&path).map_err(|_| "无法恢复此 API 会话（工作区、接口或模型可能已变化），请新建会话；不会借用其他工作区历史".to_string())?;
@@ -502,26 +509,31 @@ async fn execute_model_loop_inner(
             .map_err(|stop| stop.to_string())?;
         // 文字部分（图片只算引用）不超过 2 MB；看过的图片不会撑爆请求：只带最近的，更早的换成一句说明（见 image_skip）
         let text_body = request_body_with(profile, model, effort, &instructions, &history.items, &definitions, None)?;
-        if text_body.to_string().len() > MAX_HISTORY_BYTES {
+        let mut body = serde_json::to_vec(&text_body).map_err(|e| e.to_string())?;
+        if body.len() > MAX_HISTORY_BYTES {
             return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
         }
-        // 这次要多放掉几张旧图：先去掉之后失效的思考签名并存盘，再按记下的张数发
-        let before = history.images_skipped;
-        history.prepare_image_skip();
-        if history.images_skipped != before {
-            save_history(path, history)?;
+        // 历史里有图才需要再组一遍请求（把引用换成图片块）；没图时上面量过大小的那份就是要发的
+        if !image_sizes(&history.items).is_empty() {
+            // 这次要多放掉几张旧图：先去掉之后失效的思考签名并存盘，再按记下的张数发
+            let before = history.images_skipped;
+            history.prepare_image_skip();
+            if history.images_skipped != before {
+                save_history(path, history)?;
+            }
+            let with_images = request_body_with(
+                profile,
+                model,
+                effort,
+                &instructions,
+                &history.items,
+                &definitions,
+                Some(history.images_skipped),
+            )?;
+            body = serde_json::to_vec(&with_images).map_err(|e| e.to_string())?;
         }
-        let body = request_body_with(
-            profile,
-            model,
-            effort,
-            &instructions,
-            &history.items,
-            &definitions,
-            Some(history.images_skipped),
-        )?;
         let text_checkpoint = result.text.len();
-        let reply = stream_request(&client, profile, api_key, body, |delta| {
+        let reply = stream_request_bytes(&client, profile, api_key, body, |delta| {
             let safe = tool_runtime::redact(delta, &[api_key, site_key]);
             result.text.push_str(&safe);
             let _ = channel.send(TurnEvent::Delta { text: safe });
@@ -598,11 +610,18 @@ async fn execute_model_loop_inner(
                 "模型返回了已记录的工具调用 ID，已阻止重复执行；请核对执行记录后继续".into(),
             );
         }
+        let before_reply = history.items.len();
         history.items.extend(reply.items);
         if calls.is_empty() {
             history.interrupted = false;
             save_history(&path, &history)?;
             return Ok(());
+        }
+        // 先估这批工具跑完历史会有多大（现在的 + 这条回复里的调用参数 + 每个结果按上限估）。超了就一个都不跑：
+        // 不然工具跑了、结果却存不下，历史停在「有调用没结果」上，之后每轮都只能报错让人新建会话
+        if serialized_len(history)? + calls.len() * TOOL_RESULT_ESTIMATE > MAX_HISTORY_BYTES {
+            history.items.truncate(before_reply);
+            return Err("上下文已到上限，请新建会话；这次要执行的工具都没有运行".into());
         }
         history.interrupted = true;
         save_history(&path, &history)?;
@@ -624,7 +643,11 @@ async fn execute_model_loop_inner(
                 output = match prepare_image(Path::new(&src), &path.with_extension("images")) {
                     Ok((marker, w, h)) => {
                         image = Some(marker);
-                        Ok(json!({"opened": src, "width": w, "height": h}))
+                        // 带上文件的修改时间和大小：截图到同一个文件再看，进展判断看得出不是原地打转
+                        let meta = std::fs::metadata(&src).ok();
+                        Ok(json!({"opened": src, "width": w, "height": h,
+                            "modified": meta.as_ref().map(tool_runtime::modified_ms).unwrap_or(0),
+                            "size": meta.map(|m| m.len()).unwrap_or(0)}))
                     }
                     Err(e) => Err(e),
                 };
@@ -651,12 +674,21 @@ async fn execute_model_loop_inner(
             }
             outputs.push((call.id, safe, failed, image));
         }
+        let results_from = history.items.len();
         append_tool_outputs_with_images(&profile.protocol, &mut history.items, outputs)?;
         // Clear only alongside all results in the same atomic write. A crash
         // mid-batch or failed save leaves the on-disk flag true, so unfinished
         // side effects remain blocked rather than being replayed.
         history.interrupted = false;
-        save_history(&path, &history)?;
+        let mut saved = save_history(path, history);
+        // 结果比估的还大、存不下：把这批结果截短也要存下来（并注明），不能留着「有调用没结果」的死局
+        for cap in [8000, 1000, 100] {
+            if saved.as_ref().err().is_none_or(|e| e != HISTORY_FULL) || !shrink_tool_results(&mut history.items, results_from, cap) {
+                break;
+            }
+            saved = save_history(path, history);
+        }
+        saved?;
         // 这一批的结果都已存好再停：继续时 AI 能看到，不会重做
         if let Some(stop) = stuck {
             return Err(stop.to_string());
@@ -666,6 +698,48 @@ async fn execute_model_loop_inner(
         limit: policy.max_requests,
     }
     .to_string())
+}
+
+/// 历史存成文件有多大（和 save_history 量的是同一份）。
+fn serialized_len(history: &History) -> Result<usize, String> {
+    serde_json::to_vec(history).map(|b| b.len()).map_err(|e| e.to_string())
+}
+
+/// 工具结果太大、历史存不下时，把 `from` 之后的结果正文截到 `cap` 个字符并注明（三种协议的结果形状都认）。
+/// 返回有没有改到东西；没有就说明不是结果大，截了也没用。
+fn shrink_tool_results(items: &mut [Value], from: usize, cap: usize) -> bool {
+    const NOTE: &str = "…（结果过长，为了把这一轮存下来已截短；需要时重新查看）";
+    let mut changed = false;
+    let mut cut = |s: &mut Value| {
+        let Some(text) = s.as_str() else { return };
+        // 上一轮已经截过的：只看正文长度，同样的上限不再重复截
+        let text = text.strip_suffix(NOTE).unwrap_or(text);
+        if text.chars().count() <= cap {
+            return;
+        }
+        let short: String = text.chars().take(cap).collect();
+        *s = json!(format!("{short}{NOTE}"));
+        changed = true;
+    };
+    for item in items.iter_mut().skip(from) {
+        if item["type"] == "function_call_output" {
+            cut(&mut item["output"]);
+        } else if item["role"] == "tool" {
+            cut(&mut item["content"]);
+        } else if item["role"] == "user" {
+            let Some(blocks) = item["content"].as_array_mut() else { continue };
+            for block in blocks.iter_mut().filter(|b| b["type"] == "tool_result") {
+                if block["content"].is_string() {
+                    cut(&mut block["content"]);
+                } else if let Some(parts) = block["content"].as_array_mut() {
+                    for part in parts.iter_mut().filter(|p| p["type"] == "text") {
+                        cut(&mut part["text"]);
+                    }
+                }
+            }
+        }
+    }
+    changed
 }
 
 fn activity(
@@ -1080,6 +1154,8 @@ fn add_usage(total: &mut Option<TurnUsage>, value: &TurnUsage) {
 #[derive(Default)]
 struct Sse {
     bytes: Vec<u8>,
+    /// 已经找过事件边界的前缀长度：一个几 MB 的事件分成上千块到达时，不用每块都从头再扫一遍
+    scanned: usize,
 }
 impl Sse {
     fn push(&mut self, bytes: &[u8]) -> Result<Vec<String>, String> {
@@ -1089,20 +1165,16 @@ impl Sse {
         }
         let mut out = Vec::new();
         loop {
-            let boundary = self
-                .bytes
-                .windows(2)
-                .position(|x| x == b"\n\n")
-                .map(|p| (p, 2))
-                .into_iter()
-                .chain(
-                    self.bytes
-                        .windows(4)
-                        .position(|x| x == b"\r\n\r\n")
-                        .map(|p| (p, 4)),
-                )
-                .min_by_key(|x| x.0);
-            let Some((end, skip)) = boundary else { break };
+            // 退回 3 个字节：边界（最长 4 字节）可能一半在上一块里
+            let from = self.scanned.saturating_sub(3);
+            let tail = &self.bytes[from..];
+            let lf = tail.windows(2).position(|x| x == b"\n\n").map(|p| (from + p, 2));
+            let crlf = tail.windows(4).position(|x| x == b"\r\n\r\n").map(|p| (from + p, 4));
+            let Some((end, skip)) = [lf, crlf].into_iter().flatten().min_by_key(|x| x.0) else {
+                self.scanned = self.bytes.len();
+                break;
+            };
+            self.scanned = 0;
             let frame = String::from_utf8(self.bytes.drain(..end + skip).collect())
                 .map_err(|_| "API 返回了无效 UTF-8")?;
             let data = frame
@@ -1124,7 +1196,11 @@ impl Sse {
 #[derive(Default)]
 struct Accumulator {
     items: BTreeMap<usize, Value>,
+    /// 工具参数的 JSON 片段（Anthropic input_json_delta / Chat Completions 的 arguments），结束时一次性解析或写回
     partial: BTreeMap<usize, String>,
+    /// 文字 / 思考 / 签名的增量，按（块序号, 字段）攒在这里，结束时一次写回；
+    /// 直接往 Value 里拼每次都要把整段字符串复制一遍，长回复是 O(n²)
+    strings: BTreeMap<(usize, &'static str), String>,
     closed_blocks: HashSet<usize>,
     text: String,
     usage: TurnUsage,
@@ -1173,10 +1249,17 @@ impl Accumulator {
                     }
                     let item = self.items.get_mut(&index).ok_or("API 工具流顺序异常")?;
                     let d = &v["delta"];
+                    // 攒到 strings 里，起点是 content_block_start 里已有的那段（通常是空串）
+                    let mut grow = |key: &'static str, text: &str| {
+                        self.strings
+                            .entry((index, key))
+                            .or_insert_with(|| item[key].as_str().unwrap_or("").to_string())
+                            .push_str(text);
+                    };
                     match d["type"].as_str().unwrap_or("") {
                         "text_delta" => {
                             delta = d["text"].as_str().unwrap_or("").into();
-                            append(item, "text", &delta);
+                            grow("text", &delta);
                         }
                         "input_json_delta" => {
                             if item["type"] != "tool_use" {
@@ -1186,12 +1269,8 @@ impl Accumulator {
                                 d["partial_json"].as_str().ok_or("API 工具参数片段无效")?,
                             );
                         }
-                        "thinking_delta" => {
-                            append(item, "thinking", d["thinking"].as_str().unwrap_or(""))
-                        }
-                        "signature_delta" => {
-                            append(item, "signature", d["signature"].as_str().unwrap_or(""))
-                        }
+                        "thinking_delta" => grow("thinking", d["thinking"].as_str().unwrap_or("")),
+                        "signature_delta" => grow("signature", d["signature"].as_str().unwrap_or("")),
                         _ => {}
                     }
                 }
@@ -1239,7 +1318,10 @@ impl Accumulator {
                             target["function"]["name"] = json!(name);
                         }
                         if let Some(args) = call["function"]["arguments"].as_str() {
-                            append(&mut target["function"], "arguments", args);
+                            self.partial
+                                .entry(idx)
+                                .or_insert_with(|| target["function"]["arguments"].as_str().unwrap_or("").to_string())
+                                .push_str(args);
                         }
                     }
                 }
@@ -1259,6 +1341,19 @@ impl Accumulator {
     fn finish(mut self, protocol: &str) -> Result<Reply, String> {
         if !self.complete {
             return Err("API 连接在回合完成前断开，未标记成功，也不会自动重试".into());
+        }
+        // 攒好的文字 / 思考 / 签名一次写回各自的块
+        for ((index, key), text) in std::mem::take(&mut self.strings) {
+            if let Some(item) = self.items.get_mut(&index) {
+                item[key] = json!(text);
+            }
+        }
+        if protocol == "openai_chat" {
+            for (index, args) in std::mem::take(&mut self.partial) {
+                if let Some(item) = self.items.get_mut(&index) {
+                    item["function"]["arguments"] = json!(args);
+                }
+            }
         }
         if protocol == "anthropic_messages"
             && self.items.values().any(|block| {
@@ -1324,11 +1419,6 @@ impl Accumulator {
         })
     }
 }
-fn append(value: &mut Value, key: &str, delta: &str) {
-    let mut s = value[key].as_str().unwrap_or("").to_string();
-    s.push_str(delta);
-    value[key] = json!(s);
-}
 fn api_error(v: &Value) -> String {
     let error = if v["error"].is_object() {
         &v["error"]
@@ -1342,11 +1432,41 @@ fn api_error(v: &Value) -> String {
     message.chars().take(600).collect()
 }
 
+#[cfg(test)]
 async fn stream_request(
     client: &reqwest::Client,
     profile: &ApiProfile,
     key: &str,
     body: Value,
+    on_delta: impl FnMut(&str),
+) -> Result<Reply, String> {
+    let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
+    stream_request_bytes(client, profile, key, bytes, on_delta).await
+}
+
+/// 读下一块响应：最多等空闲上限和总上限里先到的那个；None 表示流正常结束。
+async fn next_chunk(response: &mut reqwest::Response, deadline: tokio::time::Instant) -> Result<Option<Vec<u8>>, String> {
+    let total = format!("API 响应超过 {} 小时还没结束，已停止", STREAM_TOTAL_TIMEOUT.as_secs() / 3600);
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
+        return Err(total);
+    }
+    let wait = left.min(STREAM_IDLE_TIMEOUT);
+    match tokio::time::timeout(wait, response.chunk()).await {
+        Ok(r) => r.map(|c| c.map(|b| b.to_vec())).map_err(|e| format!("API 流中断：{}", e.without_url())),
+        Err(_) if wait < STREAM_IDLE_TIMEOUT => Err(total),
+        Err(_) => Err(format!("API 流中断：{} 秒没有收到任何数据", STREAM_IDLE_TIMEOUT.as_secs())),
+    }
+}
+
+/// 发请求、读 SSE 流。超时按「多久没有字节」算（STREAM_IDLE_TIMEOUT），不是整个请求一刀切：
+/// 一次生成几十万 token 要很久，但流一直在动；另有总上限 STREAM_TOTAL_TIMEOUT 兜底。
+/// 请求体是已经序列化好的字节（调用方量过大小的那份，不再序列化一遍）。
+async fn stream_request_bytes(
+    client: &reqwest::Client,
+    profile: &ApiProfile,
+    key: &str,
+    body: Vec<u8>,
     mut on_delta: impl FnMut(&str),
 ) -> Result<Reply, String> {
     let route = match profile.protocol.as_str() {
@@ -1355,24 +1475,27 @@ async fn stream_request(
         "openai_chat" => "chat/completions",
         _ => return Err("不支持的 API 协议".into()),
     };
+    let deadline = tokio::time::Instant::now() + STREAM_TOTAL_TIMEOUT;
     let mut req = client
         .post(api_profiles::endpoint(profile, route)?)
-        .timeout(Duration::from_secs(600))
-        .json(&body);
+        // 盖掉 http_client 上 300 秒的整请求超时；空闲超时在下面自己计
+        .timeout(STREAM_TOTAL_TIMEOUT)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(body);
     req = if profile.protocol == "anthropic_messages" {
         req.header("x-api-key", key)
             .header("anthropic-version", "2023-06-01")
     } else {
         req.bearer_auth(key)
     };
-    let mut response = req
-        .send()
+    let mut response = tokio::time::timeout(STREAM_IDLE_TIMEOUT, req.send())
         .await
+        .map_err(|_| format!("API 请求失败：{} 秒内没有收到响应", STREAM_IDLE_TIMEOUT.as_secs()))?
         .map_err(|e| format!("API 请求失败：{}", e.without_url()))?;
     let status = response.status();
     if !status.is_success() {
         let mut data = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "读取 API 错误失败")? {
+        while let Some(chunk) = next_chunk(&mut response, deadline).await.map_err(|_| "读取 API 错误失败")? {
             if data.len() + chunk.len() > 64 * 1024 {
                 break;
             }
@@ -1394,11 +1517,7 @@ async fn stream_request(
     let mut sse = Sse::default();
     let mut acc = Accumulator::default();
     let mut received = 0;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("API 流中断：{}", e.without_url()))?
-    {
+    while let Some(chunk) = next_chunk(&mut response, deadline).await? {
         received += chunk.len();
         if received > MAX_STREAM_BYTES {
             return Err("API 响应超过安全大小上限".into());
@@ -1524,6 +1643,43 @@ mod tests {
             data.extend(parser.push(&[*b]).unwrap());
         }
         assert_eq!(data, vec!["{\"text\":\"你好\"}"]);
+    }
+    #[test]
+    fn sse_resumes_scanning_where_it_left_off() {
+        // 一个大事件分很多块到、边界本身也被拆开：结果和一次性收到完全一样
+        let big = "x".repeat(300_000);
+        let stream = format!("data: {{\"a\":\"{big}\"}}\n\ndata: [DONE]\r\n\r\ndata: tail\n\n");
+        let mut whole = Sse::default();
+        let expect = whole.push(stream.as_bytes()).unwrap();
+        assert_eq!(expect.len(), 3);
+        for size in [1usize, 7, 1024, 65_536] {
+            let mut parser = Sse::default();
+            let mut got = vec![];
+            for chunk in stream.as_bytes().chunks(size) {
+                got.extend(parser.push(chunk).unwrap());
+            }
+            assert_eq!(got, expect, "chunk size {size}");
+            assert!(parser.bytes.is_empty() && parser.scanned == 0);
+        }
+    }
+    #[test]
+    fn oversized_tool_results_are_shrunk_in_every_protocol() {
+        let long = "y".repeat(5000);
+        let mut items = vec![
+            json!({"role":"user","content":"keep"}),
+            json!({"type":"function_call_output","call_id":"a","output":long}),
+            json!({"role":"tool","tool_call_id":"b","content":long}),
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":long,"is_error":false},
+                {"type":"tool_result","tool_use_id":"d","content":[{"type":"text","text":long},{"type":"pilot_image","file":"/x.jpg","media_type":"image/jpeg"}],"is_error":false}]}),
+        ];
+        assert!(shrink_tool_results(&mut items, 1, 1000));
+        let text = serde_json::to_string(&items).unwrap();
+        assert!(text.len() < 4 * 1200 + 600, "{}", text.len());
+        assert_eq!(text.matches("已截短").count(), 4);
+        assert_eq!(items[0]["content"], "keep", "from 之前的不动");
+        assert_eq!(items[3]["content"][1]["content"][1]["type"], "pilot_image", "图片引用保留");
+        // 已经够短：没有东西可截，返回 false，调用方不会白白再存一次
+        assert!(!shrink_tool_results(&mut items, 1, 1000));
     }
     #[test]
     fn api_default_requests_omit_all_reasoning_controls() {

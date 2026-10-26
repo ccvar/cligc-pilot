@@ -41,6 +41,10 @@ struct Run {
 }
 
 async fn run(responses: Vec<(u16, String)>, root: &Path) -> Run {
+    run_with_system(responses, root, "test instructions").await
+}
+
+async fn run_with_system(responses: Vec<(u16, String)>, root: &Path, system: &str) -> Run {
     let (url, server) = server(responses).await;
     let p = profile("anthropic_messages", &url);
     let c = conn();
@@ -58,7 +62,7 @@ async fn run(responses: Vec<(u16, String)>, root: &Path) -> Run {
     let mut history = History {
         scope: "test".into(),
         protocol: p.protocol.clone(),
-        system: "test instructions".into(),
+        system: system.into(),
         thinking_prefix: String::new(),
         items: vec![json!({"role":"user","content":"write a file"})],
         interrupted: false,
@@ -188,6 +192,53 @@ async fn output_recovery_retains_checkpoint_without_replaying_completed_write() 
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn full_context_refuses_the_tool_batch_before_running_it() {
+    // 历史离上限不到一个工具结果的估算量：工具一个都不跑，历史不动、不留「有调用没结果」的死局
+    let dir = tempfile::tempdir().unwrap();
+    let system = "s".repeat(MAX_HISTORY_BYTES - TOOL_RESULT_ESTIMATE / 2);
+    let run = run_with_system(
+        vec![(200, response(vec![write("w1", "must not run")], "tool_use"))],
+        dir.path(),
+        &system,
+    )
+    .await;
+    assert!(!run.result.ok);
+    assert!(run.result.error.contains("上下文已到上限"), "{}", run.result.error);
+    assert!(run.result.error.contains("请新建会话"));
+    assert!(!dir.path().join("created.txt").exists());
+    assert_eq!(run.requests.len(), 1);
+    assert!(!run.history.interrupted);
+    assert_eq!(run.history.items.len(), 1, "模型这条带调用的回复没有写进历史");
+}
+
+#[tokio::test]
+async fn results_bigger_than_estimated_are_saved_truncated_instead_of_dead_ending() {
+    // 估算过了关，但 read_file 实际读出 900 KiB：截短后照样存下来，下一轮还能继续
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("big.txt"), "z".repeat(900 * 1024)).unwrap();
+    let system = "s".repeat(MAX_HISTORY_BYTES - 400 * 1024);
+    let read = json!({"type":"tool_use","id":"r1","name":"read_file","input":{"path":"big.txt","limit":2000}});
+    let run = run_with_system(
+        vec![
+            (200, response(vec![read], "tool_use")),
+            (200, response(vec![text_block("读完了。")], "end_turn")),
+        ],
+        dir.path(),
+        &system,
+    )
+    .await;
+    assert!(run.result.ok, "{}", run.result.error);
+    assert_eq!(run.requests.len(), 2);
+    assert!(!run.history.interrupted);
+    let saved = serde_json::to_string(&run.history.items).unwrap();
+    assert!(saved.contains("已截短"), "结果截短并注明");
+    assert!(saved.len() < MAX_HISTORY_BYTES);
+    // 第二次请求带的是截短后的结果，模型接着正常收尾
+    assert!(run.requests[1].1["messages"].to_string().contains("已截短"));
+    assert_eq!(run.result.text, "读完了。");
 }
 
 #[tokio::test]

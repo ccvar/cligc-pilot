@@ -1291,19 +1291,26 @@ pub fn workspace_system_prompt(has_folder: bool) -> String {
 /// 分次查看；这里处理的是 Cloudflare/workspace 对话中“说稍后自动继续、实际无人
 /// 接收结果”的假后台任务。
 fn conversation_completion_policy(message: &str, connection_kind: &str) -> String {
-    if connection_kind == "ssh" {
-        return message.to_string();
+    match runtime_policy(connection_kind) {
+        None => message.to_string(),
+        Some(policy) => format!("{message}\n\n<pilot-runtime-policy>\n{policy}\n</pilot-runtime-policy>"),
     }
-    format!(
-        "{message}\n\n\
-<pilot-runtime-policy>\n\
-当前请求需要用工具采集、生成、检查或执行后才能回答时，必须在本回合内等到工具结束并返回真实结果。\
+}
+
+/// 上面那条运行时约束的正文；SSH 会话没有（见 conversation_completion_policy）。
+/// CLI 执行器每轮包在用户消息外面；原生 API 执行器放进 system 一份（见 api_agent_tools::instructions），
+/// 不然每轮都往持久化的历史里多塞一份。
+pub(crate) fn runtime_policy(connection_kind: &str) -> Option<&'static str> {
+    if connection_kind == "ssh" {
+        return None;
+    }
+    Some(
+        "当前请求需要用工具采集、生成、检查或执行后才能回答时，必须在本回合内等到工具结束并返回真实结果。\
 不要把这类工作留成无人接收的后台任务，也不要在结果尚未就绪时结束回合并声称“稍后会自动继续”。\
 不得为这类工作使用 run_in_background、nohup、shell `&` 或其它脱离当前回合的方式；应以前台方式执行\
 并等待 completed、failed 或 canceled 后再回复，不得让 pending/running 的任务跨出本回合。周期性或\
 确实需要脱离当前对话运行的工作，向用户说明需要由用户自行安排，不要自行在后台启动。无法在本回合完成时，明确说明中断点和可恢复状态，不得假装\
-仍在运行。\n\
-</pilot-runtime-policy>"
+仍在运行。",
     )
 }
 
@@ -1518,10 +1525,13 @@ pub async fn run_turn(
 ) -> TurnResult {
     // 用户消息仍按原文写入 conversations.json；这里只增强发给执行器的临时副本。
     // 每轮注入才能覆盖升级前已经建立的 Claude/Codex session。
-    let message = crate::editorial::for_turn(
-        conversation_completion_policy(&message, &conn.kind),
-        &conn.kind,
-    );
+    // 原生 API 执行器不包：它把用户消息原样持久化进自己的历史、每轮整段重发，包一层就是每轮多存一份；
+    // 这两段约束它放在 system 里一份（见 api_agent_tools::instructions）。
+    let message = if brain.starts_with("api:") {
+        message
+    } else {
+        crate::editorial::for_turn(conversation_completion_policy(&message, &conn.kind), &conn.kind)
+    };
     // ssh 连接没有 API key（密码/口令是给 Pilot 连机器用的，绝不进子进程），
     // 且无口令私钥根本没有钥匙串条目 —— 这里拿不到不算错。
     let api_key = if conn.kind == "ssh" || conn.kind == "workspace" {
@@ -2549,10 +2559,13 @@ fn watch_codex_rollout(
         let mut path = initial_path;
         let mut offset = initial_offset;
         let mut seen = HashSet::<(String, String, String)>::new();
+        // 还没找到 rollout 文件时要递归扫 ~/.codex/sessions：放到阻塞线程做，并且越找不到扫得越稀
+        // （300 ms 起、翻倍到 5 s），不然几百个会话目录每 300 ms 扫一遍把运行时卡住
+        let mut search_wait = std::time::Duration::from_millis(300);
         loop {
             if path.is_none() {
                 let session_ref = collect.lock().unwrap().session_ref.clone();
-                path = find_codex_rollout(&session_ref);
+                path = tokio::task::spawn_blocking(move || find_codex_rollout(&session_ref)).await.ok().flatten();
                 if path.is_some() {
                     offset = 0;
                 }
@@ -2591,7 +2604,14 @@ fn watch_codex_rollout(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let wait = if path.is_some() {
+                std::time::Duration::from_millis(300)
+            } else {
+                let w = search_wait;
+                search_wait = (search_wait * 2).min(std::time::Duration::from_secs(5));
+                w
+            };
+            tokio::time::sleep(wait).await;
         }
     })
 }

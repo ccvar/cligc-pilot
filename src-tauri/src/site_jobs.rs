@@ -53,6 +53,8 @@ struct Slot {
     state: JobState,
     cancel: Arc<AtomicBool>,
     pid: Arc<AtomicU32>,
+    /// 这个作业当前正在跑的 AI 会话（运营任务交给模型那一步）；取消作业时连它一起停。
+    conv: Arc<Mutex<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -114,7 +116,7 @@ impl Jobs {
             url: String::new(),
             error: String::new(),
         };
-        g.insert(site_id.into(), Slot { state: state.clone(), cancel: cancel.clone(), pid: pid.clone() });
+        g.insert(site_id.into(), Slot { state: state.clone(), cancel: cancel.clone(), pid: pid.clone(), conv: Default::default() });
         drop(g);
         let job = Job { jobs: self.clone(), app, site_id: site_id.into(), id, cancel, pid, secrets: Default::default() };
         job.broadcast(&state);
@@ -129,18 +131,58 @@ impl Jobs {
         self.snapshot(site_id).is_some_and(|s| s.status == "running")
     }
 
+    /// 用户取消：记下取消标记，停掉正在跑的子进程和 AI 回合。作业本身由它的协程发现标记后收尾（状态变 canceled）。
     pub fn cancel(&self, site_id: &str) -> bool {
-        let g = self.inner.lock().unwrap();
-        let Some(s) = g.get(site_id) else { return false };
-        if s.state.status != "running" {
-            return false;
-        }
-        s.cancel.store(true, Ordering::SeqCst);
-        let pid = s.pid.load(Ordering::SeqCst);
-        if pid != 0 {
-            crate::agent::kill_tree(Some(pid));
+        self.stop(site_id, true)
+    }
+
+    /// 只停掉正在跑的东西（子进程、AI 回合），不打取消标记：超时这类由 Pilot 自己叫停的情形，
+    /// 作业要按「失败 + 原因」收尾，不是「已取消」。
+    pub fn kill(&self, site_id: &str) -> bool {
+        self.stop(site_id, false)
+    }
+
+    fn stop(&self, site_id: &str, mark: bool) -> bool {
+        let conv = {
+            let g = self.inner.lock().unwrap();
+            let Some(s) = g.get(site_id) else { return false };
+            if s.state.status != "running" {
+                return false;
+            }
+            if mark {
+                s.cancel.store(true, Ordering::SeqCst);
+            }
+            let pid = s.pid.load(Ordering::SeqCst);
+            if pid != 0 {
+                crate::agent::kill_tree(Some(pid));
+            }
+            let conv = s.conv.lock().unwrap().clone();
+            conv
+        };
+        // 正在跑的 AI 回合：通过运行注册表停掉，不然要等它自己结束作业才算完、站点一直被占着
+        if !conv.is_empty() {
+            if let Some(app) = crate::APP.get() {
+                use tauri::Manager;
+                app.state::<crate::AppState>().runs.cancel(&conv);
+            }
         }
         true
+    }
+
+    /// 这个站点正在跑的作业有没有被用户取消。
+    pub fn is_canceled(&self, site_id: &str) -> bool {
+        let g = self.inner.lock().unwrap();
+        g.get(site_id).is_some_and(|s| s.state.status == "running" && s.cancel.load(Ordering::SeqCst))
+    }
+
+    /// 记下这个站点的作业当前交给了哪条 AI 会话（跑完传空串清掉）。
+    pub fn set_conversation(&self, site_id: &str, conv_id: &str) {
+        let g = self.inner.lock().unwrap();
+        if let Some(s) = g.get(site_id) {
+            if s.state.status == "running" {
+                *s.conv.lock().unwrap() = conv_id.to_string();
+            }
+        }
     }
 }
 
@@ -385,5 +427,25 @@ mod tests {
         job.finish(&Ok(()));
         assert_eq!(jobs.snapshot("s1").unwrap().status, "ok");
         assert!(jobs.start(None, "s1", "deploy", "部署", &[]).is_ok());
+    }
+
+    #[test]
+    fn cancel_marks_the_job_but_kill_does_not() {
+        let jobs = Jobs::default();
+        let job = jobs.start(None, "s1", "ops:work", "改动", &[]).unwrap();
+        jobs.set_conversation("s1", "conv-1");
+        assert!(!jobs.is_canceled("s1"));
+        // 超时叫停：不打取消标记，作业按失败 + 原因收尾
+        assert!(jobs.kill("s1"));
+        assert!(!job.canceled() && !jobs.is_canceled("s1"));
+        job.finish(&Err("超过 3 小时还没结束".into()));
+        assert_eq!(jobs.snapshot("s1").unwrap().status, "failed");
+        assert!(!jobs.cancel("s1"), "结束了的作业不能再取消");
+        // 用户取消：打标记，收尾时状态是 canceled
+        let job = jobs.start(None, "s1", "ops:work", "改动", &[]).unwrap();
+        assert!(jobs.cancel("s1"));
+        assert!(job.canceled() && jobs.is_canceled("s1"));
+        job.finish(&Err("已取消".into()));
+        assert_eq!(jobs.snapshot("s1").unwrap().status, "canceled");
     }
 }

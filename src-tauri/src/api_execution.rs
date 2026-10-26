@@ -14,20 +14,17 @@ pub(crate) const MAX_REQUESTS: usize = 400;
 const LOOP_WINDOW: usize = 20;
 /// 同一个「操作 + 参数 + 结果」在窗口里出现几次算原地打转。
 const LOOP_REPEATS: usize = 3;
-/// 连续失败多少次停下。
+/// 同一个操作带着同样的参数连续失败多少次停下。
 const ERROR_STREAK: usize = 8;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ApiExecutionPolicy {
     pub(crate) max_requests: usize,
-    /// 无人值守的运营任务：在 Pilot 准备的独立工作树里，不在危险清单上的命令（构建、检查、git 提交）
-    /// 直接执行，和 Claude CLI 自动档同一条规则；危险命令照样要确认（无人值守时一律被拒绝）。
-    pub(crate) safe_commands: bool,
 }
 
 impl Default for ApiExecutionPolicy {
     fn default() -> Self {
-        Self { max_requests: MAX_REQUESTS, safe_commands: false }
+        Self { max_requests: MAX_REQUESTS }
     }
 }
 
@@ -43,10 +40,23 @@ impl ApiExecutionPolicy {
 }
 
 /// 看 AI 有没有在原地打转：记录最近的工具调用（名字、参数、结果的指纹）。
+///
+/// 结果指纹只看工具输出。read_file / view_image 的输出里带着文件的修改时间和大小
+/// （见 api_agent_tools），所以「截图到同一个文件 → 看图 → 改 → 再截 → 再看」这种正常循环，
+/// 每次看到的是不同的指纹，不会被当成卡住。
 #[derive(Default)]
 pub(crate) struct ProgressGuard {
     recent: VecDeque<(u64, String)>,
-    errors: usize,
+    /// 连续失败：（最近一次失败的「操作 + 参数」指纹，连续次数）。换了命令就重新数，
+    /// 不然 grep 没匹配到、逐个修失败的测试这种各不相同的失败也会被数进去。
+    errors: Option<(u64, usize)>,
+}
+
+fn call_fingerprint(name: &str, args: &serde_json::Value) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut h);
+    args.to_string().hash(&mut h);
+    h.finish()
 }
 
 fn fingerprint(name: &str, args: &serde_json::Value, output: &str) -> u64 {
@@ -70,9 +80,18 @@ impl ProgressGuard {
         if times >= LOOP_REPEATS {
             return Err(StopReason::Looping { tool: name.to_string(), times });
         }
-        self.errors = if failed { self.errors + 1 } else { 0 };
-        if self.errors >= ERROR_STREAK {
-            return Err(StopReason::ErrorStreak { times: self.errors });
+        if !failed {
+            self.errors = None;
+            return Ok(());
+        }
+        let call = call_fingerprint(name, args);
+        let streak = match self.errors {
+            Some((last, n)) if last == call => n + 1,
+            _ => 1,
+        };
+        self.errors = Some((call, streak));
+        if streak >= ERROR_STREAK {
+            return Err(StopReason::ErrorStreak { times: streak });
         }
         Ok(())
     }
@@ -92,7 +111,7 @@ impl fmt::Display for StopReason {
         match self {
             Self::RequestBudget { limit } => write!(f, "这一轮已经连续工作了 {limit} 步，先停一下（防止意外失控产生大量费用）。回复「继续」可以接着做，已经做过的步骤 AI 能看到，不会从头再来"),
             Self::Looping { tool, times } => write!(f, "AI 好像卡住了：同一个操作（{tool}）用同样的参数做了 {times} 次、结果都一样，先停在这里。看一下最后几步卡在哪，给它一点提示后回复「继续」"),
-            Self::ErrorStreak { times } => write!(f, "连续 {times} 次操作都失败了，先停在这里。看一下最后几步的错误，给它一点提示后回复「继续」"),
+            Self::ErrorStreak { times } => write!(f, "同一个操作连续 {times} 次都失败了，先停在这里。看一下最后几步的错误，给它一点提示后回复「继续」"),
         }
     }
 }
@@ -146,15 +165,53 @@ mod tests {
 
     #[test]
     fn long_error_streak_stops() {
+        // 同一条命令（参数一样）连续失败、每次错误不同（不算原地打转）：到上限就停
         let mut g = ProgressGuard::default();
+        let args = json!({"cmd": "npm test"});
         for i in 0..ERROR_STREAK - 1 {
-            assert!(g.observe("run_command", &json!({"cmd": format!("try {i}")}), &format!("fail {i}"), true).is_ok());
+            assert!(g.observe("run_command", &args, &format!("fail {i}"), true).is_ok());
         }
         // 中间成功一次就重新计数
         assert!(g.observe("run_command", &json!({"cmd": "ok"}), "fine", false).is_ok());
         for i in 0..ERROR_STREAK - 1 {
-            assert!(g.observe("run_command", &json!({"cmd": format!("again {i}")}), &format!("fail {i}"), true).is_ok());
+            assert!(g.observe("run_command", &args, &format!("again {i}"), true).is_ok());
         }
-        assert_eq!(g.observe("run_command", &json!({"cmd": "last"}), "fail", true), Err(StopReason::ErrorStreak { times: ERROR_STREAK }));
+        assert_eq!(g.observe("run_command", &args, "last", true), Err(StopReason::ErrorStreak { times: ERROR_STREAK }));
+    }
+
+    #[test]
+    fn different_failing_commands_are_not_a_streak() {
+        // grep 没匹配到、逐个修失败的测试：各不相同的失败不算卡住
+        let mut g = ProgressGuard::default();
+        for i in 0..(ERROR_STREAK * 3) {
+            assert!(g.observe("run_command", &json!({"cmd": format!("grep -r needle{i} src")}), "exit 1", true).is_ok());
+        }
+        // 同一条命令失败几次、换一条、再回来：换命令就重新数
+        let a = json!({"cmd": "npm test"});
+        for i in 0..ERROR_STREAK - 1 {
+            assert!(g.observe("run_command", &a, &format!("fail {i}"), true).is_ok());
+        }
+        assert!(g.observe("run_command", &json!({"cmd": "other"}), "fail", true).is_ok());
+        for i in 0..ERROR_STREAK - 1 {
+            assert!(g.observe("run_command", &a, &format!("later {i}"), true).is_ok());
+        }
+    }
+
+    #[test]
+    fn viewing_a_rewritten_screenshot_is_progress() {
+        // 截图到同一个文件再看：输出里带着修改时间和大小，每次指纹不同，不算原地打转
+        let mut g = ProgressGuard::default();
+        let args = json!({"path": "shot.png"});
+        for stamp in 0..6 {
+            let out = json!({"opened": "shot.png", "width": 1280, "height": 800, "modified": 1000 + stamp, "size": 5000 + stamp}).to_string();
+            assert!(g.observe("view_image", &args, &out, false).is_ok());
+            assert!(g.observe("write_file", &json!({"path": "src/x.astro", "content": format!("v{stamp}")}), "ok", false).is_ok());
+            assert!(g.observe("run_command", &json!({"cmd": "shot"}), &format!("saved {stamp}"), false).is_ok());
+        }
+        // 文件没变（时间和大小一样）才算：第 3 次停
+        let same = json!({"opened": "shot.png", "modified": 1, "size": 2}).to_string();
+        assert!(g.observe("view_image", &args, &same, false).is_ok());
+        assert!(g.observe("view_image", &args, &same, false).is_ok());
+        assert!(g.observe("view_image", &args, &same, false).is_err());
     }
 }
