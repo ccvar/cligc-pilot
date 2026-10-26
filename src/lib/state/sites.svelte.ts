@@ -19,9 +19,32 @@ export function siteConnection(s: Site): Connection {
 
 export type SiteTab = 'overview' | 'data' | 'queue' | 'deploy' | 'distribute' | 'settings';
 
+/** 识别结果里可以改的部分：单个导入的表单和批量导入的每一行都用它。 */
+type ImportFields = {
+  name: string; domain: string; install: string; build: string; outDir: string; root: string; checks: string;
+  mode: 'direct' | 'workers' | 'vps' | 'pages_git' | 'none';
+  sshConnId: string; command: string; project: string; branch: string; indexnowKey: string; keepEnv: boolean;
+};
+/** 批量导入的一行：一个文件夹或一个仓库。 */
+export type ImportItem = ImportFields & {
+  /** 本地＝文件夹路径；GitHub＝owner/repo */
+  key: string;
+  preview: SiteImportPreview | null;
+  status: 'detecting' | 'ready' | 'error' | 'done';
+  err: string;
+  /** 识别时的说明（比如没找到对应的服务器连接，先按暂不部署导入） */
+  note: string;
+  /** 已经导入过的站点名（默认不勾） */
+  dup: string;
+  pick: boolean;
+};
+
 type ImportForm = {
   open: boolean;
-  step: 'source' | 'review';
+  step: 'source' | 'review' | 'batch';
+  /** GitHub 来源勾选的仓库（只勾一个时走单个导入的详细表单） */
+  repoPicks: string[];
+  batch: ImportItem[];
   source: 'local' | 'github';
   ghConnId: string;
   repo: string;
@@ -53,7 +76,7 @@ type ImportForm = {
 
 function blankImport(): ImportForm {
   return {
-    open: false, step: 'source', source: 'local', ghConnId: '', repo: '', repos: [], reposLoading: false, busy: false, err: '', preview: null,
+    open: false, step: 'source', repoPicks: [], batch: [], source: 'local', ghConnId: '', repo: '', repos: [], reposLoading: false, busy: false, err: '', preview: null,
     name: '', domain: '', install: '', build: '', outDir: '', root: '', checks: '', mode: 'direct', cfConnId: '', project: '', branch: 'main',
     projects: [], projectsLoading: false, indexnowKey: '', keepEnv: true, sshConnId: '', command: '',
   };
@@ -227,25 +250,38 @@ export async function loadImportProjects() {
 }
 
 export async function pickImportFolder() {
-  const picked = await open({ title: '选择站点代码所在的文件夹', directory: true, multiple: false });
-  if (typeof picked === 'string' && picked.trim()) await detectImport({ path: picked });
+  const picked = await open({ title: '选择站点代码所在的文件夹（按住 ⌘ 可以多选）', directory: true, multiple: true });
+  const list = (Array.isArray(picked) ? picked : picked ? [picked] : []).filter((p) => p.trim());
+  if (list.length === 1) await detectImport({ path: list[0] });
+  else if (list.length > 1) await startBatch(list);
+}
+
+/** GitHub 来源的「下一步」：勾了一个走详细表单，勾了多个走批量清单。 */
+export async function importPickedRepos() {
+  const f = sites.imp;
+  if (f.repoPicks.length === 1) { f.repo = f.repoPicks[0]; await detectImport({}); }
+  else if (f.repoPicks.length > 1) await startBatch([...f.repoPicks]);
 }
 
 /** 按识别出的项目名 / 域名 / 仓库匹配一个已有的 Pages 项目，并据此推断部署方式。 */
+function matchProjectOn(x: ImportFields, preview: SiteImportPreview | null, projects: PagesProject[], source: string, repoName: string) {
+  if (!preview || !projects.length) return;
+  const d = preview.detected;
+  if (x.mode === 'workers' || x.mode === 'vps' || d.deploy_kind === 'workers' || d.deploy_kind === 'vps') return; // 不在 Pages 项目列表里
+  const repo = source === 'github' ? repoName : d.github_repo;
+  const hit = projects.find((p) => p.name === (x.project || d.cf_project))
+    ?? projects.find((p) => !!x.domain && p.domains.includes(x.domain))
+    ?? projects.find((p) => !!repo && p.source_repo === repo);
+  if (!hit) return;
+  x.project = hit.name;
+  if (hit.production_branch) x.branch = hit.production_branch;
+  // 绑定了 GitHub、绑的就是这个站点的仓库（GitHub 来源，或本地文件夹的 origin）：推送即上线
+  x.mode = hit.source_type === 'github' && !!repo && hit.source_repo === repo ? 'pages_git' : 'direct';
+}
 function matchProject() {
   const f = sites.imp;
-  if (!f.preview || !f.projects.length) return;
-  const d = f.preview.detected;
-  if (f.mode === 'workers' || f.mode === 'vps' || d.deploy_kind === 'workers' || d.deploy_kind === 'vps') return; // 不在 Pages 项目列表里
-  const repo = f.source === 'github' ? f.repo : d.github_repo;
-  const hit = f.projects.find((p) => p.name === (f.project || d.cf_project))
-    ?? f.projects.find((p) => !!f.domain && p.domains.includes(f.domain))
-    ?? f.projects.find((p) => !!repo && p.source_repo === repo);
-  if (!hit) return;
-  f.project = hit.name;
-  if (hit.production_branch) f.branch = hit.production_branch;
-  // 绑定了 GitHub、绑的就是这个站点的仓库（GitHub 来源，或本地文件夹的 origin）：推送即上线
-  f.mode = hit.source_type === 'github' && !!repo && hit.source_repo === repo ? 'pages_git' : 'direct';
+  matchProjectOn(f, f.preview, f.projects, f.source, f.repo);
+  for (const it of f.batch) if (it.status === 'ready') matchProjectOn(it, it.preview, f.projects, f.source, it.key);
 }
 
 /** 发布脚本里写的 user@host → 主机相同的 SSH 连接（用户名也相同的优先）。 */
@@ -256,24 +292,80 @@ function pickSshConn(target: string): string {
   return (ssh.find((c) => c.ssh_user === user) ?? ssh[0])?.id ?? '';
 }
 
+/** 识别结果 → 可编辑的字段（部署方式按识别结果和有没有 Cloudflare 连接推断）。 */
+function fieldsFrom(preview: SiteImportPreview, cfConnId: string): ImportFields {
+  const d = preview.detected;
+  return {
+    name: preview.name, domain: d.domain, install: d.build.install, build: d.build.build,
+    outDir: d.build.out_dir, root: d.build.root ?? '', checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
+    indexnowKey: d.indexnow_key, mode: d.deploy_kind === 'vps' ? 'vps' : cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
+    command: d.deploy_command, sshConnId: pickSshConn(d.deploy_target), keepEnv: true,
+  };
+}
+
+async function detectOne(source: string, ghConnId: string, key: string): Promise<SiteImportPreview> {
+  return source === 'github'
+    ? await invoke<SiteImportPreview>('detect_site_repo', { connId: ghConnId, repo: key })
+    : await invoke<SiteImportPreview>('detect_site_folder', { path: key });
+}
+
 export async function detectImport(arg: { path?: string }) {
   const f = sites.imp;
   f.busy = true; f.err = '';
   try {
-    const preview = f.source === 'github'
-      ? await invoke<SiteImportPreview>('detect_site_repo', { connId: f.ghConnId, repo: f.repo })
-      : await invoke<SiteImportPreview>('detect_site_folder', { path: arg.path ?? '' });
-    const d = preview.detected;
-    Object.assign(f, {
-      preview, step: 'review', name: preview.name, domain: d.domain, install: d.build.install, build: d.build.build,
-      outDir: d.build.out_dir, root: d.build.root ?? '', checks: d.build.checks.join('\n'), project: d.cf_project, branch: d.branch || 'main',
-      indexnowKey: d.indexnow_key, mode: d.deploy_kind === 'vps' ? 'vps' : f.cfConnId ? (d.deploy_kind === 'workers' ? 'workers' : 'direct') : 'none',
-      command: d.deploy_command,
-      sshConnId: pickSshConn(d.deploy_target),
-    });
+    const preview = await detectOne(f.source, f.ghConnId, f.source === 'github' ? f.repo : arg.path ?? '');
+    Object.assign(f, { preview, step: 'review', ...fieldsFrom(preview, f.cfConnId) });
     matchProject();
   } catch (e) { f.err = String(e); }
   finally { f.busy = false; }
+}
+
+/** 批量：每个文件夹 / 仓库各识别一遍（GitHub 要先克隆，并发少一点），识别完就能勾选导入。 */
+async function startBatch(keys: string[]) {
+  const f = sites.imp;
+  f.err = ''; f.step = 'batch';
+  f.batch = [...new Set(keys)].map((key) => ({
+    key, preview: null, status: 'detecting', err: '', note: '', dup: '', pick: false,
+    name: '', domain: '', install: '', build: '', outDir: '', root: '', checks: '', mode: 'none', sshConnId: '', command: '', project: '', branch: 'main', indexnowKey: '', keepEnv: true,
+  }));
+  const items = f.batch;
+  const { source, ghConnId, cfConnId } = f;
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const it = items[next++];
+      try {
+        const preview = await detectOne(source, ghConnId, it.key);
+        Object.assign(it, fieldsFrom(preview, cfConnId), { preview });
+        if (it.mode === 'vps' && !it.sshConnId) { it.mode = 'none'; it.note = '发布脚本里的服务器没有对应的远程连接，先按「暂不部署」导入，之后在设置里配'; }
+        matchProjectOn(it, preview, sites.imp.projects, source, it.key);
+        const same = sites.list.find((s) => source === 'github' ? s.source === 'github' && s.repo === it.key : s.local_dir === preview.dir);
+        it.dup = same?.name ?? '';
+        it.pick = !same;
+        it.status = 'ready';
+      } catch (e) { it.status = 'error'; it.err = String(e); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(source === 'github' ? 2 : 4, items.length) }, worker));
+}
+
+function importReq(x: ImportFields, p: SiteImportPreview, source: string, ghConnId: string, repoName: string, repos: GhRepo[]) {
+  const d = p.detected;
+  const cf = x.mode === 'none' || x.mode === 'vps';
+  return {
+    source,
+    local_dir: source === 'local' ? p.dir : '',
+    gh_conn_id: source === 'github' ? ghConnId : '',
+    repo: source === 'github' ? repoName : d.github_repo,
+    name: x.name,
+    domain: x.domain,
+    framework: d.framework,
+    default_branch: source === 'github' ? (repos.find((r) => r.full_name === repoName)?.default_branch ?? d.git_default_branch) : (d.git_default_branch || d.git_branch),
+    build: { root: x.root.trim(), install: x.install.trim(), build: x.build.trim(), out_dir: x.outDir.trim(), checks: x.checks.split('\n').map((c) => c.trim()).filter(Boolean), env_keys: [] },
+    deploy: { mode: x.mode, cf_conn_id: cf ? '' : sites.imp.cfConnId, project: cf ? '' : x.project.trim(), branch: x.branch.trim(), ssh_conn_id: x.mode === 'vps' ? x.sshConnId : '', command: x.mode === 'vps' ? x.command.trim() : '' },
+    env: x.keepEnv ? d.env : [],
+    indexnow_key: x.indexnowKey.trim(),
+  };
 }
 
 export async function confirmImport() {
@@ -282,29 +374,33 @@ export async function confirmImport() {
   if (!p) return;
   f.busy = true; f.err = '';
   try {
-    const d = p.detected;
-    const site = await invoke<Site>('import_site', {
-      req: {
-        source: f.source,
-        local_dir: f.source === 'local' ? p.dir : '',
-        gh_conn_id: f.source === 'github' ? f.ghConnId : '',
-        repo: f.source === 'github' ? f.repo : d.github_repo,
-        name: f.name,
-        domain: f.domain,
-        framework: d.framework,
-        default_branch: f.source === 'github' ? (f.repos.find((r) => r.full_name === f.repo)?.default_branch ?? d.git_default_branch) : (d.git_default_branch || d.git_branch),
-        build: { root: f.root.trim(), install: f.install.trim(), build: f.build.trim(), out_dir: f.outDir.trim(), checks: f.checks.split('\n').map((c) => c.trim()).filter(Boolean), env_keys: [] },
-        deploy: { mode: f.mode, cf_conn_id: f.mode === 'none' || f.mode === 'vps' ? '' : f.cfConnId, project: f.mode === 'none' || f.mode === 'vps' ? '' : f.project.trim(), branch: f.branch.trim(), ssh_conn_id: f.mode === 'vps' ? f.sshConnId : '', command: f.mode === 'vps' ? f.command.trim() : '' },
-        env: f.keepEnv ? d.env : [],
-        indexnow_key: f.indexnowKey.trim(),
-      },
-    });
+    const site = await invoke<Site>('import_site', { req: importReq(f, p, f.source, f.ghConnId, f.repo, f.repos) });
     f.busy = false;
     sites.imp = blankImport();
     await refreshSites();
     say(`已导入站点「${site.name}」`);
     openSite(site.id);
   } catch (e) { f.err = String(e); f.busy = false; }
+}
+
+/** 批量导入勾选的那些：一个个导，失败的留在清单里显示原因，全部成功就关掉。 */
+export async function confirmBatchImport() {
+  const f = sites.imp;
+  const todo = f.batch.filter((it) => it.pick && it.status === 'ready' && it.preview);
+  if (!todo.length) return;
+  f.busy = true; f.err = '';
+  let ok = 0;
+  for (const it of todo) {
+    try {
+      await invoke<Site>('import_site', { req: importReq(it, it.preview!, f.source, f.ghConnId, it.key, f.repos) });
+      it.status = 'done'; it.pick = false; ok++;
+    } catch (e) { it.err = String(e); }
+  }
+  f.busy = false;
+  await refreshSites();
+  const failed = todo.length - ok;
+  if (!failed) { sites.imp = blankImport(); say(`已导入 ${ok} 个站点`); }
+  else say(ok ? `已导入 ${ok} 个，${failed} 个没导进去，原因见清单` : '都没导进去，原因见清单', 'err');
 }
 
 // ---------- 设置 ----------
