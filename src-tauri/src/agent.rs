@@ -1430,10 +1430,10 @@ pub fn shot_prompt(shot_path: &str) -> String {
         "【网页截图】需要网页截图时先用随附工具自动后台渲染：\n\
 `node \"{shot_path}\" --url <URL> --out shots/名字.png [--width 1280] [--full-page] [--wait 3000]`\n\
 成功输出 JSON（含文件路径和最终 URL），失败返回结构化 `code`、`detail` 与是否可见重试。\
-若 `code=verification_required` 且 `visible_retry_available=true`，先用一句话告诉用户将打开\
-Pilot 专用浏览器协助验证，再把**同一条命令**加 `--visible --timeout 120000` 重试；该浏览器\
-使用 Pilot 独立配置，不读取用户日常 Chrome。用户只需在弹出的窗口处理网页自身的真人验证，\
-验证消失后工具会自动截图并关闭。不得要求用户自己保存、上传截图，也不得在该专用浏览器中\
+截外部网站时加 `--allow-window`：后台截图遇到真人验证会自动改用 Pilot 专用的正常 Chrome 窗口再截\
+（之前要验证过的网站直接用窗口截），窗口里出现验证由用户完成，验证消失后自动截图并关窗；\
+第一次带这个参数前先用一句话告诉用户可能会弹出 Pilot 浏览器窗口、出现验证请在窗口里完成。\
+该浏览器使用 Pilot 独立配置，不读取用户日常 Chrome。不得要求用户自己保存、上传截图，也不得在该专用浏览器中\
 代填密码、验证码或登录账号；若返回 `login_required`，停止并说明该页面必须登录。\n\
 截完**必须用 Read 打开图片确认**内容正确\
 ——打不开的页面 Chrome 会把自己的错误页截下来，所以要看图排除：错误页 / 验证码 / 空白页 / Cookie 弹窗。\
@@ -1452,11 +1452,11 @@ pub fn site_shot_prompt(shot_path: &str) -> String {
 `node \"{shot_path}\" --url <URL> --out <站点图片目录>/<有意义的文件名>.png [--width 1280] [--height 800] [--full-page] [--wait 3000]`\n\
 图片存进站点自己的静态图片目录（如 public/images/…），正文里用站点现有的写法引用，写清 alt 和图注。\
 截完**必须打开图片确认**（Read；Pilot 原生 API 执行器里用 view_image）：不是错误页、验证码、空白页或 Cookie 弹窗；有个人信息、账号、余额等敏感内容先裁掉或打码再用。\
-遇到 `code=verification_required` 且 `visible_retry_available=true`（Etherscan、BscScan 这类要人机验证的站常见）：\
-用户在对话里时，先用一句话告诉用户「将打开 Pilot 专用浏览器，请在弹出的窗口里完成网页自己的真人验证」，\
-再把**同一条命令**加 `--visible --timeout 120000` 重试；验证一通过工具会自动截图并关窗。该浏览器用 Pilot 独立配置，不读用户日常 Chrome；\
-不要替用户点验证、不要在里面填任何账号密码或验证码，也不要反复打开可见浏览器（同一个站点一次对话里最多一次）。\
-无人值守任务（托管运营、后台任务）里不要用 `--visible`（没有人能处理验证），当作截不到处理。\
+用户在对话里时，截外部网站加 `--allow-window`：后台截图遇到真人验证（Etherscan、BscScan 这类站常见）会自动改用 Pilot 专用的正常 Chrome 窗口再截，\
+之前要验证过的网站直接用窗口截；窗口里出现验证由用户完成，验证一通过就自动截图并关窗。\
+第一次带这个参数前先用一句话告诉用户「可能会弹出 Pilot 浏览器窗口，出现验证请在窗口里完成」。该浏览器用 Pilot 独立配置，不读用户日常 Chrome；\
+不要替用户点验证、不要在里面填任何账号密码或验证码，同一个站点窗口截图失败后不要反复重试。\
+无人值守任务（托管运营、后台任务）里不要用 `--allow-window` 或 `--visible`（没有人能处理验证），遇到 `verification_required` 当作截不到处理。\
 需要登录才能看到的页面（`login_required`）不要截、不要代填任何账号密码。\
 确实截不到时：正文先不放图，在 `.pilot/todo.json` 里写一条 kind 为 `ai` 的待办，title 写清缺哪个页面的图、给出网址，说明可以在对话里让你用可见浏览器再截一次；\
 不要把截不到笼统说成「网站拦截」，要按返回的 `code` / `detail` 如实说明。\

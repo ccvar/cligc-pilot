@@ -7,12 +7,16 @@ use std::path::{Path, PathBuf};
 
 /// 网页截图脚本：默认用 Pilot 独立的持久 Chrome 配置无头截图；遇到真人验证时可加
 /// `--visible` 打开同一独立配置，由用户完成验证后自动截图。不会读取日常浏览器配置。
+/// `--allow-window`（有人在场时）：无头截图遇到真人验证就自动改用正常 Chrome 窗口再截，
+/// 并记住这个网站，之后直接用窗口截。不伪装无头浏览器——窗口模式就是普通的 Chrome。
 /// 成功打印 JSON {ok:true,out,engine,bytes,final_url}；失败返回结构化 code/detail。
 pub const SHOT_JS: &str = r##"#!/usr/bin/env node
 // shot.js — Cligc Pilot 随附的网页截图工具。
 // 用法: node shot.js --url <url> --out <file.png> [--width 1280] [--height 800]
-//       [--full-page] [--wait <ms>] [--timeout <ms>] [--visible]
+//       [--full-page] [--wait <ms>] [--timeout <ms>] [--visible] [--allow-window]
 // --visible 只使用 Pilot 专属浏览器配置，不读取用户日常 Chrome 的账号、Cookie 或历史记录。
+// --allow-window 无头截图遇到真人验证时自动改用正常 Chrome 窗口（同一专属配置）再截一次；
+// 要验证过的网站会记下来（30 天），之后带这个参数时直接用窗口截。无人值守任务不要带。
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -31,7 +35,7 @@ for (let i = 0; i < args.length; i++) {
   const a = args[i];
   if (!a.startsWith("--")) { fail("invalid_argument", "参数格式错误: " + a); return; }
   const k = a.slice(2);
-  if (k === "full-page" || k === "visible") { opt[k] = true; continue; }
+  if (k === "full-page" || k === "visible" || k === "allow-window") { opt[k] = true; continue; }
   const v = args[++i];
   if (v == null) { fail("invalid_argument", "缺少 --" + k + " 的值"); return; }
   opt[k] = v;
@@ -52,9 +56,10 @@ try {
 const width = parseInt(opt.width || "1280", 10) || 1280;
 const height = parseInt(opt.height || "800", 10) || 800;
 const wait = parseInt(opt.wait || "2500", 10) || 2500;
-const timeout = Math.max(wait + 5000, parseInt(opt.timeout || (opt.visible ? "120000" : "35000"), 10) || 35000);
+let timeout = Math.max(wait + 5000, parseInt(opt.timeout || (opt.visible ? "120000" : "35000"), 10) || 35000);
 const fullPage = !!opt["full-page"];
-const visible = !!opt.visible;
+let visible = !!opt.visible;
+const allowWindow = !!opt["allow-window"];
 const out = path.resolve(opt.out);
 fs.mkdirSync(path.dirname(out), { recursive: true });
 // 路径固定在 Pilot 数据目录，故意不提供 --profile：不能让模型把日常 Chrome
@@ -62,6 +67,26 @@ fs.mkdirSync(path.dirname(out), { recursive: true });
 const profile = path.resolve(path.join(__dirname, "..", "browser-profile", "screenshots"));
 fs.mkdirSync(profile, { recursive: true });
 const lockPath = profile + ".lock";
+// 无头截图要真人验证的网站（主机名 → 时间）：带 --allow-window 时直接用正常窗口截
+const windowMemoPath = profile + ".needs-window.json";
+const WINDOW_MEMO_DAYS = 30;
+function windowMemo() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(windowMemoPath, "utf8"));
+    return raw && typeof raw === "object" ? raw : {};
+  } catch { return {}; }
+}
+function needsWindow(host) {
+  const at = host ? windowMemo()[host] : 0;
+  return Number.isFinite(at) && Date.now() - at < WINDOW_MEMO_DAYS * 864e5;
+}
+function rememberWindow(host) {
+  if (!host) return;
+  const memo = windowMemo();
+  memo[host] = Date.now();
+  for (const [k, at] of Object.entries(memo)) if (!(Date.now() - at < WINDOW_MEMO_DAYS * 864e5)) delete memo[k];
+  try { fs.writeFileSync(windowMemoPath, JSON.stringify(memo)); } catch { /* ignore */ }
+}
 let activeBrowser = null;
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   try {
@@ -291,7 +316,7 @@ async function shotWithChrome(browser) {
           ? "页面跳转到登录界面；Pilot 不会代填账号或密码。"
           : visible
             ? "等待用户完成网页验证超时。"
-            : "页面要求真人验证，可使用同一命令加 --visible 由 Pilot 专用浏览器接管。",
+            : "页面要求真人验证：有人在场时同一命令加 --allow-window，会自动改用 Pilot 专用的正常 Chrome 窗口截图。",
         detail: tail(stderr),
         finalUrl: page.href || "",
         visibleRetry: !visible,
@@ -338,7 +363,21 @@ async function main() {
     try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
     const browser = findBrowser();
     if (browser) {
-      const result = await shotWithChrome(browser);
+      const host = targetUrl.protocol === "file:" ? "" : targetUrl.hostname;
+      const toWindow = () => { visible = true; timeout = Math.max(timeout, 120000); };
+      // 之前无头截图要验证过的网站：有人在场时直接用正常窗口截，省掉一次必然失败的尝试
+      let windowReason = "";
+      if (!visible && allowWindow && needsWindow(host)) { toWindow(); windowReason = "remembered"; }
+      let result = await shotWithChrome(browser);
+      if (!result.ok && result.code === "verification_required" && !visible) {
+        rememberWindow(host);
+        if (allowWindow) {
+          try { fs.rmSync(out, { force: true }); } catch { /* ignore */ }
+          toWindow();
+          windowReason = "verification";
+          result = await shotWithChrome(browser);
+        }
+      }
       if (result.ok) {
         finish({
           ok: true,
@@ -349,6 +388,7 @@ async function main() {
           height,
           full_page: fullPage,
           final_url: result.finalUrl,
+          ...(windowReason ? { window: windowReason } : {}),
         }, 0);
         return;
       }
