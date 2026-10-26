@@ -326,9 +326,9 @@
 
       <div class="card oplog" class:open={logOpen}>
         <button class="log-h" onclick={() => (logOpen = !logOpen)} aria-expanded={logOpen}>
-          <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
           <Icon name="activity" />操作日志
           <span class="sub">{managed.activity.length ? `${managed.activity.length} 条 · 最近 ${when(managed.activity[0].ts)}` : '还没有记录'}</span>
+          <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         {#if logOpen}
           {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{/if}
@@ -370,8 +370,8 @@
   .log-h { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
   .log-h :global(.ico) { color: var(--dim); }
   .log-h .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
-  .log-h .chev { color: var(--faint); transition: transform .16s var(--su-ease); }
-  .oplog.open .log-h .chev { transform: rotate(90deg); }
+  .log-h .chev { margin-left: auto; color: var(--faint); transition: transform .16s var(--su-ease); }
+  .oplog.open .log-h .chev { transform: rotate(180deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
