@@ -361,6 +361,12 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
     } else {
         String::new()
     };
+    let mut meta = meta;
+    if meta.cutover.at > 0 && !crate::site_vps_host::managed(&site) {
+        if let Some(i) = &inv {
+            meta.cutover.notes = direct_notes(&state, &site, i, &meta.cutover.host);
+        }
+    }
     let origin = inv.as_ref().map(|i| origin_host(i, &site)).unwrap_or(site.migrate_from.clone());
     let formal = if meta.formal.is_empty() { origin.clone() } else { meta.formal.clone() };
     Ok(View {
@@ -2191,10 +2197,6 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
         s.origin = "migrated".into();
         Ok(())
     })?;
-    let other = if host.starts_with("www.") { host.trim_start_matches("www.").to_string() } else { format!("www.{host}") };
-    cut.notes.push(format!("{host} 已指向新站（{target}）。DNS 和证书生效一般要几分钟"));
-    cut.notes.push(format!("另一个写法 {other} 还按原来的记录走：如果原来是跳到 {host} 的，停掉旧主机前要在 Cloudflare 里加一条跳转规则"));
-    cut.notes.push("旧主机先别停：确认新站稳定（建议跟踪满 2 周）再停".into());
     let old_host = origin_host(&inv, &site);
     if host != old_host {
         // 换了域名：站点地址变量（AI 按【配置变量】写的）改成新域名，canonical / sitemap 跟着变
@@ -2206,19 +2208,45 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
                 s.build.env_keys = keys;
                 Ok(())
             })?;
-            cut.notes.push(format!("配置变量 {key} 已改成 https://{host}，这次上线后 canonical 和 sitemap 都用新域名"));
-        } else {
-            cut.notes.push(format!("没找到站点地址的配置变量：canonical 可能还指向 {old_host}，让 AI 改成 {host}"));
         }
-        cut.notes.push(format!("换了域名：旧域名 {old_host} 的每个地址要 301 到 {host} 的同一路径，否则搜索排名会丢——在旧域名的 Cloudflare 里加一条重定向规则"));
     }
-    if crate::site_dynamic::load(&state.sites.data_dir(&id)).is_some_and(|d| d.setup_at > 0 && d.needs_db()) {
-        cut.notes.push("表单和评论在正式域名上照常可用（人机验证一开始就加了这个域名）；提交和评论在概览的「表单和评论」里看".into());
-    }
+    cut.notes = direct_notes(&state, &site, &inv, &host);
     save_meta(&dir, |m| m.cutover = cut.clone())?;
     // 生效检查 + 补上 IndexNow 验证文件：上线一次（这次带着正式域名）
     let _ = crate::site_cmds::start_deploy(app, &state, site.id.clone());
     Ok(cut)
+}
+
+/// 上线到 Cloudflare 以后给你看的几句话（按现在的情况算，界面每次打开都重新算）。
+fn direct_notes(state: &AppState, site: &Site, inv: &Inventory, host: &str) -> Vec<String> {
+    let old = origin_host(inv, site);
+    let mut n = vec![format!("{host} 已经打开新站，几分钟内全部生效")];
+    // 只有根域名 / www 才有「另一种写法」
+    let apex = apex_of(host);
+    if host == apex || host == format!("www.{apex}") {
+        let other = if host == apex { format!("www.{apex}") } else { apex.clone() };
+        n.push(format!("另一种写法 {other} 没有改动，原来打开什么现在还是什么"));
+    }
+    if host == old {
+        n.push("旧站的服务器先别关：新站稳定两周左右再停".into());
+    } else {
+        let env = crate::sites::load_env(&site.id);
+        let url = format!("https://{host}");
+        if env.iter().any(|(k, v)| ["PUBLIC_SITE_URL", "SITE_URL", "PUBLIC_SITE", "SITE"].contains(&k.as_str()) && v.trim_end_matches('/') == url) {
+            n.push(format!("站点里的网址已经改成 {url}（给搜索引擎看的地址、网站地图都跟着改了）"));
+        } else {
+            n.push(format!("站点里的网址可能还写着 {old}：让 AI 改成 {host}"));
+        }
+        n.push(if inv.ownership.verified {
+            format!("旧域名 {old} 还在打开旧站。等新站稳定了，让它跳转到 {host}，原来的搜索排名才能带过来")
+        } else {
+            format!("旧站 {old} 不受影响；搜索排名要在 {host} 上重新积累")
+        });
+    }
+    if crate::site_dynamic::load(&state.sites.data_dir(&site.id)).is_some_and(|d| d.setup_at > 0 && d.needs_db()) {
+        n.push("表单和评论照常可用，收到的提交和评论在概览的「表单和评论」里看".into());
+    }
+    n
 }
 
 /// 回退：把这个主机名的记录恢复成切换前的样子，站点回到迁移中。
@@ -2606,7 +2634,7 @@ async fn cutover_vps(state: &AppState, site: &Site, dir: &Path, host: &str) -> R
     if !v.alias.is_empty() && !alias_ok {
         cut.notes.push(format!("{} 还没指向服务器：改好 A 记录后，它会自动跳到 {host}", v.alias));
     }
-    cut.notes.push("旧主机先别停：确认新站稳定（建议跟踪满 2 周）再停".into());
+    cut.notes.push("旧站的服务器先别关：新站稳定两周左右再停".into());
     if v.api_port > 0 {
         cut.notes.push("表单和评论在服务器上照常可用，提交和评论在概览的「表单和评论」里看".into());
     }

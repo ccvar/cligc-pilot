@@ -51,8 +51,8 @@
   <!-- 迁移中不显示上线向导：预览部署在迁移卡片里配（只建 Pages 项目、不绑域名），域名到切换时才指过来 -->
   {#if site.origin !== 'migrating'}<SiteLaunch {site} />{/if}
 
-  <!-- 迁移中：任务进度显示在迁移卡片当前那一步里；托管、数据这些到切换以后才有意义，先不显示 -->
-  {#if site.origin !== 'migrating' && job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
+  <!-- 迁移卡片在的时候（迁移中、上线后观察期）：任务进度显示在迁移卡片当前那一步里，不再另起一张；托管、数据这些到正式上线以后才有意义，先不显示 -->
+  {#if !showMigrateCard(site) && job && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 600)}
     <div class="card"><SiteJobPanel {job} /></div>
   {/if}
 
