@@ -5,8 +5,10 @@
 //! 直接把人挡在门外（用户原话：「一定要安装 wrangler 吗」）。**不需要。**
 //!
 //! 真正非 wrangler 不可的，只有用到 Workers 运行时/Pages 特性的项目 —— 见 `needs_wrangler()`。
-//! 那种情况下**故意不降级**到这个服务器：静态服务器不认 `functions/`、`_headers`、`_redirects`，
+//! 那种情况下**故意不降级**到这个服务器：静态服务器不认 `functions/`、`_headers`，
 //! 硬用它预览会给出一个「能打开、但和线上不一样」的假象，比明说「要装 wrangler」更坏。
+//! `_redirects` 里的固定路径规则（`/a /b 301`、`/feed/ /feed.xml 200`）照 Pages 的规矩实现了：
+//! 迁移来的站点首页常常就是一条跳转，不认它连首页都打不开。带 `*` / `:占位` 的规则不认。
 
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -111,6 +113,13 @@ fn resolve(root: &Path, req_path: &str) -> Option<PathBuf> {
     }
     if p.is_dir() {
         p.push("index.html");
+    } else if !p.exists() {
+        // `/a` → `a.html`（和 Cloudflare Pages 一样）：Astro 的 build.format 'file' / 'preserve' 产物就是这样
+        let mut html = p.clone().into_os_string();
+        html.push(".html");
+        if Path::new(&html).is_file() {
+            p = html.into();
+        }
     }
     let real = p.canonicalize().ok()?;
     let base = root.canonicalize().ok()?;
@@ -167,7 +176,26 @@ async fn handle(root: &Path, sock: &mut TcpStream) -> std::io::Result<()> {
         )
         .await;
     }
-    match resolve(root, target) {
+    let path = target.split(['?', '#']).next().unwrap_or("/");
+    // Pages 的规矩：_redirects 先于静态文件
+    let mut target = target.to_string();
+    match redirect_rule(root, path) {
+        Some((code, to)) if code != 200 => {
+            let status = match code {
+                302 => "302 Found",
+                303 => "303 See Other",
+                307 => "307 Temporary Redirect",
+                308 => "308 Permanent Redirect",
+                _ => "301 Moved Permanently",
+            };
+            let head = format!("HTTP/1.1 {status}\r\nLocation: {to}\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+            sock.write_all(head.as_bytes()).await?;
+            return sock.flush().await;
+        }
+        Some((_, to)) => target = to,
+        None => {}
+    }
+    match resolve(root, &target) {
         Some(f) => {
             let body = tokio::fs::read(&f).await.unwrap_or_default();
             let ct = mime(&f);
@@ -192,6 +220,45 @@ async fn handle(root: &Path, sock: &mut TcpStream) -> std::io::Result<()> {
             .await
         }
     }
+}
+
+/// `_redirects` 里匹配 `path` 的固定规则：(状态码, 目标)。没写状态码是 301；200 是改写（地址栏不变）。
+/// 结尾斜杠宽松匹配（`/a` 和 `/a/` 算同一条），和 Pages 一样。每次请求现读：文件很小，改了立刻生效。
+fn redirect_rule(root: &Path, path: &str) -> Option<(u16, String)> {
+    let raw = std::fs::read_to_string(root.join("_redirects")).ok()?;
+    let norm = |p: &str| p.trim_end_matches('/').to_string();
+    let want = norm(&percent_decode(path));
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        let (Some(from), Some(to)) = (it.next(), it.next()) else { continue };
+        if from.contains('*') || from.contains(':') || to.contains(':') && !to.starts_with("http") {
+            continue;
+        }
+        if norm(from) != want {
+            continue;
+        }
+        let code = it.next().and_then(|c| c.trim_end_matches('!').parse().ok()).unwrap_or(301);
+        return Some((code, to.to_string()));
+    }
+    None
+}
+
+/// 构建产物在不在：有 index.html，或者首页本身是 `_redirects` 里的一条跳转（迁移来的多语言站常见）。
+/// 返回修改时间（秒），没有就是 None。
+pub fn built_at(out: &Path) -> Option<u64> {
+    let marker = if out.join("index.html").is_file() {
+        out.join("index.html")
+    } else if redirect_rule(out, "/").is_some() {
+        out.join("_redirects")
+    } else {
+        return None;
+    };
+    let t = std::fs::metadata(marker).and_then(|m| m.modified()).ok()?;
+    Some(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
 }
 
 /// 在**已经绑好的** listener 上服务 `root`。
@@ -270,6 +337,9 @@ mod tests {
             "%20 要还原（用户存的模板文件名什么样都有）"
         );
         assert!(resolve(&root, "/nope.html").is_none());
+        std::fs::write(root.join("about.html"), "about").unwrap();
+        assert!(built_at(&root).is_some());
+        assert!(resolve(&root, "/about").is_some_and(|p| p.ends_with("about.html")), "/about → about.html");
 
         // ★ 路径穿越
         assert!(resolve(&root, "/../secret.txt").is_none(), "..");
@@ -328,6 +398,12 @@ mod tests {
             "预览必须立刻反映改动，不许缓存"
         );
 
+        std::fs::write(root.join("_redirects"), "/old /sub/ 301\n/feed/ /a.css 200\n").unwrap();
+        let r = get(port, "/old?x=1").await;
+        assert!(r.starts_with("HTTP/1.1 301") && r.contains("Location: /sub/"), "_redirects 的跳转: {r}");
+        let r = get(port, "/feed/").await;
+        assert!(r.starts_with("HTTP/1.1 200") && r.contains("color:red"), "200 是改写: {r}");
+
         assert!(
             get(port, "/a.css").await.contains("text/css"),
             "CSS 的 content-type"
@@ -364,5 +440,19 @@ mod tests {
         assert_eq!(mime(Path::new("a/x.css")), "text/css; charset=utf-8");
         assert_eq!(mime(Path::new("a/x.woff2")), "font/woff2");
         assert_eq!(mime(Path::new("a/unknown")), "application/octet-stream");
+    }
+
+    #[test]
+    fn redirects_file_rules_follow_pages() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path();
+        assert!(built_at(root).is_none(), "空目录不算构建过");
+        std::fs::write(root.join("_redirects"), "# 注释\n/ /es-ar/ 301\n/old /new\n/feed/ /feed.xml 200\n/blog/* /posts/:splat 301\n/tmp /t 302!\n").unwrap();
+        assert_eq!(redirect_rule(root, "/"), Some((301, "/es-ar/".into())));
+        assert_eq!(redirect_rule(root, "/old/"), Some((301, "/new".into())), "没写状态码是 301，结尾斜杠宽松匹配");
+        assert_eq!(redirect_rule(root, "/feed"), Some((200, "/feed.xml".into())));
+        assert_eq!(redirect_rule(root, "/tmp"), Some((302, "/t".into())));
+        assert_eq!(redirect_rule(root, "/blog/x"), None, "带通配的不认");
+        assert!(built_at(root).is_some(), "首页是跳转也算构建过");
     }
 }

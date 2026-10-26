@@ -432,12 +432,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
     } else {
         0
     };
-    let built_at = std::fs::metadata(out.join("index.html"))
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let built_at = crate::static_server::built_at(&out).unwrap_or(0);
     let todos = mk::load_todos(&code);
     let config = crate::site_config::vars(&site, &code);
     // 不要 full：只看站点约定和待办（站点看板每次打开都会问，别去扫整个构建产物）

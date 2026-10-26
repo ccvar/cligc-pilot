@@ -2205,7 +2205,7 @@ async fn site_preview_start(app: AppHandle, state: tauri::State<'_, AppState>, i
     let deploy = state.sites.data_dir(&id).join("deploy");
     let root = if site.source == "github" && deploy.is_dir() { deploy } else { code };
     let out = site_make::out_dir(&site.app_dir(&root), &site.build.out_dir);
-    if !out.join("index.html").is_file() {
+    if static_server::built_at(&out).is_none() {
         return Err("还没有构建产物：先点「构建并检查」".into());
     }
     let key = format!("site:{id}");

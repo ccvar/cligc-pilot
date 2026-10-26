@@ -18,7 +18,7 @@
   import type { MStage } from '$lib/state/migrate.svelte.js';
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
-  import { makingConv, siteMake, loadMake, migrateTodos } from '$lib/state/siteMake.svelte.js';
+  import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
   import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
@@ -54,6 +54,9 @@
   // AI 重做时写进 .pilot/todo.json 的「需要我处理的事」：迁移期间看板别的卡片都不显示，就放在这里
   $effect(() => { void loadMake(site.id, false); });
   const todos = $derived(migrateTodos(siteMake.state[site.id]?.todos));
+  // 有构建产物就能在本机预览（AI 自己构建过、或者核对构建过）：不用先上线
+  const built = $derived(!!siteMake.state[site.id]?.built_at);
+  $effect(() => { if (v?.meta.parity_at) void loadMake(site.id, false); });
 
   /** 只建 Pages 项目、不绑域名（站点的 domain 迁移期间是空的） */
   async function setupPreview() {
@@ -240,6 +243,7 @@
             {:else}
               <div class="act"><span class="grow">AI 做完了{todos.length ? `，还留了 ${todos.length} 件事给你（见下面，不处理也能先核对）` : ''}。下一步核对：新站逐条对照旧站，有问题会列出来，可以再让 AI 修。</span>
                 {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
+                {#if built}<button class="btn small" onclick={() => previewSite(site)} data-tip="在预览窗里打开新站（本机，不用上线）"><Icon name="external" size={12} />本地预览</button>{/if}
                 <button class="btn small" onclick={() => startRebuild(site)} data-tip="没做完、或者想再改点什么：接着原来的对话做"><Icon name="play" size={12} />让 AI 接着做</button>
                 <button class="btn small primary" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />核对</button>
               </div>
@@ -282,6 +286,7 @@
               {/if}
               <div class="row">
                 <button class="btn small" class:primary={vNext === 'parity'} onclick={() => verify(site.id)} disabled={jobRunning || !!busy || aiRunning}><Icon name="play" size={12} />{v.meta.parity_at ? '重新核对' : '核对'}</button>
+                {#if built}<button class="btn small" onclick={() => previewSite(site)} data-tip="在预览窗里打开刚构建好的新站（本机，不用上线）"><Icon name="external" size={12} />本地预览</button>{/if}
               </div>
             </div>
           </li>
