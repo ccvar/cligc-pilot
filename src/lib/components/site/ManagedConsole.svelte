@@ -16,7 +16,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setGroupPaused, setAllGroupsPaused, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -80,7 +80,7 @@
       : g?.autonomy === 'review'
         ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后改排在前面的几条（每次最多 3 条）、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
         : `现在为 ${name} 制定本周计划（只出建议，不改代码）。继续吗？`;
-    const note = paused || g?.paused ? `\n\n（托管现在${paused ? '全部' : '这个方案'}暂停着：这一次是你手动执行，执行完照样保持暂停。）` : '';
+    const note = g?.stopped.includes(id) ? '\n\n（这个站点的托管暂停着：这一次是你手动执行，执行完照样保持暂停。）' : '';
     if (!(await confirmDialog(what + note, { title: '立即执行', kind: g?.autonomy === 'auto' ? 'warning' : 'info', confirmText: g?.autonomy === 'auto' ? '执行并自动上线' : '执行' }))) return;
     await runTask(id, 'cycle');
     managed.progress = new Set([...managed.progress, id]);
@@ -90,10 +90,12 @@
   const stuck = $derived((o?.sites ?? []).filter((x) => x.queued > 0).map((x) => {
     const g = groups.find((y) => y.sites.includes(x.id));
     const full = budgetFull(x.budget);
-    const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点停止了托管' : full ? full : '';
-    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '在方案里把它打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : '';
+    const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点的托管暂停着' : full ? full : '';
+    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : '';
     return { id: x.id, name: x.name, queued: x.queued, why, fix };
   }).filter((x) => x.why));
+  // 暂停只看站点自己的开关：所有站点都关着＝全部已暂停
+  const allOff = $derived(groups.some((g) => g.sites.length) && groups.every((g) => g.sites.every((x) => g.stopped.includes(x))));
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
@@ -115,15 +117,14 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
-      <h1>托管运营 {#if groups.length && groups.every((g) => g.paused)}<span class="pill warn">全部方案已暂停</span>{/if}</h1>
+      <h1>托管运营 {#if allOff}<span class="pill warn">全部已暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
       <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
       {#if o?.sites.length}<button class="btn small ghost" onclick={digestNow}><Icon name="news" size={13} />生成今日日报</button>{/if}
-      {#if o && groups.length}
-        {@const allPaused = groups.every((g) => g.paused)}
-        <button class="ic-btn" onclick={() => setAllGroupsPaused(groups, !allPaused)} aria-label={allPaused ? '恢复全部方案' : '暂停全部方案'} data-tip={allPaused ? '恢复全部托管方案' : '暂停全部托管方案（之后可以一个个恢复）'}><Icon name={allPaused ? 'play' : 'pause'} size={15} /></button>
+      {#if o && groups.some((g) => g.sites.length)}
+        <button class="ic-btn" onclick={() => setSitesActive(groups, allOff, '全部托管站点')} aria-label={allOff ? '恢复全部站点的托管' : '暂停全部站点的托管'} data-tip={allOff ? '恢复全部站点的托管' : '暂停全部站点的托管（之后可以一个个恢复）'}><Icon name={allOff ? 'play' : 'pause'} size={15} /></button>
       {/if}
     </div>
   </header>
@@ -217,9 +218,10 @@
         <p class="hint">每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。方案和站点都能单独暂停。</p>
       </div>
       {#each groups as g (g.id)}
-        <div class="card grp" class:off={g.paused || paused}>
-          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if g.paused}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
-            {#if !paused}<button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>{/if}
+        {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
+        <div class="card grp" class:off={gOff}>
+          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
+            {#if g.sites.length}<button class="btn tiny" onclick={() => setSitesActive([g], gOff, `「${g.name}」`)} data-tip={gOff ? '把这个方案里的站点都打开' : '把这个方案里的站点都暂停'}><Icon name={gOff ? 'play' : 'pause'} size={11} />{gOff ? '恢复方案' : '暂停方案'}</button>{/if}
             <button class="ic-btn ic-sm" onclick={() => editGroup(g)} aria-label="编辑托管方案" data-tip="编辑托管方案"><Icon name="pencil" size={14} /></button>
           </h3>
           {#if g.goal?.trim()}
@@ -260,8 +262,8 @@
                       { value: '__out', label: '退出托管', sub: '改为自己运营' },
                     ]} />
                   </div>
-                  <span class="gs-state" class:on={on && !g.paused && !paused} >{g.paused ? '方案已暂停' : !on ? '已停止' : paused ? '已开启' : '托管中'}</span>
-                  <button class="switch" class:on class:dim={g.paused || paused} role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={paused ? (on ? '这个站点的托管是开着的；现在托管全部暂停，点右上角「恢复托管」后它会接着运行' : '恢复这个站点的托管（全部暂停结束后生效）') : on ? '停止这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
+                  <span class="gs-state" class:on >{on ? '托管中' : '已暂停'}</span>
+                  <button class="switch" class:on role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '暂停这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
                 {#if progress.has(id) && sites.jobs[id]}
                   {@const conv = opsConvOf(id, sites.jobs[id].started_at)}

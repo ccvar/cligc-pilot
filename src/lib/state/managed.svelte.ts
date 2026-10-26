@@ -175,30 +175,34 @@ export async function setGroupPaused(g: ManagedGroup, paused: boolean) {
   try { await invoke('set_group_paused', { id: g.id, paused }); await loadManaged(); say(paused ? `已暂停「${g.name}」` : `已恢复「${g.name}」`); }
   catch (e) { say(String(e), 'err'); }
 }
-/** 一次暂停 / 恢复所有托管方案（批量操作；状态都记在各个方案上，不另设全局开关）。 */
-export async function setAllGroupsPaused(groups: ManagedGroup[], paused: boolean) {
-  const list = groups.filter((g) => g.paused !== paused);
-  if (!list.length) return;
-  if (paused && !(await confirmDialog(`暂停全部 ${list.length} 个托管方案？这些方案里的站点都不再自动运行（正在进行的那一项会跑完）。之后可以一个个恢复，也可以一起恢复。`, { title: '暂停全部方案', kind: 'warning', confirmText: '全部暂停' }))) return;
+/** 一次打开 / 关掉一批站点的托管开关（方案的「暂停 / 恢复方案」、右上角的「暂停 / 恢复全部」都是它）。 */
+export async function setSitesActive(groups: ManagedGroup[], active: boolean, what: string) {
+  const ids = groups.flatMap((g) => g.sites.filter((x) => g.stopped.includes(x) === active));
+  if (!ids.length) return;
+  if (!active && !(await confirmDialog(`暂停${what}的 ${ids.length} 个站点？它们都不再自动运行（正在进行的那一项会跑完），规则保留，随时可以一起或一个个恢复。`, { title: `暂停${what}`, kind: 'warning', confirmText: '暂停' }))) return;
   try {
-    for (const g of list) await invoke('set_group_paused', { id: g.id, paused });
+    for (const id of ids) await invoke('set_site_managed_active', { siteId: id, active });
     await loadManaged();
-    say(paused ? `已暂停 ${list.length} 个方案` : `已恢复 ${list.length} 个方案`);
+    say(active ? `已恢复 ${ids.length} 个站点的托管` : `已暂停 ${ids.length} 个站点的托管`);
   } catch (e) { say(String(e), 'err'); }
 }
 /** 单独启用 / 停止某个站点的托管。 */
 export async function setSiteActive(siteId: string, active: boolean) {
-  try { await invoke('set_site_managed_active', { siteId, active }); await loadManaged(); say(active ? '已恢复托管' : '已停止托管，规则保留'); }
+  try { await invoke('set_site_managed_active', { siteId, active }); await loadManaged(); say(active ? '已恢复托管' : '已暂停托管，规则保留'); }
   catch (e) { say(String(e), 'err'); }
 }
 
 export async function loadManaged() {
   try {
     let [o, a] = await Promise.all([invoke<ManagedOverview>('managed_overview'), invoke<ManagedActivity[]>('managed_activity', { limit: 300 })]);
-    // 旧版的「全部暂停」总开关：换成把每个方案都暂停（效果一样，什么都不跑），再关掉总开关；以后暂停只记在方案上
-    if (o.config.paused) {
-      for (const g of o.config.groups.filter((x) => !x.paused)) await invoke('set_group_paused', { id: g.id, paused: true });
-      await invoke('set_managed_paused', { paused: false });
+    // 暂停只有一层：每个站点自己的开关。旧版的「全部暂停」和「方案暂停」换成把对应站点的开关关掉（效果一样，什么都不跑）
+    const pausedGroups = o.config.groups.filter((g) => o.config.paused || g.paused);
+    if (pausedGroups.length) {
+      for (const g of pausedGroups) {
+        for (const id of g.sites.filter((x) => !g.stopped.includes(x))) await invoke('set_site_managed_active', { siteId: id, active: false });
+        if (g.paused) await invoke('set_group_paused', { id: g.id, paused: false });
+      }
+      if (o.config.paused) await invoke('set_managed_paused', { paused: false });
       o = await invoke<ManagedOverview>('managed_overview');
       if (managed.draft) managed.draft.paused = false;
     }
