@@ -373,8 +373,7 @@
                 <button class="btn small primary" onclick={() => startRebuild(site)}><Icon name="play" size={12} />继续重做</button>
               </div>
             {:else}
-              <div class="act"><span class="grow">AI 做完了{todos.length ? `，还留了 ${todos.length} 件事给你（见下面，不处理也能先核对）` : ''}。下一步核对：新站逐条对照旧站，有问题会列出来，可以再让 AI 修。</span>
-                {#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开对话</button>{/if}
+              <div class="act"><span class="grow">AI 做完了{todos.length ? `，还留了 ${todos.length} 件事给你（见下面，不处理也能先核对）` : ''}。下一步核对：新站逐条对照旧站，有问题会列出来，可以再让 AI 修。{#if conv} <button class="link-btn" onclick={() => openConv(conv.id)}>看 AI 做了什么</button>{/if}</span>
                 {#if built}<button class="btn small" onclick={() => previewSite(site)} data-tip="在预览窗里打开新站（本机，不用上线）"><Icon name="external" size={12} />本地预览</button>{/if}
                 <button class="btn small" onclick={() => startRebuild(site)} data-tip="没做完、或者想再改点什么：接着原来的对话做"><Icon name="play" size={12} />让 AI 接着做</button>
                 <button class="btn small primary" onclick={() => verify(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />核对</button>
@@ -384,15 +383,16 @@
         {:else if conv}
           <div class="act sub"><span class="grow faint">重做对话里有 AI 做了什么、改了哪些文件。</span><button class="btn tiny" onclick={() => openConv(conv.id)}><Icon name="chat" size={11} />打开重做对话</button></div>
         {/if}
-        <div class="req">
-          <b>交给 AI 的要求</b>
+        {#if ex.low_coverage.length}<ul class="mini"><li><span class="lv warn">!</span><span>{ex.low_coverage.length} 页正文可能没抓全，AI 会对照旧页面补齐 <button class="link-btn" onclick={() => toggleItem('cov')}>{openItems.has('cov') ? '收起' : '查看'}</button></span></li></ul>{/if}
+        {#if openItems.has('cov')}<ul class="items">{#each ex.low_coverage as l (l)}<li class="mono">{l}</li>{/each}</ul>{/if}
+        <details class="req">
+          <summary>交给 AI 的要求</summary>
           <ul class="mini">
             <li><span class="lv info">i</span><span>{ex.pages} 篇内容、{ex.lists} 个列表页和首页，每个旧地址原样生成，正文一字不改</span></li>
             {#if ex.features?.length}<li><span class="lv info">i</span><span>动态功能：{featNames(ex.features)}，按 Pilot 给的接口接到页面上</span></li>{/if}
-            {#if ex.low_coverage.length}<li><span class="lv warn">!</span><span>{ex.low_coverage.length} 页正文可能没抓全，要对照旧页面补齐 <button class="link-btn" onclick={() => toggleItem('cov')}>{openItems.has('cov') ? '收起' : '查看'}</button></span></li>{/if}
+            <li><span class="lv info">i</span><span>{v.plan?.visual === 'fresh' ? '全新视觉' : '保留品牌（logo、站名、主色），升级设计'}{v.plan?.direction && v.plan.direction !== 'auto' ? `，照你挑的设计方向做` : ''}；不用米黄纸色这类套路</span></li>
           </ul>
-          {#if openItems.has('cov')}<ul class="items">{#each ex.low_coverage as l (l)}<li class="mono">{l}</li>{/each}</ul>{/if}
-        </div>
+        </details>
 
       {:else if shown === 'verify'}
         <ol class="cut">
@@ -430,7 +430,7 @@
               {#if isVps}
                 <span><b>配置服务器</b>{#if v.vps?.setup_at}<small>{v.vps.ip} · {v.vps.os}{v.vps.api_port ? ' · 表单和评论服务' : ''}</small>{/if}</span>
                 {#if !v.vps?.setup_at}
-                  <small class="desc">选一台服务器（SSH 连接）。Pilot 会装 Caddy（网页和自动 HTTPS）{dynNeed ? '，再装一个 Go 写的小服务处理表单和评论（数据存 SQLite）' : ''}。需要 root 或免密 sudo；80 / 443 端口被别的网站服务占着时不会去动它。</small>
+                  <small class="desc">选一台你的服务器（在 Pilot 的连接里加过的远程服务器）。Pilot 会装好网页服务和免费 HTTPS 证书{dynNeed ? '，再装一个处理表单和评论的小服务' : ''}，不用你懂运维。要能用管理员身份登录（root 或免密 sudo）；服务器上已经有别的网站占着时不会动它。</small>
                   {#if sshConns.length}
                     <div class="row wrap">
                       <div class="dd"><Dropdown bind:value={sshConn} options={sshConns.map((c) => ({ value: c.id, label: c.name, sub: `${c.ssh_user}@${c.ssh_host}` }))} /></div>
@@ -442,18 +442,18 @@
                   <div class="row"><button class="btn tiny" onclick={() => setupVps(site.id, site.deploy.ssh_conn_id)} disabled={jobRunning || !!busy}>重新配置</button></div>
                 {/if}
               {:else}
-                <span><b>准备预览地址</b>{#if v.deploy_ready}<small>Pages 项目 {site.deploy.project}{dynNeed ? (dynReady ? ' · 动态功能已配置' : '') : ''}</small>{/if}</span>
+                <span><b>准备预览地址</b>{#if v.deploy_ready}<small>{site.deploy.project}.pages.dev{dynNeed ? (dynReady ? ' · 动态功能已配置' : '') : ''}</small>{/if}</span>
                 {#if !v.deploy_ready}
-                  <small class="desc">建一个 Cloudflare Pages 项目，只用来预览，不会动线上域名（Cloudflare 的跳转规则要上线后才生效，所以要实际上线测）。</small>
+                  <small class="desc">在你的 Cloudflare 账号里建一个预览用的项目，新站先放在那里给你看，不影响现在的网站。</small>
                   {#if cfConns.length}
                     <div class="row wrap">
-                      <div class="dd"><Dropdown bind:value={cfConn} options={cfConns.map((c) => ({ value: c.id, label: c.name, sub: c.login || c.account_id }))} /></div>
-                      <input class="tin proj" bind:value={project} placeholder="Pages 项目名" spellcheck="false" />
-                      <button class="btn small" class:primary={vNext === 'deploy'} onclick={setupPreview} disabled={!!busy || !cfConn || !project.trim()}>{busy === 'pages' ? '创建中…' : '创建 Pages 项目'}</button>
+                      {#if cfConns.length > 1}<div class="dd"><Dropdown bind:value={cfConn} options={cfConns.map((c) => ({ value: c.id, label: c.name, sub: c.login || c.account_id }))} /></div>{/if}
+                      <input class="tin proj" bind:value={project} placeholder="项目名" spellcheck="false" data-tip="预览地址会是 项目名.pages.dev" />
+                      <button class="btn small" class:primary={vNext === 'deploy'} onclick={setupPreview} disabled={!!busy || !cfConn || !project.trim()}>{busy === 'pages' ? '创建中…' : '建好预览项目'}</button>
                     </div>
                   {:else}<small class="desc warn-text">还没有 Cloudflare 连接：先在设置里连接 Cloudflare。</small>{/if}
                 {:else if dynNeed && !dynReady}
-                  <small class="desc">保留了{featNames(v.dynamic?.features ?? [])}：还要在 Cloudflare 上建数据库（D1）{v.dynamic?.features.includes('form') || v.dynamic?.features.includes('comments') ? '和人机验证（Turnstile）' : ''}{v.dynamic?.large.length ? `，把 ${v.dynamic.large.length} 个大文件传到 R2` : ''}，绑到这个 Pages 项目。令牌要有 D1、Turnstile{v.dynamic?.large.length ? '、R2' : ''} 的编辑权限。</small>
+                  <small class="desc">保留了{featNames(v.dynamic?.features ?? [])}：还要在 Cloudflare 上建好存提交内容的数据库{v.dynamic?.features.includes('form') || v.dynamic?.features.includes('comments') ? '和防垃圾的人机验证' : ''}{v.dynamic?.large.length ? `，把 ${v.dynamic.large.length} 个大文件放到云存储` : ''}，Pilot 一键建好。（Cloudflare 令牌要有 D1、Turnstile{v.dynamic?.large.length ? '、R2' : ''} 的编辑权限）</small>
                   <div class="row"><button class="btn small" class:primary={vNext === 'dynamic'} onclick={() => setupDynamic(site.id)} disabled={jobRunning || !!busy}>{dynSetting ? '配置中…' : '配置动态功能'}</button></div>
                 {:else if dynNeed}
                   {#each v.dynamic?.notes ?? [] as n (n)}<small class="desc">{n}</small>{/each}
@@ -688,7 +688,9 @@
   .act { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 9px 9px 9px 14px; border-radius: 10px; background: var(--rail); font-size: 12.5px; color: var(--dim); }
   .act .grow { line-height: 1.55; }
   .act.sub { padding: 0; background: none; }
-  .req { display: flex; flex-direction: column; gap: 6px; }
+  .req summary { cursor: pointer; font-size: 12px; color: var(--faint); }
+  .req summary:hover { color: var(--text); }
+  .req[open] summary { margin-bottom: 6px; }
   .domains { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--rail); }
   .dm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; min-height: 28px; }
   .dm .dk { flex: none; width: 64px; color: var(--dim); }
@@ -728,7 +730,6 @@
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }
   .todo-box > b small { margin-left: 6px; font-weight: 400; color: var(--faint); }
-  .req > b { font-size: 12.5px; font-weight: 600; }
   .link-btn.sm { font-size: 12px; }
   .link-btn.al { align-self: flex-start; }
   .kv { font-size: 12.5px; }

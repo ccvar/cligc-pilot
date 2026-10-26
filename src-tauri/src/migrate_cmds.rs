@@ -1804,7 +1804,7 @@ fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, a
 - `.pilot/migrate/screens/`：旧站首页和几类页面的截图。\n\n\
 【迁移的硬约束】\n\
 1. URL 一个都不能变：路由用每篇内容的 `path` 字段生成（`getStaticPaths` 按 path 出页面），不要按文件名推；列表页、首页、分类页按 urls.json 里的地址生成。{slash}\n\
-2. 迁移来的正文一字不改写：只换外观和结构；页面 <title> 用 seoTitle 原样，description 原样；`schema` 里列的结构化数据类型都要输出（可以多，不能少）。\n\
+2. 迁移来的正文一字不改写：只换外观和结构；旧页面上的版块（卡片、表格、折叠问答、按钮、步骤）照 `.pilot/migrate/screens/` 和旧站页面做成对应的组件，不能压平成一串纯文字（Pilot 核对时会数表格、折叠问答和图片）；页面 <title> 用 seoTitle 原样，description 原样；`schema` 里列的结构化数据类型都要输出（可以多，不能少）。\n\
 3. canonical 指向正式域名 https://{origin_host} 上的原地址（站点地址走配置变量，默认就是它）。\n\
 4. 旧站在跳转的地址（urls.json 里 action=redirect）写进 `public/_redirects`：`旧路径 新路径 301`，每行一条。\n\
 5. RSS / Atom 地址不变（survey.md 里列着）：用 @astrojs/rss 生成；地址不以 .xml 结尾的（比如 /feed/），生成到 feed.xml 再在 `_redirects` 里写 `/feed/ /feed.xml 200` 改写。\n\
