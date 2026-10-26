@@ -97,6 +97,7 @@
   // 暂停只看站点自己的开关：所有站点都关着＝全部已暂停
   const allOff = $derived(groups.some((g) => g.sites.length) && groups.every((g) => g.sites.every((x) => g.stopped.includes(x))));
   let moreOpen = $state(false);
+  let planMenu = $state('');
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
@@ -232,8 +233,18 @@
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
         <div class="card grp" class:off={gOff}>
           <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
-            {#if g.sites.length}<button class="btn tiny" onclick={() => setSitesActive([g], gOff, `「${g.name}」`)} data-tip={gOff ? '把这个方案里的站点都打开' : '把这个方案里的站点都暂停'}><Icon name={gOff ? 'play' : 'pause'} size={11} />{gOff ? '恢复方案' : '暂停方案'}</button>{/if}
-            <button class="ic-btn ic-sm" onclick={() => editGroup(g)} aria-label="编辑托管方案" data-tip="编辑托管方案"><Icon name="pencil" size={14} /></button>
+            <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
+            <span class="more-wrap">
+              <button class="ic-btn ic-sm" class:on={planMenu === g.id} onclick={() => (planMenu = planMenu === g.id ? '' : g.id)} aria-label="方案设置" aria-haspopup="menu" aria-expanded={planMenu === g.id} data-tip={planMenu === g.id ? null : '方案设置'}><Icon name="sliders" size={14} /></button>
+              {#if planMenu === g.id}
+                <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                <span class="more-mask" onclick={() => (planMenu = '')}></span>
+                <span class="more-pop" role="menu">
+                  <button role="menuitem" onclick={() => { planMenu = ''; editGroup(g); }}><Icon name="pencil" size={14} /><span><b>编辑方案</b><small>目标、自主程度、规则和站点</small></span></button>
+                  {#if g.sites.length}<button role="menuitem" onclick={() => { planMenu = ''; void setSitesActive([g], gOff, `「${g.name}」`); }}><Icon name={gOff ? 'play' : 'pause'} size={14} /><span><b>{gOff ? '恢复方案' : '暂停方案'}</b><small>{gOff ? '把这个方案里的站点都打开' : '把这个方案里的站点都暂停'}</small></span></button>{/if}
+                </span>
+              {/if}
+            </span>
           </h3>
           {#if g.goal?.trim()}
             <!-- 运营目标默认只显示一行，点开看全文 -->
@@ -346,7 +357,7 @@
   .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
-  .more-wrap { position: relative; }
+  .more-wrap { position: relative; display: inline-flex; font-weight: 400; }
   .ic-btn.on { background: var(--su-hover); color: var(--text); }
   .more-mask { position: fixed; inset: 0; z-index: 30; }
   .more-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; min-width: 180px; max-width: 240px; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--card, #fff); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
