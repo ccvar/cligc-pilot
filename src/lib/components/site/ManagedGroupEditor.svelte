@@ -162,7 +162,7 @@
       </div>
      {:else}
       <div class="chosen">
-        <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="link-btn" onclick={() => (step = 1)}>修改</button></div>
+        <div class="ch-top"><span class="lbl">「{g.name || '未命名'}」托管 {g.sites.length} 个站点</span><button class="ic-btn ic-sm" onclick={() => (step = 1)} aria-label="回去修改" data-tip="回去修改托管哪些站点"><Icon name="pencil" size={13} /></button></div>
         <div class="chips">{#each g.sites as id (id)}<span class="pill line"><SiteIcon {id} size={12} />{siteName(id)}</span>{/each}</div>
         <div class="ch-top"><span class="ch-sub">{g.goal.trim() || '没有写运营目标'} · 允许 {g.actions.length} 种动作{topicCount ? ` · ${topicCount} 个选题` : ''}{g.guidelines.trim() ? ' · 有内容准则' : ''}</span><button class="link-btn" onclick={() => (step = 2)}>修改</button></div>
       </div>

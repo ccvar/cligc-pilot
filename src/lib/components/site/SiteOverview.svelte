@@ -79,7 +79,7 @@
   {#if hasData}<SiteSummary {site} />{/if}
 
   <div class="card">
-    <h3><Icon name="chart" />数据与收录 <span class="grow"></span><button class="btn tiny" onclick={() => (sites.tab = 'settings')}><Icon name="sliders" size={12} />设置</button></h3>
+    <h3><Icon name="chart" />数据与收录 <span class="grow"></span><button class="ic-btn ic-sm" onclick={() => (sites.tab = 'settings')} aria-label="数据与收录设置" data-tip="在设置里接入 GA4、Search Console、Bing"><Icon name="sliders" size={14} /></button></h3>
     <div class="binds">
       {#each binds as b (b.k)}
         <div class="bind">

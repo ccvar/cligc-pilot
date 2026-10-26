@@ -59,7 +59,7 @@
 </script>
 
 {#snippet head(icon: string, title: string, key: string)}
-  <h3><Icon name={icon} />{title}<span class="grow"></span>{#if editing !== key}<button class="ic-btn edit-ic" onclick={() => startEdit(key)} disabled={!!editing && editing !== key} aria-label={`修改${title}`} data-tip={!!editing && editing !== key ? '先保存或取消正在改的那一张' : `修改${title}`}><Icon name="pencil" size={14} /></button>{/if}</h3>
+  <h3><Icon name={icon} />{title}<span class="grow"></span>{#if editing !== key}<button class="ic-btn ic-sm" onclick={() => startEdit(key)} disabled={!!editing && editing !== key} aria-label={`修改${title}`} data-tip={!!editing && editing !== key ? '先保存或取消正在改的那一张' : `修改${title}`}><Icon name="pencil" size={14} /></button>{/if}</h3>
 {/snippet}
 {#snippet editBar()}
   <div class="edit-bar"><span class="grow"></span><button class="btn small ghost" onclick={cancelEdit} disabled={sites.saving}>取消</button><button class="btn small primary" onclick={saveEdit} disabled={sites.saving || !dirty}>{#if sites.saving}<span class="spin"></span>保存中{:else}保存{/if}</button></div>
@@ -124,8 +124,6 @@
       {/if}
     </div>
 
-    <SiteConfigCard {site} />
-
     <div class="card" class:editing={editing === 'deploy'}>
       {@render head('rocket', '部署', 'deploy')}
       {#if editing === 'deploy'}
@@ -159,16 +157,18 @@
     </div>
 
     {#if site.deploy.mode === 'vps' && site.deploy.command.trim()}
-      <div class="card"><h3><Icon name="key" />VPS 部署授权</h3><VpsAuth {site} /></div>
+      <div class="card wide"><h3><Icon name="key" />VPS 部署授权</h3><VpsAuth {site} /></div>
     {:else if site.deploy.mode === 'vps'}
-      <SiteVpsCard {site} />
+      <div class="wide"><SiteVpsCard {site} /></div>
     {/if}
 
     <SiteDataSettings draft={d} {site} editing={editing === 'data'} locked={!!editing && editing !== 'data'} onedit={() => startEdit('data')} oncancel={cancelEdit} onsave={saveEdit} saving={sites.saving} {dirty} />
 
     <SiteDynamicSettings {site} />
 
-    <div class="card danger-zone">
+    <div class="wide"><SiteConfigCard {site} /></div>
+
+    <div class="card danger-zone wide">
       <h3 class="dz-head"><Icon name="info" />危险操作</h3>
       <div class="dz">
         <div class="dz-t"><b><Icon name="trash" size={13} />下线并删除</b><p class="hint">把网站从网上撤下来{site.deploy.project && (site.deploy.mode === 'direct' || site.deploy.mode === 'pages_git') ? `（删除 Cloudflare Pages 项目 ${site.deploy.project}，解除域名指向）` : ''}{site.origin === 'migrated' ? '，迁移的域名恢复成上线前的样子' : ''}，再从 Pilot 移除；可以选择把代码文件夹移到废纸篓。不能撤销。</p></div>
@@ -183,13 +183,17 @@
 {/if}
 
 <style>
-  .st { display: flex; flex-direction: column; gap: 14px; }
+  /* 两列排：短的卡片（基本信息、构建、部署、数据源、表单和评论）两张一行；
+     配置变量、服务器、危险操作和正在改的卡片占满一行 */
+  .st { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+  .st > .wide, .st > :global(.card.editing) { grid-column: 1 / -1; }
+  .st > .wide > :global(.card) { margin: 0; }
+  .st :global(.kv > dt) { white-space: nowrap; }
   .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
   .small { font-size: 12px; }
   .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
   .edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .grow { flex: 1; }
-  .st :global(.edit-ic) { width: 26px; height: 26px; margin: -4px -6px -4px 0; }
   .tags { gap: 6px; align-items: center; }
   .tag-in { max-width: 150px; height: 24px !important; font-size: 12px; }
   /* 危险操作：红色的边和底，和别的设置分开 */

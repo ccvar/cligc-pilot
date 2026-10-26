@@ -66,7 +66,7 @@
 </script>
 
 <div class="card" class:editing>
-  <h3><Icon name="database" />数据源<span class="grow"></span>{#if !editing}<button class="ic-btn edit-ic" onclick={onedit} disabled={locked} aria-label="修改数据源" data-tip={locked ? '先保存或取消正在改的那一张' : '修改数据源'}><Icon name="pencil" size={14} /></button>{/if}</h3>
+  <h3><Icon name="database" />数据源<span class="grow"></span>{#if !editing}<button class="ic-btn ic-sm" onclick={onedit} disabled={locked} aria-label="修改数据源" data-tip={locked ? '先保存或取消正在改的那一张' : '修改数据源'}><Icon name="pencil" size={14} /></button>{/if}</h3>
   {#if !editing}
     <dl class="kv">
       <dt><span class="dt-ic"><GoogleMark size={13} />GA4</span></dt><dd>{site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未接入'}</dd>
@@ -170,7 +170,6 @@
 <style>
   .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
   .grow { flex: 1; }
-  .edit-ic { width: 26px; height: 26px; margin: -4px -6px -4px 0; }
   .dt-ic { display: inline-flex; align-items: center; gap: 6px; }
   .link-btn.ix { margin-left: 8px; font-size: 12px; }
   .edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }

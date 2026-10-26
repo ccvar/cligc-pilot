@@ -297,7 +297,7 @@
             {#if Object.keys(p.features ?? {}).length}<dt>动态功能</dt><dd>{Object.entries(p.features).map(([k, x]) => `${v.survey?.features.find((f) => f.key === k)?.label ?? k}：${x === 'drop' ? '去掉' : '保留'}`).join('；')}</dd>{/if}
             <dt>确认于</dt><dd><span data-tip={full(p.confirmed_at)}>{ago(p.confirmed_at)}</span></dd>
           </dl>
-          {#if !launched}<div class="act sub"><span class="grow"></span><button class="btn tiny" onclick={() => (editPlan = true)} disabled={jobRunning}>修改方案</button></div>{/if}
+          {#if !launched}<div class="act sub"><span class="grow"></span><button class="ic-btn ic-sm" onclick={() => (editPlan = true)} disabled={jobRunning} aria-label="修改方案" data-tip="修改方案（改了要重新抓取）"><Icon name="pencil" size={14} /></button></div>{/if}
         {/if}
 
       {:else if shown === 'extract'}

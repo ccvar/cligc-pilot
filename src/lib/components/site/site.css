@@ -200,6 +200,8 @@
 .su .ic-btn { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; border-radius: 8px; color: var(--dim); cursor: pointer; transition: background-color .12s, color .12s; flex: none; }
 .su .ic-btn:hover:not(:disabled) { background: var(--su-hover); color: var(--text); }
 .su .ic-btn:disabled { opacity: .5; cursor: default; }
+/* 卡片标题栏 / 行尾的小图标按钮（修改、刷新、设置…），文字说明放在悬停提示里 */
+.su .ic-btn.ic-sm { width: 26px; height: 26px; border-radius: 7px; margin: -4px -6px -4px 0; }
 /* 数据源小标识：放在标签、表头、切换按钮里 */
 .su .src { display: inline-flex; align-items: center; gap: 5px; }
 .su .src svg { flex: none; }

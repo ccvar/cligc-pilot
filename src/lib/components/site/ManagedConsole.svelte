@@ -155,7 +155,7 @@
           {/if}
           {#if p?.positioning.text}
             <div class="pos">
-              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="link-btn" onclick={() => openSite(s.id, 'overview')}>修改</button></div>
+              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="ic-btn ic-sm" onclick={() => openSite(s.id, 'overview')} aria-label="修改站点定位" data-tip="修改站点定位（在站点概览里）"><Icon name="pencil" size={13} /></button></div>
               <p>{p.positioning.text}</p>
             </div>
           {/if}
@@ -214,7 +214,7 @@
         <div class="card grp" class:off={g.paused}>
           <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if g.paused}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
             <button class="btn tiny" onclick={() => setGroupPaused(g, !g.paused)}><Icon name={g.paused ? 'play' : 'pause'} size={11} />{g.paused ? '恢复方案' : '暂停方案'}</button>
-            <button class="btn tiny" onclick={() => editGroup(g)}><Icon name="sliders" size={11} />编辑</button>
+            <button class="ic-btn ic-sm" onclick={() => editGroup(g)} aria-label="编辑托管方案" data-tip="编辑托管方案"><Icon name="pencil" size={14} /></button>
           </h3>
           {#if g.goal?.trim()}<p class="goal">{g.goal}</p>{/if}
           <div class="rules">
@@ -343,7 +343,6 @@
   .pos-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
   .pos-t .faint { font-weight: 400; font-size: 11.5px; }
   .pos-t .grow { flex: 1; }
-  .pos-t .link-btn { font-size: 12px; font-weight: 400; }
   .pos p { margin: 4px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .gs-run { opacity: .55; transition: opacity .12s; }
   .gs:hover .gs-run, .gs-run:focus-visible { opacity: 1; }

@@ -51,7 +51,7 @@
 
     {#if site.deploy.mode !== 'vps'}
     <div class="card">
-      <h3><CfMark size={14} />{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="btn tiny" onclick={() => loadPagesDeploys(site.id)}><Icon name="refresh" size={12} />刷新</button></h3>
+      <h3><CfMark size={14} />{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="ic-btn ic-sm" onclick={() => loadPagesDeploys(site.id)} aria-label="刷新部署记录" data-tip="刷新部署记录"><Icon name="refresh" size={14} /></button></h3>
       {#if sites.pagesErr[site.id]}<div class="err-note">{sites.pagesErr[site.id]}</div>
       {:else if !pages.length}<p class="hint">还没有部署记录（项目尚未创建，或首次上线前）。</p>
       {:else}
