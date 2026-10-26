@@ -24,12 +24,15 @@
     emptyText = '无匹配站点',
     footer,
     onchange,
+    menuMin = 132,
   }: { value: string; options: Opt[]; placeholder?: string; disabled?: boolean; compact?: boolean; menuCompact?: boolean; searchable?: boolean; keepOpenOnSelect?: boolean; tone?: string; bare?: boolean; tip?: string; ariaLabel?: string;
     /** 一个选项都没有时菜单里显示的话 */
     emptyText?: string;
     /** 菜单底部、分隔线下面的操作（如「刷新」「去新建」）；参数是关菜单的函数 */
     footer?: Snippet<[() => void]>;
-    onchange?: (value: string) => void } = $props();
+    onchange?: (value: string) => void;
+    /** 紧凑菜单的最小宽度（选项文字长时调大，免得折行） */
+    menuMin?: number } = $props();
   function closeMenu() { open = false; hideTipBubble(); }
 
   let open = $state(false);
@@ -60,7 +63,7 @@
     const up = belowSpace < 220 && aboveSpace > belowSpace;
     const maxH = Math.min(300, Math.max(96, up ? aboveSpace : belowSpace));
     // 紧凑模式触发器很窄，菜单加宽到 ≥240px；靠右时钳制左边界防溢出。
-    const width = menuCompact ? Math.max(r.width, 132) : compact ? Math.max(r.width, 240) : r.width;
+    const width = menuCompact ? Math.max(r.width, menuMin) : compact ? Math.max(r.width, 240) : r.width;
     let left = r.left;
     if (compact) left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
     const vert = up

@@ -28,6 +28,8 @@ class FleetState {
   query = $state('');
   filter = $state<SiteFilter>('all');
   tag = $state('');
+  /** 按部署方式筛选：direct / workers / pages_git / vps / none；空＝全部 */
+  mode = $state('');
   sort = $state<SiteSort>('name');
   desc = $state(false);
   page = $state(0);

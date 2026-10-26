@@ -4,6 +4,7 @@
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
+  import Dropdown from '$lib/Dropdown.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
@@ -15,10 +16,10 @@
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
-  const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
+  const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag).filter((r) => !fleet.mode || r.deploy_mode === fleet.mode), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const pageRows = $derived(filtered.slice(fleet.page * PAGE_SIZE, (fleet.page + 1) * PAGE_SIZE));
-  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; fleet.page = 0; });
+  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.mode; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
   const totals = $derived({
@@ -28,6 +29,12 @@
   const n = num;
   const when = ago;
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
+  // 站点后面的下拉：按部署方式筛选（只列出现在有站点的方式，带个数）
+  const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
+  const modeOpts = $derived([
+    { value: '', label: `全部部署方式 · ${rows.length}`, short: '全部部署方式' },
+    ...MODE_ORDER.filter((m) => rows.some((r) => r.deploy_mode === m)).map((m) => ({ value: m, label: `${MODE[m]} · ${rows.filter((r) => r.deploy_mode === m).length}`, short: MODE[m] })),
+  ]);
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
   // 右上角的提醒：有问题才出现，点开按问题分组，点一组就只看这组站点
@@ -78,6 +85,9 @@
 
   <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
+    {#if fleet.tab === 'sites' && modeOpts.length > 2}
+      <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
+    {/if}
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
   </div>
 
@@ -85,8 +95,8 @@
    {#key fleet.tab}
    <div class="pane">
     {#if fleet.tab === 'sites'}
-      {#if fleet.filter !== 'all' || fleet.tag}
-        <div class="only">只看：{onlyLabel}{onlyLabel && fleet.tag ? ' · ' : ''}{fleet.tag ? `#${fleet.tag}` : ''}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; }}>看全部</button></div>
+      {#if fleet.filter !== 'all' || fleet.tag || fleet.mode}
+        <div class="only">只看：{[onlyLabel, fleet.tag ? `#${fleet.tag}` : '', fleet.mode ? MODE[fleet.mode] : ''].filter(Boolean).join(' · ')}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; fleet.mode = ''; }}>看全部</button></div>
       {/if}
       {#if !fleet.loaded && !rows.length}
         <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>
@@ -183,6 +193,7 @@
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
+  .mode-dd { display: flex; align-items: center; margin: 0 6px 2px -4px; }
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
