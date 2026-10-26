@@ -57,9 +57,9 @@ export interface DomainCheck {
 
 const DONE_KEY = 'cligc.pilot.launchDone';
 const STATUS_KEY = 'cligc.pilot.launchStatus';
-function loadStatus(): Record<string, LaunchStatus> { try { return JSON.parse(localStorage.getItem(STATUS_KEY) || '{}'); } catch { return {}; } }
+function loadStatus(): Record<string, LaunchStatus> { try { const v = JSON.parse(localStorage.getItem(STATUS_KEY) || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } }
 const OPEN_KEY = 'cligc.pilot.launchOpen';
-const loadSet = (k: string) => { try { return new Set<string>(JSON.parse(localStorage.getItem(k) || '[]')); } catch { return new Set<string>(); } };
+const loadSet = (k: string) => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return new Set<string>(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []); } catch { return new Set<string>(); } };
 const saveSet = (k: string, v: Set<string>) => { try { localStorage.setItem(k, JSON.stringify([...v])); } catch { /* */ } };
 
 /** 向导的必做步骤（Bing 可选，不计入「全部完成」）。 */
@@ -117,17 +117,22 @@ function remember(id: string, v: LaunchStatus) {
 
 /** 读向导状态：先只读当前状态（快），再在后台按域名去已连接的 Google / Bing 账号里找资源，
  *  唯一命中就绑上（force=手动刷新：直接带上查找，不受 10 分钟节流）。 */
+const loadSeq: Record<string, number> = {};
 export async function loadLaunch(id: string, force = false) {
+  // 同一站点可能同时被 $effect、刷新按钮和 step() 调起：只认最后一次的结果，早的那次不再写回、也不提前收掉转圈
+  const seq = (loadSeq[id] = (loadSeq[id] ?? 0) + 1);
+  const latest = () => loadSeq[id] === seq;
   // 由 $effect 调用：同步读写 checking 不能被追踪，否则写回后会再次触发，无限循环
   untrack(() => { launch.checking = { ...launch.checking, [id]: true }; });
   try {
-    if (!force) remember(id, await invoke<LaunchStatus>('launch_status', { id, probe: false }));
+    if (!force) { const quick = await invoke<LaunchStatus>('launch_status', { id, probe: false }); if (latest()) remember(id, quick); }
     const v = await invoke<LaunchStatus>('launch_status', { id, force, probe: true });
+    if (!latest()) return;
     remember(id, v);
     if (v.auto_bound?.length) { await refreshSites(); say(`已自动处理：${v.auto_bound.join('、')}`); }
     else if (force) say('状态已是最新');
-  } catch (e) { say(String(e), 'err'); }
-  finally { launch.checking = { ...launch.checking, [id]: false }; }
+  } catch (e) { if (latest()) say(String(e), 'err'); }
+  finally { if (latest()) launch.checking = { ...launch.checking, [id]: false }; }
 }
 
 function note(id: string, step: string, text: string) {

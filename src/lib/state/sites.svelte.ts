@@ -84,7 +84,7 @@ function blankImport(): ImportForm {
 
 const RECENT_KEY = 'cligc.pilot.recentSites';
 const RECENT_MAX = 8;
-function loadRecent(): string[] { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; } }
+function loadRecent(): string[] { try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; } catch { return []; } }
 
 class SitesState {
   list = $state<Site[]>([]);
@@ -332,7 +332,8 @@ async function startBatch(keys: string[]) {
   const { source, ghConnId, cfConnId } = f;
   let next = 0;
   const worker = async () => {
-    while (next < items.length) {
+    // 对话框关了（imp 整个换掉）就停：别再克隆仓库、往已经不显示的清单里写
+    while (next < items.length && sites.imp.batch === items) {
       const it = items[next++];
       try {
         const preview = await detectOne(source, ghConnId, it.key);

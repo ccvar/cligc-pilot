@@ -144,8 +144,8 @@ function soon() {
 
 export function initFleet() {
   $effect(() => {
-    // 站点列表变了（导入、删除、改名）就重读总览
-    void sites.list.length;
+    // 站点列表变了（导入、删除、改名、改域名）就重读总览——只看长度会漏掉改名
+    void sites.list.map((s) => s.id + ':' + s.updated_at).join();
     void loadFleet();
   });
   $effect(() => {

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { panes } from './panes.svelte.js';
 import { app, say } from './app.svelte.js';
 import { scrollSoon } from './thread.svelte.js';
 
@@ -38,10 +39,22 @@ export async function respondPermit(id: string, allow: boolean) {
 export function initPermits() {
   $effect(() => { if (permits.activePermits.length) scrollSoon(true); }); // 待批卡一出现就滚到它，不用手动翻
   $effect(() => {
-    const t = setInterval(async () => {
-      if (!Object.keys(app.running).length) { if (permits.pendingPermits.length) permits.pendingPermits = []; return; }
-      try { permits.pendingPermits = (await invoke<Permit[]>('list_pending_permits')).filter((p) => !respondedPermits.has(p.id)); } catch { /* */ }
-    }, 600);
-    return () => clearInterval(t);
+    // 看着的那条对话在跑：600ms 一次，卡片要立刻出来；只有后台（托管运营 / 迁移）在跑：3 秒一次就够，
+    // 这些轮次动辄几小时，每 600ms 读一遍目录太浪费
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
+    const tick = async () => {
+      const running = Object.keys(app.running);
+      if (!running.length) { if (permits.pendingPermits.length) permits.pendingPermits = []; }
+      else if (!inFlight) {
+        inFlight = true;
+        try { permits.pendingPermits = (await invoke<Permit[]>('list_pending_permits')).filter((p) => !respondedPermits.has(p.id)); } catch { /* */ }
+        finally { inFlight = false; }
+      }
+      const watching = running.some((id) => id === app.activeConvId || panes.splitVisible);
+      t = setTimeout(tick, watching ? 600 : 3000);
+    };
+    tick();
+    return () => clearTimeout(t);
   });
 }

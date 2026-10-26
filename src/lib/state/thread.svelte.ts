@@ -74,7 +74,12 @@ export async function pickThreadCombo(v: string) {
   if (i < 0) return;
   const brain = v.slice(0, i) as Brain;
   const model = v.slice(i + 2);
-  if (brain === conv.brain) { thread.threadModel = model; void persistThreadModel(model); return; }
+  if (brain === conv.brain) {
+    const before = thread.threadModel;
+    thread.threadModel = model;
+    persistThreadModel(model).catch(() => { thread.threadModel = before; });
+    return;
+  }
   const label = brainLabel(brain);
   // ★ 这个框就是「在真机上自动重跑」的同意点：切完立刻 rebuildSession 重跑最近一条请求。
   // 切到 codex 的风险必须**当场**说，不能只靠权限档位 tip 那种要悬停才出的——用户点完就跑了。

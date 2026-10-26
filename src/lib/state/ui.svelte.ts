@@ -193,10 +193,9 @@ export function initUi() {
   });
   $effect(() => {
     const win = getCurrentWindow();
-    let unlisten: (() => void) | undefined;
     const sync = async () => { try { ui.isFullscreen = await win.isFullscreen(); } catch { /* */ } };
     sync();
-    win.onResized(sync).then((u) => (unlisten = u)).catch(() => {});
-    return () => unlisten?.();
+    const un = win.onResized(sync).catch(() => undefined);
+    return () => { void un.then((f) => f?.()); };
   });
 }

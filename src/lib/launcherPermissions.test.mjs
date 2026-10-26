@@ -43,7 +43,7 @@ function selectContext(conns, overrides = {}) {
   const ctx = vm.createContext(withStores({
     conns, activeConnId: '__workspace__', selSeq: 0, isMainWindow: false, view: 'launcher',
     activeConvId: '', activeConv: null, lPerm: 'full', lSite: 'old', lStyle: 'x', cfProjects: ['old'],
-    switchConversationWorkspace() {}, probeOs() {}, disposeTerm() {}, say() {},
+    switchConversationWorkspace() {}, workspaceOf: (id) => id, probeOs() {}, disposeTerm() {}, say() {},
     isSiteConnId: (id) => id.startsWith('site:'), siteIdOf: (id) => id.slice(5), loadSiteStatus() {}, loadGhRepos() {}, touchRecent() {},
     sites: { tab: 'overview', draft: null }, SITES_CONN_ID: '__sites__',
     invoke: async () => ['site-a'], localStorage: { setItem() {} },

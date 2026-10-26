@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import type { ToolCall, Conversation } from '$lib/types';
 import { invoke } from '@tauri-apps/api/core';
 import { leaves } from '$lib/conversationLayout';
@@ -23,8 +24,6 @@ type ExecutionActivity = {
 };
 export type LiveTurn = {
   text: string;
-  /** 只在正文 delta 到达时更新；任务活动变化不能重建正文 DOM。 */
-  renderedText: string;
   tools: ToolCall[];
   activities: Record<string, ExecutionActivity>;
   lastActivityAt: number;
@@ -232,6 +231,17 @@ export function mdRenderCached(text: string): string {
   const html = mdRender(text);
   mdCache.set(text, html);
   if (mdCache.size > 300) mdCache.delete(mdCache.keys().next().value as string);
+  return html;
+}
+// 流式输出中的正文：每个增量都是一段新文字，放进 mdCache 会把 300 个格子全占成同一回复的前缀、
+// 把已完成消息的缓存挤掉。按对话只记上一次的结果——活动卡更新时正文不变就不重算。
+const liveMd = new Map<string, { text: string; html: string }>();
+export function mdRenderLive(convId: string, text: string): string {
+  const hit = liveMd.get(convId);
+  if (hit && hit.text === text) return hit.html;
+  const html = mdRender(text);
+  liveMd.set(convId, { text, html });
+  if (liveMd.size > 8) liveMd.delete(liveMd.keys().next().value as string);
   return html;
 }
 
@@ -552,8 +562,11 @@ export function initMessages() {
       ? leaves(panes.conversationLayout).map(p=>splitConversation(p.conversation)).filter((c):c is Conversation=>!!c)
       : app.activeConv ? [app.activeConv] : [];
     const prefixes=contexts.map(c=>c.conn_id+'|'+conversationProject(c)+'|');
-    const stale = Object.keys(media.thumbs).filter((k) => !prefixes.some(prefix=>k.startsWith(prefix)));
-    if (stale.length) { const keep = { ...media.thumbs }; for (const k of stale) delete keep[k]; media.thumbs = keep; }
+    // 读写 media.thumbs 的部分不追踪：每张缩略图回来都会写它，追踪了就把所有消息重新扫一遍
+    untrack(() => {
+      const stale = Object.keys(media.thumbs).filter((k) => !prefixes.some(prefix=>k.startsWith(prefix)));
+      if (stale.length) { const keep = { ...media.thumbs }; for (const k of stale) delete keep[k]; media.thumbs = keep; }
+    });
     const images=contexts.flatMap(c=>c.messages.flatMap(m=> {
       const atts=m.role==='user'?splitAttachments(m.text).atts:[...splitGenImages(m.text).atts, ...mentionedImages(splitGenImages(m.text).body)];
       return atts.filter(isImgPath).map(p=>({c,p}));

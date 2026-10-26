@@ -31,7 +31,7 @@ export async function bloggerLogin(updateId: string) {
   } finally { blogger.busy = false; }
 }
 
-export function cancelBloggerLogin() { void invoke('google_oauth_cancel'); }
+export function cancelBloggerLogin() { invoke('google_oauth_cancel').catch(() => {}); }
 
 export async function loadBlogs(connId: string, force = false) {
   if (!connId || (!force && blogger.blogs[connId])) return;

@@ -63,7 +63,7 @@ export function closeGhConnect() {
 export function resetGhVerification() { gh.ghVerified = null; gh.ghErr = ''; }
 
 export async function verifyGh() {
-  if (!gh.ghToken.trim()) return;
+  if (!gh.ghToken.trim() || gh.ghVerifying) return;
   gh.ghVerifying = true; gh.ghErr = ''; gh.ghVerified = null;
   try {
     const v = await invoke<GhVerify>('verify_github_token', { token: gh.ghToken.trim() });
@@ -100,8 +100,8 @@ export async function confirmGh() {
 
 /** 选中 GitHub 连接时调用：列本地检出，并（按连接缓存）拉取可访问的仓库。 */
 export async function loadGhRepos(connId: string, force = false) {
-  try { gh.checkouts = await invoke<string[]>('list_github_checkouts', { connId }); }
-  catch { gh.checkouts = []; }
+  try { const list = await invoke<string[]>('list_github_checkouts', { connId }); if (app.activeConnId === connId) gh.checkouts = list; }
+  catch { if (app.activeConnId === connId) gh.checkouts = []; }
   if (!force && gh.reposConnId === connId && gh.repos.length) return;
   gh.reposLoading = true; gh.reposErr = '';
   try {

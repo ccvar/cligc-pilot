@@ -116,6 +116,7 @@ export async function confirmSaveTmpl() {
 }
 export function openUseTmpl(t: Template) { library.useTmplSlug = t.slug; library.useTmplName = t.name; library.useTmplProject = ''; library.useTmplErr = ''; library.useTmplOpen = true; }
 export async function confirmUseTmpl() {
+  if (library.useTmplBusy) return; // 输入框里连按回车
   if (!library.useTmplProject.trim()) { library.useTmplErr = '给新项目起个名'; return; }
   if (!app.isCfConn) { library.useTmplErr = '请先在左下角切到一个 Cloudflare 连接'; return; }
   library.useTmplBusy = true; library.useTmplErr = '';

@@ -14,7 +14,7 @@ import { brainUsable } from './models';
 import { launcher } from './launcher.svelte.js';
 
 const HIDE_KEY = 'cligc.pilot.conventionsHintHidden';
-function loadHidden(): string[] { try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch { return []; } }
+function loadHidden(): string[] { try { const v = JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; } catch { return []; } }
 
 export const siteMake = $state({
   state: {} as Record<string, MakeState>,

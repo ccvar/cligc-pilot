@@ -10,7 +10,7 @@ import { scrollSoon, thread } from './thread.svelte.js';
 import { viewAfterConvGone } from './conversations';
 import { composer, queuedPayloadText } from './composer.svelte.js';
 import { launcher, STYLE_DIRECTIVES, workspaceFolderName } from './launcher.svelte.js';
-import { mdRender, ATT_MARKER } from './messages.svelte.js';
+import { ATT_MARKER } from './messages.svelte.js';
 import { cf, checkCfReady } from './cloudflare.svelte.js';
 import { workbench, setWbFlags } from './workbench.svelte.js';
 import { sites, SITE_PREFIX } from './sites.svelte.js';
@@ -44,7 +44,7 @@ export function initOpsLive() {
       const { conv_id: id, event: ev } = e.payload;
       if (!app.lives[id]) {
         const now = Date.now();
-        app.lives[id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: now, error: '', failed: false, startedAt: now };
+        app.lives[id] = { text: '', tools: [], activities: {}, lastActivityAt: now, error: '', failed: false, startedAt: now };
         app.running[id] = app.convos.find((c) => c.id === id)?.conn_id ?? 'ops';
       }
       applyTurnEvent(id, ev);
@@ -69,10 +69,7 @@ function applyTurnEvent(convId: string, ev: TurnEvent) {
     if (ev.type === 'delta' || ev.type === 'text_reset') {
       // 恢复一次被截断的响应时，只撤回该响应的文字；此前的正文、工具和活动保留。
       buf.text = ev.type === 'text_reset' ? ev.text : buf.text + ev.text;
-      // Markdown 的 {@html} 会替换其整棵子树。若直接在模板中调用 mdRender，
-      // 生图/推理等 activity 更新也可能让正文跟着反复失效，形成可见闪空。
-      // 把渲染结果缓存到正文事件上，任务卡更新时该字段保持引用和值都不变。
-      buf.renderedText = mdRender(buf.text);
+      // 渲染交给视图里的 mdRenderLive（按对话缓存上一次结果）：这里每个增量都整段渲染一遍、结果却没人读
       buf.lastActivityAt = Date.now();
       if (app.activeConvId === convId) scrollSoon();
     }
@@ -123,7 +120,6 @@ export function beginTurn(convId: string, optimistic: Conversation) {
   const startedAt = Date.now();
   app.lives[convId] = {
     text: '',
-    renderedText: '',
     tools: [],
     activities: {},
     lastActivityAt: startedAt,
@@ -283,7 +279,7 @@ export async function startBackgroundChat(o: { siteId: string; siteName: string;
   };
   app.convos = [optimistic, ...app.convos];
   const startedAt = Date.now();
-  app.lives[id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
+  app.lives[id] = { text: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
   app.running[id] = connId;
   try {
     const conv = await invoke<Conversation>('start_conversation', {
@@ -302,7 +298,7 @@ export async function continueInBackground(convId: string, text: string): Promis
   delete turns.autoRetried[convId];
   delete turns.retryExhausted[convId];
   const startedAt = Date.now();
-  app.lives[convId] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
+  app.lives[convId] = { text: '', tools: [], activities: {}, lastActivityAt: startedAt, error: '', failed: false, startedAt };
   app.running[convId] = c.conn_id;
   app.convos = app.convos.map((x) => (x.id === convId ? { ...x, status: 'running', messages: [...x.messages, optimisticUser(text)] } : x));
   try {
@@ -328,10 +324,17 @@ async function followDetached(c: Conversation) {
   following.add(c.id);
   const started = Date.now();
   app.running[c.id] = c.conn_id;
-  app.lives[c.id] = { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: started, error: '', failed: false, startedAt: started };
+  app.lives[c.id] = { text: '', tools: [], activities: {}, lastActivityAt: started, error: '', failed: false, startedAt: started };
   try {
     for (;;) {
-      const live = await invoke<Conversation | null>('get_conversation_live', { id: c.id }).catch(() => null);
+      let live: Conversation | null;
+      try { live = await invoke<Conversation | null>('get_conversation_live', { id: c.id }); }
+      catch {
+        // 调用本身失败（不是会话没了）：歇一下再问，别把还在跑的指示器摘掉
+        if (!following.has(c.id) || app.lives[c.id]?.startedAt !== started) return;
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
       // 本页又自己开了一轮（比如点了重试），交给那一轮的通道
       if (!following.has(c.id) || app.lives[c.id]?.startedAt !== started) return;
       if (!live) { delete app.running[c.id]; delete app.lives[c.id]; return; }
@@ -345,7 +348,6 @@ async function followDetached(c: Conversation) {
       const buf = app.lives[c.id];
       if (buf && part?.partial && part.text !== buf.text) {
         buf.text = part.text;
-        buf.renderedText = mdRender(part.text);
         buf.tools = part.tools.map((t) => ({ label: t.label, detail: t.detail, at: t.at ?? part.text.length }));
         buf.lastActivityAt = Date.now();
         if (app.activeConvId === c.id) scrollSoon();

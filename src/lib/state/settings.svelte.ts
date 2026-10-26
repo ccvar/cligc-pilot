@@ -95,10 +95,11 @@ export function addCustom(b: string) {
   if (!arr.includes(v)) { arr.push(v); savePrefs(launcher.prefs); }
   settings.customDraft[b] = '';
 }
-export function removeCustom(b: string, id: string) {
+export async function removeCustom(b: string, id: string) {
   const arr = customsOf(b);
   const i = arr.indexOf(id);
   if (i < 0) return;
+  if (!(await confirmDialog(`删除自定义模型 ${id}？用着它的会话下次要重新选模型。`, { title: '删除模型', kind: 'danger', confirmText: '删除' }))) return;
   arr.splice(i, 1);
   savePrefs(launcher.prefs);
   if (launcher.lBrain === b && launcher.lModel === id) launcher.lModel = defaultModelFor(b);

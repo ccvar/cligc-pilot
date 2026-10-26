@@ -107,7 +107,7 @@ export function closeCfConnect() {
   cf.cfUpdateId = '';
 }
 export async function verifyCf() {
-  if (!cf.cfToken.trim()) return;
+  if (!cf.cfToken.trim() || cf.cfVerifying) return;
   cf.cfVerifying = true; cf.cfErr = '';
   try {
     const v = await invoke<{ token_status: string; accounts: { id: string; name: string }[]; zones: { id: string; name: string }[] }>('verify_cf_token', { token: cf.cfToken.trim() });

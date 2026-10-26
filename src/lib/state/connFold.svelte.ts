@@ -3,7 +3,7 @@
 const FOLD_KEY = 'cligc.pilot.connFold.v2';
 
 class FoldState {
-  map = $state<Record<string, boolean>>((() => { try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch { return {}; } })());
+  map = $state<Record<string, boolean>>((() => { try { const v = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; } })());
 }
 export const connFold = new FoldState();
 

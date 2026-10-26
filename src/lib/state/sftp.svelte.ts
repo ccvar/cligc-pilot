@@ -238,7 +238,7 @@ export function onColKey(e: KeyboardEvent, k: ColKey) {
   saveColW();
 }
 /** 读一个目录的孩子进缓存。force=true 时无视缓存重读（改动后刷新用）。 */
-export async function loadDir(path: string, force = false): Promise<boolean> {
+export async function loadDir(path: string, force = false, quiet = false): Promise<boolean> {
   const id = sftp.sftpConnId;
   if (!force && sftp.sftpKids[path]) return true;
   sftp.sftpLoading = { ...sftp.sftpLoading, [path]: true };
@@ -248,7 +248,7 @@ export async function loadDir(path: string, force = false): Promise<boolean> {
     sftp.sftpKids = { ...sftp.sftpKids, [path]: list };
     return true;
   } catch (e) {
-    if (path === sftp.sftpPath) sftp.sftpErr = String(e); else say(String(e), 'err');
+    if (path === sftp.sftpPath) sftp.sftpErr = String(e); else if (!quiet) say(String(e), 'err');
     return false;
   } finally {
     sftp.sftpLoading = { ...sftp.sftpLoading, [path]: false };
@@ -283,7 +283,7 @@ export async function sftpRefresh() {
   sftp.sftpBusy = true; sftp.sftpErr = '';
   try {
     const dirs = [sftp.sftpPath, ...sftp.sftpOpenDirs];
-    const ok = await Promise.all(dirs.map((d) => loadDir(d, true)));
+    const ok = await Promise.all(dirs.map((d) => loadDir(d, true, true))); // 没了的目录下面统一收掉，不用一个个弹错
     // 远端已经不在了的目录：连同展开态一起丢掉，别在树里留幽灵行
     const gone = dirs.filter((_, i) => !ok[i] && dirs[i] !== sftp.sftpPath);
     if (gone.length) {

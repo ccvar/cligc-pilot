@@ -347,7 +347,7 @@ export async function startTerm(id: string, el: HTMLDivElement) {
     if ((event.key !== 'Escape' && event.key !== 'Esc' && event.keyCode !== 27) || !workbench.termState[id]?.on) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    void invoke('ssh_input', { connId: id, b64: strToB64('\x1b') });
+    invoke('ssh_input', { connId: id, b64: strToB64('\x1b') }).catch(() => {});
   }, true);
   const alive = () => slots.get(id)?.term === t;
   const ch = new Channel<{ type: string; b64?: string; error?: string }>();
@@ -367,9 +367,9 @@ export async function startTerm(id: string, el: HTMLDivElement) {
       if (d.includes('\r') && !st?.busy) void reconnectTerm(id);
       return;
     }
-    void invoke('ssh_input', { connId: id, b64: strToB64(d) });
+    invoke('ssh_input', { connId: id, b64: strToB64(d) }).catch(() => {}); // 会话刚断、closed 事件还没到：丢掉就行
   });
-  t.onResize(({ cols, rows }) => { void invoke('ssh_resize', { connId: id, cols, rows }); });
+  t.onResize(({ cols, rows }) => { invoke('ssh_resize', { connId: id, cols, rows }).catch(() => {}); });
   // 「正在连接」用浮层（见 .term-connecting），**不往终端里写**：
   // 写进去就是终端缓冲的一部分，连上之后擦不干净（服务器的 banner 可能已经跟着来了，
   // 光标位置不由我们说了算）—— 那行字就会一直赖在最上面。浮层随 busy 自动收。

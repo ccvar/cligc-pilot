@@ -8,7 +8,7 @@ import { stateFunctions, withStores } from './testing/appSource.mjs';
 const code = ts.transpileModule(stateFunctions(['makeChannel', 'applyTurnEvent']), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function live() {
-  return { text: '', renderedText: '', tools: [], activities: {}, lastActivityAt: 0, startedAt: 10, error: '', failed: false };
+  return { text: '', tools: [], activities: {}, lastActivityAt: 0, startedAt: 10, error: '', failed: false };
 }
 
 function harness() {
@@ -37,12 +37,10 @@ test('a safe text checkpoint removes failed partial text without duplicating pri
   const previousActivity = buf.lastActivityAt, previousScrolls = h.scrolls();
   channel.onmessage({ type: 'text_reset', text: 'A' });
   assert.equal(buf.text, 'A');
-  assert.equal(buf.renderedText, '<rendered>A</rendered>');
   assert.ok(buf.lastActivityAt > previousActivity);
   assert.equal(h.scrolls(), previousScrolls + 1);
   channel.onmessage({ type: 'delta', text: 'B' });
   assert.equal(buf.text, 'AB');
-  assert.equal(buf.renderedText, '<rendered>AB</rendered>');
   assert.equal(buf.tools, tools);
   assert.equal(buf.activities, activities);
   assert.equal(buf.tools[0].detail, 'earlier successful tool');
@@ -50,7 +48,7 @@ test('a safe text checkpoint removes failed partial text without duplicating pri
   assert.equal(JSON.stringify(h.history), history);
   assert.equal(h.context.activeConv.messages, h.history);
   assert.equal(h.context.convos[0].messages, h.history);
-  assert.deepEqual(h.renders, ['A', 'Afailed partial response', 'A', 'AB']);
+  assert.equal(h.renders.length, 0, '渲染不在事件接收端做，交给视图按需缓存');
 });
 
 test('background-conversation resets update only its own buffer and never scroll the active view', () => {
@@ -63,7 +61,6 @@ test('background-conversation resets update only its own buffer and never scroll
   inactive.onmessage({ type: 'text_reset', text: 'A' });
   inactive.onmessage({ type: 'delta', text: 'B' });
   assert.equal(h.context.lives.inactive.text, 'AB');
-  assert.equal(h.context.lives.inactive.renderedText, '<rendered>AB</rendered>');
   assert.equal(h.context.lives.inactive.tools[0].detail, 'kept');
   assert.equal(JSON.stringify(h.context.lives.active), activeBefore);
   assert.equal(h.scrolls(), scrolls);
@@ -76,7 +73,6 @@ test('empty checkpoints clear only current streamed text, not tools or activity 
   channel.onmessage({ type: 'delta', text: 'failed first response' });
   channel.onmessage({ type: 'text_reset', text: '' });
   assert.equal(h.context.lives.active.text, '');
-  assert.equal(h.context.lives.active.renderedText, '<rendered></rendered>');
   assert.equal(h.context.lives.active.tools.length, 1);
   assert.equal(h.context.lives.active.activities.reasoning.detail, 'kept');
   assert.equal(h.context.lives.active.startedAt, 10);

@@ -7,6 +7,7 @@ import { selectConn, bootConnId } from './connections.svelte.js';
 import { detectSiteUrl } from './messages.svelte.js';
 import type { LiveTurn } from './messages.svelte.js';
 import { sites, siteConnection, isSiteConnId, siteIdOf } from './sites.svelte.js';
+import { settings } from './settings.svelte.js';
 
 type ConfirmKind = 'warning' | 'danger' | 'info';
 
@@ -101,7 +102,13 @@ export function finishConfirm(value: boolean) {
   app.confirmState = null;
   resolve?.(value);
 }
-export function say(m: string, k: 'ok' | 'err' = 'ok', ms = 0) { app.flash = m; app.flashKind = k; setTimeout(() => (app.flash = ''), ms || (k === 'err' ? 8000 : 4000)); }
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+export function say(m: string, k: 'ok' | 'err' = 'ok', ms = 0) {
+  app.flash = m; app.flashKind = k;
+  // 上一条的定时器不能把这一条提前收掉（「正在下线…」4 秒后把刚出的结果清了）
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (app.flash = ''), ms || (k === 'err' ? 8000 : 4000));
+}
 export async function refreshConns() {
   try {
     app.conns = await invoke<Connection[]>('list_connections');
@@ -128,7 +135,8 @@ export function initApp() {
   });
   $effect(() => {
     const need = !!app.brains && ((app.brains.claude.found && app.brains.claude.logged_in === false) || (app.brains.codex.found && app.brains.codex.logged_in === false) || (app.brains.grok.found && app.brains.grok.logged_in === false));
-    if (!need) return;
+    // 只在「连接与模型」打开着的时候轮询（登录状态灯在那里）：装了没登录的 CLI 很常见，不能整个会话每 6 秒探一次
+    if (!need || !settings.setupOpen) return;
     const t = setInterval(() => { if (!document.hidden) refreshBrains(); }, 6000);
     return () => clearInterval(t);
   });
