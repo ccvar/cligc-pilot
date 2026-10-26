@@ -1987,6 +1987,21 @@ pub async fn migrate_ownership(state: tauri::State<'_, AppState>, id: String) ->
         own.verified = true;
         own.by = "gsc".into();
     }
+    // 站点还没绑 Search Console：看看连接的 Google 账号里有没有已验证这个站（有完整或所有者权限才算）
+    if !own.verified {
+        for c in state.conns.list().into_iter().filter(|c| c.kind == "google") {
+            let Ok(raw) = crate::keychain::get_key(&c.id) else { continue };
+            let Ok(cred) = crate::google::parse_credential(&c.key_kind, &raw) else { continue };
+            let Ok(t) = crate::google::access_token(&c.id, &cred, &crate::google::read_scopes()).await else { continue };
+            let Ok(list) = crate::google::list_gsc_sites(&t).await else { continue };
+            if let Some(g) = crate::google::match_gsc_site(&list, &domain).filter(|g| matches!(g.permission.as_str(), "siteOwner" | "siteFullUser")) {
+                own.gsc_site = g.url.clone();
+                own.verified = true;
+                own.by = "gsc".into();
+                break;
+            }
+        }
+    }
     if !own.verified {
         let apex = apex_of(&domain);
         let txt = doh(&apex, "TXT").await;
@@ -2300,7 +2315,13 @@ pub async fn migrate_host_use(state: tauri::State<'_, AppState>, id: String, hos
     let host = clean_host(&host)?;
     let bare = |h: &str| h.trim_start_matches("www.").to_string();
     let mut u = HostUse { old_site: bare(&host) == bare(&origin_host(&inv, &site)), host: host.clone(), ..Default::default() };
-    let recs: Vec<FullRec> = if let Some((_, token, zone)) = cf_zone_for(&state, &host).await {
+    // Cloudflare 偶尔一次请求失败（网络、代理）：没找到就再查一次，别把「没查到」当成「不是你的」
+    let mut found = cf_zone_for(&state, &host).await;
+    if found.is_none() {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        found = cf_zone_for(&state, &host).await;
+    }
+    let recs: Vec<FullRec> = if let Some((_, token, zone)) = found {
         u.in_cf = true;
         crate::cf::all_dns_records(&token, &zone.id).await.unwrap_or_default().into_iter().filter(|r| r.name.eq_ignore_ascii_case(&host) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME")).collect()
     } else {

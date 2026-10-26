@@ -98,6 +98,9 @@
   // 进到这一步就查一次 DNS（不用点「检查 DNS」）
   let dnsAuto = '';
   $effect(() => { if (v?.stage === 'cutover' && !isVps && !v.meta.dns.at && dnsAuto !== site.id) { dnsAuto = site.id; untrack(() => void prepareDnsQuiet(site.id)); } });
+  // 旧站的所有权：进到这一步还没确认的，自动用连接的 Cloudflare / Google 账号查一遍
+  let ownAuto = '';
+  $effect(() => { if (v?.stage === 'cutover' && v.survey && !v.survey.ownership.verified && ownAuto !== site.id) { ownAuto = site.id; untrack(() => void checkOwnership(site.id)); } });
   // 等你改名称服务器：每分钟自动查一次生效没有
   $effect(() => {
     if (v?.stage !== 'cutover' || isVps || !v.meta.dns.zone_id || v.meta.dns.zone_status === 'active') return;
@@ -158,12 +161,14 @@
   const oldOwned = $derived(!!own?.verified);
   // 上线会替换掉的东西：旧站域名上是旧站；新域名在用就是那里原来的内容；没在用就没什么可退的
   const goneText = $derived(!moved ? '；原来的设置存着，随时能退回旧站' : formalUse?.records.length && !formalUse.ours ? '；那里原来的内容会打不开（设置存着，能退回）' : '');
-  const mine = $derived(moved ? !!formalUse?.in_cf : oldOwned);
+  // 新域名在不在你的 Cloudflare 账号里：第 2 条（域名交给 Cloudflare 管理）查到生效了就算，和它用同一份结果
+  const formalInCf = $derived(!!formalUse?.in_cf || (moved && dns?.zone_status === 'active'));
+  const mine = $derived(moved ? formalInCf : oldOwned);
   // 切换这一步现在该做什么：只剩一个动作，写在最上面
   const cutNext = $derived.by<{ text: string; spin?: boolean; ready?: boolean; act?: 'addcf' | 'fix' | 'own' } | null>(() => {
     if (!v || v.stage !== 'cutover') return null;
     const apex = host.replace(/^www\./, '');
-    if (moved && !formalUse) return { text: `正在查 ${host} 是不是你的…`, spin: true };
+    if (moved && (!formalUse || (!formalInCf && !dns?.at))) return { text: `正在查 ${host} 是不是你的…`, spin: true };
     // 已经加进 Cloudflare、在等名称服务器生效的，交给下面 DNS 那几种情况说
     if (moved && !mine && !dns?.zone_id) return { text: `${host} 不在你的 Cloudflare 账号里。是你的域名就按下面第 2 条接进来；不是你的没法上线到它，点上面「修改」换一个。`, act: isVps ? undefined : 'addcf' };
     if (!moved && !mine) return { text: `先确认 ${oldHost.replace(/^www\./, '')} 是你的：按下面第 1 条加一条 TXT 记录，或者在设置里接上 Search Console`, act: 'own' };
@@ -457,7 +462,8 @@
           </div>
           {#if moved}
             {#if !formalUse}<small class="desc">正在查 {host} 是不是你的、现在有没有在用…</small>
-            {:else if !formalUse.in_cf}<small class="desc warn-text">{host} 不在你的 Cloudflare 账号里：是你的域名就按下面第 2 条接进来；不是你的没法上线到它，换一个。</small>
+            {:else if !formalInCf && !dns?.at}<small class="desc">正在查 {host} 在不在你的 Cloudflare 账号里…</small>
+            {:else if !formalInCf}<small class="desc warn-text">{host} 不在你的 Cloudflare 账号里：是你的域名就按下面第 2 条接进来；不是你的没法上线到它，换一个。</small>
             {:else}<small class="desc" class:warn-text={formalUse.records.length > 0 && !formalUse.ours}>{host} 在你的 Cloudflare 账号里 · {useText(formalUse).replace(`${host} `, '')}{formalUse.records.length && !formalUse.ours ? '：正式上线时会改为打开新站，那里原来的内容就打不开了' : ''}。</small>{/if}
             {#if oldOwned}<small class="desc warn-text">旧域名 {oldHost} 也是你的：新站稳定后，记得让它跳转到 {host}，原来的搜索排名才能带过来。</small>
             {:else}<small class="desc warn-text">旧站 {oldHost} 不在你的账号里，没法让它跳转过来：搜索排名要在 {host} 上重新积累；旧站要是一直开着，两边内容一样，搜索引擎可能只收录其中一个。</small>{/if}
@@ -553,7 +559,7 @@
           <li>
             <span class="lv">3</span>
             <div class="cb">
-              <span><b>正式上线</b><small>{isVps ? `${host} 指向服务器后，Caddy 自动申请 HTTPS 证书；原来的 DNS 记录存下来，可以回退。旧主机先别停。` : `${host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。`}</small></span>
+              <span><b>正式上线</b><small>{isVps ? `${host} 指向你的服务器，自动申请免费的 HTTPS 证书` : `${host} 打开新站`}{goneText}{!moved ? '。旧站的服务器先别关，新站稳定后再停' : ''}</small></span>
               {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「正式上线」。</small>{/if}
             </div>
           </li>
