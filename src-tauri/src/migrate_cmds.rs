@@ -177,6 +177,9 @@ pub struct Meta {
     /// 让 AI 出设计方向小样的时间（重做前）
     #[serde(default)]
     pub directions_at: u64,
+    /// 存下的对照结果是哪一版规则算的（见 PARITY_REV）
+    #[serde(default)]
+    pub parity_rev: u32,
 }
 
 /// 旧域名 → 新域名的 301（Cloudflare 重定向规则）。撤销时要原样恢复。
@@ -375,7 +378,13 @@ pub async fn migrate_state(state: tauri::State<'_, AppState>, id: String) -> Res
     let dir = mdir(&state, &id);
     let inv: Option<Inventory> = read_json(&dir.join("inventory.json"));
     let plan: Option<Plan> = read_json(&dir.join("plan.json"));
-    let meta = load_meta(&dir);
+    let mut meta = load_meta(&dir);
+    if meta.parity_at > 0 && meta.parity_rev < PARITY_REV {
+        if let Some(i) = &inv {
+            refresh_parity(&site, i, &dir).await;
+            meta = load_meta(&dir);
+        }
+    }
     let vps = crate::site_vps_host::load(&state.sites.data_dir(&id)).filter(|_| crate::site_vps_host::managed(&site));
     let deploy_ready = (site.deploy.mode == "direct" && !site.deploy.project.is_empty() && !site.deploy.cf_conn_id.is_empty()) || vps.as_ref().is_some_and(|v| v.setup_at > 0);
     let preview = if !meta.live.base.is_empty() {
@@ -1866,6 +1875,60 @@ pub async fn migrate_verify(app: tauri::AppHandle, state: tauri::State<'_, AppSt
     Ok(job_id)
 }
 
+/// 对照规则的版本：规则改过（比如列表页不再比正文）就加一，存下的旧结果打开时会用现有的构建产物重新判断一遍。
+const PARITY_REV: u32 = 2;
+
+/// 拿构建产物逐条对照旧站（不构建）。
+async fn parity_checks(code: &Path, inv: &Inventory, dir: &Path, out: &Path, dynamic: Option<&crate::site_dynamic::Dynamic>) -> Result<Vec<mx::ParityCheck>, String> {
+    let mut map: mx::UrlMap = read_json(&code.join(".pilot/migrate/urls.json")).ok_or("仓库里没有 .pilot/migrate/urls.json")?;
+    let assets: Vec<String> = read_json(&code.join(".pilot/migrate/assets.json")).unwrap_or_default();
+    // 换了正式域名：canonical 应该指向新域名
+    let formal = load_meta(dir).formal;
+    if !formal.is_empty() {
+        map.domain = formal;
+    }
+    let in_r2: Vec<String> = dynamic.map(|d| d.large.clone()).unwrap_or_default();
+    let routes_ok = dynamic.is_none() || out.join("_routes.json").is_file();
+    let (o, inv2, refs) = (out.to_path_buf(), inv.clone(), dir.join("ref"));
+    let mut checks = tokio::task::spawn_blocking(move || mx::parity(&o, &map, &inv2, &refs, &assets, &in_r2)).await.map_err(|e| e.to_string())?;
+    if let Some(c) = crate::site_make::paper_background(out) {
+        checks.push(mx::ParityCheck {
+            key: "paper_bg".into(),
+            label: "页面底色".into(),
+            level: "warn".into(),
+            detail: format!("底色是米黄 / 奶油色（{c}）：{}", crate::site_make::PAPER_HINT),
+            items: Vec::new(),
+        });
+    }
+    if !routes_ok {
+        checks.push(mx::ParityCheck {
+            key: "routes".into(),
+            label: "动态功能路由".into(),
+            level: "block".into(),
+            detail: "构建产物里没有 _routes.json（应该从 public/_routes.json 复制过去），表单、评论的接口会不通".into(),
+            items: Vec::new(),
+        });
+    }
+    Ok(checks)
+}
+
+/// 存下的对照结果是旧规则算的：用现有的构建产物重新判断（不重新构建；没有构建产物就不动）。
+async fn refresh_parity(site: &Site, inv: &Inventory, dir: &Path) {
+    let code = PathBuf::from(&site.local_dir);
+    let out = crate::site_make::out_dir(&site.app_dir(&code), &site.build.out_dir);
+    if !out.join("index.html").is_file() && crate::static_server::built_at(&out).is_none() {
+        return;
+    }
+    let site_dir = dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    let dynamic = crate::site_dynamic::load(&site_dir).filter(|d| !d.features.is_empty());
+    if let Ok(checks) = parity_checks(&code, inv, dir, &out, dynamic.as_ref()).await {
+        let _ = save_meta(dir, |m| {
+            m.parity = checks;
+            m.parity_rev = PARITY_REV;
+        });
+    }
+}
+
 async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conns::ConnStore, job: &Job) -> Result<(), String> {
     let code = PathBuf::from(&site.local_dir);
     // Functions 代码由 Pilot 维护：构建前恢复成标准版本（AI 改过也以这份为准）
@@ -1887,41 +1950,13 @@ async fn run_verify(site: Site, inv: Inventory, dir: PathBuf, conns: crate::conn
     };
     job.step("parity", "running", "");
     let map: mx::UrlMap = read_json(&code.join(".pilot/migrate/urls.json")).ok_or("仓库里没有 .pilot/migrate/urls.json")?;
-    let assets: Vec<String> = read_json(&code.join(".pilot/migrate/assets.json")).unwrap_or_default();
-    let out = built.out.clone();
-    let refs = dir.join("ref");
-    let (mut map2, inv2) = (map.clone(), inv.clone());
-    // 换了正式域名：canonical 应该指向新域名
-    let formal = load_meta(&dir).formal;
-    if !formal.is_empty() {
-        map2.domain = formal;
-    }
-    let in_r2: Vec<String> = dynamic.as_ref().map(|d| d.large.clone()).unwrap_or_default();
-    let routes_ok = dynamic.is_none() || built.out.join("_routes.json").is_file();
-    let mut checks = tokio::task::spawn_blocking(move || mx::parity(&out, &map2, &inv2, &refs, &assets, &in_r2)).await.map_err(|e| e.to_string())?;
-    if let Some(c) = crate::site_make::paper_background(&built.out) {
-        checks.push(mx::ParityCheck {
-            key: "paper_bg".into(),
-            label: "页面底色".into(),
-            level: "warn".into(),
-            detail: format!("底色是米黄 / 奶油色（{c}）：{}", crate::site_make::PAPER_HINT),
-            items: Vec::new(),
-        });
-    }
-    if !routes_ok {
-        checks.push(mx::ParityCheck {
-            key: "routes".into(),
-            label: "动态功能路由".into(),
-            level: "block".into(),
-            detail: "构建产物里没有 _routes.json（应该从 public/_routes.json 复制过去），表单、评论的接口会不通".into(),
-            items: Vec::new(),
-        });
-    }
+    let checks = parity_checks(&code, &inv, &dir, &built.out, dynamic.as_ref()).await?;
     let blocks = checks.iter().filter(|c| c.level == "block").count();
     let warns = checks.iter().filter(|c| c.level == "warn").count();
     save_meta(&dir, |m| {
         m.parity_at = now();
         m.parity = checks;
+        m.parity_rev = PARITY_REV;
     })?;
     job.step("parity", if blocks > 0 { "failed" } else { "ok" }, &format!("{blocks} 项必须修，{warns} 项提醒"));
 

@@ -487,7 +487,9 @@
             </div>
           </li>
         </ol>
-        {#if launched}
+        {#if launched && (warns.length || blocks.length)}
+          <div class="act"><span class="grow">还有 {warns.length + blocks.length} 项提醒（上面列着）。可以交给 AI 改，改完用右上角的「构建并上线」更新线上的新站。</span><button class="btn small" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={12} />{aiRunning ? 'AI 正在改…' : '交给 AI 改'}</button></div>
+        {:else if launched}
           <p class="hint">新站已经正式上线，以后改了内容用右上角的「构建并上线」更新。</p>
         {:else if vNext === 'fix'}
           <div class="act"><span class="grow">有问题要修：交给 AI，按上面的结果改完再点「重新核对」。</span><button class="btn small primary" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={12} />{aiRunning ? 'AI 正在修…' : '让 AI 修这些问题'}</button></div>
