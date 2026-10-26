@@ -62,6 +62,7 @@ async fn run(responses: Vec<(u16, String)>, root: &Path) -> Run {
         thinking_prefix: String::new(),
         items: vec![json!({"role":"user","content":"write a file"})],
         interrupted: false,
+        images_skipped: 0,
     };
     let path = work.join("history.json");
     save_history(&path, &history).unwrap();

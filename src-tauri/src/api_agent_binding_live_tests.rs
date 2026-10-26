@@ -159,6 +159,7 @@ async fn live_claude_thinking_prefix_resume_and_migration() {
             "content": "How many positive integers less than 500 have exactly six positive divisors? Give the count and a short derivation."
         })],
         interrupted: false,
+        images_skipped: 0,
     };
     assert!(history.prepare_thinking_prefix(ORIGINAL_SYSTEM, &[]) == 0);
     persist(&path, &history);

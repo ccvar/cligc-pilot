@@ -38,6 +38,38 @@ struct History {
     items: Vec<Value>,
     /// Set before side effects; cleared atomically with all recorded tool results.
     interrupted: bool,
+    /// 最早有几张图已经换成一句说明（只增不减）：之后每次请求都按这个数发，历史前缀保持不变。
+    #[serde(default)]
+    images_skipped: usize,
+}
+
+/// 去掉 `from` 之后（不含）助手消息里的思考块：前面的内容变了，之后的思考签名都不再有效。
+/// 只去后面的、留前面的——前面那些的前缀没变，签名仍然有效。
+fn strip_thinking_after(items: &mut Vec<Value>, from: Option<usize>) -> usize {
+    let mut removed = 0;
+    let mut index = 0;
+    items.retain_mut(|item| {
+        let here = index;
+        index += 1;
+        if from.is_some_and(|f| here <= f) || item["role"] != "assistant" {
+            return true;
+        }
+        let Some(blocks) = item["content"].as_array_mut() else {
+            return true;
+        };
+        let before = blocks.len();
+        blocks.retain(|block| {
+            !matches!(
+                block["type"].as_str(),
+                Some("thinking" | "redacted_thinking")
+            )
+        });
+        removed += before - blocks.len();
+        // Do not send an empty assistant turn after removing thinking-only
+        // output. Later reasoning was removed as well, avoiding a gap.
+        before == blocks.len() || !blocks.is_empty()
+    });
+    removed
 }
 
 impl History {
@@ -55,29 +87,41 @@ impl History {
         // A changed prefix invalidates every later reasoning block. Old
         // versions never saved the effective prompt, so migrate them once too.
         // Preserve all user text, tool calls and results; never replay a tool.
-        let mut removed = 0;
-        self.items.retain_mut(|item| {
-            if item["role"] != "assistant" {
-                return true;
-            }
-            let Some(blocks) = item["content"].as_array_mut() else {
-                return true;
-            };
-            let before = blocks.len();
-            blocks.retain(|block| {
-                !matches!(
-                    block["type"].as_str(),
-                    Some("thinking" | "redacted_thinking")
-                )
-            });
-            removed += before - blocks.len();
-            // Do not send an empty assistant turn after removing thinking-only
-            // output. Later reasoning was removed as well, avoiding a gap.
-            before == blocks.len() || !blocks.is_empty()
-        });
+        let removed = strip_thinking_after(&mut self.items, None);
         self.thinking_prefix = prefix;
         removed
     }
+
+    /// 图多了要多放掉几张最早的：被换成说明的那张图之后的思考签名都失效了（前缀变了），
+    /// 先把它们去掉，再记下放掉了几张。返回去掉的思考块数；没有新放掉的图时什么都不改。
+    fn prepare_image_skip(&mut self) -> usize {
+        let want = image_skip(&image_sizes(&self.items)).max(self.images_skipped);
+        if want <= self.images_skipped {
+            return 0;
+        }
+        let first = image_item(&self.items, self.images_skipped);
+        self.images_skipped = want;
+        if self.protocol != "anthropic_messages" {
+            return 0;
+        }
+        match first {
+            Some(at) => strip_thinking_after(&mut self.items, Some(at)),
+            None => 0,
+        }
+    }
+}
+
+/// 第 `nth` 张图（从 0 数，按历史顺序）在哪条消息里。
+fn image_item(items: &[Value], nth: usize) -> Option<usize> {
+    let mut seen = 0;
+    for (i, item) in items.iter().enumerate() {
+        let n = image_sizes(std::slice::from_ref(item)).len();
+        if seen + n > nth {
+            return Some(i);
+        }
+        seen += n;
+    }
+    None
 }
 
 struct SessionGuard(String);
@@ -322,6 +366,7 @@ async fn execute(
             thinking_prefix: String::new(),
             items: vec![],
             interrupted: false,
+            images_skipped: 0,
         }
     };
     history
@@ -439,17 +484,24 @@ async fn execute_model_loop_inner(
             .check_boundary(request_index)
             .map_err(|stop| stop.to_string())?;
         // 文字部分（图片只算引用）不超过 2 MB；看过的图片不会撑爆请求：只带最近的，更早的换成一句说明（见 image_skip）
-        let text_body = request_body_with(profile, model, effort, &instructions, &history.items, &definitions, false)?;
+        let text_body = request_body_with(profile, model, effort, &instructions, &history.items, &definitions, None)?;
         if text_body.to_string().len() > MAX_HISTORY_BYTES {
             return Err("上下文已达到安全上限，请新建会话；未自动丢弃历史".into());
         }
-        let body = request_body(
+        // 这次要多放掉几张旧图：先去掉之后失效的思考签名并存盘，再按记下的张数发
+        let before = history.images_skipped;
+        history.prepare_image_skip();
+        if history.images_skipped != before {
+            save_history(path, history)?;
+        }
+        let body = request_body_with(
             profile,
             model,
             effort,
             &instructions,
             &history.items,
             &definitions,
+            Some(history.images_skipped),
         )?;
         let text_checkpoint = result.text.len();
         let reply = stream_request(&client, profile, api_key, body, |delta| {
@@ -620,6 +672,7 @@ fn activity(
     });
 }
 
+#[cfg(test)]
 fn request_body(
     profile: &ApiProfile,
     model: &str,
@@ -628,10 +681,10 @@ fn request_body(
     items: &[Value],
     definitions: &[Value],
 ) -> Result<Value, String> {
-    request_body_with(profile, model, effort, system, items, definitions, true)
+    request_body_with(profile, model, effort, system, items, definitions, Some(image_skip(&image_sizes(items))))
 }
 
-/// expand=false：图片保持引用（只用来量文字部分有多大）。
+/// images=None：图片保持引用（只用来量文字部分有多大）；Some(n)：换成图片块，最早的 n 张只留一句说明。
 fn request_body_with(
     profile: &ApiProfile,
     model: &str,
@@ -639,9 +692,9 @@ fn request_body_with(
     system: &str,
     items: &[Value],
     definitions: &[Value],
-    expand: bool,
+    images: Option<usize>,
 ) -> Result<Value, String> {
-    let expanded = if expand { expand_images(&profile.protocol, items) } else { items.to_vec() };
+    let expanded = match images { Some(skip) => expand_images(&profile.protocol, items, skip), None => items.to_vec() };
     let items = expanded.as_slice();
     let tools: Vec<Value> = definitions.iter().map(|d| match profile.protocol.as_str() {
         "openai_responses" => json!({"type":"function","name":d["name"],"description":d["description"],"parameters":d["parameters"],"strict":false}),
@@ -849,7 +902,7 @@ fn image_skip(sizes: &[u64]) -> usize {
 
 /// 发请求前把历史里的图片引用换成各协议的图片块（文件不在了就换成一句说明）。
 /// 图太多时最早的几张只留一句说明（image_skip），AI 需要的话可以重新查看那个文件。
-fn expand_images(protocol: &str, items: &[Value]) -> Vec<Value> {
+fn expand_images(protocol: &str, items: &[Value], skip: usize) -> Vec<Value> {
     fn walk(protocol: &str, v: &mut Value, idx: &mut usize, skip: usize) {
         if v["type"] == "pilot_image" {
             let file = v["file"].as_str().unwrap_or("").to_string();
@@ -883,7 +936,6 @@ fn expand_images(protocol: &str, items: &[Value]) -> Vec<Value> {
             _ => {}
         }
     }
-    let skip = image_skip(&image_sizes(items));
     let mut idx = 0;
     let mut out = items.to_vec();
     out.iter_mut().for_each(|v| walk(protocol, v, &mut idx, skip));
@@ -1545,6 +1597,7 @@ mod tests {
             thinking_prefix: String::new(),
             items: vec![],
             interrupted: true,
+            images_skipped: 0,
         };
         save_history(&path, &interrupted).unwrap();
         assert!(ensure_new_history(&path).is_err());
@@ -1563,6 +1616,7 @@ mod tests {
             thinking_prefix: String::new(),
             items: vec![json!({"role":"user","content":"keep"})],
             interrupted: false,
+            images_skipped: 0,
         };
         save_history(&path, &h).unwrap();
         h.items
@@ -1930,9 +1984,40 @@ mod image_tests {
         assert_eq!(image_skip(&big), 6, "按字节再放到 24 MB 以内");
         // 被放掉的图换成一句说明，不再是图片块
         let items: Vec<Value> = (0..21).map(|i| json!({"role":"user","content":[{"type":"pilot_image","file":format!("/nope/{i}.png"),"media_type":"image/png"}]})).collect();
-        let sent = expand_images("anthropic_messages", &items);
+        let sent = expand_images("anthropic_messages", &items, image_skip(&image_sizes(&items)));
         assert!(sent[0]["content"][0]["text"].as_str().unwrap().contains("这次没有再附上"));
         assert!(sent[20]["content"][0]["text"].as_str().unwrap().contains("文件已不在了"), "最近的照常处理");
+    }
+
+    #[test]
+    fn skipping_more_images_drops_only_the_thinking_after_the_changed_image() {
+        let img = |i: usize| json!({"type":"pilot_image","file":format!("/nope/{i}.png"),"media_type":"image/png"});
+        let think = |t: &str| json!({"role":"assistant","content":[{"type":"thinking","thinking":"","signature":t},{"type":"text","text":t}]});
+        // 一开始 2 轮对话、没有图：第一轮的思考在任何图之前，之后永远保留
+        let mut items = vec![json!({"role":"user","content":[{"type":"text","text":"开始"}]}), think("a")];
+        for i in 0..21 {
+            items.push(json!({"role":"user","content":[img(i)]}));
+            items.push(think(&format!("t{i}")));
+        }
+        let mut h = History { scope: String::new(), protocol: "anthropic_messages".into(), system: String::new(), thinking_prefix: String::new(), items, interrupted: false, images_skipped: 0 };
+        let removed = h.prepare_image_skip();
+        assert_eq!(h.images_skipped, 10);
+        assert_eq!(removed, 21, "第 0 张图之后的思考全部去掉");
+        assert_eq!(h.items[1]["content"][0]["type"], "thinking", "图之前的思考保留");
+        assert!(h.items.iter().skip(2).all(|it| it["content"].as_array().unwrap().iter().all(|b| b["type"] != "thinking")));
+        assert_eq!(h.items.len(), 44, "正文还在，消息不丢");
+        // 同一批里再请求：不再改动
+        assert_eq!(h.prepare_image_skip(), 0);
+        // 多了 10 张：只去掉第 10 张图之后的新思考
+        for i in 21..31 {
+            h.items.push(json!({"role":"user","content":[img(i)]}));
+            h.items.push(think(&format!("n{i}")));
+        }
+        let removed = h.prepare_image_skip();
+        assert_eq!((h.images_skipped, removed), (20, 10));
+        // 放掉的张数只增不减：发出去的内容和上次一致
+        let sent = expand_images("anthropic_messages", &h.items, h.images_skipped);
+        assert!(sent[2]["content"][0]["text"].as_str().unwrap().contains("这次没有再附上"));
     }
 
     #[test]
@@ -1947,22 +2032,22 @@ mod image_tests {
         let mut items = vec![];
         append_tool_outputs_with_images("anthropic_messages", &mut items, vec![("t1".into(), "{}".into(), false, Some(marker.clone()))]).unwrap();
         assert!(!serde_json::to_string(&items).unwrap().contains("base64"));
-        let sent = expand_images("anthropic_messages", &items);
+        let sent = expand_images("anthropic_messages", &items, 0);
         assert_eq!(sent[0]["content"][0]["content"][1]["type"], "image");
         assert_eq!(sent[0]["content"][0]["content"][1]["source"]["type"], "base64");
         // Responses：文字结果 + 一条带图的用户消息
         let mut items = vec![];
         append_tool_outputs_with_images("openai_responses", &mut items, vec![("c1".into(), "{}".into(), false, Some(marker))]).unwrap();
-        let sent = expand_images("openai_responses", &items);
+        let sent = expand_images("openai_responses", &items, 0);
         assert_eq!(sent[0]["type"], "function_call_output");
         assert!(sent[1]["content"][1]["image_url"].as_str().unwrap().starts_with("data:image/"));
         // 图片只算引用：文字部分很小，图片另计
         assert_eq!(image_load(&items).0, 1);
         let p = tests::profile("openai_responses", "http://127.0.0.1:1");
-        let text_only = request_body_with(&p, "m", "", "", &items, &[], false).unwrap().to_string();
+        let text_only = request_body_with(&p, "m", "", "", &items, &[], None).unwrap().to_string();
         assert!(!text_only.contains("base64") && text_only.len() < 2000);
         // 文件没了：换成一句说明，不让请求失败
         let gone = json!({"type":"pilot_image","file":"/nope.jpg","media_type":"image/jpeg"});
-        assert_eq!(expand_images("anthropic_messages", &[gone])[0]["type"], "text");
+        assert_eq!(expand_images("anthropic_messages", &[gone], 0)[0]["type"], "text");
     }
 }
