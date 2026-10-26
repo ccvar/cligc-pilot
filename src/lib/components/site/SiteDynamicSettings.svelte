@@ -25,7 +25,7 @@
 </script>
 
 <div class="card dyn" class:editing>
-  <h3><Icon name="inbox" />表单和评论<span class="grow"></span>{#if !editing && site.origin !== 'migrating' && (isPagesDirect(site) || vps)}<button class="btn tiny" onclick={() => (editing = true)}>{conf?.setup_at ? '修改' : '开启'}</button>{/if}</h3>
+  <h3><Icon name="inbox" />表单和评论<span class="grow"></span>{#if !editing && site.origin !== 'migrating' && (isPagesDirect(site) || vps)}<button class="ic-btn edit-ic" onclick={() => (editing = true)} aria-label={conf?.setup_at ? '修改表单和评论' : '开启表单和评论'} data-tip={conf?.setup_at ? '修改表单和评论' : '开启表单和评论'}><Icon name="pencil" size={14} /></button>{/if}</h3>
   {#if site.origin === 'migrating'}
     <p class="hint">迁移中的站点在概览的「迁移进度」里配置（按迁移方案自动带上旧站的表单和评论）。</p>
   {:else if !isPagesDirect(site) && !vps}
@@ -61,6 +61,7 @@
   .opts { gap: 16px; margin: 8px 0 10px; }
   .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
   .grow { flex: 1; }
+  .edit-ic { width: 26px; height: 26px; margin: -4px -6px -4px 0; }
   .status { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12px; color: var(--ok); }
   .notes { margin: 0 0 8px; padding-left: 18px; font-size: 12px; color: var(--dim); line-height: 1.55; }
 </style>

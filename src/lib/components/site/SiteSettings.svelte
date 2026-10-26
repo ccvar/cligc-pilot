@@ -59,7 +59,7 @@
 </script>
 
 {#snippet head(icon: string, title: string, key: string)}
-  <h3><Icon name={icon} />{title}<span class="grow"></span>{#if editing !== key}<button class="btn tiny" onclick={() => startEdit(key)} disabled={!!editing && editing !== key}>修改</button>{/if}</h3>
+  <h3><Icon name={icon} />{title}<span class="grow"></span>{#if editing !== key}<button class="ic-btn edit-ic" onclick={() => startEdit(key)} disabled={!!editing && editing !== key} aria-label={`修改${title}`} data-tip={!!editing && editing !== key ? '先保存或取消正在改的那一张' : `修改${title}`}><Icon name="pencil" size={14} /></button>{/if}</h3>
 {/snippet}
 {#snippet editBar()}
   <div class="edit-bar"><span class="grow"></span><button class="btn small ghost" onclick={cancelEdit} disabled={sites.saving}>取消</button><button class="btn small primary" onclick={saveEdit} disabled={sites.saving || !dirty}>{#if sites.saving}<span class="spin"></span>保存中{:else}保存{/if}</button></div>
@@ -189,6 +189,7 @@
   .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
   .edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
   .grow { flex: 1; }
+  .st :global(.edit-ic) { width: 26px; height: 26px; margin: -4px -6px -4px 0; }
   .tags { gap: 6px; align-items: center; }
   .tag-in { max-width: 150px; height: 24px !important; font-size: 12px; }
   /* 危险操作：红色的边和底，和别的设置分开 */
