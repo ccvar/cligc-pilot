@@ -219,19 +219,51 @@ export async function fixDns(id: string, n: number) {
   await run(id, 'dns', () => invoke('migrate_dns_fix', { id }), 'DNS 记录已补上');
 }
 
-export async function cutover(id: string, host: string, vps = false, cfAuto = false) {
-  const msg = vps
-    ? (cfAuto ? `Pilot 会在 Cloudflare 把 ${host} 的 A 记录改成服务器的 IP（原来的记录存下来，可以一键回退），然后由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款）。旧主机先别停。`
-             : `${host} 已经指向服务器了：接下来由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款），站点正式切到新站。旧主机先别停。`)
-    : `${host} 会改为指向新站：原来这个主机名的 DNS 记录会被替换（已存下来，可以一键回退）。旧主机先别停。`;
-  if (!await confirmDialog(msg, { title: '正式上线', kind: 'danger', confirmText: '上线' })) return;
-  await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, '已正式上线，DNS 和证书生效一般要几分钟');
+/** 一个域名现在有没有在用（改正式域名、正式上线前给你看） */
+export interface HostUse { host: string; in_cf: boolean; records: string[]; ours: boolean; other_pages: string; status: number; title: string; old_site: boolean }
+
+export async function hostUse(id: string, host: string): Promise<HostUse | null> {
+  try { return await invoke<HostUse>('migrate_host_use', { id, host }); } catch { return null; }
 }
 
-/** 改正式域名（空＝恢复成旧站的域名） */
+/** 「现在打开它是什么」的一句话 */
+export function useText(u: HostUse): string {
+  if (u.ours) return `${u.host} 已经指向这个新站`;
+  if (!u.records.length) return `${u.host} 现在没在用`;
+  if (u.old_site) return `${u.host} 现在打开的是旧站`;
+  const what = u.other_pages ? `另一个 Cloudflare Pages 项目（${u.other_pages}）` : u.status ? (u.title ? `「${u.title}」` : `一个网站（返回 ${u.status}）`) : '别的服务（现在打不开）';
+  return `${u.host} 正在用：打开是${what}`;
+}
+
+export async function cutover(id: string, host: string, vps = false, cfAuto = false, oldHost = '') {
+  const u = await hostUse(id, host);
+  const moved = !!oldHost && host.replace(/^www\./, '') !== oldHost.replace(/^www\./, '');
+  const now = !u ? '' : u.ours ? '' : !u.records.length ? `${host} 现在没在用，` : u.old_site ? `现在打开 ${host} 看到的是旧站，` : `注意：${useText(u)}，上线后那里原来的内容就打不开了。`;
+  const how = vps
+    ? `${now}上线后 ${host} 会打开你服务器上的新站，Pilot 会${cfAuto ? '自动改好域名指向，并' : ''}自动申请免费的 HTTPS 证书（Let's Encrypt）。`
+    : `${now}上线后打开 ${host} 就是新站。`;
+  const back = u && !u.records.length ? '' : '原来的设置已经存好，出问题点「退回旧站」就能恢复。';
+  const keep = moved ? `旧域名 ${oldHost} 还是打开旧站，等新站稳定了再让它跳转到新域名。` : '旧站的服务器先别关，新站稳定后（建议两周）再停。';
+  if (!await confirmDialog(`${how}${back}${keep}`, { title: `正式上线到 ${host}`, kind: u && u.records.length && !u.old_site && !u.ours ? 'danger' : 'warning', confirmText: '上线' })) return;
+  await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, `已正式上线到 ${host}，一般几分钟内生效`);
+}
+
+/** 改正式域名（空＝恢复成旧站的域名）。先查这个域名有没有在用，在用的要你确认 */
 export async function setFormal(id: string, host: string, old: string) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
-  if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '') && !await confirmDialog(`正式域名改成 ${h}，等于连域名一起搬家：正式上线时 ${h} 指向新站，canonical 和 sitemap 改用新域名；旧域名 ${old} 的每个地址要另外做 301 跳到新域名的同一路径，不然搜索排名会丢。`, { title: '换正式域名', kind: 'warning', confirmText: '改成新域名' })) return false;
+  if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '')) {
+    migrate.busy[id] = 'formal';
+    const u = await hostUse(id, h);
+    migrate.busy[id] = '';
+    if (!u) { say(`「${h}」不是有效的域名`, 'err'); return false; }
+    const inUse = u.records.length > 0 && !u.ours;
+    const lines = [
+      inUse ? `${useText(u)}。用它当正式域名，上线时它会改为打开新站，那里原来的内容就打不开了（设置会存好，能退回）。` : `${useText(u)}，可以用。`,
+      u.in_cf ? '' : `它不在你的 Cloudflare 账号里，上线前要先接进来（后面会一步步带你做）。`,
+      `换了正式域名，搜索引擎会把新站算在 ${h} 上；旧域名 ${old} 要另外设置跳转到新域名，不然原来的搜索排名会丢。`,
+    ].filter(Boolean);
+    if (!await confirmDialog(lines.join('\n\n'), { title: inUse ? `${h} 正在使用中` : `正式域名改成 ${h}`, kind: inUse ? 'danger' : 'warning', confirmText: inUse ? '仍然用它' : '改成新域名', cancelText: inUse ? '换一个' : '取消' })) return false;
+  }
   await run(id, 'formal', () => invoke('migrate_set_formal', { id, host: h }), h ? `正式域名改成了 ${h}` : '正式域名恢复成旧站的域名');
   return true;
 }
@@ -240,12 +272,12 @@ export async function setFormal(id: string, host: string, old: string) {
 export async function stagingUp(id: string, host: string) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
   if (!h) return;
-  if (!await confirmDialog(`Pilot 会先重新部署一次（给 ${h} 加上「不让搜索引擎收录」），再把 ${h} 绑到新站的 Pages 项目，并在 Cloudflare 里加一条 CNAME。${h} 现在已经有 DNS 记录的话不会动它。旧站不受影响。`, { title: '部署到测试域名', kind: 'info', confirmText: '上线' })) return;
-  await run(id, 'staging', () => invoke('migrate_staging', { id, host: h }), `已部署到 ${h}，证书签好一般要几分钟，之后点「实测测试域名」`);
+  if (!await confirmDialog(`在 ${h} 上打开新站给你看，几分钟后生效。页面不让搜索引擎收录，旧站不受影响。${h} 要是已经在用，Pilot 不会动它，会提示你换一个。`, { title: '部署到测试域名', kind: 'info', confirmText: '部署' })) return;
+  await run(id, 'staging', () => invoke('migrate_staging', { id, host: h }), `已部署到 ${h}，证书签好一般要几分钟，好了会自动实测`);
 }
 
 export async function stagingRemove(id: string, host: string) {
-  if (!await confirmDialog(`解除 ${host} 和新站的绑定，删掉它指向新站的那条 CNAME。正式域名不受影响。`, { title: '删除测试域名', kind: 'danger', confirmText: '删除' })) return;
+  if (!await confirmDialog(`${host} 不再打开新站（Pilot 加的设置会删掉）。正式域名和旧站都不受影响。`, { title: '删除测试域名', kind: 'danger', confirmText: '删除' })) return;
   await run(id, 'staging', async () => { say(await invoke<string>('migrate_staging_remove', { id }), 'ok'); });
 }
 
@@ -257,8 +289,9 @@ export async function stagingStatus(id: string) {
   catch { return ''; }
 }
 
+
 export async function rollback(id: string, host: string) {
-  if (!await confirmDialog(`把 ${host} 的 DNS 恢复成上线前的记录，打开的又会是旧站；新站和抓好的内容都保留，改好后再上线。`, { title: '回退到旧站', kind: 'danger', confirmText: '回退' })) return;
+  if (!await confirmDialog(`把 ${host} 恢复成上线前的设置，打开的又会是旧站；新站和抓好的内容都保留，改好后可以再上线。`, { title: '退回旧站', kind: 'danger', confirmText: '退回' })) return;
   await run(id, 'rollback', async () => { const m = await invoke<string>('migrate_rollback', { id }); say(m, 'ok'); await refreshSites(); });
 }
 

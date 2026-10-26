@@ -2272,6 +2272,70 @@ pub async fn migrate_set_formal(state: tauri::State<'_, AppState>, id: String, h
     Ok(if host.is_empty() { old } else { host })
 }
 
+/// 一个域名现在有没有在用：指向哪、能不能打开、打开是什么。改正式域名、正式上线前给用户看。
+#[derive(Serialize, Default)]
+pub struct HostUse {
+    pub host: String,
+    /// 在已连接的 Cloudflare 账号里、已生效（Pilot 能自动改）
+    pub in_cf: bool,
+    /// 现有的指向（A / AAAA / CNAME），给人看的
+    pub records: Vec<String>,
+    /// 已经指向这个新站的 Pages 项目
+    pub ours: bool,
+    /// 指向别的 Pages 项目（项目名）
+    pub other_pages: String,
+    /// 打开它的结果：状态码（0＝打不开）和页面标题
+    pub status: u16,
+    pub title: String,
+    /// 就是旧站的域名
+    pub old_site: bool,
+}
+
+#[tauri::command]
+pub async fn migrate_host_use(state: tauri::State<'_, AppState>, id: String, host: String) -> Result<HostUse, String> {
+    let site = state.sites.get(&id)?;
+    let dir = mdir(&state, &id);
+    let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
+    let host = clean_host(&host)?;
+    let bare = |h: &str| h.trim_start_matches("www.").to_string();
+    let mut u = HostUse { old_site: bare(&host) == bare(&origin_host(&inv, &site)), host: host.clone(), ..Default::default() };
+    let recs: Vec<FullRec> = if let Some((_, token, zone)) = cf_zone_for(&state, &host).await {
+        u.in_cf = true;
+        crate::cf::all_dns_records(&token, &zone.id).await.unwrap_or_default().into_iter().filter(|r| r.name.eq_ignore_ascii_case(&host) && matches!(r.kind.as_str(), "A" | "AAAA" | "CNAME")).collect()
+    } else {
+        let mut v = doh(&host, "CNAME").await;
+        if v.is_empty() {
+            v = doh(&host, "A").await;
+        }
+        v
+    };
+    let ours = format!("{}.pages.dev", site.deploy.project);
+    for r in &recs {
+        let c = r.content.trim_end_matches('.').to_ascii_lowercase();
+        if r.kind == "CNAME" && !site.deploy.project.is_empty() && c == ours {
+            u.ours = true;
+        } else if r.kind == "CNAME" && c.ends_with(".pages.dev") {
+            u.other_pages = c.trim_end_matches(".pages.dev").to_string();
+        }
+        u.records.push(format!("{} → {}{}", r.kind, c, if r.proxied { "（经 Cloudflare 代理）" } else { "" }));
+    }
+    if !recs.is_empty() {
+        if let Ok(r) = reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::limited(4)).build().map_err(|e| e.to_string())?.get(format!("https://{host}/")).send().await {
+            u.status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
+            let low = body.to_ascii_lowercase();
+            if let (Some(a), Some(b)) = (low.find("<title"), low.find("</title>")) {
+                if let Some(gt) = body[a..].find('>') {
+                    if a + gt + 1 <= b {
+                        u.title = body[a + gt + 1..b].split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+                    }
+                }
+            }
+        }
+    }
+    Ok(u)
+}
+
 /// 先上线到测试域名：绑到同一个 Pages 项目，加一条 CNAME。这个主机名已经有记录就不碰。
 /// 页面不让收录：上线时 Pilot 给测试域名和 pages.dev 加 `X-Robots-Tag: noindex`（见 site_deploy::add_verify_files）。
 #[tauri::command]

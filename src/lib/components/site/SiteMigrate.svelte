@@ -20,7 +20,7 @@
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, hostUse, useText, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -44,6 +44,13 @@
   let editFormal = $state(false);
   let formalIn = $state('');
   let stagingIn = $state('');
+  // 换了正式域名：看看它现在有没有在用
+  let formalUse = $state<import('$lib/state/migrate.svelte.js').HostUse | null>(null);
+  $effect(() => {
+    const h = moved ? host : '';
+    formalUse = null;
+    if (h) untrack(() => void hostUse(site.id, h).then((u) => { if (host === h) formalUse = u; }));
+  });
   // 测试域名是可选的：没绑过就先收起来
   let showStaging = $state(false);
   const stg = $derived(v?.meta.staging);
@@ -420,7 +427,7 @@
           <div class="act next" class:ready={cutNext.ready}>
             {#if cutNext.spin}<span class="spin"></span>{/if}
             <span class="grow"><b>{cutNext.ready ? '可以正式上线了' : '下一步'}</b>{cutNext.text}</span>
-            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '上线中…' : '正式上线'}</button>
+            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto, oldHost)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '上线中…' : '正式上线'}</button>
             {:else if cutNext.act === 'addcf'}<button class="btn small primary" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>接进 Cloudflare</button>
             {:else if cutNext.act === 'fix' && dns}<button class="btn small primary" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 条</button>
             {:else if cutNext.act === 'own'}<button class="btn small" onclick={() => checkOwnership(site.id)} disabled={!!busy}>{busy === 'own' ? '检查中…' : '重新检查'}</button>{/if}
@@ -439,7 +446,10 @@
               {#if moved}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>恢复成 {oldHost}</button>{/if}
             {/if}
           </div>
-          {#if moved}<small class="desc warn-text">换了域名：上线后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
+          {#if moved}
+            {#if formalUse}<small class="desc" class:warn-text={formalUse.records.length > 0 && !formalUse.ours}>{useText(formalUse)}{formalUse.records.length && !formalUse.ours ? '：正式上线时会改为打开新站，那里原来的内容就打不开了' : ''}{formalUse.in_cf ? '' : '；它不在你的 Cloudflare 账号里，下面第 2 条会带你接进来'}。</small>{/if}
+            <small class="desc warn-text">换了域名：搜索引擎会把新站算在 {host} 上；旧域名 {oldHost} 要另外设置跳转到新域名，不然原来的搜索排名会丢。</small>
+          {/if}
           {#if !isVps && (v.meta.live.base || lastUrl)}
             <div class="dm"><span class="dk">预览地址</span><button class="link-btn mono" onclick={() => openUrl(v.meta.live.base || lastUrl)}>{(v.meta.live.base || lastUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</button><small class="faint">Cloudflare 自带的地址，现在就能打开看新站 · 不让搜索引擎收录</small></div>
           {/if}
@@ -531,7 +541,7 @@
         {@const t = v.meta.track}
         <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 28 天了，迁移完成。' : '上线后会定期检查；打开站点时超过 12 小时没查过也会自动查一次。'}<small class="faint"> 上线于 <span data-tip={full(v.meta.cutover.at)}>{ago(v.meta.cutover.at)}</span>{t.at ? ` · 上次检查 ${ago(t.at)}` : ''}</small></span>
           <button class="btn small primary" onclick={() => track(site.id)} disabled={jobRunning || !!busy}><Icon name="play" size={12} />立即检查</button>
-          <button class="btn small danger" onclick={() => rollback(site.id, v.meta.cutover.host)} disabled={jobRunning || !!busy}><Icon name="undo" size={12} />回退到旧站</button>
+          <button class="btn small danger" onclick={() => rollback(site.id, v.meta.cutover.host)} disabled={jobRunning || !!busy}><Icon name="undo" size={12} />退回旧站</button>
         </div>
         <ul class="mini">
           {#each v.meta.cutover.notes as n (n)}<li><span class="lv info">i</span><span>{n}</span></li>{/each}
