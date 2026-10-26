@@ -27,12 +27,14 @@ export interface MSummary {
   groups: MGroup[]; top: { path: string; title: string; clicks: number; impressions: number }[]; features: MFeature[]; hosting: MHosting;
   analytics: string[]; generator: string; gsc_used: boolean; cn_share: number | null; ownership: MOwnership; notes: string[];
 }
-export interface MPlan { drop_groups: string[]; drop_paths: string[]; stack: string; deploy: string; visual: 'keep_brand' | 'fresh'; style: string; features: Record<string, 'keep' | 'drop'>; confirmed_at: number }
+export interface MPlan { drop_groups: string[]; drop_paths: string[]; stack: string; deploy: string; visual: 'keep_brand' | 'fresh'; style: string; features: Record<string, 'keep' | 'drop'>; confirmed_at: number; direction?: string; auto?: boolean }
+/** 重做前 AI 出的设计方向小样 */
+export interface MDirection { id: string; name: string; idea: string; palette: string[]; fonts: string; shot: string }
 export interface MParity { key: string; label: string; level: 'ok' | 'warn' | 'block'; detail: string; items: string[] }
 export interface MRec { kind: string; name: string; content: string; proxied: boolean; priority?: number | null; ttl: number }
 export interface MDns { at: number; cf_conn: string; zone_id: string; created_zone: boolean; ns: string[]; current_ns: string[]; zone_status: string; snapshot: MRec[]; missing: MRec[] }
 export interface MMeta {
-  surveyed_at: number; extracted_at: number; rebuild_at: number; parity_at: number;
+  surveyed_at: number; extracted_at: number; rebuild_at: number; parity_at: number; directions_at: number;
   extract: { pages: number; lists: number; assets: number; assets_failed: string[]; low_coverage: string[]; collections: Record<string, number>; large: string[]; comments: number; features: string[] };
   parity: MParity[];
   live: { at: number; base: string; checked: number; bad: string[] };
@@ -143,17 +145,29 @@ export async function loadMigrate(id: string) {
   finally { migrate.loading[id] = false; }
 }
 
+/** 常见的报错翻译成「怎么回事 + 下一步怎么做」；认不出的照原样 */
+export function friendly(e: unknown): string {
+  const m = String(e).replace(/^Error:\s*/, '');
+  if (/Cloudflare 40[13]|Authentication error|Unauthorized|permission/i.test(m) && !m.includes('令牌缺'))
+    return `Cloudflare 令牌的权限不够，这一步做不了。到 Cloudflare 后台（我的个人资料 → API 令牌）给这个令牌加上对应权限，或者在 Pilot 的连接里换一个权限够的令牌。\n（原文：${m}）`;
+  if (/请求 Cloudflare 失败|error sending request|timed out|dns error|connection (refused|reset)/i.test(m))
+    return `连不上服务器，可能是网络或代理的问题。检查网络后再试一次。\n（原文：${m}）`;
+  if (/keychain|钥匙串|secret/i.test(m) && /not found|找不到/i.test(m))
+    return `这个连接的密钥找不到了：到 Pilot 的连接里重新填一下。\n（原文：${m}）`;
+  return m;
+}
+
 async function run(id: string, busy: string, f: () => Promise<unknown>, ok?: string) {
   migrate.busy[id] = busy;
   try { await f(); if (ok) say(ok, 'ok'); }
-  catch (e) { say(String(e), 'err'); }
+  catch (e) { say(friendly(e), 'err'); }
   finally { migrate.busy[id] = ''; void loadMigrate(id); }
 }
 
 export const resurvey = (id: string) => run(id, 'survey', () => invoke('migrate_survey', { id }));
 
 /** 确认方案并直接开始抓取。 */
-export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style' | 'features' | 'deploy'>) {
+export async function confirmPlan(id: string, plan: Pick<MPlan, 'drop_groups' | 'drop_paths' | 'visual' | 'style' | 'features' | 'deploy' | 'auto'>) {
   await run(id, 'plan', async () => {
     await invoke('migrate_save_plan', { id, plan: { ...plan, stack: 'astro', confirmed_at: 0 } });
     await invoke('migrate_extract', { id });
@@ -175,7 +189,7 @@ export const vpsDns = $state({} as Record<string, MVpsDns | undefined>);
 export async function checkVpsDns(id: string) {
   migrate.busy[id] = 'vpsdns';
   try { vpsDns[id] = await invoke<MVpsDns>('migrate_vps_dns', { id }); }
-  catch (e) { say(String(e), 'err'); }
+  catch (e) { say(friendly(e), 'err'); }
   finally { migrate.busy[id] = ''; }
 }
 
@@ -187,17 +201,52 @@ export const extract = (id: string) => run(id, 'extract', () => invoke('migrate_
 export async function startRebuild(site: Site) {
   try {
     const text = await invoke<string>('migrate_rebuild_message', { id: site.id });
-    const conv = makingConv(site.id);
-    const reuse = !!conv && /^(请迁移重做|继续迁移重做)/.test(conv.title) && conv.status !== 'running' && !app.running[conv.id];
-    if (!reuse && !brainUsable(launcher.lBrain)) {
-      await startSiteChat(site.id, text, '重做要求写好了：选一个可用的模型后发送，就开始重做', MAKING_PERM);
-      return;
-    }
-    say(reuse ? 'AI 在后台接着重做，进度看「重做」这一步' : 'AI 在后台开始重做了，进度看「重做」这一步', 'ok');
-    const run = reuse ? continueInBackground(conv!.id, text) : startBackgroundChat({ siteId: site.id, siteName: site.name, text, perm: MAKING_PERM });
-    void run.finally(() => void loadMigrate(site.id));
-  } catch (e) { say(String(e), 'err'); }
+    await sendMaking(site, text, 'AI 在后台开始重做了，进度看「重做」这一步', 'AI 在后台接着重做，进度看「重做」这一步', '重做要求写好了：选一个可用的模型后发送，就开始重做');
+  } catch (e) { say(friendly(e), 'err'); }
   finally { void loadMigrate(site.id); }
+}
+
+/** 交给重做那条对话（在后台跑）：有就接着说，没有才开新的；没有可用模型时才去启动页选。 */
+async function sendMaking(site: Site, text: string, startMsg: string, continueMsg: string, pickModelMsg: string) {
+  const conv = makingConv(site.id);
+  const reuse = !!conv && /^(请迁移重做|继续迁移重做)/.test(conv.title) && conv.status !== 'running' && !app.running[conv.id];
+  if (!reuse && !brainUsable(launcher.lBrain)) {
+    await startSiteChat(site.id, text, pickModelMsg, MAKING_PERM);
+    return;
+  }
+  say(reuse ? continueMsg : startMsg, 'ok');
+  const r = reuse ? continueInBackground(conv!.id, text) : startBackgroundChat({ siteId: site.id, siteName: site.name, text, perm: MAKING_PERM });
+  void r.finally(() => { void loadMigrate(site.id); void loadDirections(site.id); });
+}
+
+// ───────── 重做前：挑设计方向 ─────────
+
+export const directions = $state({} as Record<string, MDirection[]>);
+
+export async function loadDirections(id: string) {
+  try { directions[id] = await invoke<MDirection[]>('migrate_directions', { id }); } catch { /* 还没有 */ }
+}
+
+/** 让 AI 先画 3 个首页小样（feedback：都不满意时的意见，AI 照着重出） */
+export async function askDirections(site: Site, feedback = '') {
+  try {
+    const text = await invoke<string>('migrate_directions_message', { id: site.id, feedback: feedback.trim() || null });
+    await sendMaking(site, text, 'AI 在后台画 3 个设计方向，好了这里会出现', 'AI 按你的意见重新画 3 个方向', '要求写好了：选一个可用的模型后发送，AI 就开始画设计方向');
+  } catch (e) { say(friendly(e), 'err'); }
+  finally { void loadMigrate(site.id); }
+}
+
+/** 挑定方向（auto＝跳过，让 AI 自己定），然后开始重做 */
+export async function pickDirection(site: Site, direction: string) {
+  try {
+    await invoke('migrate_pick_direction', { id: site.id, direction });
+    await loadMigrate(site.id);
+    await startRebuild(site);
+  } catch (e) { say(friendly(e), 'err'); }
+}
+
+export async function openDirection(id: string, direction: string) {
+  try { await invoke('migrate_direction_open', { id, direction }); } catch (e) { say(friendly(e), 'err'); }
 }
 
 export const verify = (id: string) => run(id, 'verify', () => invoke('migrate_verify', { id }));
@@ -365,7 +414,7 @@ export function migrateNext(site: Site): MNext {
   const open = (label: string): Pick<MNext, 'label' | 'icon' | 'run'> => ({ label, icon: 'checks', run: () => openSite(site.id, 'overview') });
   if (!v) return { text: '读取中…', tone: '' };
   if (job?.status === 'running') return { text: `正在${job.title}…`, tone: 'live' };
-  if (aiRunningFor(site.id)) return { text: 'AI 正在重做…', tone: 'live' };
+  if (aiRunningFor(site.id)) return { text: v.stage === 'rebuild' && !v.meta.rebuild_at ? 'AI 正在画设计方向…' : 'AI 正在重做…', tone: 'live' };
   const failed = job?.status === 'failed' && job.finished_at > Date.now() / 1000 - 3600;
   switch (v.stage) {
     case 'survey':
@@ -375,7 +424,11 @@ export function migrateNext(site: Site): MNext {
     case 'extract':
       return { text: failed ? '抓取没完成，可以再试一次' : '方案已确认，等抓取内容', tone: failed ? 'warn' : '', label: '开始抓取', icon: 'play', run: () => void extract(site.id) };
     case 'rebuild':
-      if (!v.meta.rebuild_at) return { text: '内容已抓好，等 AI 重做', tone: '', label: '开始重做', icon: 'wand', run: () => void startRebuild(site) };
+      if (!v.meta.rebuild_at && !v.plan?.direction) {
+        if (v.meta.directions_at && (directions[site.id]?.length ?? 0) > 0) return { text: '3 个设计方向画好了，等你挑', tone: 'ok', ...open('去挑方向') };
+        return { text: '内容已抓好，先让 AI 画设计方向', tone: '', label: '画设计方向', icon: 'wand', run: () => void askDirections(site) };
+      }
+      if (!v.meta.rebuild_at) return { text: '设计方向选好了，等 AI 重做', tone: '', label: '开始重做', icon: 'wand', run: () => void startRebuild(site) };
       if (aiStopped(site.id)) return { text: 'AI 停下了，可以继续', tone: 'warn', label: '继续重做', icon: 'play', run: () => void startRebuild(site) };
       return { text: `AI 做完了，等核对${todoNote(site.id)}`, tone: '', label: '核对', icon: 'checks', run: () => void verify(site.id) };
     case 'verify': {

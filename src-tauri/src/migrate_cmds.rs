@@ -174,6 +174,9 @@ pub struct Meta {
     /// 换了域名以后，旧域名跳转到新域名
     #[serde(default)]
     pub old_redirect: OldRedirect,
+    /// 让 AI 出设计方向小样的时间（重做前）
+    #[serde(default)]
+    pub directions_at: u64,
 }
 
 /// 旧域名 → 新域名的 301（Cloudflare 重定向规则）。撤销时要原样恢复。
@@ -1272,6 +1275,9 @@ pub async fn migrate_save_plan(state: tauri::State<'_, AppState>, id: String, pl
         style: plan.style.trim().chars().take(500).collect(),
         drop_groups: plan.drop_groups,
         drop_paths: plan.drop_paths,
+        // 改方案不改已经挑好的设计方向（视觉选项变了才要重挑）
+        direction: read_json::<Plan>(&dir.join("plan.json")).filter(|p| p.visual == plan.visual).map(|p| p.direction).unwrap_or_default(),
+        auto: plan.auto,
         confirmed_at: now(),
     };
     write_json(&dir.join("plan.json"), &plan)?;
@@ -1617,6 +1623,105 @@ fn survey_md(inv: &Inventory, plan: &Plan, map: &mx::UrlMap, st: &ExtractStats) 
     s
 }
 
+// ───────────────────────── ④ 重做前：挑设计方向 ─────────────────────────
+
+const DIR_REL: &str = ".pilot/migrate/directions";
+
+/// 让 AI 先出 3 个设计方向的首页小样（`feedback`：上一轮都不满意时的意见）。
+#[tauri::command]
+pub async fn migrate_directions_message(state: tauri::State<'_, AppState>, id: String, feedback: Option<String>) -> Result<String, String> {
+    let dir = mdir(&state, &id);
+    let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
+    let plan: Plan = read_json(&dir.join("plan.json")).ok_or("先确认迁移方案")?;
+    if load_meta(&dir).extracted_at == 0 {
+        return Err("先抓取旧站内容".into());
+    }
+    save_meta(&dir, |m| m.directions_at = now())?;
+    let fb = feedback.map(|f| f.trim().to_string()).filter(|f| !f.is_empty());
+    Ok(directions_message(&inv, &plan, fb.as_deref()))
+}
+
+fn directions_message(inv: &Inventory, plan: &Plan, feedback: Option<&str>) -> String {
+    let brand = if plan.visual == "fresh" {
+        "三个方向的气质、配色、字体组合要明显不同（只保留站名），各自从站点的定位和读者出发。"
+    } else {
+        "三个方向都保留旧站的 logo、站名和主色（看 `.pilot/migrate/screens/` 里的截图和 `public/` 里的图标），在版式、字体、留白和细节上拉开差别。"
+    };
+    let style = if plan.style.is_empty() { String::new() } else { format!("\n补充要求：{}", plan.style) };
+    let head = match feedback {
+        Some(f) => format!("上一轮的 3 个设计方向我都不太满意：{f}\n按这个意见重新出 3 个，覆盖原来的文件，其余要求不变："),
+        None => format!("请迁移重做旧站 {} 之前，先出 3 个设计方向给我挑。这一轮只做设计小样，不改站点代码：", inv.domain),
+    };
+    format!(
+        "{head}\n\n\
+1. 先读 `.pilot/migrate/survey.md`，看 `.pilot/migrate/screens/` 里旧站的截图，弄清站点内容、读者和现在的样子。\n\
+2. {brand}{style}\n\
+3. 每个方向做一个单文件的首页小样：`{DIR_REL}/d1.html`、`d2.html`、`d3.html`。CSS 写在文件里，字体可以用 Google Fonts；内容用旧站真实的站名、导航和几篇真实文章的标题、摘要和配图（图片用 `/public/…` 开头的路径引用仓库里的文件），不要占位文字。手机和电脑宽度都要好看。\n\
+4. 给每个小样截一张 1280 宽的首屏图，存成 `d1.png`、`d2.png`、`d3.png`（同一个目录）。\n\
+5. 写 `{DIR_REL}/directions.json`：`[{{\"id\":\"d1\",\"name\":\"两三个字的名字\",\"idea\":\"一句话：气质是什么、为什么适合这个站\",\"palette\":[\"#主色\",\"#强调色\",\"#底色\",\"#文字色\"],\"fonts\":\"标题字体 / 正文字体\"}}, …]`。\n\
+6. `git add {DIR_REL} && git commit -m \"设计方向小样\"`，用两三句话汇报三个方向各是什么。不要开始重做——我挑好方向后会告诉你。\n\n{visual}",
+        visual = crate::site_make::VISUAL_STANDARD,
+    )
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct Direction {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub idea: String,
+    #[serde(default)]
+    pub palette: Vec<String>,
+    #[serde(default)]
+    pub fonts: String,
+    /// 首屏截图（data: URL）；AI 没截到就是空
+    #[serde(default, skip_deserializing)]
+    pub shot: String,
+}
+
+/// AI 出好的设计方向（没有就是空）。
+#[tauri::command]
+pub fn migrate_directions(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<Direction>, String> {
+    use base64::Engine;
+    let site = state.sites.get(&id)?;
+    let d = PathBuf::from(&site.local_dir).join(DIR_REL);
+    let mut list: Vec<Direction> = read_json(&d.join("directions.json")).unwrap_or_default();
+    list.retain(|x| !x.id.is_empty() && x.id.chars().all(|c| c.is_ascii_alphanumeric()) && d.join(format!("{}.html", x.id)).is_file());
+    for x in &mut list {
+        if let Ok(b) = std::fs::read(d.join(format!("{}.png", x.id))) {
+            if b.len() < 6 * 1024 * 1024 {
+                x.shot = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(b));
+            }
+        }
+    }
+    Ok(list)
+}
+
+/// 挑定设计方向：d1 / d2 / d3，或者 auto（跳过，让 AI 自己定）。
+#[tauri::command]
+pub fn migrate_pick_direction(state: tauri::State<'_, AppState>, id: String, direction: String) -> Result<(), String> {
+    let dir = mdir(&state, &id);
+    let mut plan: Plan = read_json(&dir.join("plan.json")).ok_or("先确认迁移方案")?;
+    if direction != "auto" && !direction.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("方向不对".into());
+    }
+    plan.direction = direction;
+    write_json(&dir.join("plan.json"), &plan)
+}
+
+/// 在预览窗里打开一个方向的小样（以仓库为根，小样里 `/public/…` 的图片才找得到）。
+#[tauri::command]
+pub async fn migrate_direction_open(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, direction: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    if !direction.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("方向不对".into());
+    }
+    let root = PathBuf::from(&site.local_dir);
+    crate::preview_dir(&app, &state, &format!("dir:{id}"), root, &format!("{} · 设计方向", site.name), &format!("/{DIR_REL}/{direction}.html")).await
+}
+
 // ───────────────────────── ④ 重做 ─────────────────────────
 
 /// 重做对话的第一条消息。
@@ -1648,7 +1753,10 @@ fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, a
     } else {
         "保留品牌：沿用旧站的 logo、站点名称和主色（看 `.pilot/migrate/screens/` 里的旧站截图和 `public/` 里的 favicon），在这个基础上把设计升级到下面的视觉标准。".to_string()
     };
-    let style = if plan.style.is_empty() { String::new() } else { format!("\n补充要求：{}", plan.style) };
+    let mut style = if plan.style.is_empty() { String::new() } else { format!("\n补充要求：{}", plan.style) };
+    if !plan.direction.is_empty() && plan.direction != "auto" {
+        style.push_str(&format!("\n【设计方向（我已经选定）】`{DIR_REL}/{d}.html`（说明在 `{DIR_REL}/directions.json` 里 id 为 {d} 的那一项）。全站按这个方向做：配色、字体、版式、组件样式都照它，首页以它为基础完善；不要另起炉灶，也不要混用另外两个方向。", d = plan.direction));
+    }
     let slash = match inv.trailing_slash.as_str() {
         "always" => "旧站地址都以 / 结尾：astro.config 里 `trailingSlash: 'always'`、`build.format: 'directory'`（产物是 a/index.html）。",
         "never" => "旧站地址都不以 / 结尾：astro.config 里 `trailingSlash: 'never'`、`build.format: 'file'`（产物是 a.html）。",
@@ -2939,6 +3047,19 @@ mod tests {
         assert!(m.contains("GA4（G-ABC123）Pilot 已经存成配置变量 `PUBLIC_GA_ID`"));
         let m = rebuild_message("旧站", &Inventory { domain: "old.example".into(), ..Default::default() }, &Plan::default(), &Meta::default(), false);
         assert!(m.contains("正式域名就是 old.example") && m.contains("旧站没有 GA4"));
+    }
+
+    #[test]
+    fn directions_message_and_chosen_direction() {
+        let inv = Inventory { domain: "old.example".into(), ..Default::default() };
+        let m = directions_message(&inv, &Plan { visual: "fresh".into(), ..Default::default() }, None);
+        assert!(m.starts_with("请迁移重做旧站 old.example 之前") && m.contains("d1.html") && m.contains("directions.json") && m.contains("不要开始重做"));
+        let m = directions_message(&inv, &Plan::default(), Some("太花了"));
+        assert!(m.contains("太花了") && m.contains("保留旧站的 logo"));
+        let r = rebuild_message("旧站", &inv, &Plan { direction: "d2".into(), ..Default::default() }, &Meta::default(), false);
+        assert!(r.contains(".pilot/migrate/directions/d2.html"));
+        let r = rebuild_message("旧站", &inv, &Plan { direction: "auto".into(), ..Default::default() }, &Meta::default(), false);
+        assert!(!r.contains("我已经选定"));
     }
 
     #[test]

@@ -2208,22 +2208,29 @@ async fn site_preview_start(app: AppHandle, state: tauri::State<'_, AppState>, i
     if static_server::built_at(&out).is_none() {
         return Err("还没有构建产物：先点「构建并检查」".into());
     }
-    let key = format!("site:{id}");
-    if let Some(u) = reusable_preview(&app, &state, &key) {
-        open_preview_window(&app, &u, &site.name)?;
-        return Ok(u);
+    preview_dir(&app, &state, &format!("site:{id}"), out, &site.name, "").await
+}
+
+/// 用内建静态服务器预览一个目录，打开预览窗（`page`：要打开的路径，比如 `/a/b.html`；空＝首页）。
+/// 同一个 key 的服务还在就直接复用。
+pub(crate) async fn preview_dir(app: &AppHandle, state: &AppState, key: &str, dir: std::path::PathBuf, title: &str, page: &str) -> Result<String, String> {
+    if let Some(u) = reusable_preview(app, state, key) {
+        let full = format!("{u}{page}");
+        open_preview_window(app, &full, title)?;
+        return Ok(full);
     }
     let old_port = state.preview.lock().unwrap().as_ref().and_then(|h| url_port(&h.url));
-    stop_preview(&state);
+    stop_preview(state);
     if let Some(p) = old_port {
         wait_port_released(p, 2500).await;
     }
     let port = free_port(PREVIEW_DEFAULT_PORT).ok_or("找不到空闲的预览端口")?;
-    let proc = start_builtin(out, port).await?;
+    let proc = start_builtin(dir, port).await?;
     let url = format!("http://127.0.0.1:{port}");
-    *state.preview.lock().unwrap() = Some(PreviewHandle { proc, url: url.clone(), project: key });
-    open_preview_window(&app, &url, &site.name)?;
-    Ok(url)
+    *state.preview.lock().unwrap() = Some(PreviewHandle { proc, url: url.clone(), project: key.to_string() });
+    let full = format!("{url}{page}");
+    open_preview_window(app, &full, title)?;
+    Ok(full)
 }
 
 #[tauri::command]
@@ -4678,6 +4685,10 @@ pub fn run() {
             migrate_cmds::migrate_rebuild_message,
             migrate_cmds::migrate_verify,
             migrate_cmds::migrate_live,
+            migrate_cmds::migrate_directions_message,
+            migrate_cmds::migrate_directions,
+            migrate_cmds::migrate_pick_direction,
+            migrate_cmds::migrate_direction_open,
             migrate_cmds::migrate_set_formal,
             migrate_cmds::migrate_host_use,
             migrate_cmds::migrate_old_redirect,

@@ -214,6 +214,12 @@ pub struct Plan {
     /// 视觉风格的补充要求
     #[serde(default)]
     pub style: String,
+    /// 重做前挑的设计方向：d1 / d2 / d3（`.pilot/migrate/directions/` 里的小样）；auto＝跳过，让 AI 自己定；空＝还没挑
+    #[serde(default)]
+    pub direction: String,
+    /// 确认方案以后自动往下做（抓取 → 出设计方向 → 重做 → 核对 → 部署到预览 → 实测），只在要你选、要你上线时停
+    #[serde(default)]
+    pub auto: bool,
     /// 动态功能怎么处理：form / comments → keep（用 Pages Functions + D1 实现）| drop（去掉）
     #[serde(default)]
     pub features: BTreeMap<String, String>,

@@ -19,8 +19,9 @@
   import type { MStage } from '$lib/state/migrate.svelte.js';
   import { sites, deploySite, refreshSites } from '$lib/state/sites.svelte.js';
   import { openConv } from '$lib/state/conversations.js';
+  import { humanTool } from '$lib/state/messages.svelte.js';
   import { makingConv, siteMake, loadMake, migrateTodos, previewSite } from '$lib/state/siteMake.svelte.js';
-  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, setFormal, hostUse, useText, oldRedirect, oldRedirectUndo, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
+  import { migrate, STAGES, loadMigrate, resurvey, extract, startRebuild, verify, liveCheck, directions, loadDirections, askDirections, pickDirection, openDirection, setFormal, hostUse, useText, oldRedirect, oldRedirectUndo, stagingUp, stagingRemove, stagingCheck, stagingStatus, prepareDnsQuiet, checkOwnership, prepareDns, addToCloudflare, fixDns, cutover, rollback, track, trackIfStale, setupDynamic, setupVps, vpsDns, checkVpsDns } from '$lib/state/migrate.svelte.js';
   import { FEATURE_LABEL } from '$lib/state/dynamic.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -155,6 +156,18 @@
   const aiStop = $derived.by(() => {
     const last = conv?.messages?.[conv.messages.length - 1];
     return last && last.role !== 'user' && last.error ? last.text.split('\n')[0].slice(0, 160) : '';
+  });
+  const dirs = $derived(directions[site.id] ?? []);
+  let dirFeedback = $state('');
+  $effect(() => { if (v?.meta.directions_at) untrack(() => void loadDirections(site.id)); });
+  // AI 现在在做什么：最近一步工具调用（读文件、改文件、跑命令、截图……）
+  const aiLive = $derived(conv ? app.lives[conv.id] : undefined);
+  const aiSteps = $derived(aiLive?.tools?.length ?? 0);
+  const aiDoing = $derived.by(() => {
+    const t = aiLive?.tools?.[aiLive.tools.length - 1];
+    if (!t) return '';
+    const h = humanTool(t);
+    return `${h.verb} ${h.target}`.trim().slice(0, 120);
   });
   const aiMins = $derived(aiStarted ? Math.max(1, Math.round((Date.now() - aiStarted) / 60000)) : 0);
   // 「是你的」看要上线的那个域名：旧站域名看所有权确认；换了新域名，看它在不在你的 Cloudflare 账号里
@@ -304,11 +317,49 @@
       {:else if shown === 'rebuild'}
         {@const ex = v.meta.extract}
         {#if isCurrent}
-          {#if !v.meta.rebuild_at}
-            <div class="act"><span class="grow">内容都抓好了。交给 AI 用 Astro 重做全站，只换外观。</span><button class="btn small primary" onclick={() => startRebuild(site)}><Icon name="wand" size={12} />开始重做</button></div>
+          {#if !v.meta.rebuild_at && !v.plan?.direction}
+            <!-- 重做前先挑设计方向：AI 画 3 个首页小样，挑一个再开工 -->
+            {#if aiRunning}
+              <div class="running"><span class="spin"></span><span class="rt"><b>AI 正在画 3 个设计方向</b>{#if aiMins}<small>已 {aiMins} 分钟，一般 5–10 分钟</small>{/if}</span>{#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />看它在做什么</button>{/if}</div>
+              {#if aiDoing}<p class="hint doing">现在：{aiDoing}</p>{/if}
+            {:else if !v.meta.directions_at || !dirs.length}
+              <div class="act"><span class="grow">{v.meta.directions_at && !dirs.length ? 'AI 这一轮没画出设计方向，可以再让它画一次。' : '重做前先挑设计方向：AI 先画 3 个首页小样（大约 5–10 分钟），你挑一个，它再照着重做全站。'}</span>
+                <button class="link-btn" onclick={() => pickDirection(site, 'auto')} data-tip="不挑了，让 AI 自己定设计方向直接开始重做">跳过，直接重做</button>
+                <button class="btn small primary" onclick={() => askDirections(site)}><Icon name="wand" size={12} />让 AI 画 3 个方向</button>
+              </div>
+            {:else}
+              <div class="act"><span class="grow"><b>挑一个设计方向</b>点「打开看看」在预览窗里看完整的首页，选定后 AI 照着它重做全站。</span></div>
+              <div class="dirs">
+                {#each dirs as d (d.id)}
+                  <div class="dir">
+                    <button class="shot" onclick={() => openDirection(site.id, d.id)} data-tip="在预览窗里打开这个方向的首页小样">
+                      {#if d.shot}<img src={d.shot} alt={d.name} />{:else}<span class="noshot">{d.name}</span>{/if}
+                    </button>
+                    <div class="dmeta">
+                      <b>{d.name}</b>
+                      <small>{d.idea}</small>
+                      {#if d.palette.length}<span class="swatches">{#each d.palette.slice(0, 5) as c (c)}<i style="background:{c}" title={c}></i>{/each}</span>{/if}
+                      {#if d.fonts}<small class="faint">{d.fonts}</small>{/if}
+                    </div>
+                    <div class="dacts">
+                      <button class="btn tiny" onclick={() => openDirection(site.id, d.id)}><Icon name="external" size={11} />打开看看</button>
+                      <button class="btn tiny primary" onclick={() => pickDirection(site, d.id)}>用这个</button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+              <div class="redo-dirs">
+                <input class="tin" bind:value={dirFeedback} placeholder="都不满意？说说哪里不对，比如「太花了，想要更干净的」" />
+                <button class="btn tiny" onclick={() => { void askDirections(site, dirFeedback); dirFeedback = ''; }} disabled={!dirFeedback.trim()}>重新画</button>
+                <button class="link-btn" onclick={() => pickDirection(site, 'auto')}>跳过，让 AI 自己定</button>
+              </div>
+            {/if}
+          {:else if !v.meta.rebuild_at}
+            <div class="act"><span class="grow">{v.plan?.direction && v.plan.direction !== 'auto' ? `设计方向选好了（${dirs.find((d) => d.id === v.plan?.direction)?.name ?? v.plan.direction}）。` : ''}交给 AI 用 Astro 重做全站，文字一字不改、地址一个不变。</span><button class="btn small primary" onclick={() => startRebuild(site)}><Icon name="wand" size={12} />开始重做</button></div>
           {:else if aiRunning}
-            <div class="running"><span class="spin"></span><span class="rt"><b>AI 正在重做</b>{#if aiMins}<small>已 {aiMins} 分钟</small>{/if}</span>{#if conv}<button class="btn small primary" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />打开重做对话</button>{/if}</div>
-            <p class="hint">做完后这里会出现「核对」。可以先去忙别的。</p>
+            <div class="running"><span class="spin"></span><span class="rt"><b>AI 正在重做</b>{#if aiMins}<small>已 {aiMins} 分钟{aiSteps ? ` · 做了 ${aiSteps} 步` : ''}</small>{/if}</span>{#if conv}<button class="btn small" onclick={() => openConv(conv.id)}><Icon name="chat" size={12} />看它在做什么</button>{/if}</div>
+            {#if aiDoing}<p class="hint doing">现在：{aiDoing}</p>{/if}
+            <p class="hint">整站重做一般要半小时到一两个小时，{v.plan?.auto ? '做完会自动核对。' : '做完后这里会出现「核对」。'}可以先去忙别的。</p>
           {:else}
             {#if aiStop}<div class="failed"><span class="lv block">!</span><span class="rt"><b>上一轮停下了</b><small>{aiStop}</small></span></div>{/if}
             {#if aiStop}
@@ -652,6 +703,20 @@
   .act b { margin-right: 6px; color: var(--text); font-weight: 600; }
   .danger-row { margin-top: 2px; }
   .danger-link { color: var(--err); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+  .dirs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .dir { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 8px; background: var(--card, #fff); }
+  .dir .shot { display: block; padding: 0; border: none; border-radius: 8px; overflow: hidden; aspect-ratio: 16 / 10; background: var(--rail); cursor: zoom-in; }
+  .dir .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+  .dir .noshot { display: flex; height: 100%; align-items: center; justify-content: center; font-size: 13px; color: var(--faint); }
+  .dmeta { display: flex; flex-direction: column; gap: 3px; padding: 0 4px; }
+  .dmeta b { font-size: 13px; }
+  .dmeta small { font-size: 12px; color: var(--dim); line-height: 1.5; }
+  .swatches { display: flex; gap: 4px; margin-top: 2px; }
+  .swatches i { width: 16px; height: 16px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
+  .dacts { display: flex; gap: 6px; justify-content: flex-end; padding: 0 4px 2px; }
+  .redo-dirs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .redo-dirs .tin { flex: 1; min-width: 220px; height: 28px; font-size: 12.5px; }
+  .hint.doing { margin-top: -4px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .todo-box { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
   .todo-box > b { font-size: 12.5px; font-weight: 600; }
   .todo-box > b small { margin-left: 6px; font-weight: 400; color: var(--faint); }
