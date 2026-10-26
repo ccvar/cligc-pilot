@@ -76,7 +76,7 @@
       await invoke('save_site', { site: { ...site, deploy: { ...site.deploy, mode: 'direct', cf_conn_id: cfConn, project: project.trim(), branch: site.deploy.branch || 'main' } } });
       await refreshSites();
       await invoke('site_setup_pages', { id: site.id });
-      say(`已建好 Pages 项目 ${project.trim()}，可以上线到预览地址了`, 'ok');
+      say(`已建好 Pages 项目 ${project.trim()}，可以部署到预览地址了`, 'ok');
     } catch (e) { say(String(e), 'err'); }
     finally { migrate.busy[site.id] = ''; void loadMigrate(site.id); }
   }
@@ -154,14 +154,14 @@
     if (isVps) {
       if (!vd) return { text: `正在检查 ${host} 指向哪里…`, spin: true };
       if (!(vd.points || vd.cf_auto)) return { text: `只差一步要你自己做：到域名的 DNS 服务商把 ${host} 指向服务器 ${vd.ip}（见下面第 2 条），Pilot 会自动检查` };
-      return { text: `都准备好了。点「切换到新站」，${host} 就会打开新站；原来的记录存着，随时能回退。`, ready: true };
+      return { text: `都准备好了。点「正式上线」，${host} 就会打开新站；原来的记录存着，随时能回退。`, ready: true };
     }
     if (!dns?.at || busy === 'dns') return { text: `正在检查 ${apex} 的 DNS…`, spin: true };
     if (!dns.zone_id) return { text: `${apex} 还不在你的 Cloudflare 账号里。点「接进 Cloudflare」：Pilot 自动加进去、照原样补齐现有记录（邮件等），之后只剩改名称服务器要你做。`, act: 'addcf' };
     if (dns.missing.length) return { text: `原有的 ${dns.missing.length} 条记录还没进 Cloudflare，改名称服务器前要补上（见下面第 2 条）。`, act: 'fix' };
     if (dns.zone_status !== 'active') return { text: `只差一步要你自己做：去域名注册商把名称服务器改成下面第 2 条里的两个。Pilot 每分钟自动检查一次，生效了这里会变。` };
     const tip = stg?.host && stg.status !== 'active' ? `测试域名 ${stg.host} 还在生效中，可以等它好了先看看。` : '';
-    return { text: `都准备好了。点「切换到新站」，${host} 就会打开新站；原来的记录存着，随时能回退。${tip}`, ready: true };
+    return { text: `都准备好了。点「正式上线」，${host} 就会打开新站；原来的记录存着，随时能回退。${tip}`, ready: true };
   });
   // 上线 / 发布成功过：实测不用重新构建，直接测
   const deployedOk = $derived(!!sites.status[site.id]?.last_deploy?.ok);
@@ -188,8 +188,8 @@
     extract: '把正文转成 Markdown，图片和附件放回原路径',
     rebuild: 'AI 用 Astro 重做全站：URL 一个不变、正文一字不改',
     verify: '新站逐条对照旧站，再把每个旧地址实际打开一遍',
-    cutover: '把域名指向新站，可以随时回退',
-    track: '切换后盯一段时间：旧地址、搜索流量',
+    cutover: '让正式域名打开新站，随时能退回旧站',
+    track: '上线后盯一段时间：旧地址、搜索流量',
   };
 </script>
 
@@ -391,10 +391,10 @@
           <li class={!v.meta.live.at ? '' : v.meta.live.bad.length ? 'block' : 'ok'}>
             <span class="lv">{!v.meta.live.at ? '3' : v.meta.live.bad.length ? '✕' : '✓'}</span>
             <div class="cb">
-              <span><b>{isVps ? '发布到服务器，实测每个旧地址' : '上线到预览地址，实测每个旧地址'}</b>
+              <span><b>{isVps ? '发布到服务器，实测每个旧地址' : '部署到预览地址，实测每个旧地址'}</b>
                 {#if v.meta.live.at}<small>{v.meta.live.bad.length ? `${v.meta.live.checked} 个里 ${v.meta.live.bad.length} 个不对` : `${v.meta.live.checked} 个旧地址都能正常打开或跳转`}</small>{/if}
               </span>
-              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '上线'}，还没实测：点「实测每个旧地址」（不用重新构建，一两分钟），都通过就进入「切换」。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
+              {#if !v.meta.live.at && v.deploy_ready}<small class="desc">{deployedOk ? `已${isVps ? '发布' : '部署'}，还没实测：点「实测每个旧地址」（不用重新构建，一两分钟），都通过就进入「切换」。` : isVps ? '发布成功后 Pilot 会在服务器上带域名请求每个旧地址，不用先改 DNS。' : `上线到 ${v.preview.replace(/^https?:\/\//, '')}，成功后 Pilot 会接着把每个旧地址实际打开一遍。`}{blocks.length ? '先把上面必须修的问题修好。' : ''}</small>{/if}
               {#if v.meta.live.bad.length}
                 <button class="link-btn sm al" onclick={() => toggleItem('live')}>{openItems.has('live') ? '收起' : '查看不对的地址'}</button>
                 {#if openItems.has('live')}<ul class="items">{#each v.meta.live.bad.slice(0, 80) as b (b)}<li class="mono">{b}</li>{/each}</ul>{/if}
@@ -402,7 +402,7 @@
               {#if v.deploy_ready && (dynReady || isVps)}
                 <div class="row">
                   {#if deployedOk && !v.meta.live.at}<button class="btn small" class:primary={vNext === 'live'} onclick={() => liveCheck(site.id)} disabled={jobRunning || !!busy}><Icon name="checks" size={12} />{runHere && job.kind === 'migrate:live' ? '实测中…' : '实测每个旧地址'}</button>{/if}
-                  <button class="btn small" class:primary={vNext === 'live' && !deployedOk} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '上线中…') : deployedOk ? (isVps ? '重新发布' : '重新上线') : (isVps ? '发布到服务器' : '上线到预览地址')}</button>
+                  <button class="btn small" class:primary={vNext === 'live' && !deployedOk} onclick={() => deploySite(site.id)} disabled={jobRunning || !!blocks.length}><Icon name="rocket" size={12} />{deploying ? (isVps ? '发布中…' : '部署中…') : deployedOk ? (isVps ? '重新发布' : '重新部署') : (isVps ? '发布到服务器' : '部署到预览地址')}</button>
                   {#if !isVps && (v.meta.live.base || lastUrl)}<button class="btn tiny" onclick={() => openUrl(v.meta.live.base || lastUrl)}><Icon name="external" size={11} />打开预览</button>{/if}
                 </div>
               {/if}
@@ -412,15 +412,15 @@
         {#if vNext === 'fix'}
           <div class="act"><span class="grow">有问题要修：交给 AI，按上面的结果改完再点「重新核对」。</span><button class="btn small primary" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={12} />{aiRunning ? 'AI 正在修…' : '让 AI 修这些问题'}</button></div>
         {:else if vNext === 'done' && warns.length && isCurrent}
-          <div class="act sub"><span class="grow faint">还有 {warns.length} 项提醒，不影响切换。</span><button class="btn tiny" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={11} />让 AI 也处理掉</button></div>
+          <div class="act sub"><span class="grow faint">还有 {warns.length} 项提醒，不影响上线。</span><button class="btn tiny" onclick={() => startRebuild(site)} disabled={aiRunning}><Icon name="wand" size={11} />让 AI 也处理掉</button></div>
         {/if}
 
       {:else if shown === 'cutover'}
         {#if cutNext && isCurrent}
           <div class="act next" class:ready={cutNext.ready}>
             {#if cutNext.spin}<span class="spin"></span>{/if}
-            <span class="grow"><b>{cutNext.ready ? '可以切换了' : '下一步'}</b>{cutNext.text}</span>
-            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '切换中…' : '切换到新站'}</button>
+            <span class="grow"><b>{cutNext.ready ? '可以正式上线了' : '下一步'}</b>{cutNext.text}</span>
+            {#if cutNext.ready}<button class="btn small primary" onclick={() => cutover(site.id, host, isVps, !!vd?.cf_auto)} disabled={!!busy || jobRunning}><Icon name="rocket" size={12} />{busy === 'cutover' ? '上线中…' : '正式上线'}</button>
             {:else if cutNext.act === 'addcf'}<button class="btn small primary" onclick={() => addToCloudflare(site.id, host.replace(/^www\./, ''))} disabled={!!busy || !site.deploy.cf_conn_id}>接进 Cloudflare</button>
             {:else if cutNext.act === 'fix' && dns}<button class="btn small primary" onclick={() => fixDns(site.id, dns.missing.length)} disabled={!!busy}>补上 {dns.missing.length} 条</button>
             {:else if cutNext.act === 'own'}<button class="btn small" onclick={() => checkOwnership(site.id)} disabled={!!busy}>{busy === 'own' ? '检查中…' : '重新检查'}</button>{/if}
@@ -439,7 +439,7 @@
               {#if moved}<button class="link-btn" onclick={() => setFormal(site.id, '', oldHost)}>恢复成 {oldHost}</button>{/if}
             {/if}
           </div>
-          {#if moved}<small class="desc warn-text">换了域名：切换后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
+          {#if moved}<small class="desc warn-text">换了域名：上线后 canonical 和 sitemap 用 {host}；旧域名 {oldHost} 的每个地址要另外做 301 跳到 {host} 的同一路径，不然搜索排名会丢。</small>{/if}
           {#if !isVps && (v.meta.live.base || lastUrl)}
             <div class="dm"><span class="dk">预览地址</span><button class="link-btn mono" onclick={() => openUrl(v.meta.live.base || lastUrl)}>{(v.meta.live.base || lastUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</button><small class="faint">Cloudflare 自带的地址，现在就能打开看新站 · 不让搜索引擎收录</small></div>
           {/if}
@@ -456,7 +456,7 @@
                 <button class="btn tiny quiet" onclick={() => stagingRemove(site.id, stg.host)} disabled={!!busy || jobRunning}>删除</button>
               {:else}
                 <input class="tin" bind:value={stagingIn} placeholder={`new.${host.replace(/^www\./, '')}`} spellcheck="false" autocapitalize="off" />
-                <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '上线中…' : '上线到测试域名'}</button>
+                <button class="btn tiny" onclick={() => stagingUp(site.id, stagingIn || `new.${host.replace(/^www\./, '')}`)} disabled={!!busy || jobRunning}>{busy === 'staging' ? '部署中…' : '部署到测试域名'}</button>
                 <button class="btn tiny quiet" onclick={() => (showStaging = false)} disabled={busy === 'staging'}>收起</button>
               {/if}
             </div>
@@ -483,7 +483,7 @@
           <li class:ok={!!vd?.points}>
             <span class="lv">{vd?.points ? '✓' : '2'}</span>
             <div class="cb">
-              <span><b>域名指向服务器 {v.vps?.ip}</b>{#if vd?.points}<small>已指向</small>{:else if vd?.cf_auto}<small>域名在你的 Cloudflare 账号里，切换时 Pilot 自动改</small>{/if}</span>
+              <span><b>域名指向服务器 {v.vps?.ip}</b>{#if vd?.points}<small>已指向</small>{:else if vd?.cf_auto}<small>域名在你的 Cloudflare 账号里，正式上线时 Pilot 自动改</small>{/if}</span>
               {#if vd && !vd.points && !vd.cf_auto}
                 <small class="desc">到域名的 DNS 服务商，把这两条 A 记录改成服务器的 IP（改之前访客照常看到旧站；改完一般几分钟到几小时生效）：</small>
                 <div class="ns"><code>{vd.host} → {vd.ip}</code>{#if vd.alias}<code>{vd.alias} → {vd.ip}</code>{/if}</div>
@@ -497,9 +497,9 @@
             <span class="lv">{dns?.zone_status === 'active' ? '✓' : '2'}</span>
             <div class="cb">
               <span><b>域名交给 Cloudflare 管理</b>{#if dns?.zone_status === 'active'}<small>{apexOf(host)} 已经在你的 Cloudflare 账号里</small>{:else if dns?.zone_id}<small>已加进 Cloudflare，等你改名称服务器</small>{/if}</span>
-              {#if dns?.zone_status !== 'active'}<small class="desc">切换就是在 Cloudflare 里把 {host} 改成指向新站，所以这个域名得由你的 Cloudflare 账号管理。</small>{/if}
+              {#if dns?.zone_status !== 'active'}<small class="desc">正式上线就是在 Cloudflare 里把 {host} 改成指向新站，所以这个域名得由你的 Cloudflare 账号管理。</small>{/if}
               {#if !dns?.at}
-                <div class="row"><span class="spin"></span><small class="faint">正在查 {apexOf(host)} 现在由谁管理，顺便记下现有的设置（邮件等），切换时不会弄丢</small></div>
+                <div class="row"><span class="spin"></span><small class="faint">正在查 {apexOf(host)} 现在由谁管理，顺便记下现有的设置（邮件等），上线时不会弄丢</small></div>
               {:else if !dns.zone_id}
                 <small class="desc">{apexOf(host)} 现在不在你的 Cloudflare 账号里。点「接进 Cloudflare」，Pilot 会把它加进去，并把现有的设置（邮件等）原样搬过去；之后只剩一件事要你做：去买域名的地方改两项「名称服务器」。</small>
                 <div class="row"><button class="btn tiny" onclick={() => addToCloudflare(site.id, apexOf(host))} disabled={!!busy || !site.deploy.cf_conn_id}>{busy === 'dns' ? '处理中…' : '接进 Cloudflare'}</button><button class="btn tiny quiet" onclick={() => prepareDns(site.id)} disabled={!!busy}>重新检查</button></div>
@@ -521,15 +521,15 @@
           <li>
             <span class="lv">3</span>
             <div class="cb">
-              <span><b>切换到新站</b><small>{isVps ? `${host} 指向服务器后，Caddy 自动申请 HTTPS 证书；原来的 DNS 记录存下来，可以回退。旧主机先别停。` : `${host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。`}</small></span>
-              {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「切换到新站」。</small>{/if}
+              <span><b>正式上线</b><small>{isVps ? `${host} 指向服务器后，Caddy 自动申请 HTTPS 证书；原来的 DNS 记录存下来，可以回退。旧主机先别停。` : `${host} 改为指向新站；原来的记录存下来，可以一键回退。旧主机先别停。`}</small></span>
+              {#if !cutNext?.ready}<small class="desc">前面两条都好了，最上面会出现「正式上线」。</small>{/if}
             </div>
           </li>
         </ol>
 
       {:else if shown === 'track'}
         {@const t = v.meta.track}
-        <div class="act"><span class="grow">{v.stage === 'done' ? '跟踪满 28 天了，迁移完成。' : '切换后会定期检查；打开站点时超过 12 小时没查过也会自动查一次。'}<small class="faint"> 切换于 <span data-tip={full(v.meta.cutover.at)}>{ago(v.meta.cutover.at)}</span>{t.at ? ` · 上次检查 ${ago(t.at)}` : ''}</small></span>
+        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 28 天了，迁移完成。' : '上线后会定期检查；打开站点时超过 12 小时没查过也会自动查一次。'}<small class="faint"> 上线于 <span data-tip={full(v.meta.cutover.at)}>{ago(v.meta.cutover.at)}</span>{t.at ? ` · 上次检查 ${ago(t.at)}` : ''}</small></span>
           <button class="btn small primary" onclick={() => track(site.id)} disabled={jobRunning || !!busy}><Icon name="play" size={12} />立即检查</button>
           <button class="btn small danger" onclick={() => rollback(site.id, v.meta.cutover.host)} disabled={jobRunning || !!busy}><Icon name="undo" size={12} />回退到旧站</button>
         </div>

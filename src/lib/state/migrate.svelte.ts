@@ -54,8 +54,8 @@ export const STAGES: { key: MStage; label: string }[] = [
   { key: 'extract', label: '抓取' },
   { key: 'rebuild', label: '重做' },
   { key: 'verify', label: '核对' },
-  { key: 'cutover', label: '切换' },
-  { key: 'track', label: '跟踪' },
+  { key: 'cutover', label: '正式上线' },
+  { key: 'track', label: '上线后观察' },
 ];
 
 const PARENT_KEY = 'cligc.pilot.newSiteParent';
@@ -224,24 +224,24 @@ export async function cutover(id: string, host: string, vps = false, cfAuto = fa
     ? (cfAuto ? `Pilot 会在 Cloudflare 把 ${host} 的 A 记录改成服务器的 IP（原来的记录存下来，可以一键回退），然后由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款）。旧主机先别停。`
              : `${host} 已经指向服务器了：接下来由服务器上的 Caddy 向 Let's Encrypt 申请免费 HTTPS 证书（即同意 Let's Encrypt 的服务条款），站点正式切到新站。旧主机先别停。`)
     : `${host} 会改为指向新站：原来这个主机名的 DNS 记录会被替换（已存下来，可以一键回退）。旧主机先别停。`;
-  if (!await confirmDialog(msg, { title: '切换到新站', kind: 'danger', confirmText: '切换' })) return;
-  await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, '已切换到新站，DNS 和证书生效一般要几分钟');
+  if (!await confirmDialog(msg, { title: '正式上线', kind: 'danger', confirmText: '上线' })) return;
+  await run(id, 'cutover', async () => { await invoke('migrate_cutover', { id }); await refreshSites(); }, '已正式上线，DNS 和证书生效一般要几分钟');
 }
 
 /** 改正式域名（空＝恢复成旧站的域名） */
 export async function setFormal(id: string, host: string, old: string) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
-  if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '') && !await confirmDialog(`正式域名改成 ${h}，等于连域名一起搬家：切换时 ${h} 指向新站，canonical 和 sitemap 改用新域名；旧域名 ${old} 的每个地址要另外做 301 跳到新域名的同一路径，不然搜索排名会丢。`, { title: '换正式域名', kind: 'warning', confirmText: '改成新域名' })) return false;
+  if (h && h.replace(/^www\./, '') !== old.replace(/^www\./, '') && !await confirmDialog(`正式域名改成 ${h}，等于连域名一起搬家：正式上线时 ${h} 指向新站，canonical 和 sitemap 改用新域名；旧域名 ${old} 的每个地址要另外做 301 跳到新域名的同一路径，不然搜索排名会丢。`, { title: '换正式域名', kind: 'warning', confirmText: '改成新域名' })) return false;
   await run(id, 'formal', () => invoke('migrate_set_formal', { id, host: h }), h ? `正式域名改成了 ${h}` : '正式域名恢复成旧站的域名');
   return true;
 }
 
-/** 先上线到测试域名：绑到 Pages 项目、加一条 CNAME，页面不让收录 */
+/** 先部署到测试域名：绑到 Pages 项目、加一条 CNAME，页面不让收录 */
 export async function stagingUp(id: string, host: string) {
   const h = host.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
   if (!h) return;
-  if (!await confirmDialog(`Pilot 会先重新上线一次（给 ${h} 加上「不让搜索引擎收录」），再把 ${h} 绑到新站的 Pages 项目，并在 Cloudflare 里加一条 CNAME。${h} 现在已经有 DNS 记录的话不会动它。旧站不受影响。`, { title: '上线到测试域名', kind: 'info', confirmText: '上线' })) return;
-  await run(id, 'staging', () => invoke('migrate_staging', { id, host: h }), `已上线到 ${h}，证书签好一般要几分钟，之后点「实测测试域名」`);
+  if (!await confirmDialog(`Pilot 会先重新部署一次（给 ${h} 加上「不让搜索引擎收录」），再把 ${h} 绑到新站的 Pages 项目，并在 Cloudflare 里加一条 CNAME。${h} 现在已经有 DNS 记录的话不会动它。旧站不受影响。`, { title: '部署到测试域名', kind: 'info', confirmText: '上线' })) return;
+  await run(id, 'staging', () => invoke('migrate_staging', { id, host: h }), `已部署到 ${h}，证书签好一般要几分钟，之后点「实测测试域名」`);
 }
 
 export async function stagingRemove(id: string, host: string) {
@@ -258,7 +258,7 @@ export async function stagingStatus(id: string) {
 }
 
 export async function rollback(id: string, host: string) {
-  if (!await confirmDialog(`把 ${host} 的 DNS 恢复成切换前的记录，打开的又会是旧站；新站和抓好的内容都保留，可以改好后再切换。`, { title: '回退到旧站', kind: 'danger', confirmText: '回退' })) return;
+  if (!await confirmDialog(`把 ${host} 的 DNS 恢复成上线前的记录，打开的又会是旧站；新站和抓好的内容都保留，改好后再上线。`, { title: '回退到旧站', kind: 'danger', confirmText: '回退' })) return;
   await run(id, 'rollback', async () => { const m = await invoke<string>('migrate_rollback', { id }); say(m, 'ok'); await refreshSites(); });
 }
 
@@ -314,14 +314,14 @@ export function migrateNext(site: Site): MNext {
       if (blocks || v.meta.live.bad.length) return { text: '核对有问题要修', tone: 'warn', label: '让 AI 修', icon: 'wand', run: () => void startRebuild(site) };
       if (!v.deploy_ready) return { text: `核对通过，等你配置${v.plan?.deploy === 'vps' ? '服务器' : '预览地址'}`, tone: '', ...open('去配置') };
       if (v.dynamic?.features.length && !v.dynamic.setup_at && v.plan?.deploy !== 'vps') return { text: '等你配置动态功能', tone: '', ...open('去配置') };
-      if (!v.meta.live.at && sites.status[site.id]?.last_deploy?.ok) return { text: `已${v.plan?.deploy === 'vps' ? '发布' : '上线'}，等实测每个旧地址`, tone: '', label: '实测', icon: 'checks', run: () => void liveCheck(site.id) };
-      if (!v.meta.live.at) return { text: `等${v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览地址'}实测`, tone: '', label: v.plan?.deploy === 'vps' ? '发布到服务器' : '上线到预览', icon: 'rocket', run: () => void deploySite(site.id) };
+      if (!v.meta.live.at && sites.status[site.id]?.last_deploy?.ok) return { text: `已${v.plan?.deploy === 'vps' ? '发布' : '部署'}，等实测每个旧地址`, tone: '', label: '实测', icon: 'checks', run: () => void liveCheck(site.id) };
+      if (!v.meta.live.at) return { text: `等${v.plan?.deploy === 'vps' ? '发布到服务器' : '部署到预览地址'}实测`, tone: '', label: v.plan?.deploy === 'vps' ? '发布到服务器' : '部署到预览', icon: 'rocket', run: () => void deploySite(site.id) };
       return { text: '核对中', tone: '', ...open('查看') };
     }
     case 'cutover':
-      return { text: '核对通过，可以切换了', tone: 'ok', ...open('去切换') };
+      return { text: '核对通过，可以正式上线了', tone: 'ok', ...open('去上线') };
     case 'track':
-      return { text: '已切换，跟踪中', tone: 'ok' };
+      return { text: '已正式上线，观察中', tone: 'ok' };
     default:
       return { text: '迁移完成', tone: 'ok' };
   }
@@ -389,7 +389,7 @@ export async function batchTick() {
         else if (justFailed) { waiting.push(`${s.migrate_from} 发布失败，要你看一下`); delete batch.deployed[s.id]; }
         continue;
       }
-      if (v.stage === 'cutover') waiting.push(`${s.migrate_from} 核对通过，等你切换`);
+      if (v.stage === 'cutover') waiting.push(`${s.migrate_from} 核对通过，等你正式上线`);
     }
     batch.note = waiting.join('；');
   } finally { ticking = false; }
@@ -403,7 +403,7 @@ export function setBatchAuto(on: boolean) {
   else batch.note = '';
 }
 
-/** 迁移作业结束（或者上线到预览地址结束）就刷新迁移状态。 */
+/** 迁移作业结束（或者部署到预览地址结束）就刷新迁移状态。 */
 export function initMigrate() {
   $effect(() => {
     const un = listen<{ site_id: string; status: string; kind: string; title: string; error: string }>('site-job', (ev) => {

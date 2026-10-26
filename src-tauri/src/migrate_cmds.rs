@@ -2138,7 +2138,7 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     let plan: Option<Plan> = read_json(&dir.join("plan.json"));
     let meta = load_meta(&dir);
     if stage(Some(&inv), plan.as_ref(), &meta) != "cutover" {
-        return Err("核对还没全部通过（包括预览地址实测），先处理完再切换".into());
+        return Err("核对还没全部通过（包括预览地址实测），先处理完再正式上线".into());
     }
     if !inv.ownership.verified {
         return Err("还没确认这个站是你的：先完成「确认这个站是你的」".into());
@@ -2149,10 +2149,10 @@ pub async fn migrate_cutover(app: tauri::AppHandle, state: tauri::State<'_, AppS
     }
     let cf = state.conns.get(&site.deploy.cf_conn_id).map_err(|_| "站点的 Cloudflare 连接不存在".to_string())?;
     let token = crate::keychain::get_key(&cf.id)?;
-    let zone = crate::cf::zone_for(&token, &host).await?.ok_or_else(|| format!("{host} 的 DNS 不在这个 Cloudflare 账号里：先在「切换」里把域名接进 Cloudflare"))?;
+    let zone = crate::cf::zone_for(&token, &host).await?.ok_or_else(|| format!("{host} 的 DNS 不在这个 Cloudflare 账号里：先在「正式上线」里把域名接进 Cloudflare"))?;
     let (status, _) = crate::cf::zone_info(&token, &zone.id).await?;
     if status != "active" {
-        return Err(format!("{} 在 Cloudflare 里还没生效（{status}）：去域名注册商把名称服务器改成 Cloudflare 给的那两个，生效后再切换", zone.name));
+        return Err(format!("{} 在 Cloudflare 里还没生效（{status}）：去域名注册商把名称服务器改成 Cloudflare 给的那两个，生效后再正式上线", zone.name));
     }
     let target = crate::cf::pages_subdomain(&token, &cf.account_id, &site.deploy.project).await?;
     // 存下这个主机名原来的记录（回退用）
@@ -2216,7 +2216,7 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
         return rollback_vps(&state, &site, &dir, &cut).await;
     }
     if cut.host.is_empty() || cut.zone_id.is_empty() {
-        return Err("还没切换过".into());
+        return Err("还没正式上线过".into());
     }
     let cf = state.conns.get(&site.deploy.cf_conn_id)?;
     let token = crate::keychain::get_key(&cf.id)?;
@@ -2243,7 +2243,7 @@ pub async fn migrate_rollback(state: tauri::State<'_, AppState>, id: String) -> 
         m.cutover.rolled_back_at = now();
         m.track = Track::default();
     })?;
-    Ok(format!("{} 已恢复成切换前的 {} 条记录，打开的又是旧站了（DNS 缓存可能要几分钟）", cut.host, cut.before.len()))
+    Ok(format!("{} 已恢复成上线前的 {} 条记录，打开的又是旧站了（DNS 缓存可能要几分钟）", cut.host, cut.before.len()))
 }
 
 // ───────────────────────── ⑥ 切换前：正式域名 / 测试域名 ─────────────────────────
@@ -2255,7 +2255,7 @@ pub async fn migrate_set_formal(state: tauri::State<'_, AppState>, id: String, h
     let dir = mdir(&state, &id);
     let inv: Inventory = read_json(&dir.join("inventory.json")).ok_or("还没盘点")?;
     if load_meta(&dir).cutover.at > 0 {
-        return Err("已经切换过了：先回退再改正式域名".into());
+        return Err("已经正式上线了：先退回旧站再改正式域名".into());
     }
     let host = if host.trim().is_empty() { String::new() } else { clean_host(&host)? };
     let old = origin_host(&inv, &site);
@@ -2508,7 +2508,7 @@ async fn cutover_vps(state: &AppState, site: &Site, dir: &Path, host: &str) -> R
         // 域名不在 Cloudflare：先看用户改好了没有
         let ips = resolve_a(host).await;
         if !ips.iter().any(|i| i == &v.ip) {
-            return Err(format!("{host} 现在解析到 {}，还没指向服务器 {}：到域名的 DNS 服务商把 A 记录改成 {}（www 也改），改好后再点切换", if ips.is_empty() { "（没有记录）".to_string() } else { ips.join("、") }, v.ip, v.ip));
+            return Err(format!("{host} 现在解析到 {}，还没指向服务器 {}：到域名的 DNS 服务商把 A 记录改成 {}（www 也改），改好后再点「正式上线」", if ips.is_empty() { "（没有记录）".to_string() } else { ips.join("、") }, v.ip, v.ip));
         }
         cut.manual_dns = true;
         // 记下切换前别人查到的旧记录（回退时提示用户改回去）
@@ -2585,7 +2585,7 @@ pub async fn migrate_track(app: tauri::AppHandle, state: tauri::State<'_, AppSta
     let dir = mdir(&state, &id);
     let meta = load_meta(&dir);
     if meta.cutover.at == 0 || site.domain.is_empty() {
-        return Err("还没切换".into());
+        return Err("还没正式上线".into());
     }
     let job = state.site_jobs.start(Some(app), &id, "migrate:track", "迁移跟踪", TRACK_STEPS)?;
     let job_id = job.id.clone();
@@ -2633,9 +2633,9 @@ async fn run_track(site: Site, dir: PathBuf, meta: Meta, conns: crate::conns::Co
                 t.after_clicks = if an > 0 { a / an as f64 } else { 0.0 };
                 t.after_days = an;
                 if an >= 3 && t.base_clicks > 5.0 && t.after_clicks < t.base_clicks * 0.7 {
-                    t.notes.push(format!("切换后日均点击 {:.0}，比切换前（{:.0}）低了 {:.0}%：看看上面不对的地址，以及 Search Console 的「网页索引编制」", t.after_clicks, t.base_clicks, (1.0 - t.after_clicks / t.base_clicks) * 100.0));
+                    t.notes.push(format!("上线后日均点击 {:.0}，比上线前（{:.0}）低了 {:.0}%：看看上面不对的地址，以及 Search Console 的「网页索引编制」", t.after_clicks, t.base_clicks, (1.0 - t.after_clicks / t.base_clicks) * 100.0));
                 }
-                job.step("search", "ok", &format!("切换前日均 {:.1}，切换后 {:.1}（{an} 天）", t.base_clicks, t.after_clicks));
+                job.step("search", "ok", &format!("上线前日均 {:.1}，上线后 {:.1}（{an} 天）", t.base_clicks, t.after_clicks));
             }
             Err(e) => job.step("search", "failed", &e),
         }

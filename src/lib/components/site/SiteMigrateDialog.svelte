@@ -25,8 +25,8 @@
         <li><b>盘点</b>找全旧站的页面、判断适合部署到哪</li>
         <li><b>抓取</b>正文转成 Markdown，图片和附件放回原路径</li>
         <li><b>重做</b>AI 用 Astro 重做全站，URL 一个不变</li>
-        <li><b>核对</b>每个旧地址在新站上实测，通过才能切换</li>
-        <li><b>切换</b>确认是你的站后再把域名指过来，随时可以回退</li>
+        <li><b>核对</b>每个旧地址在新站上实测，通过才能正式上线</li>
+        <li><b>上线</b>确认是你的站后再把域名指过来，随时能退回旧站</li>
       </ol>
       <div class="seg" role="tablist">
         <button class:on={!d.multi} onclick={() => (d.multi = false)} disabled={d.busy}>一个站点</button>
@@ -35,12 +35,12 @@
       {#if !d.multi}
         <div class="field"><label for="mg-domain">旧站域名</label>
           <input id="mg-domain" class="tin" bind:value={d.domain} placeholder="example.com" spellcheck="false" autocapitalize="off" onkeydown={(e) => { if (e.key === 'Enter' && ready) void createMigration(); }} />
-          <small>只抓公开页面，限速、遵守 robots.txt。切换域名前会确认这个站是你的。</small>
+          <small>只抓公开页面，限速、遵守 robots.txt。正式上线前会确认这个站是你的。</small>
         </div>
       {:else}
         <div class="field"><label for="mg-domains">旧站域名 <small class="opt">每行一个，最多 50 个</small></label>
           <textarea id="mg-domains" class="tin plain" rows="6" bind:value={d.domains} placeholder={'example.com\nblog.example.org\nshop.example.net'} spellcheck="false"></textarea>
-          <small>每个站建一个文件夹，排队盘点（同时最多 2 个在抓）。盘点好以后可以逐个确认方案，也可以「按默认方案确认」，再打开「自动推进」。切换域名始终一个一个确认。</small>
+          <small>每个站建一个文件夹，排队盘点（同时最多 2 个在抓）。盘点好以后可以逐个确认方案，也可以「按默认方案确认」，再打开「自动推进」。正式上线始终一个一个确认。</small>
         </div>
         {#if d.results.some((r) => r.error)}
           <ul class="res">{#each d.results as r (r.domain)}<li class:bad={!!r.error}><b>{r.domain}</b>{r.error ? `：${r.error}` : '：已建好，排队盘点'}</li>{/each}</ul>
@@ -68,7 +68,7 @@
   .flow { list-style: none; margin: 4px 0 6px; padding: 10px 12px; border-radius: 10px; background: var(--rail); display: flex; flex-direction: column; gap: 5px; counter-reset: f; }
   .flow li { counter-increment: f; display: flex; gap: 8px; font-size: 12px; color: var(--dim); line-height: 1.5; }
   .flow li::before { content: counter(f); flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 50%; background: #fff; box-shadow: inset 0 0 0 1px var(--border2); font-size: 10px; font-weight: 600; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; }
-  .flow b { flex: none; font-weight: 600; color: var(--text); width: 30px; }
+  .flow b { flex: none; font-weight: 600; color: var(--text); width: 30px; white-space: nowrap; }
   .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--dim); }
   .grow { flex: 1; }
   .opt { font-weight: 400; color: var(--faint); font-size: 11px; margin-left: 4px; }

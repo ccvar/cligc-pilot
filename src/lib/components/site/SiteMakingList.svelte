@@ -99,7 +99,7 @@
             <span class="grow"></span>
             <button class="btn tiny" onclick={() => openMigrate(true)}><Icon name="plus" size={11} />批量迁移</button>
             {#if planN}<button class="btn tiny" onclick={confirmAllDefault}>按默认方案确认 {planN} 个</button>{/if}
-            <label class="auto" data-tip={'打开后 Pilot 自动做：抓取内容、在后台让 AI 重做（一次一个）、核对、发布到预览地址（部署已配好的）。\n不会自动确认方案、配置服务器或 Cloudflare 项目，也不会切换域名。'}><input type="checkbox" checked={batch.auto} onchange={(e) => setBatchAuto((e.currentTarget as HTMLInputElement).checked)} />自动推进</label>
+            <label class="auto" data-tip={'打开后 Pilot 自动做：抓取内容、在后台让 AI 重做（一次一个）、核对、发布到预览地址（部署已配好的）。\n不会自动确认方案、配置服务器或 Cloudflare 项目，也不会正式上线。'}><input type="checkbox" checked={batch.auto} onchange={(e) => setBatchAuto((e.currentTarget as HTMLInputElement).checked)} />自动推进</label>
           </div>
           {#if batch.auto && batch.note}<p class="bn">{batch.note}</p>{/if}
         </div>
