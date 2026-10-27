@@ -16,6 +16,8 @@ class ManagedState {
   digests = $state<string[]>([]);
   /** 日报日历：最近一年每天的动态计数 */
   daily = $state<DayCount[]>([]);
+  /** 方案卡片小柱子：每个托管站点最近 14 天的计数 */
+  siteDaily = $state<Record<string, DayCount[]>>({});
   /** data：新版日报的结构化内容；旧日报只有 Markdown（text） */
   digest = $state<{ name: string; text: string; data: DigestData | null } | null>(null);
   tab = $state<ManagedTab>('groups');
@@ -241,8 +243,12 @@ export async function loadPlans() {
 }
 export async function loadDigests() {
   try {
-    const [v, d] = await Promise.all([invoke<string[]>('list_digests'), invoke<DayCount[]>('managed_daily', { days: 372 }).catch(() => [] as DayCount[])]);
-    managed.digests = v; managed.daily = d;
+    const [v, d, sd] = await Promise.all([
+      invoke<string[]>('list_digests'),
+      invoke<DayCount[]>('managed_daily', { days: 372 }).catch(() => [] as DayCount[]),
+      invoke<{ site_id: string; days: DayCount[] }[]>('managed_site_daily', { days: 14 }).catch(() => []),
+    ]);
+    managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days]));
   } catch (e) { say(String(e), 'err'); }
 }
 export async function openDigest(name: string) {

@@ -408,6 +408,45 @@ pub fn read_digest_data(state: tauri::State<'_, AppState>, name: String) -> Resu
     Ok(load_digest(&state, &name))
 }
 
+/// 一个托管站点最近几天每天的计数（方案卡片上的小柱子用）。
+#[derive(Serialize)]
+pub struct SiteDays {
+    pub site_id: String,
+    pub days: Vec<DayCount>,
+}
+
+/// 每个托管站点最近 days 天每天的动态计数和作业次数（只返回有数据的日子）。
+#[tauri::command]
+pub fn managed_site_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<SiteDays> {
+    use chrono::TimeZone;
+    let since = (chrono::Local::now().timestamp().max(0) as u64).saturating_sub(days.unwrap_or(14).min(60) * 86_400);
+    let date_of = |ts: u64| chrono::Local.timestamp_opt(ts as i64, 0).single().map(|t| t.format("%Y-%m-%d").to_string());
+    let mut per: std::collections::BTreeMap<String, std::collections::BTreeMap<String, DayCount>> = Default::default();
+    let mut bump = |site: &str, date: String, f: &dyn Fn(&mut DayCount)| {
+        let m = per.entry(site.to_string()).or_default();
+        f(m.entry(date.clone()).or_insert_with(|| DayCount { date, ..Default::default() }));
+    };
+    for a in managed::activity(&state.data_dir, 5_000).into_iter().filter(|a| a.ts >= since && !a.site_id.is_empty()) {
+        let Some(date) = date_of(a.ts) else { continue };
+        match a.kind.as_str() {
+            "shipped" => bump(&a.site_id, date, &|d| d.shipped += 1),
+            "planned" => bump(&a.site_id, date, &|d| d.planned += 1),
+            "proposed" => bump(&a.site_id, date, &|d| d.proposed += 1),
+            "rolled_back" | "failed" | "watch_failed" => bump(&a.site_id, date, &|d| d.broken += 1),
+            _ => {}
+        }
+    }
+    let cfg = managed::load(&state.data_dir);
+    for site in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
+        for r in crate::site_runner::runs_of(&state.sites.data_dir(&site.id)).into_iter().filter(|r| r.started >= since) {
+            if let Some(date) = date_of(r.started) {
+                bump(&site.id, date, &|d| d.ran += 1);
+            }
+        }
+    }
+    per.into_iter().map(|(site_id, m)| SiteDays { site_id, days: m.into_values().collect() }).collect()
+}
+
 /// 读一份日报的结构化内容；改版前的日报只有 Markdown，读回来按新样子转，站点 id 按名字补。
 fn load_digest(state: &AppState, name: &str) -> Option<crate::site_runner::DigestData> {
     let dir = managed::digests_dir(&state.data_dir);

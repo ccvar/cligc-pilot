@@ -17,6 +17,7 @@
   import DigestCalendar from './DigestCalendar.svelte';
   import PlansView from './PlansView.svelte';
   import RunChart from './RunChart.svelte';
+  import PlanSpark from './PlanSpark.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
@@ -26,7 +27,7 @@
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
   import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
-  import type { ManagedGroup } from '$lib/types';
+  import type { ManagedGroup, DayCount } from '$lib/types';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -162,6 +163,16 @@
     };
     return [...g.sites].map((id, i) => ({ id, i, r: rank(id) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.id);
   }
+  /** 方案里各站点最近 14 天的计数按天加起来（站点按现在所在的方案算） */
+  function groupDays(g: ManagedGroup) {
+    const m = new Map<string, DayCount>();
+    for (const id of g.sites) for (const d of managed.siteDaily[id] ?? []) {
+      const e = m.get(d.date) ?? { date: d.date, shipped: 0, planned: 0, proposed: 0, broken: 0, ran: 0 };
+      e.shipped += d.shipped; e.planned += d.planned; e.proposed += d.proposed; e.broken += d.broken; e.ran += d.ran;
+      m.set(d.date, e);
+    }
+    return [...m.values()];
+  }
   function groupSummary(g: ManagedGroup) {
     let shipped = 0, need = 0, failed = 0;
     for (const id of g.sites) { const s = sitesById.get(id); if (!s) continue; shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed; }
@@ -293,6 +304,7 @@
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
+            {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
             <span class="more-wrap">
