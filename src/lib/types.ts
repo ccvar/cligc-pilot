@@ -442,6 +442,9 @@ export interface GscRow { key: string; key2?: string; clicks: number; impression
 export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string }
 /** 全部站点列表上的一个分发渠道 */
 export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
+/** 在线监测（首页每小时、证书每天、域名每周） */
+export interface UptimePing { ts: number; ok: boolean; status: number; ms: number; err: string }
+export interface MonitorView { last: UptimePing | null; down: boolean; down_since: number; uptime: number; avg_ms: number; checks: number; cert_expires: number; cert_err: string; cert_checked: number; domain_expires: number; domain_err: string; domain_checked: number }
 /** 推广链接检查（每周一次，见 link_check） */
 export interface LinkResult { href: string; url: string; pages: number; sample_page: string; status: number; final_url: string; hops: number; verdict: 'ok' | 'unverified' | 'broken'; note: string }
 export interface LinkReport { checked_at: number; source: string; links: LinkResult[] }
@@ -449,6 +452,8 @@ export interface SiteRow {
   channels?: ChannelBrief[];
   /** 上次推广链接检查里失效的个数 */
   links_broken?: number;
+  /** 在线监测：首页连续两次打不开（从什么时候）、证书 / 域名还剩几天、证书出错原因 */
+  site_down?: boolean; down_since?: number; down_err?: string; cert_days?: number | null; cert_err?: string; domain_days?: number | null;
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
   level: number;
   /** 所在托管方案名（没托管为空） */

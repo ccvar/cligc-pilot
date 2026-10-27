@@ -31,6 +31,13 @@ pub struct SiteRow {
     pub job: String,
     pub last_deploy_ts: u64,
     pub last_deploy_ok: Option<bool>,
+    /// 在线监测：首页连续两次打不开、从什么时候开始；证书 / 域名还剩几天（没查到为 None）、证书出错原因
+    pub site_down: bool,
+    pub down_since: u64,
+    pub down_err: String,
+    pub cert_days: Option<i64>,
+    pub cert_err: String,
+    pub domain_days: Option<i64>,
     /// 上次推广链接检查里失效的个数
     pub links_broken: usize,
     /// 分发渠道（站点列表上显示图标）
@@ -64,6 +71,7 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
             let last = crate::site_deploy::load_history(&dir).into_iter().find(|d| d.ok || !d.error.contains("已取消"));
             let job = state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running").map(|j| j.title).unwrap_or_default();
             let last_ts = last.as_ref().map(|d| d.ts).unwrap_or(0);
+            let mon = crate::monitor::load(&dir);
             SiteRow {
                 active_at: s.updated_at.max(last_ts).max(last_conv.get(&s.id).copied().unwrap_or(0)),
                 has_data: !s.data.gsc_site.is_empty() || !s.data.ga4_property.is_empty() || !s.data.bing_site.is_empty(),
@@ -76,6 +84,12 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 last_deploy_ok: last.map(|d| d.ok),
                 channels: crate::syndicate::channel_briefs(&dir),
                 links_broken: crate::link_check::load(&dir).broken(),
+                site_down: mon.down(),
+                down_since: mon.down_since(),
+                down_err: mon.pings.last().map(|p| p.err.clone()).unwrap_or_default(),
+                cert_days: mon.cert_days(crate::now_secs()),
+                cert_err: mon.cert_err.clone(),
+                domain_days: mon.domain_days(crate::now_secs()),
                 id: s.id,
                 name: s.name,
                 domain: s.domain,
@@ -164,6 +178,59 @@ pub async fn check_site_links(state: tauri::State<'_, AppState>, id: String) -> 
     let site = state.sites.get(&id)?;
     let out = crate::syndicate::built_out(&state, &site).ok();
     crate::link_check::check_site(&site, &state.sites.data_dir(&id), out).await
+}
+
+/// 站点概览「在线情况」卡片：最近的检查、7 天可用率、证书 / 域名到期。
+#[derive(Serialize)]
+pub struct MonitorView {
+    pub last: Option<crate::monitor::Ping>,
+    pub down: bool,
+    pub down_since: u64,
+    /// 最近 7 天能打开的比例（0–1），没检查过为 -1
+    pub uptime: f64,
+    pub avg_ms: u32,
+    pub checks: usize,
+    pub cert_expires: u64,
+    pub cert_err: String,
+    pub cert_checked: u64,
+    pub domain_expires: u64,
+    pub domain_err: String,
+    pub domain_checked: u64,
+}
+
+fn monitor_view(m: crate::monitor::Monitor) -> MonitorView {
+    let ok: Vec<&crate::monitor::Ping> = m.pings.iter().filter(|p| p.ok).collect();
+    MonitorView {
+        last: m.pings.last().cloned(),
+        down: m.down(),
+        down_since: m.down_since(),
+        uptime: if m.pings.is_empty() { -1.0 } else { ok.len() as f64 / m.pings.len() as f64 },
+        avg_ms: if ok.is_empty() { 0 } else { (ok.iter().map(|p| p.ms as u64).sum::<u64>() / ok.len() as u64) as u32 },
+        checks: m.pings.len(),
+        cert_expires: m.cert_expires,
+        cert_err: m.cert_err,
+        cert_checked: m.cert_checked,
+        domain_expires: m.domain_expires,
+        domain_err: m.domain_err,
+        domain_checked: m.domain_checked,
+    }
+}
+
+#[tauri::command]
+pub fn site_monitor(state: tauri::State<'_, AppState>, id: String) -> Result<MonitorView, String> {
+    state.sites.get(&id)?;
+    Ok(monitor_view(crate::monitor::load(&state.sites.data_dir(&id))))
+}
+
+/// 现在就检查首页、证书和域名。
+#[tauri::command]
+pub async fn check_site_monitor(state: tauri::State<'_, AppState>, id: String) -> Result<MonitorView, String> {
+    let site = state.sites.get(&id)?;
+    if site.domain.trim().is_empty() {
+        return Err("这个站点还没有设置域名".into());
+    }
+    let (m, _) = crate::monitor::check_site(&site, &state.sites.data_dir(&id), true).await;
+    Ok(monitor_view(m))
 }
 
 #[tauri::command]

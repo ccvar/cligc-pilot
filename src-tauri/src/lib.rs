@@ -3,6 +3,7 @@ mod store_file;
 mod typesafe;
 mod jev_checks;
 mod link_check;
+mod monitor;
 mod agent;
 mod bing;
 mod api_agent;
@@ -5078,6 +5079,8 @@ pub fn run() {
             fleet_cmds::recent_ships,
             fleet_cmds::site_links,
             fleet_cmds::check_site_links,
+            fleet_cmds::site_monitor,
+            fleet_cmds::check_site_monitor,
             fleet_cmds::set_site_flags,
             fleet_cmds::data_sources_overview,
             fleet_cmds::auto_bind_sites,
