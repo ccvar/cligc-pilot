@@ -315,7 +315,6 @@
 
       <BackgroundSection />
 
-      <div class="sec-head mt"><span>关于</span></div>
       <div class="brain-row about-card">
         <span class="brain-ic"><AppIcon size={20} /></span>
         <span class="brain-main"><b>Cligc Pilot</b><small>{updater.appVersion ? `v${updater.appVersion}` : ''}{updater.updMsg ? ` · ${updater.updMsg}` : ''}</small></span>
@@ -453,8 +452,8 @@
   .brains-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
   .brains-list > .brain-block { padding: 10px 12px; }
   .brains-list > .brain-block + .brain-block { border-top: 1px solid var(--border); }
-  /* 关于只有一行，不套卡片、不缩进：左边和「关于」标题、右边和上面卡片的边对齐 */
-  .about-card { padding: 2px 0; }
+  /* 版本和检查更新：只有一行，不要标题和卡片、不缩进，左右和上面卡片的边对齐 */
+  .about-card { padding: 2px 0; margin-top: 17px; } /* 没有标题：和上一组隔开的距离同组与组之间（17 + gap 7） */
   .about-card .about-update-entry { margin-right: -10px; } /* 按钮的内边距伸出去，文字贴齐右边；悬停底色照样左右对称 */
   /* 每个大脑（行 + 自定义模型）成一块，块内贴紧。 */
   .brain-block { display: flex; flex-direction: column; gap: 0; }
