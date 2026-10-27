@@ -12,6 +12,7 @@
   import { mdRender } from '$lib/state/messages.svelte.js';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import BrainIcon from '$lib/BrainIcon.svelte';
+  import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { modelIcon } from '$lib/state/models';
   import { openSite } from '$lib/state/sites.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
@@ -168,7 +169,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
-      <h1>托管运营 {#if allOff}<span class="pill warn">全部已暂停</span>{/if}</h1>
+      <h1>托管运营<InfoTip text={'每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。\n方案和站点都能单独暂停。'} label="托管方案说明" /> {#if allOff}<span class="pill warn">全部已暂停</span>{/if}</h1>
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
@@ -275,9 +276,6 @@
         {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
     {:else}
-      <div class="gbar">
-        <p class="hint">每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。方案和站点都能单独暂停。</p>
-      </div>
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
         <div class="card grp" class:off={gOff}>
@@ -416,8 +414,6 @@
   .log-h .chev { margin-left: auto; color: var(--faint); transition: transform .16s var(--su-ease); }
   .oplog.open .log-h .chev { transform: rotate(180deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
-  .gbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .gbar .hint { margin: 0; }
   .grp.off { background: #fcfbf9; }
   .more-wrap { position: relative; display: inline-flex; font-weight: 400; }
   .ic-btn.on { background: var(--su-hover); color: var(--text); }
