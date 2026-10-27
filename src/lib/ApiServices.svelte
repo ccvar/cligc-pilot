@@ -186,7 +186,8 @@
           <span class="connection-state" class:verified={profile.enabled && results[profile.id]?.ok} class:failed={profile.enabled && results[profile.id]?.ok === false} title={results[profile.id]?.message ?? status(profile)}><i aria-hidden="true"></i><span>{status(profile)}</span></span>
           <ApiServiceMenu name={profile.name} enabled={profile.enabled} busy={!!busy} onedit={() => edit(profile)} ontest={() => test(profile)} ontoggle={() => toggle(profile)} ondelete={() => deleteTarget = profile} />
         </div>
-        <p class="test-result slot" class:error={!!results[profile.id] && !results[profile.id].ok} class:on={!!results[profile.id]} role="status">{results[profile.id]?.message ?? ''}</p>
+        <!-- 测完才有这一行；没测过不占位置（原来空着也留一行，把「用量与账单」推得离服务名很远） -->
+        {#if results[profile.id]}<p class="test-result" class:error={!results[profile.id].ok} role="status">{results[profile.id].message}</p>{/if}
         {#if editorId === profile.id}{@render editor()}{/if}
         <!-- 编辑时只是藏起来、不卸载：关掉编辑器不用重新读一遍账单。key 里的协议 / 地址变了才重建（换了接口，旧结果作废） -->
         <div hidden={editorId === profile.id}>{#key `${profile.id}:${profile.protocol}:${profile.base_url}`}<ApiBilling id={profile.id} name={profile.name} disabled={!!busy} />{/key}</div>
