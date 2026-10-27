@@ -581,7 +581,8 @@
   .grp-tg .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
   .grp-tg .chev.up { transform: rotate(180deg); }
   .grp-tg:hover .chev { color: var(--dim); }
-  .grp-tg .next-chip + .chev { margin-left: 10px; }
+  /* 胶囊右边和下面站点行「下次…」的右边对齐：站点行右边是 10 + 「…」20 + 10 + 开关 32 = 72px，标题这边是 箭头 12 + 8 + 「…」20 = 40px，差的 32px 放在胶囊和箭头之间 */
+  .grp-tg .next-chip + .chev { margin-left: 32px; }
   .gs .grow { flex: 1; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
