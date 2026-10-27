@@ -298,7 +298,7 @@
             {#if g.guidelines?.trim()}<button type="button" class="rule-link" data-tip={`AI 写作和修改都按这份内容准则来，点一下查看或修改：\n${guidePreview(g.guidelines)}`} onclick={() => editGroup(g, 'guidelines')}><Icon name="doc" size={12} />内容准则</button>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
             <span data-tip={g.new_content === 'auto' ? `AI 写好的新页面检查通过就直接上线${g.min_page_chars ? `；正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : 'AI 写好的新页面等你看过再上线'}><Icon name="file" size={12} />新页{g.new_content === 'auto' ? '自动发' : '人审'}{g.min_page_chars ? ` ≥${g.min_page_chars}字` : ''}</span>
-            {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '代码人审', small: '小改代码自动', all: '代码自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
+            {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '人审上线', small: '小改自动上线', all: '自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
             <span data-tip="每个站点每天最多自动上线这么多条，超出的留给你确认"><Icon name="rocket" size={12} />每天 ≤{g.daily_changes} 条</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
           </div>
