@@ -137,7 +137,7 @@
   .nv { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
   /* 分隔线画在整列上（跟右边一样高）；列表本身滚动时贴在顶上 */
   .slist { border-right: 1px solid var(--border); min-width: 0; }
-  .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; }
+  .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; overflow-x: hidden; }
   .site { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; text-align: left; min-width: 0; }
   .site:hover { background: var(--su-hover); color: var(--text); }
   .site.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }

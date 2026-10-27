@@ -186,9 +186,10 @@
   .pv { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
   /* 分隔线画在整列上（跟右边一样高）；列表本身滚动时贴在顶上 */
   .slist { border-right: 1px solid var(--border); min-width: 0; }
-  .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; }
-  .sq { position: sticky; top: -10px; z-index: 1; display: block; margin: -10px -8px 4px; padding: 10px 8px 6px; background: var(--card); color: var(--faint); }
-  .sq :global(svg) { position: absolute; left: 17px; top: 50%; margin-top: -4px; pointer-events: none; }
+  .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; overflow-x: hidden; }
+  /* 不往左右伸出去（原来左右各 -8px，宽出列表 16px，冒出横向滚动条）；上面 -10px 盖住列表的上内边距，滚动时内容不从搜索框上面露出来 */
+  .sq { position: sticky; top: -10px; z-index: 1; display: block; margin: -10px 0 4px; padding: 10px 0 6px; background: var(--card); color: var(--faint); }
+  .sq :global(svg) { position: absolute; left: 9px; top: 50%; margin-top: -4px; pointer-events: none; }
   .sq input { display: block; width: 100%; height: 28px; padding: 0 8px 0 28px; border: 1px solid var(--border2); border-radius: 7px; background: transparent; font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
   .sq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
   .none { margin: 6px 8px; font-size: 12px; color: var(--faint); }
