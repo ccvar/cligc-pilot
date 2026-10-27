@@ -7,6 +7,7 @@
   import VpsAuth from './VpsAuth.svelte';
   import SiteConfigCard from './SiteConfigCard.svelte';
   import SiteDynamicSettings from './SiteDynamicSettings.svelte';
+  import { isPagesDirect, isVpsManaged } from '$lib/state/dynamic.svelte.js';
   import SiteVpsCard from './SiteVpsCard.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
@@ -174,8 +175,11 @@
 
     <div class="wide"><SiteConfigCard {site} /></div>
 
-    <!-- 第三行「功能」：表单和评论，平时一行 -->
-    <div class="wide"><SiteDynamicSettings {site} /></div>
+    <!-- 第三行「功能」：表单和评论，平时一行。只有用得上的站点才显示（Pilot 上传到 Pages，或 Pilot 托管的服务器）；
+         Workers / 绑定 GitHub 的 Pages / 自带发布脚本的服务器用不了，改版中的站点在改版进度里配，都不放这张卡 -->
+    {#if site.origin !== 'migrating' && (isPagesDirect(site) || isVpsManaged(site))}
+      <div class="wide"><SiteDynamicSettings {site} /></div>
+    {/if}
 
     <div class="card danger-zone wide" class:open={dzOpen}>
       <h3 class="dz-head"><button class="dz-toggle" onclick={() => (dzOpen = !dzOpen)} aria-expanded={dzOpen}><Icon name="info" />危险操作<span class="dz-sub">下线并删除 · 只从 Pilot 移除</span><svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
