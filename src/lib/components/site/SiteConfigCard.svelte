@@ -132,9 +132,8 @@
         {#if !cs.vars.length}还没有变量
         {:else}{cs.vars.length} 个{#if missingN}<span class="warn-ink"> · {missingN} 个没填</span>{/if}{#if cs.target && pendingN}<span class="warn-ink"> · {pendingN} 个没同步</span>{:else if cs.synced_at}<span data-tip={full(cs.synced_at)}> · {ago(cs.synced_at)}同步过</span>{/if}{/if}
       </span>{/if}
+      <InfoTip text={about} label="配置变量说明" />
     </button>
-    <InfoTip text={about} label="配置变量说明" />
-    <span class="grow"></span>
     {#if cs?.target && cs.vars.length}
       <button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>
       <button class="btn tiny warn" class:hot={cs.needs_sync} onclick={sync} disabled={syncing || pulling || !!syncingKey} data-tip={`覆盖 ${cs.target_label} 里的同名变量（会先确认）；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>
@@ -204,7 +203,8 @@
 </div>
 
 <style>
-  .cfg-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  /* 整行（标题、概况、空白处）都能点开收起，和 VPS 部署授权、危险操作一样；只有右边两个按钮不算 */
+  .cfg-toggle { flex: 1; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .sum { font-size: 12px; font-weight: 400; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .warn-ink { color: var(--su-warn-ink, #8a5a08); }
   .cfg-toggle:hover .sum { color: var(--dim); }
@@ -221,14 +221,14 @@
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   /* 行内编辑框：细边框、和按钮一样高，聚焦时边框加深加一圈淡光；不用全局输入框那种 1.5px 粗框 */
-  .field { position: relative; flex: 1; min-width: 0; max-width: 520px; display: flex; }
-  .ein { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); color: var(--text); font-size: 12px; outline: none; transition: border-color .12s, box-shadow .12s; }
-  .ein:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
-  .ein:focus { border-color: color-mix(in srgb, var(--border2) 30%, var(--dim)); box-shadow: var(--su-ring); }
+  /* 边框画在外面这个框上（固定 26px，和旁边的按钮一样高），里面的输入框没有边框、没有阴影 */
+  .field { flex: 1; min-width: 0; max-width: 520px; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
+  .field:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
+  .field:focus-within { border-color: color-mix(in srgb, var(--border2) 25%, var(--dim)); }
+  .ein { flex: 1; min-width: 0; height: 100%; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12px; outline: none; -webkit-appearance: none; appearance: none; }
   .ein::placeholder { color: var(--faint); }
-  .field:has(.in-eye) .ein { padding-right: 28px; }
-  .in-eye { position: absolute; right: 2px; top: 2px; width: 22px; height: 22px; }
-  .ebtn { height: 26px; }
+  .in-eye { flex: none; width: 22px; height: 22px; margin-right: 1px; }
+  .vcol.edit .btn.ebtn { height: 26px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; }
   .val { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val.masked { color: var(--faint); letter-spacing: 1px; }
   .tag { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
@@ -244,7 +244,6 @@
   .acts .del:hover:not(:disabled) { color: var(--err); }
   .desc { grid-column: 2; font-size: 11.5px; line-height: 1.5; color: var(--faint); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   .hint { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
-  .grow { flex: 1; }
   .add { display: flex; align-items: center; gap: 6px; }
   .add-link { font-size: 12px; align-self: flex-start; }
   /* 同步会覆盖线上的值：按钮用警告色，有改动没同步时底色再深一点 */
