@@ -144,6 +144,7 @@
   }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 日报设置（全局）：只比较这两项
+  let digestSetOpen = $state(false);
   const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
 
   const KIND: Record<string, { l: string; c: string; i: string }> = {
@@ -266,13 +267,17 @@
         {#if managed.digest?.data}<DigestView data={managed.digest.data} />{:else if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
       </div>
       {#if d}
+        {@const setOpen = digestSetOpen || dirty}
         <div class="card">
-          <h3><Icon name="calendar" />日报设置 <span class="sub">所有托管方案共用</span></h3>
+          <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />日报设置 <span class="sub">{o?.config.digest ? `每天 ${o.config.digest_hour} 点后 · ` : '已关闭 · '}所有托管方案共用</span>
+            <svg class="chev" class:up={setOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
+          {#if setOpen}
           <div class="row">
             <label class="check"><input type="checkbox" bind:checked={d.digest} /><span>每天发一份托管日报（系统通知 + 报告）</span></label>
             {#if d.digest}<span class="faint" style="font-size:12px">时间</span><input class="tin" type="number" min="0" max="23" style="width:70px" bind:value={d.digest_hour} /><span class="faint" style="font-size:12px">点之后</span>{/if}
           </div>
           <p class="hint">托管需要客户端在运行（关掉窗口后托盘常驻即可）；电脑关机期间不会运营，开机后补跑一次。</p>
+          {/if}
         </div>
         {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
@@ -525,4 +530,8 @@
   .md :global(ul) { padding-left: 18px; margin: 6px 0; }
   /* 和旁边「新增方案」小按钮一样高 */
   .page-head .more-wrap > .ic-btn { width: 26px; height: 26px; border-radius: 7px; }
+  .set-toggle { flex: 1; width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .set-toggle .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
+  .set-toggle .chev.up { transform: rotate(180deg); }
+  .set-toggle:hover .chev, .set-toggle:hover .sub { color: var(--dim); }
 </style>
