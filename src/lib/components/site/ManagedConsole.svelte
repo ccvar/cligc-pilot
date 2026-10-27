@@ -16,6 +16,7 @@
   import { modelIcon } from '$lib/state/models';
   import { openSite } from '$lib/state/sites.svelte.js';
   import DigestCalendar from './DigestCalendar.svelte';
+  import PlansView from './PlansView.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
@@ -155,7 +156,6 @@
   };
   const when = ago;
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
-  const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };
 </script>
 
 {#snippet jevRule(g: ManagedGroup, rule: 'jev_gate' | 'skip_offtopic', label: string, what: string)}
@@ -215,31 +215,7 @@
         <div class="row"><button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={12} />新增托管方案</button></div>
       </div>
     {:else if managed.tab === 'plans'}
-      {#each o?.sites ?? [] as s (s.id)}
-        {@const p = managed.plans.find((x) => x.site_id === s.id)}
-        <div class="card">
-          <h3><SiteIcon id={s.id} size={15} />{s.name}<span class="stg {s.stage}">{STAGE_LABEL[s.stage] ?? s.stage}</span><span class="sub">{p ? `${md(p.plan.date)}制定` : '还没有计划'}</span><span class="grow"></span>
-            {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
-            <button class="btn tiny" onclick={() => runTask(s.id, 'plan')} disabled={!!s.job}><Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}</button>
-          </h3>
-          {#if p?.plan.notes}
-            <div class="pnote"><Icon name="info" size={12} /><span><b>AI 给你的说明</b>{p.plan.notes}</span></div>
-          {/if}
-          {#if p?.positioning.text}
-            <div class="pos">
-              <div class="pos-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span><button class="ic-btn ic-sm" onclick={() => openSite(s.id, 'overview')} aria-label="修改站点定位" data-tip="修改站点定位（在站点概览里）"><Icon name="pencil" size={13} /></button></div>
-              <p>{p.positioning.text}</p>
-            </div>
-          {/if}
-          {#if p}
-            <ol class="plan">
-              {#each p.plan.tasks as t, i (i)}
-                <li><span class="no">{i + 1}</span><div><div class="pt"><b>{t.title}</b></div><div class="pw"><WhyChips change={t.change} source={t.source || (t.change === 'new_content' ? 'positioning' : t.change === 'technical' ? 'health' : 'data')} target={t.query} /></div>{#if t.why}<small>{t.why}</small>{/if}{#if t.expect?.note}<small class="expect"><Icon name="target" size={11} />预期：{t.expect.note}</small>{/if}{#if t.page}<small class="mono pg">{t.page}</small>{/if}</div></li>
-              {/each}
-            </ol>
-          {:else}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
-        </div>
-      {/each}
+      <PlansView sites={o?.sites ?? []} plans={managed.plans} />
     {:else if managed.tab === 'needs'}
       <div class="card">
         <h3><Icon name="bell" />需要你</h3>
@@ -405,7 +381,6 @@
 </div>
 
 <style>
-  .expect { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
   .nsite { width: 150px; min-width: 150px; max-width: 150px; vertical-align: top; }
   .nsite span { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
   .stuck { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.6; }
@@ -472,14 +447,6 @@
   .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
   .stg.growing { background: var(--su-run-soft); color: var(--su-run); }
   .stg.established { background: var(--su-ok-soft); color: var(--ok); }
-  .pnote { display: flex; gap: 8px; margin: -2px 0 12px; padding: 9px 12px; border-radius: 10px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.6; }
-  .pnote :global(.ico) { flex: none; margin-top: 3px; }
-  .pnote b { display: block; font-weight: 600; }
-  .pos { margin: -2px 0 14px; padding: 10px 12px; border-radius: 10px; background: var(--rail); border: 1px solid var(--border); }
-  .pos-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
-  .pos-t .faint { font-weight: 400; font-size: 11.5px; }
-  .pos-t .grow { flex: 1; }
-  .pos p { margin: 4px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .gs-run { opacity: .55; transition: opacity .12s; }
   .gs:hover .gs-run, .gs-run:focus-visible { opacity: 1; }
   .gs-job { flex: none; border: none; cursor: pointer; gap: 5px; }
@@ -511,17 +478,9 @@
   .see { font-size: 11.5px; opacity: 0; transition: opacity .12s; }
   .ev:hover .see { opacity: 1; }
   .ev-why { margin: 3px 0 2px; }
-  .pw { margin: 4px 0 2px; }
   .nw { margin: 3px 0; }
   .link-btn.plain { text-decoration: none; color: var(--dim); font-size: inherit; }
   .link-btn.plain:hover { color: var(--text); text-decoration: underline; }
-  .plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
-  .plan li { display: flex; gap: 10px; align-items: flex-start; }
-  .plan .no { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--dim); font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; font-variant-numeric: tabular-nums; }
-  .plan .pt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .plan b { font-weight: 550; }
-  .plan small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
-  .plan small.pg { color: var(--faint); font-size: 11px; }
   .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
   tr.clickable { cursor: pointer; }
   .md { margin-top: 14px; font-size: 13px; line-height: 1.75; border-top: 1px solid var(--border); padding-top: 12px; }

@@ -281,6 +281,35 @@ pub struct SitePlan {
     pub plan: serde_json::Value,
     pub positioning: crate::site_stage::Positioning,
     pub stage: crate::site_stage::StageInfo,
+    /// 和 plan.tasks 一一对应：这条计划在任务队列里走到哪了（空＝没进队列）。
+    /// 状态同队列（open / working / proposed / merged / deployed / dismissed / rolled_back / failed），
+    /// 上线后有问题要你核对的记成 attention。
+    pub task_status: Vec<String>,
+    /// 和 plan.tasks 一一对应：队列里那一条的 id（空＝没有）。
+    pub task_item: Vec<String>,
+}
+
+/// 计划里每一项在队列里的状态：按标题找这份计划之后入队的那一条。
+fn plan_progress(plan: &serde_json::Value, dir: &std::path::Path) -> (Vec<String>, Vec<String>) {
+    use chrono::TimeZone;
+    let since = chrono::NaiveDate::parse_from_str(plan["date"].as_str().unwrap_or(""), "%Y-%m-%d")
+        .ok()
+        .and_then(|d| chrono::Local.from_local_datetime(&d.and_hms_opt(0, 0, 0)?).earliest())
+        .map(|t| t.timestamp().max(0) as u64)
+        .unwrap_or(0);
+    let queue = crate::site_ops::load_queue(dir);
+    plan["tasks"]
+        .as_array()
+        .map(|ts| ts.iter().map(|t| {
+            let title = t["title"].as_str().unwrap_or("");
+            queue
+                .iter()
+                .filter(|i| i.opp.kind == "plan" && i.opp.title == title && i.created_at >= since)
+                .max_by_key(|i| i.created_at)
+                .map(|i| (if i.status == "deployed" && !i.attention.is_empty() { "attention".to_string() } else { i.status.clone() }, i.id.clone()))
+                .unwrap_or_default()
+        }).unzip())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -294,7 +323,8 @@ pub fn managed_plans(state: tauri::State<'_, AppState>) -> Vec<SitePlan> {
         .filter_map(|s| {
             let dir = state.sites.data_dir(&s.id);
             let p = crate::site_runner::latest_plan(&dir)?;
-            Some(SitePlan { positioning: crate::site_stage::load_positioning(&dir), stage: crate::site_stage::stage_of(&s, &dir), site_id: s.id, site_name: s.name, plan: p })
+            let (task_status, task_item) = plan_progress(&p, &dir);
+            Some(SitePlan { positioning: crate::site_stage::load_positioning(&dir), stage: crate::site_stage::stage_of(&s, &dir), site_id: s.id, site_name: s.name, plan: p, task_status, task_item })
         })
         .collect()
 }

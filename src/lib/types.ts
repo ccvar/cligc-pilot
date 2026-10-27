@@ -514,7 +514,7 @@ export interface StageInfo { stage: string; auto_stage: string; reason: string; 
 /** AI 归纳的站点定位；by=user 表示运营人员改过，AI 不再覆盖。 */
 export interface Positioning { text: string; by: string; updated: number }
 export interface SiteStageView extends StageInfo { positioning: Positioning }
-export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; stage?: string; notes?: string; tasks: PlanTask[] }; positioning: Positioning; stage: StageInfo }
+export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; stage?: string; notes?: string; tasks: PlanTask[] }; positioning: Positioning; stage: StageInfo; task_status: string[]; task_item: string[] }
 /** 判断模型（Jev）对一个页面的内容质检：分数 0–3，概率 0–1 */
 export interface PageQuality {
   page: string;
