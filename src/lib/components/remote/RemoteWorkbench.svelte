@@ -14,7 +14,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { workbench, reconnectTerm, toggleWbTerm, toggleWbChat, toggleWbFiles, missingSshCredential, repairActiveSshCredential, startWbResize } from '$lib/state/workbench.svelte.js';
   import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
-  import AttachButton from '$lib/components/common/AttachButton.svelte';
+  import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层，和对话输入框一样
   let grown = $state(false);
@@ -89,6 +89,7 @@
             <div class="composer" class:compact class:fileover={composer.composerFileOver} role="group" aria-label="远程消息输入"
               ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={onComposerDrop}>
               <AttachTray items={composer.attachments} uploading={composer.attaching} onremove={removeAttachment} />
+              <span class="cb-plus"><AttachMenu onfiles={(fs) => attachFiles(fs)} /></span>
               <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="1" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
                 oninput={(e) => composerGrown(e.currentTarget, grown, (v) => (grown = v))}
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
@@ -97,7 +98,6 @@
               <div class="composer-bar">
                 <div class="cb-left"><span class="ssh-target" title={app.activeConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(app.activeConn)} size={13} /><span class="st-addr">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}</span></span></div>
                 <div class="cb-right">
-                  <AttachButton onfiles={(fs) => attachFiles(fs)} />
                   <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, true)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, true)} />
                   <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
                   <button class="send" onclick={() => void startChat()} disabled={(!launcher.lDraft.trim() && !composer.attachments.length) || composer.attaching || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
@@ -274,6 +274,11 @@
   .composer-wrap .composer.compact textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .composer.compact .composer-bar { flex: none; padding: 0 8px 0 0; }
   .composer.compact .cb-left { display: none; }
+  /* 「+」在左下角（和 Claude 客户端一样）：两层时贴在底栏最左、底栏左边让出位置；一行模式时排在文字前面 */
+  .cb-plus { position: absolute; left: 8px; bottom: 8px; z-index: 1; display: flex; }
+  .composer:has(.cb-plus) .cb-left { padding-left: 32px; }
+  .composer.compact .cb-plus { position: static; flex: none; margin-left: 8px; }
+  .composer.compact textarea { padding-left: 6px !important; }
   /* ---- 线程 ---- */
   /* ★ 标题要和左上角那排工具图标在同一条水平线上。
      `.win-tools` 是 fixed / top:0 / height:30px + align-items:center → **图标中心恒在 15px**

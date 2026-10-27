@@ -19,7 +19,7 @@
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
   import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
   import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
-  import AttachButton from '$lib/components/common/AttachButton.svelte';
+  import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
   import { openSaveTmpl } from '$lib/state/library.svelte.js';
@@ -78,10 +78,10 @@
           {#each ua.atts as p (p)}
             {#if isImgPath(p) && media.thumbs[thumbKey(p,context)] !== ''}
               {#if media.thumbs[thumbKey(p,context)]}
-                <button class="ub-att-img" data-tip={p.split('/').pop()} onclick={() => (ui.lightbox = media.thumbs[thumbKey(p,context)])}><img src={media.thumbs[thumbKey(p,context)]} alt={p.split('/').pop()} onerror={() => (media.thumbs = { ...media.thumbs, [thumbKey(p,context)]: '' })} /></button>
+                <button class="ub-att-img sq" data-tip={p.split('/').pop()} onclick={() => (ui.lightbox = media.thumbs[thumbKey(p,context)])}><img src={media.thumbs[thumbKey(p,context)]} alt={p.split('/').pop()} onerror={() => (media.thumbs = { ...media.thumbs, [thumbKey(p,context)]: '' })} /></button>
               {:else}
                 <!-- 数据未到：同尺寸占位，图片就位零布局跳动 -->
-                <span class="ub-att-img ph" data-tip={p.split('/').pop()}></span>
+                <span class="ub-att-img sq ph" data-tip={p.split('/').pop()}></span>
               {/if}
             {:else}
               <span class="ub-att">
@@ -405,6 +405,7 @@
         </div>
       {/if}
       <AttachTray items={attachments} {uploading} onremove={(i)=>{if(paneState)paneState.files=paneState.files.filter((_,n)=>n!==i);else removeAttachment(i);}} />
+      <span class="cb-plus"><AttachMenu onfiles={(fs)=>{if(scoped)void uploadPaneFiles(id,fs);else attachFiles(fs);}} /></span>
       <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? (compact ? '输入下一条，回车排队' : '输入下一条，回车排队，等这轮结束自动发送') : suggestion ? `${suggestion}（按 Tab 填入）` : compact ? '继续说…（Shift+Enter 换行）' : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
         oninput={(e)=>watchGrow(e.currentTarget, id||'main')}
         oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
@@ -428,7 +429,6 @@
           {/if}
         </div>
         <div class="cb-right">
-          <AttachButton onfiles={(fs)=>{if(scoped)void uploadPaneFiles(id,fs);else attachFiles(fs);}} />
           <Dropdown compact value={context?.perm_mode||'full'} options={permOptsFor(activeConv?.brain ?? 'claude', activeConvIsSsh)} tone={permTone(context?.perm_mode||'full')} tip={permTipFor(activeConv?.brain ?? 'claude', context?.perm_mode||'full', activeConvIsSsh)} onchange={(v)=>scoped&&context?void splitSetting(context,'perm',v):persistThreadPerm(v)} />
           <!-- 模型下拉列全部厂商（图标区分）：同厂商下一轮生效；跨厂商确认后以历史摘要重建续跑 -->
           <ModelFx options={scoped&&context?splitModelOptions(context):thread.threadComboOpts} value={`${activeConv?.brain ?? 'claude'}::${context?.model??''}`} effort={context?.effort??''} fast={activeConv?.fast ?? false} fastOk={app.brains?.claude_fast_ok ?? false} lockModel={viewBusy} onpick={(v: string) => { if(scoped&&context)void splitSetting(context,'model',v);else void pickThreadCombo(v); }} oneffort={(v:string)=>scoped&&context?void splitSetting(context,'effort',v):persistThreadEffort(v)} onfast={(v: boolean) => { if(scoped&&context)void splitSetting(context,'fast',v);else void persistThreadFast(v); }} />
@@ -508,6 +508,11 @@
   .composer-wrap .composer.compact textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .composer.compact .composer-bar { flex: none; padding: 0 8px 0 0; }
   .composer.compact .cb-left { display: none; }
+  /* 「+」在左下角（和 Claude 客户端一样）：两层时贴在底栏最左、底栏左边让出位置；一行模式时排在文字前面 */
+  .cb-plus { position: absolute; left: 8px; bottom: 8px; z-index: 1; display: flex; }
+  .composer:has(.cb-plus) .cb-left { padding-left: 32px; }
+  .composer.compact .cb-plus { position: static; flex: none; margin-left: 8px; }
+  .composer.compact textarea { padding-left: 6px !important; }
   /* 会话页只读徽标（站点/厂商，不可改）。 */
   .cb-ro { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; color: var(--dim); font-size: 13px; opacity: .9; min-width: 0; }
   .cb-ro-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -716,6 +721,9 @@
      注意不能用 max-width:min(…,100%)：容器 shrink-to-fit，百分比循环引用会让整条声明失效。 */
   .ub-att-img img { display: block; max-width: 260px; max-height: 180px; width: auto; height: auto; }
   .ub-att-img.ph { display: inline-block; width: 128px; height: 96px; cursor: default; animation: phpulse 1.2s ease-in-out infinite; }
+  /* 自己发出去的图片：和输入框里一样的方形缩略图（裁成正方形），点开看原图 */
+  .ub-att-img.sq { width: 84px; height: 84px; min-width: 0; border-radius: 12px; }
+  .ub-att-img.sq img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
   /* 助手消息里的生图产物：与用户附件同款卡片，气泡外基底微调 */
   .gen-imgs { margin-top: 6px; }
   .ub-att.as-btn { cursor: pointer; font: inherit; font-size: 12px; color: inherit; }

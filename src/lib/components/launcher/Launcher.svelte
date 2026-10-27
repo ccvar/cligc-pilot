@@ -12,7 +12,7 @@
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, STYLE_OPTS, chooseWorkspaceFolder, workspaceFolderName, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
   import { autogrow, composer, onComposerKey, onComposerPaste, onComposerDrop, onComposerDragOver, onComposerDragLeave, removeAttachment, attachFiles } from '$lib/state/composer.svelte.js';
-  import AttachButton from '$lib/components/common/AttachButton.svelte';
+  import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startChat } from '$lib/state/turns.svelte.js';
   import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint, CODEX_GITHUB_NOTE } from '$lib/state/models';
@@ -61,6 +61,7 @@
             onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
+            <AttachMenu onfiles={(fs) => attachFiles(fs, true)} folder={app.isWorkspaceChat ? { label: launcher.workspaceDir ? '换一个文件夹' : '添加文件夹', onpick: chooseWorkspaceFolder } : null} />
             {#if app.isSitesHub}
               <Dropdown compact searchable bind:value={launcher.lSite} options={siteOpts} placeholder={sites.list.length ? '选择站点' : '还没有站点'} />
             {:else if app.isSiteConn}
@@ -86,7 +87,6 @@
             {/if}
           </div>
           <div class="cb-right">
-            <AttachButton onfiles={(fs) => attachFiles(fs, true)} />
             <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, app.isSshConn)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, app.isSshConn)} />
             <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
             <UsageRing />
