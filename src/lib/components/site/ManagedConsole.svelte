@@ -20,7 +20,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL, setGroupRule } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
   import type { ManagedGroup } from '$lib/types';
 
   const o = $derived(managed.overview);
@@ -132,6 +132,14 @@
   });
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
+  // 运营目标是编辑时勾的几个预设拼起来的（再加自己写的话）：拆回预设，卡片上显示成一排名称，
+  // 两个方案开头一样时也一眼分得清；自己写的部分接在后面
+  function goalParts(goal: string) {
+    let rest = goal;
+    const presets = GOAL_PRESETS.filter((p) => goal.includes(p.goal));
+    for (const p of presets) rest = rest.replace(p.goal, '');
+    return { presets, rest: rest.replace(/\s+/g, ' ').trim() };
+  }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 日报设置（全局）：只比较这两项
   const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
@@ -288,8 +296,15 @@
             </span>
           </h3>
           {#if g.goal?.trim()}
-            <!-- 运营目标默认只显示一行，点开看全文 -->
-            <button class="goal" class:open={goalOpen.has(g.id)} onclick={() => toggleGoal(g.id)} data-tip={goalOpen.has(g.id) ? null : '点开看完整的运营目标'}><span class="goal-t">{g.goal}</span><span class="goal-more">{goalOpen.has(g.id) ? '收起' : '展开'}</span></button>
+            {@const gp = goalParts(g.goal)}
+            <!-- 运营目标：预设显示成名称胶囊（悬停看完整说明），自己写的话接在后面、默认一行，点开看全文 -->
+            <div class="goal" class:open={goalOpen.has(g.id)}>
+              <span class="goal-lbl"><Icon name="target" size={13} />目标</span>
+              {#each gp.presets as p (p.key)}<span class="goal-pill" data-tip={p.goal}><Icon name={p.icon} size={12} />{p.name}</span>{/each}
+              {#if gp.rest}
+                <button class="goal-t" onclick={() => toggleGoal(g.id)} data-tip={goalOpen.has(g.id) ? '收起' : `点开看全文：${gp.rest}`}>{gp.rest}</button>
+              {/if}
+            </div>
           {/if}
           <!-- 第一行只看：模型（带厂商图标）和发布规则，文字压短尽量一行放下；第二行是能直接点的开关 -->
           <div class="rules">
@@ -414,11 +429,15 @@
   .more-pop span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .more-pop b { font-size: 13px; font-weight: 500; }
   .more-pop small { font-size: 11px; color: var(--faint); line-height: 1.4; }
-  .goal { display: flex; align-items: baseline; gap: 8px; width: 100%; margin: -6px 0 10px; padding: 0; border: none; background: none; font: inherit; font-size: 12.5px; color: var(--dim); line-height: 1.6; text-align: left; cursor: pointer; }
-  .goal-t { flex: 1; min-width: 0; max-width: 90ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .goal.open .goal-t { white-space: normal; color: var(--text); }
-  .goal-more { flex: none; font-size: 12px; color: var(--faint); }
-  .goal:hover .goal-more { color: var(--text); text-decoration: underline; }
+  /* 运营目标：方案里最重要的一条，比下面的规则深一级；预设是胶囊，自己写的话一行省略、点开看全文 */
+  .goal { display: flex; align-items: center; gap: 6px; min-width: 0; margin: -4px 0 12px; font-size: 13px; color: var(--text); }
+  .goal.open { flex-wrap: wrap; }
+  .goal-lbl { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; color: var(--dim); font-size: 12px; }
+  .goal-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; background: var(--rail); border: 1px solid var(--border); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+  .goal-pill :global(.ico) { color: var(--dim); }
+  .goal-t { flex: 1; min-width: 0; margin-left: 4px; padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--dim); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .goal.open .goal-t { white-space: normal; flex-basis: 100%; margin-left: 0; color: var(--text); line-height: 1.6; }
+  .goal-t:hover { color: var(--text); }
   /* 一行放下：每项不折行，模型名和动作列表太长时省略号收起；窄到放不下时才换行 */
   .rules { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; min-width: 0; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
