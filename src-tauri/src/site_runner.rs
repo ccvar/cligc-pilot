@@ -2437,6 +2437,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             crate::link_check::schedule(&app);
             // 在线监测：首页每小时、证书每天、域名每周（见 monitor）
             crate::monitor::schedule(&app);
+            // 新页面收录：上线 3 天起用 URL 检查确认 Google 编入索引没有（见 index_check）
+            crate::index_check::schedule(&app);
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;

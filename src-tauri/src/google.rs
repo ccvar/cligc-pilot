@@ -427,6 +427,29 @@ pub async fn gsc_submit_sitemap(token: &str, site: &str, feed: &str) -> Result<(
     api(token, reqwest::Method::PUT, &url, None).await.map(|_| ())
 }
 
+/// URL 检查（Search Console URL Inspection API）：这个网址有没有被 Google 编入索引。每个资源每天约 2000 次额度。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Inspection {
+    /// PASS（已编入）| NEUTRAL（没编入，但不算错）| FAIL（有问题）| 其它
+    pub verdict: String,
+    /// Search Console 里的覆盖状态原文，如「已抓取 - 尚未编入索引」「已发现 - 尚未编入索引」
+    pub coverage: String,
+    pub last_crawl: String,
+    pub google_canonical: String,
+}
+
+pub async fn gsc_inspect(token: &str, site: &str, url: &str) -> Result<Inspection, String> {
+    let body = serde_json::json!({ "inspectionUrl": url, "siteUrl": site, "languageCode": "zh-CN" });
+    let v = api(token, reqwest::Method::POST, "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect", Some(body)).await?;
+    let r = &v["inspectionResult"]["indexStatusResult"];
+    Ok(Inspection {
+        verdict: r["verdict"].as_str().unwrap_or("").to_string(),
+        coverage: r["coverageState"].as_str().unwrap_or("").to_string(),
+        last_crawl: r["lastCrawlTime"].as_str().unwrap_or("").to_string(),
+        google_canonical: r["googleCanonical"].as_str().unwrap_or("").to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,6 +4,7 @@ mod typesafe;
 mod jev_checks;
 mod link_check;
 mod monitor;
+mod index_check;
 mod agent;
 mod bing;
 mod api_agent;

@@ -42,8 +42,11 @@
     const wait = Math.max(0, 31 - days);
     const tail = `\n上线 ${days} 天${wait ? `，再过 ${wait} 天出复盘结论（搜索数据有 2–3 天延迟，前几周的数字只是苗头）` : '，复盘结论稍后出'}`;
     if (!b) {
-      if (!now) return { t: days < 4 ? '等数据' : '还没展示', c: 'line', tip: `新页面，Google 还没有展示记录${tail}` };
-      return { t: `展示 ${now.impressions}`, c: '', tip: `新页面近 28 天：展示 ${now.impressions}、点击 ${now.clicks}${now.position ? `、平均排名 ${now.position.toFixed(1)}` : ''}${tail}` };
+      // 新页面：先看有没有被 Google 收录（上线 3 天起用 URL 检查确认），收录了再看展示
+      const idx = i.index_state === 'indexed' ? '已被 Google 收录' : i.index_state === 'not_indexed' ? `还没被 Google 收录（${i.index_note}）` : i.index_state === 'error' ? `收录情况查不了：${i.index_note}` : days < 3 ? '上线 3 天后开始确认有没有被收录' : '等确认收录';
+      if (i.index_state === 'not_indexed') return { t: '未收录', c: 'down', tip: `新页面${idx}${tail}` };
+      if (!now) return { t: i.index_state === 'indexed' ? '已收录' : days < 4 ? '等数据' : '还没展示', c: i.index_state === 'indexed' ? '' : 'line', tip: `新页面，${idx}；Google 还没有展示记录${tail}` };
+      return { t: `展示 ${now.impressions}`, c: '', tip: `新页面，${idx}；近 28 天：展示 ${now.impressions}、点击 ${now.clicks}${now.position ? `、平均排名 ${now.position.toFixed(1)}` : ''}${tail}` };
     }
     if (days < 4) return { t: '等数据', c: 'line', tip: `上线前 28 天：${rowText(b)}${tail}` };
     const after = now ?? { clicks: 0, impressions: 0, ctr: 0, position: 0, key: '' };

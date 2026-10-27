@@ -422,6 +422,10 @@ export interface OpsItem {
   /** 上线前 / 复盘时这个页面近 28 天的 Google 数据 */
   before?: GscRow | null;
   after?: GscRow | null;
+  /** 新页面有没有被 Google 编入索引：空＝还没查 | indexed | not_indexed | error；note 是 Search Console 的覆盖状态 */
+  index_state?: string;
+  index_note?: string;
+  index_checked?: number;
 }
 
 // ---- 多站点 ----

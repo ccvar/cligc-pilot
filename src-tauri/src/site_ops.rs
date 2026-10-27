@@ -369,6 +369,15 @@ pub struct QueueItem {
     /// 内容质检没过后，AI 已经按原因重写过一次（只重写一次）。
     #[serde(default)]
     pub jev_rewritten: bool,
+    /// 新页面有没有被 Google 编入索引（上线 3 天后开始用 URL 检查查，见 index_check）：
+    /// 空＝还没查 | indexed | not_indexed（查过、还没编入）| error（查不了，比如没接 Search Console）
+    #[serde(default)]
+    pub index_state: String,
+    /// Search Console 给的覆盖状态原文（没编入时说明卡在哪一步）
+    #[serde(default)]
+    pub index_note: String,
+    #[serde(default)]
+    pub index_checked: u64,
     /// 上次失败的原因，重做时交给 AI。
     #[serde(default)]
     pub retry_note: String,
