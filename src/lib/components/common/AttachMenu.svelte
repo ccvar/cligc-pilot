@@ -19,7 +19,7 @@
   function toggle() {
     if (open) { open = false; return; }
     const r = btn!.getBoundingClientRect();
-    pos = { left: Math.max(8, Math.min(r.left, window.innerWidth - 248)), bottom: window.innerHeight - r.top + 6 };
+    pos = { left: Math.max(8, Math.min(r.left, window.innerWidth - 216)), bottom: window.innerHeight - r.top + 6 };
     open = true;
   }
   async function pickFiles() {
@@ -77,7 +77,7 @@
   .attach-plus { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; flex: none; border: none; background: none; border-radius: 8px; color: var(--dim); cursor: pointer; transition: background-color .12s, color .12s; }
   .attach-plus:hover:not(:disabled), .attach-plus.on { background: #efede8; color: var(--text); }
   .attach-plus:disabled { opacity: .45; cursor: default; }
-  .attach-pop { position: fixed; z-index: 60; width: 240px; padding: 6px; background: #fff; border: 1px solid var(--border2); border-radius: 14px; box-shadow: 0 10px 30px rgba(30, 28, 24, .12), 0 2px 6px rgba(30, 28, 24, .06); }
+  .attach-pop { position: fixed; z-index: 60; width: 208px; padding: 6px; background: #fff; border: 1px solid var(--border2); border-radius: 14px; box-shadow: 0 10px 30px rgba(30, 28, 24, .12), 0 2px 6px rgba(30, 28, 24, .06); }
   .attach-pop button { width: 100%; display: flex; align-items: center; gap: 11px; padding: 8px 10px; border: none; background: none; border-radius: 9px; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
   .attach-pop button:hover { background: #f4f3ef; }
   .attach-pop button svg { flex: none; color: var(--dim); }
