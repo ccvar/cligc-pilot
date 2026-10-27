@@ -134,9 +134,8 @@
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   });
-  // 方案卡片：暂停的方案默认收起，其余默认展开（grpToggled 记的是和默认相反的那些）
-  let grpToggled = $state<Set<string>>(new Set());
-  function toggleGrp(id: string) { const n = new Set(grpToggled); if (n.has(id)) n.delete(id); else n.add(id); grpToggled = n; }
+  // 方案卡片展开 / 收起：点过的记下来；没点过的，暂停的方案收起、其余展开
+  let grpOpen = $state<Record<string, boolean>>({});
   // 站点多的方案先显示 SITE_LIMIT 个，要你处理的、失败的、正在跑的排前面
   const SITE_LIMIT = 6;
   let showAll = $state<Set<string>>(new Set());
@@ -274,15 +273,14 @@
     {:else}
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
-        {@const gOpen = gOff ? grpToggled.has(g.id) : !grpToggled.has(g.id)}
+        {@const gOpen = grpOpen[g.id] ?? !gOff}
         {@const sum = groupSummary(g)}
         {@const ordered = orderSites(g)}
         {@const visible = showAll.has(g.id) ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
-          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
+          <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
-            <span class="grow"></span>
-            {#if gOff && g.sites.length}<button class="link-btn fold" onclick={() => toggleGrp(g.id)}>{gOpen ? '收起' : '展开'}</button>{/if}
+            <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
             <span class="more-wrap">
               <button class="ic-btn ic-sm" class:on={planMenu === g.id} onclick={() => (planMenu = planMenu === g.id ? '' : g.id)} aria-label="这个方案的操作" aria-haspopup="menu" aria-expanded={planMenu === g.id} data-tip={planMenu === g.id ? null : '编辑、暂停这个方案'}><Icon name="more" size={16} /></button>
@@ -485,7 +483,12 @@
   .gs-all { display: block; width: 100%; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
   .gs-all:hover { color: var(--text); background: #fcfbf9; }
   .grp.shut > h3 { margin-bottom: 0; }
-  .fold { font-size: 12px; color: var(--dim); }
+  /* 方案标题整行（名称、标签、概况、空白处）都能点开收起，箭头在右边 */
+  .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
+  .grp-tg .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
+  .grp-tg .chev.up { transform: rotate(180deg); }
+  .grp-tg:hover .chev { color: var(--dim); }
   .gs .grow { flex: 1; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
