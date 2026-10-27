@@ -17,8 +17,8 @@
   import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
   import { permits, permitDesc, togglePermitCmd, respondPermit } from '$lib/state/permits.svelte.js';
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
-  import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
-  import { legacyComposer, composer, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
+  import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, uploadPanePaths, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
+  import { legacyComposer, composer, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, attachPaths, composerGrown } from '$lib/state/composer.svelte.js';
   import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
@@ -430,7 +430,7 @@
         </div>
       {/if}
       <AttachTray items={attachments} {uploading} onremove={(i)=>{if(paneState)paneState.files=paneState.files.filter((_,n)=>n!==i);else removeAttachment(i);}} />
-      <span class="cb-plus"><AttachMenu onfiles={(fs)=>{if(scoped)void uploadPaneFiles(id,fs);else attachFiles(fs);}} /></span>
+      <span class="cb-plus"><AttachMenu onpaths={(ps)=>{if(scoped)void uploadPanePaths(id,ps);else attachPaths(ps);}} /></span>
       <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? (compact ? '输入下一条，回车排队' : '输入下一条，回车排队，等这轮结束自动发送') : suggestion ? `${suggestion}（按 Tab 填入）` : compact ? '继续说…（Shift+Enter 换行）' : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
         oninput={(e)=>watchGrow(e.currentTarget, id||'main')}
         oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
@@ -477,7 +477,7 @@
       <div class="dv-box">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /><path d="M4.5 14.5v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
         <b>松开即可添加到对话</b>
-        <small>图片、文档、代码文件都可以，单个不超过 25MB</small>
+        <small>图片、文档、代码文件都可以；拖进来的单个不超过 200MB，更大的点输入框左下角的「+」选</small>
       </div>
     </div>
   {/if}

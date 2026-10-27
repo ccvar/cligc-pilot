@@ -962,32 +962,142 @@ fn is_pending_conv_id(id: &str) -> bool {
     id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
 }
 
-/// `workspace_dir`：启动页给还没建的自由对话加附件时传（空串＝没选文件夹）；其它情况为 None。
+/// 拖入 / 粘贴的附件上限：内容要整个经过前端（读进内存再传过来），太大会把界面卡住。
+/// 点「+」选的文件走 `save_attachment_path`，后端按路径直接复制，不设上限。
+const ATTACH_RAW_MAX: usize = 200 * 1024 * 1024;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttachMeta {
+    conn_id: String,
+    project: String,
+    /// 启动页给还没建的自由对话加附件时传（空串＝没选文件夹）；其它情况为空
+    #[serde(default)]
+    workspace_dir: Option<String>,
+    filename: String,
+}
+
+/// 拖入 / 粘贴的文件存进当前会话工作目录的 uploads/，返回相对路径（AI 可直接读取）。
+/// 内容走原始字节（invoke 的 body 直接是 Uint8Array），不再转成 JSON 数字数组——那样 1 个字节要变成好几个字符，
+/// 25MB 就要传 100MB 左右的文本。会话信息放在 `x-pilot-attach` 头里（JSON 再 base64，文件名可能有中文）。
 #[tauri::command]
 async fn save_attachment(
+    state: tauri::State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("附件内容格式不对".into());
+    };
+    if data.len() > ATTACH_RAW_MAX {
+        return Err("文件太大（拖入 / 粘贴上限 200MB）：更大的文件请点输入框左下角的「+」选择".into());
+    }
+    let meta: AttachMeta = {
+        use base64::Engine as _;
+        let raw = request
+            .headers()
+            .get("x-pilot-attach")
+            .and_then(|v| v.to_str().ok())
+            .ok_or("缺少附件信息")?;
+        let json = base64::engine::general_purpose::STANDARD.decode(raw).map_err(|_| "附件信息格式不对")?;
+        serde_json::from_slice(&json).map_err(|e| format!("附件信息格式不对: {e}"))?
+    };
+    let (conn, runtime_project) = attachment_runtime(&state, &meta.conn_id, &meta.project, meta.workspace_dir.as_deref())?;
+    let data = data.clone();
+    // 大文件写盘别占着主线程 / tokio 工作线程。
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = attachment_dest(&conn, &runtime_project, &meta.filename)?;
+        std::fs::write(&target, &data).map_err(|e| format!("保存附件失败: {e}"))?;
+        Ok(upload_rel(&target))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+struct SavedAttachment {
+    /// 工作目录里的相对路径（uploads/xxx）
+    path: String,
+    /// 图片的缩略图（data URI）；不是图片或太大就是空串
+    preview: String,
+}
+
+/// 点「+」选的文件：后端按路径直接复制进 uploads/，不经过前端，所以没有大小限制。
+#[tauri::command]
+async fn save_attachment_path(
     state: tauri::State<'_, AppState>,
     conn_id: String,
     project: String,
     workspace_dir: Option<String>,
-    filename: String,
-    data: Vec<u8>,
-) -> Result<String, String> {
-    if data.len() > 25_000_000 {
-        return Err("文件太大（上限 25MB）".into());
-    }
+    src: String,
+) -> Result<SavedAttachment, String> {
     let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project, workspace_dir.as_deref())?;
-    // 25MB 的写盘别占着主线程 / tokio 工作线程。
-    tauri::async_runtime::spawn_blocking(move || write_attachment(&conn, &runtime_project, &filename, &data))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = std::path::PathBuf::from(&src);
+        let meta = std::fs::metadata(&src).map_err(|e| format!("读不到这个文件: {e}"))?;
+        if meta.is_dir() {
+            return Err("选的是文件夹：请选文件".into());
+        }
+        let filename = src.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let target = attachment_dest(&conn, &runtime_project, &filename)?;
+        std::fs::copy(&src, &target).map_err(|e| format!("复制附件失败: {e}"))?;
+        let preview = match image_mime(&filename) {
+            Some(mime) if meta.len() <= 8_000_000 => std::fs::read(&target)
+                .map(|d| {
+                    use base64::Engine as _;
+                    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(d))
+                })
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        Ok(SavedAttachment { path: upload_rel(&target), preview })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn write_attachment(
+fn image_mime(name: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(name).extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod attachment_dest_tests {
+    use super::*;
+
+    #[test]
+    fn same_name_gets_numbered_and_path_is_relative() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = workspace_connection(&dir.path().to_string_lossy());
+        let a = attachment_dest(&conn, "", "shot.png").unwrap();
+        std::fs::write(&a, b"x").unwrap();
+        let b = attachment_dest(&conn, "", "shot.png").unwrap();
+        assert_eq!(upload_rel(&a), "uploads/shot.png");
+        assert_eq!(upload_rel(&b), "uploads/shot-1.png");
+        assert_eq!(image_mime("a.JPG"), Some("image/jpeg"));
+        assert_eq!(image_mime("a.zip"), None);
+    }
+}
+
+/// uploads/ 下的相对路径（前端和 AI 都用这个）
+fn upload_rel(target: &std::path::Path) -> String {
+    format!("uploads/{}", target.file_name().and_then(|n| n.to_str()).unwrap_or("file"))
+}
+
+/// 附件要放到哪：工作目录下的 uploads/，重名就加 -1、-2…
+fn attachment_dest(
     conn: &conns::Connection,
     runtime_project: &str,
     filename: &str,
-    data: &[u8],
-) -> Result<String, String> {
+) -> Result<std::path::PathBuf, String> {
     let dir = {
         let w = resolve_work_dir(conn, runtime_project)?;
         if w.is_empty() {
@@ -1019,13 +1129,7 @@ fn write_attachment(
             }
         }
     }
-    std::fs::write(&target, data).map_err(|e| format!("保存附件失败: {e}"))?;
-    let name = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(&safe)
-        .to_string();
-    Ok(format!("uploads/{name}"))
+    Ok(target)
 }
 
 /// 校验并解析消息里提到的文件路径为绝对路径。相对路径按工作目录解析；绝对路径
@@ -1621,21 +1725,7 @@ async fn read_workdir_image(
     project: String,
     path: String,
 ) -> Result<String, String> {
-    let ext = std::path::Path::new(&path)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let mime = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "bmp" => "image/bmp",
-        "avif" => "image/avif",
-        _ => return Err("不是图片文件".into()),
-    };
+    let mime = image_mime(&path).ok_or("不是图片文件")?;
     let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project, None)?;
     tauri::async_runtime::spawn_blocking(move || {
         let p = resolve_in_workdir(&conn, &runtime_project, &path)?;
@@ -4809,6 +4899,7 @@ pub fn run() {
             sftp_upload,
             sftp_transfer::sftp_upload_entry,
             save_attachment,
+            save_attachment_path,
             read_workdir_image,
             resolve_workdir_file,
             usage_stats,

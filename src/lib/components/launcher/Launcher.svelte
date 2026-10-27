@@ -11,7 +11,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, STYLE_OPTS, chooseWorkspaceFolder, workspaceFolderName, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
-  import { autogrow, composer, onComposerKey, onComposerPaste, onComposerDrop, onComposerDragOver, onComposerDragLeave, removeAttachment, attachFiles } from '$lib/state/composer.svelte.js';
+  import { autogrow, composer, onComposerKey, onComposerPaste, onComposerDrop, onComposerDragOver, onComposerDragLeave, removeAttachment, attachPaths } from '$lib/state/composer.svelte.js';
   import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startChat } from '$lib/state/turns.svelte.js';
@@ -61,7 +61,7 @@
             onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
-            <AttachMenu onfiles={(fs) => attachFiles(fs, true)} folder={app.isWorkspaceChat ? { label: launcher.workspaceDir ? '换一个文件夹' : '添加文件夹', onpick: chooseWorkspaceFolder } : null} />
+            <AttachMenu onpaths={(ps) => attachPaths(ps, true)} folder={app.isWorkspaceChat ? { label: launcher.workspaceDir ? '换一个文件夹' : '添加文件夹', onpick: chooseWorkspaceFolder } : null} />
             {#if app.isSitesHub}
               <Dropdown compact searchable bind:value={launcher.lSite} options={siteOpts} placeholder={sites.list.length ? '选择站点' : '还没有站点'} />
             {:else if app.isSiteConn}

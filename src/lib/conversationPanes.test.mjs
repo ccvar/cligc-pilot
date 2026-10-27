@@ -22,7 +22,7 @@ function harness(){
     endTurn:(c,id)=>{ctx.splitSnapshots[id]=c;delete ctx.running[id];delete ctx.lives[id];},
     refreshConvos:async()=>{},maybeAutoRetry:()=>{},failTurn:async(e,id)=>{delete ctx.running[id];ctx.restoreSplitQueue(id);},
     invoke:async(command,args)=>{calls.push({command,args});if(command==='send_message')return new Promise((resolve,reject)=>{results[args.convId]={resolve,reject};});return 'saved/file.txt';},
-    conversationProject:c=>c.site_slug,attachmentFilename:f=>f.name,openConv:()=>Promise.resolve(),say:()=>{},view:'thread',SITES_CONN_ID:'__sites__',SITE_PREFIX:'site:',paneTabs:{},tab:'overview',list:[],draft:'',attachments:[],queued:null,splitSuspended:false,splitVisible:true,conns:[],Date,Uint8Array,
+    conversationProject:c=>c.site_slug,attachmentFilename:f=>f.name,ATTACH_RAW_MAX:200*1024*1024,ATTACH_RAW_TOO_BIG:'too big',filePreview:async()=>'',saveAttachmentBytes:(t,filename)=>ctx.invoke('save_attachment',{...t,filename}),openConv:()=>Promise.resolve(),say:()=>{},view:'thread',SITES_CONN_ID:'__sites__',SITE_PREFIX:'site:',paneTabs:{},tab:'overview',list:[],draft:'',attachments:[],queued:null,splitSuspended:false,splitVisible:true,conns:[],Date,Uint8Array,
   };
   vm.createContext(withStores(ctx));vm.runInContext(code,ctx);return{ctx,calls,results};
 }

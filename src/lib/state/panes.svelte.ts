@@ -9,7 +9,7 @@ import { app, say, refreshConvos, confirmDialog } from './app.svelte.js';
 import { brainUsable, isCodexSsh, CODEX_SSH_NOTE, brainLabel } from './models';
 import { thread, conversationModelOptions } from './thread.svelte.js';
 import { turns, beginTurn, optimisticUser, makeChannel, endTurn, maybeAutoRetry, failTurn, rebuildSession } from './turns.svelte.js';
-import { composer, autogrow, attachmentFilename } from './composer.svelte.js';
+import { composer, autogrow, attachmentFilename, saveAttachmentBytes, saveAttachmentPath, filePreview, ATTACH_RAW_MAX, ATTACH_RAW_TOO_BIG } from './composer.svelte.js';
 import type { Attach } from './composer.svelte.js';
 import { detectSiteUrl, conversationProject, ATT_MARKER } from './messages.svelte.js';
 
@@ -333,15 +333,28 @@ export function singleConversationDragOver(e:DragEvent) {
   panes.singleDropEdge=dropEdge(e.clientX-r.left,e.clientY-r.top,r.width,r.height);
 }
 export async function splitUpload(c:Conversation,file:File) {
-  if(file.size>25*1024*1024)throw new Error('文件太大（上限 25MB）');
+  if(file.size>ATTACH_RAW_MAX)throw new Error(ATTACH_RAW_TOO_BIG);
   panes.paneUploading[c.id]=(panes.paneUploading[c.id]??0)+1;
   try {
-    const path=await invoke<string>('save_attachment',{connId:c.conn_id,project:conversationProject(c),filename:attachmentFilename(file),data:Array.from(new Uint8Array(await file.arrayBuffer()))});
-    let preview='';
-    if(file.type?.startsWith('image/'))preview=await new Promise<string>(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>resolve('');reader.readAsDataURL(file);});
+    const filename=attachmentFilename(file);
+    const path=await saveAttachmentBytes({connId:c.conn_id,project:conversationProject(c)},filename,file);
+    const preview=await filePreview(file,filename);
     const state=panes.splitDrafts[c.id];
     if(state)state.files=[...state.files,{name:file.name||path.split('/').pop()||'附件',path,preview}];
   }finally{panes.paneUploading[c.id]--;}
+}
+/** 点「+」选的文件（本机路径）：后端直接复制，不受拖入 / 粘贴的大小限制 */
+export async function uploadPanePaths(id:string,paths:string[]) {
+  const c=splitConversation(id);if(!c)return;
+  for(const src of paths){
+    panes.paneUploading[c.id]=(panes.paneUploading[c.id]??0)+1;
+    try{
+      const r=await saveAttachmentPath({connId:c.conn_id,project:conversationProject(c)},src);
+      const state=panes.splitDrafts[c.id];
+      if(state)state.files=[...state.files,{name:r.path.split('/').pop()||'附件',path:r.path,preview:r.preview}];
+    }catch(e){panes.splitErrors[id]=e instanceof Error?e.message:String(e);}
+    finally{panes.paneUploading[c.id]--;}
+  }
 }
 export function restoreSplitQueue(id:string) {
   const q=panes.splitQueued[id], state=panes.splitDrafts[id];

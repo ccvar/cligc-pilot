@@ -1,16 +1,17 @@
 <script lang="ts">
   // 输入框左下角的「+」（和 Claude 客户端一样）：点开是菜单——添加文件或图片（⌘U），启动页自由对话还能添加文件夹。
+  // 选文件用系统对话框拿到路径，交给后端直接复制（不经过前端读内容，所以不限大小）。
   // 菜单用 fixed 定位贴在按钮上方：分屏格子里的输入框外层会裁切溢出，absolute 会被切掉。
   // ⌘U 只给焦点所在的那个输入框（分屏时每格各有一个）；焦点不在任何输入框、页面上又只有一个时也给它。
   import { onMount } from 'svelte';
-  let { onfiles, folder = null, disabled = false }: {
-    onfiles: (files: File[]) => void;
+  import { open as openDialog } from '@tauri-apps/plugin-dialog';
+  let { onpaths, folder = null, disabled = false }: {
+    onpaths: (paths: string[]) => void;
     /** 启动页自由对话：选工作文件夹 */
     folder?: { label: string; onpick: () => void } | null;
     disabled?: boolean;
   } = $props();
   let btn = $state<HTMLButtonElement | undefined>();
-  let input = $state<HTMLInputElement | undefined>();
   let open = $state(false);
   let pos = $state({ left: 0, bottom: 0 });
   const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
@@ -21,7 +22,12 @@
     pos = { left: Math.max(8, Math.min(r.left, window.innerWidth - 248)), bottom: window.innerHeight - r.top + 6 };
     open = true;
   }
-  function pickFiles() { open = false; input?.click(); }
+  async function pickFiles() {
+    open = false;
+    const picked = await openDialog({ title: '添加文件或图片', multiple: true, directory: false });
+    const paths = picked == null ? [] : Array.isArray(picked) ? picked : [picked];
+    if (paths.length) onpaths(paths);
+  }
   function pickFolder() { open = false; folder?.onpick(); }
 
   onMount(() => {
@@ -34,7 +40,7 @@
       const lone = (!act || act === document.body) && document.querySelectorAll('.attach-plus').length === 1;
       if (!focusedHere && !lone) return;
       e.preventDefault();
-      pickFiles();
+      void pickFiles();
     };
     const onDown = (e: PointerEvent) => {
       if (!open) return;
@@ -51,8 +57,6 @@
 <button type="button" class="attach-plus" class:on={open} bind:this={btn} {disabled} onclick={toggle} aria-label="添加" aria-haspopup="menu" aria-expanded={open} data-tip={open ? undefined : '添加文件或图片'}>
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.8v10.4M2.8 8h10.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
 </button>
-<input bind:this={input} type="file" multiple hidden
-  onchange={(e) => { const files = Array.from(e.currentTarget.files ?? []); e.currentTarget.value = ''; if (files.length) onfiles(files); }} />
 {#if open}
   <div class="attach-pop" role="menu" style:left="{pos.left}px" style:bottom="{pos.bottom}px">
     <button type="button" role="menuitem" onclick={pickFiles}>

@@ -91,34 +91,70 @@ function launcherTarget(): { connId: string; project: string; workspaceDir?: str
   return '先进入一个对话再添加文件';
 }
 export function launcherTargetKey(): string { const t = launcherTarget(); return typeof t === 'string' ? '' : JSON.stringify(t); }
-async function attachFile(f: File, fromLauncher = false) {
+type AttachTarget = { connId: string; project: string; workspaceDir?: string };
+/** 拖入 / 粘贴的上限：内容要整个读进前端再传给后端，太大会卡住界面。点「+」选的文件按路径复制，不受这个限制。 */
+export const ATTACH_RAW_MAX = 200 * 1024 * 1024;
+export const ATTACH_RAW_TOO_BIG = '文件太大（拖入 / 粘贴上限 200MB）：更大的文件请点输入框左下角的「+」选择';
+/** 拖入 / 粘贴：内容按原始字节传（不转成 JSON 数字数组），会话信息放请求头（JSON 再 base64，文件名可能有中文）。 */
+export async function saveAttachmentBytes(t: AttachTarget, filename: string, f: File): Promise<string> {
+  if (f.size > ATTACH_RAW_MAX) throw new Error(ATTACH_RAW_TOO_BIG);
+  const meta = new TextEncoder().encode(JSON.stringify({ connId: t.connId, project: t.project, workspaceDir: t.workspaceDir ?? null, filename }));
+  let bin = ''; for (const b of meta) bin += String.fromCharCode(b);
+  return invoke<string>('save_attachment', new Uint8Array(await f.arrayBuffer()), { headers: { 'x-pilot-attach': btoa(bin) } });
+}
+/** 图片缩略图：小图直接转 data URI；大图用对象 URL（不再复制一份内容进内存） */
+export function filePreview(f: File, filename: string): Promise<string> {
+  if (!f.type.startsWith('image/') && !isImgPath(filename)) return Promise.resolve('');
+  if (f.size > 8_000_000) return Promise.resolve(URL.createObjectURL(f));
+  return new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => res(''); r.readAsDataURL(f); });
+}
+/** 点「+」选的文件：只把路径交给后端，后端直接复制进工作目录，所以没有大小限制。 */
+export function saveAttachmentPath(t: AttachTarget, src: string): Promise<{ path: string; preview: string }> {
+  return invoke('save_attachment_path', { connId: t.connId, project: t.project, workspaceDir: t.workspaceDir ?? null, src });
+}
+/** 这一次加附件存到哪；启动页换了站点 / 文件夹以后再加，之前那几个文件在旧位置，一起清掉 */
+function resolveTarget(fromLauncher: boolean): AttachTarget | null {
   const lt = fromLauncher ? launcherTarget() : null;
-  if (typeof lt === 'string') { say(lt, 'err'); return; }
+  if (typeof lt === 'string') { say(lt, 'err'); return null; }
   const target = lt ?? attachmentTarget();
-  if (!target) { say('先进入一个对话再添加文件', 'err'); return; }
+  if (!target) { say('先进入一个对话再添加文件', 'err'); return null; }
   if (lt) {
-    // 换了站点 / 文件夹以后再加：之前那几个文件在旧位置，一起清掉
     const key = JSON.stringify(lt);
     if (composer.launcherKey !== key) { composer.attachments = []; composer.launcherKey = key; }
   }
-  if (f.size > 25 * 1024 * 1024) { say('文件太大（上限 25MB）', 'err'); return; }
-  const filename = attachmentFilename(f);
+  return target;
+}
+async function withAttaching(job: () => Promise<Attach>) {
   composer.attachingCount++;
   composer.attaching = true;
-  try {
-    const buf = new Uint8Array(await f.arrayBuffer());
-    const path = await invoke<string>('save_attachment', { connId: target.connId, project: target.project, workspaceDir: lt?.workspaceDir ?? null, filename, data: Array.from(buf) });
-    let preview = '';
-    if (f.type.startsWith('image/') || isImgPath(filename)) {
-      preview = await new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => res(''); r.readAsDataURL(f); });
-    }
-    composer.attachments = [...composer.attachments, { name: path.split('/').pop() || filename, path, preview }];
-  } catch (e) { say(String(e), 'err'); }
+  try { const a = await job(); composer.attachments = [...composer.attachments, a]; }
+  catch (e) { say(e instanceof Error ? e.message : String(e), 'err'); }
   finally { composer.attachingCount--; composer.attaching = composer.attachingCount > 0; }
 }
-/** 选文件 / 拖入 / 粘贴进来的一批文件。fromLauncher：启动页（还没有对话）。 */
+async function attachFile(f: File, fromLauncher = false) {
+  const target = resolveTarget(fromLauncher);
+  if (!target) return;
+  if (f.size > ATTACH_RAW_MAX) { say(ATTACH_RAW_TOO_BIG, 'err'); return; }
+  const filename = attachmentFilename(f);
+  await withAttaching(async () => {
+    const path = await saveAttachmentBytes(target, filename, f);
+    return { name: path.split('/').pop() || filename, path, preview: await filePreview(f, filename) };
+  });
+}
+/** 拖入 / 粘贴进来的一批文件。fromLauncher：启动页（还没有对话）。 */
 export function attachFiles(files: Iterable<File>, fromLauncher = false) {
   for (const f of Array.from(files)) void attachFile(f, fromLauncher);
+}
+/** 点「+」选的一批文件（本机路径）。 */
+export function attachPaths(paths: string[], fromLauncher = false) {
+  const target = resolveTarget(fromLauncher);
+  if (!target) return;
+  for (const src of paths) {
+    void withAttaching(async () => {
+      const r = await saveAttachmentPath(target, src);
+      return { name: r.path.split('/').pop() || src.split(/[\\/]/).pop() || src, path: r.path, preview: r.preview };
+    });
+  }
 }
 export function removeAttachment(i: number) { composer.attachments = composer.attachments.filter((_, idx) => idx !== i); }
 export function queuedPayloadText(message: QueuedMessage): string {

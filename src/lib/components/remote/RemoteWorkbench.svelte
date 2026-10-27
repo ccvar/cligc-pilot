@@ -13,7 +13,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { workbench, reconnectTerm, toggleWbTerm, toggleWbChat, toggleWbFiles, missingSshCredential, repairActiveSshCredential, startWbResize } from '$lib/state/workbench.svelte.js';
-  import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
+  import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey, attachPaths, composerGrown } from '$lib/state/composer.svelte.js';
   import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层，和对话输入框一样
@@ -89,7 +89,7 @@
             <div class="composer" class:compact class:fileover={composer.composerFileOver} role="group" aria-label="远程消息输入"
               ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={onComposerDrop}>
               <AttachTray items={composer.attachments} uploading={composer.attaching} onremove={removeAttachment} />
-              <span class="cb-plus"><AttachMenu onfiles={(fs) => attachFiles(fs)} /></span>
+              <span class="cb-plus"><AttachMenu onpaths={(ps) => attachPaths(ps)} /></span>
               <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="1" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
                 oninput={(e) => composerGrown(e.currentTarget, grown, (v) => (grown = v))}
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
