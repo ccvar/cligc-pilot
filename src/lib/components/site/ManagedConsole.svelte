@@ -173,7 +173,7 @@
       <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
     </div>
     <div class="row">
-      <button class="ic-btn" onclick={() => newGroup()} aria-label="新增托管方案" data-tip="新增托管方案"><Icon name="plus" size={15} /></button>
+      <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={13} />新增方案</button>
       <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
       {#if o?.sites.length}
         <div class="more-wrap">
@@ -522,4 +522,6 @@
   .md :global(h1) { font-size: 16px; margin: 0 0 8px; }
   .md :global(h2) { font-size: 14px; margin: 16px 0 6px; }
   .md :global(ul) { padding-left: 18px; margin: 6px 0; }
+  /* 和旁边「新增方案」小按钮一样高 */
+  .page-head .more-wrap > .ic-btn { width: 26px; height: 26px; border-radius: 7px; }
 </style>
