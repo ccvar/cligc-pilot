@@ -34,7 +34,7 @@
     <h3><Icon name="trend" />近 28 天 <span class="sub">与前 28 天对比</span><span class="grow"></span>
       {#if binds.length}
         <!-- 数据源：一排小标签，圆点表示接没接上；悬停看绑的是哪个资源，点一下去设置 -->
-        <span class="srcs">{#each binds as b (b.k)}<button class="src-ic" class:ok={b.ok} class:warn={!b.ok && b.pending} onclick={() => (sites.tab = 'settings')} data-tip={`${b.k}：${bindState(b)}\n${b.text}\n点一下去设置`} aria-label={`${b.k}：${bindState(b)}`}>{#if b.k === 'GA4'}<GaMark size={15} />{:else if b.k === 'Search Console'}<GoogleMark size={15} />{:else if b.k === 'Bing'}<BingMark size={15} />{:else}<Icon name="zap" size={15} />{/if}<i aria-hidden="true"></i></button>{/each}</span>
+        <span class="srcs">{#each binds as b (b.k)}<button class="src-ic" class:ok={b.ok} class:warn={!b.ok && b.pending} onclick={() => (sites.tab = 'settings')} data-tip={`${b.k}：${bindState(b)}\n${b.text}\n点一下去设置`} aria-label={`${b.k}：${bindState(b)}`}>{#if b.k === 'GA4'}<GaMark size={12} />{:else if b.k === 'Search Console'}<GoogleMark size={12} />{:else if b.k === 'Bing'}<BingMark size={12} />{:else}<Icon name="zap" size={12} />{/if}<i aria-hidden="true"></i></button>{/each}</span>
       {/if}
       <button class="ic-btn" onclick={() => (sites.tab = 'data')} aria-label="完整数据" data-tip="看完整数据"><Icon name="chart" size={15} /></button></h3>
     <div class="stats">
@@ -52,11 +52,11 @@
 <style>
   .opps-t { margin: 14px 0 4px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
   /* 数据源：品牌图标 + 右下角状态圆点（绿＝已接入、黄＝验证中、没接的图标变灰），说明在悬停提示里 */
-  .srcs { display: inline-flex; align-items: center; gap: 2px; margin-right: 2px; font-weight: 400; }
-  .src-ic { position: relative; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: none; color: var(--dim); cursor: pointer; }
+  .srcs { display: inline-flex; align-items: center; gap: 0; margin-right: 4px; font-weight: 400; }
+  .src-ic { position: relative; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--dim); cursor: pointer; }
   .src-ic:hover { background: var(--su-hover); color: var(--text); }
   .src-ic:not(.ok):not(.warn) :global(svg) { filter: grayscale(1); opacity: .45; }
-  .src-ic i { position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--border2); box-shadow: 0 0 0 1.5px var(--card, #fff); }
+  .src-ic i { position: absolute; right: 3px; bottom: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--border2); box-shadow: 0 0 0 1px var(--card, #fff); }
   .src-ic.ok i { background: var(--ok); }
   .src-ic.warn i { background: var(--warn); }
 </style>
