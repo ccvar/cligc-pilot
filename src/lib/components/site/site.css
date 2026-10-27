@@ -13,7 +13,7 @@
   --su-ease: cubic-bezier(.2, .7, .2, 1);
   color: var(--text);
 }
-.su .tin { width: 100%; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; box-sizing: border-box; transition: border-color .12s, box-shadow .12s; }
+.su .tin { width: 100%; font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1px solid var(--border2); border-radius: 8px; padding: 5.5px 10px; box-sizing: border-box; transition: border-color .12s, box-shadow .12s; }
 .su input.tin { height: var(--ctl-h); padding-top: 0; padding-bottom: 0; line-height: normal; }
 .su textarea.tin { resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .su .tin:hover { border-color: #d3d0c7; }
@@ -23,7 +23,8 @@
 /* 和 .btn.small（26px）排在同一行的输入框：同高、同字号、同圆角 */
 .su input.tin.small { height: 26px; padding: 0 8px; font-size: 12px; border-radius: 7px; }
 
-.su .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; white-space: nowrap; transition: background-color .12s, border-color .12s, color .12s, box-shadow .12s, transform .08s; }
+/* 边框 1px（原来 1.5px 偏粗）；内边距各加 0.5px，按钮和输入框的高度不变 */
+.su .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #fff; color: var(--text); border: 1px solid var(--border2); border-radius: 8px; padding: 6.5px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; white-space: nowrap; transition: background-color .12s, border-color .12s, color .12s, box-shadow .12s, transform .08s; }
 .su .btn:hover:not(:disabled) { background: var(--su-hover); border-color: #d6d3ca; }
 .su .btn:active:not(:disabled) { background: var(--su-press); transform: translateY(.5px); }
 .su .btn:focus-visible { box-shadow: var(--su-ring); }
@@ -37,7 +38,7 @@
 .su .btn.quiet:hover:not(:disabled) { background: var(--su-hover); border-color: transparent; color: var(--text); }
 .su .btn.danger { color: var(--err); border-color: var(--err-border); }
 .su .btn.danger:hover:not(:disabled) { background: var(--err-soft); border-color: #eebcbc; }
-.su .btn.small { padding: 4px 10px; font-size: 12px; }
+.su .btn.small { padding: 4.5px 10px; font-size: 12px; }
 .su .btn.tiny { padding: 2px 8px; font-size: 11.5px; border-width: 1px; border-radius: 6px; gap: 4px; }
 .su .btn.small { gap: 5px; }
 .su .btn .ico { opacity: .8; }
