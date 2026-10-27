@@ -26,6 +26,9 @@
   $effect(() => { if (d && d !== checksFor) { checksFor = d; checksText = d.build.checks.join('\n'); } });
   function syncChecks() { if (d) d.build.checks = checksText.split('\n').map((c) => c.trim()).filter(Boolean); }
   let tagIn = $state('');
+  // 危险操作默认收起，点标题才展开（每次进设置页都是收起的，免得误点）
+  let dzOpen = $state(false);
+  $effect(() => { void site.id; dzOpen = false; });
   async function addTag() {
     const t = tagIn.trim();
     if (!t) return;
@@ -174,8 +177,9 @@
     <!-- 第三行「功能」：表单和评论，平时一行 -->
     <div class="wide"><SiteDynamicSettings {site} /></div>
 
-    <div class="card danger-zone wide">
-      <h3 class="dz-head"><Icon name="info" />危险操作</h3>
+    <div class="card danger-zone wide" class:open={dzOpen}>
+      <h3 class="dz-head"><button class="dz-toggle" onclick={() => (dzOpen = !dzOpen)} aria-expanded={dzOpen}><Icon name="info" />危险操作<span class="dz-sub">下线并删除 · 只从 Pilot 移除</span><svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
+      {#if dzOpen}
       <div class="dz">
         <div class="dz-t"><b><Icon name="trash" size={13} />下线并删除</b><p class="hint">把网站从网上撤下来{site.deploy.project && (site.deploy.mode === 'direct' || site.deploy.mode === 'pages_git') ? `（删除 Cloudflare Pages 项目 ${site.deploy.project}，解除域名指向）` : ''}{site.origin === 'migrated' ? '，改版切换过的域名恢复成上线前的样子' : ''}，再从 Pilot 移除；可以选择把代码文件夹移到废纸篓。不能撤销。</p></div>
         <button class="btn small danger solid" onclick={() => takedownSite(site)}>下线并删除</button>
@@ -184,6 +188,7 @@
         <div class="dz-t"><b><Icon name="x" size={13} />只从 Pilot 移除</b><p class="hint">网站照常在线，只删除 Pilot 里的站点记录、数据缓存、运营记录和站点会话；代码文件夹与 GitHub 仓库不会被改动。</p></div>
         <button class="btn small danger" onclick={() => removeSite(site)}>只从 Pilot 移除</button>
       </div>
+    {/if}
     </div>
   </div>
 {/if}
@@ -208,6 +213,13 @@
   /* 危险操作：红色的边和底，和别的设置分开 */
   .danger-zone { display: flex; flex-direction: column; gap: 14px; border-color: var(--err-border, #f0c9c9); background: color-mix(in srgb, var(--err-soft, #fdf1f1) 55%, var(--card, #fff)); }
   .dz-head { color: var(--err); margin-bottom: -2px; }
+  .danger-zone:not(.open) { gap: 0; }
+  .danger-zone:not(.open) .dz-head { margin-bottom: 0; }
+  .dz-toggle { flex: 1; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .dz-sub { font-size: 12px; font-weight: 400; color: var(--faint); }
+  .dz-toggle .chev { margin-left: auto; color: var(--faint); transition: transform .16s; }
+  .danger-zone.open .dz-toggle .chev { transform: rotate(180deg); }
+  .dz-toggle:hover .chev, .dz-toggle:hover .dz-sub { color: var(--dim); }
   .dz-head :global(svg) { color: var(--err); }
   .dz + .dz { padding-top: 14px; border-top: 1px solid var(--err-border, #f0c9c9); }
   .dz { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
