@@ -58,12 +58,12 @@
     <section>
       <h4><Icon name="activity" size={13} />今天有动静的站点<span class="cnt">{data.active.length}</span></h4>
       <div class="sites">
-        {#each data.active as s (s.site_id)}
+        {#each data.active as s (s.site_name)}
           <div class="site-card">
-            <button class="site-name" onclick={() => openSite(s.site_id, 'overview')} data-tip="打开这个站点">{s.site_name}</button>
+            {#if s.site_id}<button class="site-name" onclick={() => openSite(s.site_id, 'overview')} data-tip="打开这个站点">{s.site_name}</button>{:else}<span class="site-name gone">{s.site_name}</span>{/if}
             <ul class="events">
               {#each s.events as e, i (i)}
-                {@const key = `${s.site_id}:${i}`}
+                {@const key = `${s.site_name}:${i}`}
                 <li>
                   <div class="ev">
                     <span class="pill {TONE[e.kind] ?? ''}">{e.label}</span>
@@ -95,11 +95,11 @@
         <table class="tr">
           <thead><tr><th>站点</th><th class="num">Google 点击</th><th class="num">变化</th>{#if hasViews}<th class="num">浏览量</th><th class="num">变化</th>{/if}</tr></thead>
           <tbody>
-            {#each data.traffic as t (t.site_id)}
+            {#each data.traffic as t (t.site_name)}
               {@const dc = delta(t.clicks, t.clicks_prev)}
               {@const dv = delta(t.views, t.views_prev)}
               <tr>
-                <td><button class="site-link" onclick={() => openSite(t.site_id, 'overview')}>{t.site_name}</button></td>
+                <td>{#if t.site_id}<button class="site-link" onclick={() => openSite(t.site_id, 'overview')}>{t.site_name}</button>{:else}{t.site_name}{/if}</td>
                 <td class="num">{t.clicks}</td><td class="num {dc.c}">{dc.t}</td>
                 {#if hasViews}<td class="num">{t.views}</td><td class="num {dv.c}">{dv.t}</td>{/if}
               </tr>
@@ -145,6 +145,7 @@
   .site-name, .site-link { align-self: flex-start; border: 0; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
   .site-link { font-weight: 500; font-size: 12.5px; }
   .site-name:hover, .site-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .site-name.gone { cursor: default; text-decoration: none; }
   .events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .ev { display: flex; align-items: center; gap: 8px; min-height: 24px; min-width: 0; }
   .ev .more { width: 22px; height: 22px; flex: none; }

@@ -317,14 +317,24 @@ pub fn read_digest(state: tauri::State<'_, AppState>, name: String) -> Result<St
     std::fs::read_to_string(managed::digests_dir(&state.data_dir).join(format!("{name}.md"))).map_err(|_| "日报不存在".to_string())
 }
 
-/// 日报的结构化内容（新版日报才有；旧的只有 Markdown，返回 None）。
+/// 日报的结构化内容；改版前只存了 Markdown 的旧日报，读回来转成同样的结构。
 #[tauri::command]
 pub fn read_digest_data(state: tauri::State<'_, AppState>, name: String) -> Result<Option<crate::site_runner::DigestData>, String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("名称不合法".into());
     }
-    let p = managed::digests_dir(&state.data_dir).join(format!("{name}.json"));
-    Ok(std::fs::read(p).ok().and_then(|b| serde_json::from_slice(&b).ok()))
+    let dir = managed::digests_dir(&state.data_dir);
+    if let Some(d) = std::fs::read(dir.join(format!("{name}.json"))).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
+        return Ok(Some(d));
+    }
+    // 改版前的日报只有 Markdown：读回来按新样子显示，站点 id 按名字补
+    let Some(mut d) = std::fs::read_to_string(dir.join(format!("{name}.md"))).ok().and_then(|md| crate::site_runner::parse_old_digest(&md)) else { return Ok(None) };
+    let sites = state.sites.list();
+    let id_of = |n: &str| sites.iter().find(|s| s.name == n).map(|s| s.id.clone()).unwrap_or_default();
+    for s in &mut d.active { s.site_id = id_of(&s.site_name); }
+    for n in &mut d.needs { n.site_id = id_of(&n.site_name); }
+    for t in &mut d.traffic { t.site_id = id_of(&t.site_name); }
+    Ok(Some(d))
 }
 
 /// 立刻生成一份日报（不影响定时的那一份）。

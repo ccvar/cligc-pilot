@@ -2214,6 +2214,75 @@ pub fn digest_markdown(d: &DigestData) -> String {
     md
 }
 
+/// 把改版前存下的 Markdown 日报读回结构化内容，让旧日报也按新样子显示。
+/// 旧格式：每个站点一个「## 站点」，下面是点击数、「[计划] 标题：详情」这类事件和「需要你：N 项（…）」。
+/// 站点 id 旧格式里没有，由调用方按名字补。
+pub fn parse_old_digest(md: &str) -> Option<DigestData> {
+    let date = md.lines().next()?.strip_prefix("# 托管日报 · ")?.trim().to_string();
+    let mut d = DigestData { date, ..Default::default() };
+    let num = |s: &str| -> f64 { whole(s.trim().parse::<f64>().unwrap_or(0.0)) };
+    let count_before = |line: &str, unit: &str, after: &str| -> usize {
+        line.split_once(after).and_then(|(_, r)| r.split_once(unit)).and_then(|(n, _)| n.trim().parse().ok()).unwrap_or(0)
+    };
+    let mut cur: Option<(String, Vec<DigestEvent>, Option<DigestTraffic>)> = None;
+    let flush = |d: &mut DigestData, cur: Option<(String, Vec<DigestEvent>, Option<DigestTraffic>)>| {
+        let Some((name, events, traffic)) = cur else { return };
+        let busy = !events.is_empty() || d.needs.iter().any(|n| n.site_name == name);
+        if !events.is_empty() {
+            d.active.push(DigestSite { site_id: String::new(), site_name: name.clone(), events });
+        } else if !busy {
+            d.quiet.push(name.clone());
+        }
+        if let Some(t) = traffic {
+            if t.clicks > 0.0 || t.clicks_prev > 0.0 {
+                d.traffic.push(t);
+            } else {
+                d.no_traffic.push(name);
+            }
+        }
+    };
+    for line in md.lines().skip(1) {
+        let line = line.trim();
+        if line.starts_with("托管 ") {
+            d.sites_total = line.strip_prefix("托管 ").and_then(|r| r.split_once(" 个站点")).and_then(|(n, _)| n.trim().parse().ok()).unwrap_or(0);
+            d.shipped = count_before(line, "项", "自动上线");
+            d.planned = count_before(line, "次", "出计划");
+            d.broken = count_before(line, "项", "回滚");
+        } else if let Some(name) = line.strip_prefix("## ") {
+            flush(&mut d, cur.take());
+            cur = Some((name.trim().to_string(), Vec::new(), None));
+        } else if let (Some(item), Some((name, events, traffic))) = (line.strip_prefix("- "), cur.as_mut()) {
+            if let Some(r) = item.strip_prefix("近 28 天 Google 点击 ") {
+                let (now_s, prev_s) = r.split_once("（前 28 天 ").unwrap_or((r, "0"));
+                *traffic = Some(DigestTraffic { site_name: name.clone(), clicks: num(now_s), clicks_prev: num(prev_s.trim_end_matches('）')), ..Default::default() });
+            } else if let Some(r) = item.strip_prefix("需要你：") {
+                let titles = r.split_once('（').map(|(_, t)| t.trim_end_matches('）')).unwrap_or("");
+                for t in titles.split('；').map(str::trim).filter(|t| !t.is_empty()) {
+                    d.needs.push(DigestNeed { site_name: name.clone(), title: t.into(), why: "需要你".into(), ..Default::default() });
+                }
+            } else if let Some((label, rest)) = item.strip_prefix('[').and_then(|r| r.split_once("] ")) {
+                let kind = match label {
+                    "已上线" => "shipped",
+                    "计划" | "出计划" => "planned",
+                    "待你确认" => "proposed",
+                    "已回滚" => "rolled_back",
+                    "失败" => "failed",
+                    "上线后检查失败" => "watch_failed",
+                    "换用备用模型" => "fallback",
+                    "预算" => "budget",
+                    _ => continue,
+                };
+                let (title, detail) = rest.split_once('：').unwrap_or((rest, ""));
+                events.push(DigestEvent { kind: kind.into(), label: event_label(kind).unwrap_or(label).into(), title: title.into(), detail: detail.into() });
+            }
+        }
+    }
+    flush(&mut d, cur.take());
+    let swing = |t: &DigestTraffic| (t.clicks - t.clicks_prev).abs();
+    d.traffic.sort_by(|a, b| swing(b).partial_cmp(&swing(a)).unwrap_or(std::cmp::Ordering::Equal).then(b.clicks.partial_cmp(&a.clicks).unwrap_or(std::cmp::Ordering::Equal)));
+    Some(d)
+}
+
 /// 每日摘要：所有托管站点过去 24 小时做了什么、什么需要你。写一份报告（结构化 + Markdown）并发系统通知。
 pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     let st = app.state::<crate::AppState>();
@@ -2541,5 +2610,22 @@ mod tests {
         assert_eq!(change_text(2.0, 2.0), "持平");
         let md = digest_markdown(&d);
         assert!(md.contains("其余 1 个站点今天没有变化：c.com"));
+    }
+
+    #[test]
+    fn old_markdown_digests_are_read_back_into_the_new_layout() {
+        let md = "# 托管日报 · 2026-10-23\n\n托管 4 个站点；过去 24 小时 AI 自动上线 0 项、出计划 1 次、回滚 0 项。\n\n## a.com\n\n\n## b.com\n\n- 近 28 天 Google 点击 -0（前 28 天 -0）\n\n## c.com\n\n- 近 28 天 Google 点击 2（前 28 天 -0）\n- [计划] 本周计划 2 项：重写评测；修正链接\n\n## d.com\n\n- 需要你：1 项（换标题）\n";
+        let d = parse_old_digest(md).unwrap();
+        assert_eq!((d.date.as_str(), d.sites_total, d.shipped, d.planned, d.broken), ("2026-10-23", 4, 0, 1, 0));
+        assert_eq!(d.active.len(), 1);
+        assert_eq!(d.active[0].site_name, "c.com");
+        assert_eq!((d.active[0].events[0].kind.as_str(), d.active[0].events[0].label.as_str()), ("planned", "出计划"));
+        assert_eq!((d.active[0].events[0].title.as_str(), d.active[0].events[0].detail.as_str()), ("本周计划 2 项", "重写评测；修正链接"));
+        assert_eq!(d.quiet, vec!["a.com".to_string(), "b.com".to_string()]);
+        assert_eq!(d.needs.len(), 1);
+        assert_eq!(d.traffic.len(), 1);
+        assert_eq!((d.traffic[0].clicks, d.traffic[0].clicks_prev), (2.0, 0.0));
+        assert_eq!(d.no_traffic, vec!["b.com".to_string()]);
+        assert!(parse_old_digest("随便一段文字").is_none());
     }
 }
