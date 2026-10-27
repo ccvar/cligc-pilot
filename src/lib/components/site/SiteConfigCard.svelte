@@ -158,8 +158,9 @@
                   {#if v.set}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : ck === 'reset' ? `${v.key} 改回自动` : `清除 ${v.key} 的值`} data-tip={ck === 'delete' ? '删除这个变量' : ck === 'reset' ? '改回自动' : '清除值（变量保留，变成未填）'}><Icon name={ck === 'delete' ? 'trash' : ck === 'reset' ? 'undo' : 'eraser'} size={13} /></button>{/if}
                 </div>
               {/if}
+              <!-- 说明写的是「该填什么」：放在值下面，和值从同一个位置开始；最多两行，长的悬停看全文 -->
+              {#if v.desc}<small class="desc" data-tip={v.desc.length > 70 ? v.desc : undefined}>{v.desc}</small>{/if}
             </div>
-            {#if v.desc}<small class="desc" data-tip={v.desc.length > 60 ? v.desc : undefined}>{v.desc}</small>{/if}
           </li>
         {/each}
       </ul>
@@ -190,10 +191,10 @@
   .cfg.open .chev { transform: rotate(180deg); }
 
   .vars { list-style: none; margin: 0 0 10px; padding: 0; border: 1px solid var(--border); border-radius: 10px; }
-  .vars > li { padding: 7px 8px 7px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; }
+  .vars > li { padding: 7px 8px 7px 12px; border-top: 1px solid var(--border); }
   .vars > li:first-child { border-top: none; }
   /* 一行：名字 ｜ 值 ｜ 操作。名字列等宽，值从同一个位置开始 */
-  .line { display: grid; grid-template-columns: minmax(120px, 230px) minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 26px; }
+  .line { display: grid; grid-template-columns: minmax(120px, 230px) minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 2px; min-height: 26px; }
   .kcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -211,7 +212,7 @@
   .acts { display: flex; align-items: center; gap: 0; }
   .acts .ic-btn, .eye { width: 24px; height: 24px; }
   .acts .del:hover:not(:disabled) { color: var(--err); }
-  .desc { font-size: 11.5px; line-height: 1.5; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .desc { grid-column: 2 / -1; font-size: 11.5px; line-height: 1.5; color: var(--faint); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   .hint { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
   .grow { flex: 1; }
   .add { display: flex; align-items: center; gap: 6px; }
