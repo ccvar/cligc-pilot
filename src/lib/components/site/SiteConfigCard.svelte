@@ -1,12 +1,14 @@
 <script lang="ts">
   // 站点设置 → 配置变量：.env.example 里声明的变量（+ 手动加的），值存在 Pilot（钥匙串），
-  // 构建时注入，并按部署方式同步到 Cloudflare 的环境变量 / Worker 密钥 / 服务器上的 env 文件。值从不显示。
+  // 构建时注入，并按部署方式同步到 Cloudflare 的环境变量 / Worker 密钥 / 服务器上的 env 文件。
+  // 默认收起，标题行给一句概况（几个变量、几个没填、几个没同步）；展开后一行一个变量：名字 ｜ 值 ｜ 操作图标，说明缩成一行。
   import { invoke } from '@tauri-apps/api/core';
   import Icon from './Icon.svelte';
   import type { ConfigState, ConfigVar, Site } from '$lib/types';
   import { say, confirmDialog } from '$lib/state/app.svelte.js';
   import { sites, setSiteEnv, pullSiteConfig } from '$lib/state/sites.svelte.js';
   import { ago, full } from './fmt';
+  import InfoTip from '$lib/components/common/InfoTip.svelte';
 
   let { site }: { site: Site } = $props();
   let cs = $state<ConfigState | null>(null);
@@ -30,6 +32,10 @@
     try { cs = await invoke<ConfigState>('site_config_state', { id: site.id }); } catch { cs = null; }
   }
   $effect(() => { void site.id; void site.build.env_keys.length; void site.deploy.mode; shown = {}; void load(); });
+  // 默认收起；换站点重新收起
+  let open = $state(false);
+  $effect(() => { void site.id; open = false; editing = ''; adding = false; });
+  function toggle() { open = !open; if (!open) { editing = ''; adding = false; shown = {}; } }
 
   async function save(k: string, v: string) {
     if (!v.trim()) return;
@@ -86,107 +92,128 @@
     catch (e) { say(String(e), 'err'); }
     finally { pulling = false; }
   }
-  const tag = (v: ConfigVar) => (v.secret ? '密钥' : '公开');
   // 同步到哪儿：说人话（不说「部署目标」）——Pages / Workers 是 Cloudflare，VPS 是你的服务器
   const dest = $derived(cs?.target === 'vps' ? '服务器' : 'Cloudflare');
+  const missingN = $derived(cs?.missing.length ?? 0);
+  const pendingN = $derived(cs ? cs.vars.filter((v) => v.pending).length + cs.will_remove.length : 0);
+  const about = $derived(`邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到${cs?.target_label ?? dest}，也不会进仓库。\n「从线上读取」把${dest}上已有的值拿回来，只补 Pilot 里没填的。\n「同步到${dest}」会覆盖那边的同名变量，点了会先确认；也可以在某个变量上只同步它。`);
 </script>
 
-<div class="card cfg" onpointerleave={hideAll} role="group" aria-label="配置变量">
-  <h3><Icon name="key" />配置变量<span class="grow"></span>
-    {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>{/if}
-    {#if cs?.target && cs.vars.length}<button class="btn tiny warn" class:hot={cs.needs_sync} onclick={sync} disabled={syncing || pulling || !!syncingKey} data-tip={`覆盖 ${cs.target_label} 里的同名变量（会先确认）；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
+<div class="card cfg" class:open onpointerleave={hideAll} role="group" aria-label="配置变量">
+  <h3 class="cfg-head" style:margin-bottom={open ? null : '0'}>
+    <button class="cfg-toggle" onclick={toggle} aria-expanded={open}>
+      <Icon name="key" />配置变量
+      {#if cs}<span class="sum">
+        {#if !cs.vars.length}还没有变量
+        {:else}{cs.vars.length} 个{#if missingN}<span class="warn-ink"> · {missingN} 个没填</span>{/if}{#if cs.target && pendingN}<span class="warn-ink"> · {pendingN} 个没同步</span>{:else if cs.synced_at}<span data-tip={full(cs.synced_at)}> · {ago(cs.synced_at)}同步过</span>{/if}{/if}
+      </span>{/if}
+    </button>
+    <InfoTip text={about} label="配置变量说明" />
+    <span class="grow"></span>
+    {#if cs?.target && cs.vars.length}
+      <button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>
+      <button class="btn tiny warn" class:hot={cs.needs_sync} onclick={sync} disabled={syncing || pulling || !!syncingKey} data-tip={`覆盖 ${cs.target_label} 里的同名变量（会先确认）；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>
+    {/if}
+    <button class="ic-btn chev-btn" onclick={toggle} aria-label={open ? '收起配置变量' : '展开配置变量'} data-tip={open ? '收起' : '展开'}><svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   </h3>
-  <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? (dest === '服务器' ? '服务器' : 'Cloudflare')}。值不会显示，也不会进仓库。</p>
-  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到{dest}：下次上线时会自动同步；也可以现在点「同步到{dest}」全部写上去，或在下面只同步某一个。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
-  {#if cs?.target && cs.missing.length}<p class="sync-ok">还有 {cs.missing.length} 个没填。{dest}上要是已经配过，点「从线上读取」把已有的值拿回来。</p>{/if}
 
-  {#if cs && cs.vars.length}
-    <ul class="vars">
-      {#each cs.vars as v (v.key)}
-        <li class:missing={v.declared && !v.set && !v.auto && !v.remote}>
-          <div class="vk">
-            <span class="mono k">{v.key}</span>
-            <span class="tag" class:secret={v.secret}>{tag(v)}</span>
-            {#if !v.declared}<span class="tag">手动添加</span>{/if}
-            {#if v.pending && !v.differ && cs.target}<span class="tag warn" data-tip={`这个值还没写到${dest}`}>未同步</span>{/if}
-            {#if v.differ}<span class="tag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>{/if}
-            <span class="grow"></span>
-            {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else if v.remote}<span class="st ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就在这里填新值，同步时会覆盖线上的"><Icon name="check" size={11} />线上已有</span>{:else}<span class="st no">未填</span>{/if}
-          </div>
-          {#if v.set && !v.secret}<code class="val" title={v.value}>{v.value || '（空）'}</code>
-          {:else if v.set && v.secret}<div class="val-row">{#if shown[v.key] !== undefined}<code class="val" title={shown[v.key]}>{shown[v.key] || '（空）'}</code>{:else}<code class="val masked">••••••••</code>{/if}<button class="ic-btn eye" class:on={shown[v.key] !== undefined} onclick={() => reveal(v.key)} aria-label={shown[v.key] !== undefined ? `隐藏 ${v.key}` : `显示 ${v.key}`} data-tip={shown[v.key] !== undefined ? '隐藏' : '显示值（鼠标离开这张卡会自动隐藏）'}><Icon name={shown[v.key] !== undefined ? 'eye-off' : 'eye'} size={12} /></button></div>{/if}
-          {#if v.desc}<small class="desc">{v.desc}</small>{/if}
-          {#if !v.set && v.auto}<small class="auto">自动用 <code>{v.auto}</code>（按站点域名，改域名会跟着变）</small>{/if}
-          {#if editing === v.key}
-            <div class="row">
-              <input class="tin mono small" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '输入新值（会覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
-              <button class="btn small primary" onclick={() => save(v.key, val)} disabled={!val.trim()}>保存</button>
-              <button class="btn small ghost" onclick={() => (editing = '')}>取消</button>
+  {#if open && cs}
+    {#if cs.vars.length}
+      <ul class="vars">
+        {#each cs.vars as v (v.key)}
+          {@const isShown = shown[v.key] !== undefined}
+          <li>
+            <div class="line">
+              <div class="kcol">
+                <span class="mono k" title={v.key}>{v.key}</span>
+                {#if v.secret}<span class="tag secret">密钥</span>{/if}
+                {#if !v.declared}<span class="tag" data-tip="不在 .env.example 里，是在 Pilot 里手动加的">手动</span>{/if}
+              </div>
+              {#if editing === v.key}
+                <div class="vcol edit">
+                  <!-- svelte-ignore a11y_autofocus -->
+                  <input class="tin mono small" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '新值（覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" autofocus onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
+                  <button class="btn tiny primary" onclick={() => save(v.key, val)} disabled={!val.trim()}>保存</button>
+                  <button class="btn tiny ghost" onclick={() => (editing = '')}>取消</button>
+                </div>
+              {:else}
+                <div class="vcol">
+                  {#if v.set && !v.secret}<code class="val" title={v.value}>{v.value || '（空）'}</code>
+                  {:else if v.set}<code class="val" class:masked={!isShown} title={isShown ? shown[v.key] : ''}>{isShown ? shown[v.key] || '（空）' : '••••••••'}</code><button class="ic-btn eye" class:on={isShown} onclick={() => reveal(v.key)} aria-label={isShown ? `隐藏 ${v.key}` : `显示 ${v.key}`} data-tip={isShown ? '隐藏' : '显示值（鼠标离开这张卡会自动隐藏）'}><Icon name={isShown ? 'eye-off' : 'eye'} size={12} /></button>
+                  {:else if v.auto}<code class="val" title={v.auto}>{v.auto}</code><span class="flag ok" data-tip="没填值时按站点域名自动给，改域名会跟着变；填了就用你填的">自动</span>
+                  {:else if v.remote}<span class="flag ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就填新值，同步时会覆盖线上的">线上已有</span>
+                  {:else if v.declared}<span class="flag no">未填</span><button class="link-btn fill" onclick={() => { editing = v.key; val = ''; }}>填写</button>{/if}
+                  {#if v.differ}<span class="flag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>
+                  {:else if v.pending && cs.target}<span class="flag warn" data-tip={`这个值还没写到${dest}`}>未同步</span>{/if}
+                </div>
+                <div class="acts">
+                  {#if canSyncOne(v)}<button class="ic-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing} aria-label={`只同步 ${v.key}`} data-tip={`只把它同步到${dest}（会先确认）`}>{#if syncingKey === v.key}<span class="spin"></span>{:else}<Icon name="upload" size={13} />{/if}</button>{/if}
+                  {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => { editing = v.key; val = ''; }} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
+                  {#if v.set}<button class="ic-btn del" onclick={() => clear(v.key)} aria-label={`清除 ${v.key}`} data-tip={v.auto ? '清除（改回自动）' : '清除值'}><Icon name="trash" size={13} /></button>{/if}
+                </div>
+              {/if}
             </div>
-          {:else}
-            <div class="acts">
-              <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set || v.remote ? '修改值' : v.auto ? '改成别的' : '填写'}</button>
-              {#if canSyncOne(v)}<button class="link-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing}>{syncingKey === v.key ? '同步中…' : `只同步这个到${dest}`}</button>{/if}
-              {#if v.set}<button class="link-btn danger" onclick={() => clear(v.key)}>{v.auto ? '清除（改回自动）' : '清除'}</button>{/if}
-            </div>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {:else if cs}
-    <p class="hint">这个站点还没有声明配置变量（仓库里没有 <code>.env.example</code>）。需要的话可以在下面手动添加。</p>
-  {/if}
+            {#if v.desc}<small class="desc" data-tip={v.desc.length > 60 ? v.desc : undefined}>{v.desc}</small>{/if}
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <p class="hint">这个站点还没有声明配置变量（仓库里没有 <code>.env.example</code>）。需要的话可以在下面手动添加。</p>
+    {/if}
 
-  {#if adding}
-    <div class="add">
-      <span class="lbl">添加其他变量</span>
-      <div class="row">
+    {#if adding}
+      <div class="add">
         <input class="tin mono small" style="max-width:220px" bind:value={newKey} placeholder="变量名，如 PUBLIC_GA_ID" spellcheck="false" autocapitalize="off" />
         <input class="tin mono small" type="password" bind:value={newVal} placeholder="值" autocomplete="off" />
-        <button class="btn small primary" onclick={addNew} disabled={!newKey.trim() || !newVal.trim() || sites.saving || addBusy}>{addBusy ? '保存中…' : '保存'}</button>
-        <button class="btn small ghost" onclick={() => (adding = false)}>取消</button>
+        <button class="btn tiny primary" onclick={addNew} disabled={!newKey.trim() || !newVal.trim() || sites.saving || addBusy}>{addBusy ? '保存中…' : '保存'}</button>
+        <button class="btn tiny ghost" onclick={() => (adding = false)}>取消</button>
       </div>
-    </div>
-  {:else}
-    <button class="link-btn add-link" onclick={() => (adding = true)}>+ 添加其他变量</button>
+    {:else}
+      <button class="link-btn add-link" onclick={() => (adding = true)}>+ 添加其他变量</button>
+    {/if}
   {/if}
 </div>
 
 <style>
-  .cfg .hint { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
-  .sync-note { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; padding: 7px 10px; border-radius: 8px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12px; color: #8a5a08; }
-  .sync-ok { margin: 0 0 10px; font-size: 11.5px; color: var(--faint); }
-  .vars { list-style: none; margin: 0 0 12px; padding: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .vars > li { padding: 9px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+  .cfg-toggle { display: flex; align-items: center; gap: 8px; min-width: 0; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .sum { font-size: 12px; font-weight: 400; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .warn-ink { color: var(--su-warn-ink, #8a5a08); }
+  .cfg-toggle:hover .sum { color: var(--dim); }
+  .chev-btn { width: 24px; height: 24px; margin-right: -4px; }
+  .chev { transition: transform .16s; }
+  .cfg.open .chev { transform: rotate(180deg); }
+
+  .vars { list-style: none; margin: 0 0 10px; padding: 0; border: 1px solid var(--border); border-radius: 10px; }
+  .vars > li { padding: 7px 8px 7px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; }
   .vars > li:first-child { border-top: none; }
-  .vars > li.missing { background: #fdfaf2; }
-  .vk { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  /* 一行：名字 ｜ 值 ｜ 操作。名字列等宽，值从同一个位置开始 */
+  .line { display: grid; grid-template-columns: minmax(120px, 230px) minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 26px; }
+  .kcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
+  .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .vcol.edit { grid-column: 2 / -1; }
+  .vcol.edit .tin { flex: 1; min-width: 0; }
+  .val { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .val.masked { color: var(--faint); letter-spacing: 1px; }
+  .tag { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
   .tag.secret { background: #f3ecf9; color: #6b3fa0; }
-  .tag.warn { background: var(--su-warn-soft, #fbf3dc); color: var(--su-warn-ink, #8a5a08); }
+  .flag { flex: none; font-size: 11px; white-space: nowrap; }
+  .flag.ok { color: var(--ok); }
+  .flag.no { color: var(--su-warn-ink, #8a5a08); }
+  .flag.warn { padding: 0 6px; line-height: 16px; border-radius: 999px; font-size: 10px; background: var(--su-warn-soft, #fbf3dc); color: var(--su-warn-ink, #8a5a08); }
+  .fill { font-size: 12px; }
+  .acts { display: flex; align-items: center; gap: 0; }
+  .acts .ic-btn, .eye { width: 24px; height: 24px; }
+  .acts .del:hover:not(:disabled) { color: var(--err); }
+  .desc { font-size: 11.5px; line-height: 1.5; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hint { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
+  .grow { flex: 1; }
+  .add { display: flex; align-items: center; gap: 6px; }
+  .add-link { font-size: 12px; align-self: flex-start; }
   /* 同步会覆盖线上的值：按钮用警告色，有改动没同步时底色再深一点 */
   .btn.warn { color: var(--su-warn-ink, #8a5a08); border-color: color-mix(in srgb, var(--su-warn-ink, #8a5a08) 35%, transparent); }
   .btn.warn:hover:not(:disabled) { background: var(--su-warn-soft, #fbf3dc); }
   .btn.warn.hot { background: var(--su-warn-soft, #fbf3dc); border-color: color-mix(in srgb, var(--su-warn-ink, #8a5a08) 55%, transparent); }
-  .val { align-self: flex-start; max-width: 100%; box-sizing: border-box; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .val.masked { color: var(--faint); letter-spacing: 1px; }
-  .val-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
-  .val-row .val { min-width: 0; }
-  .val-row .eye { width: 22px; height: 22px; }
-  .st { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; }
-  .st.ok { color: var(--ok); }
-  .st.no { color: #8a5a08; }
-  .desc { font-size: 12px; color: var(--faint); }
-  .auto { font-size: 12px; color: var(--dim); }
-  .auto code { font-size: 11.5px; }
-  .acts { display: flex; gap: 12px; }
-  .acts .link-btn { font-size: 12px; }
-  .acts .link-btn.danger { color: var(--err); }
-  .grow { flex: 1; }
-  .add { display: flex; flex-direction: column; gap: 6px; }
-  .add-link { font-size: 12px; align-self: flex-start; }
-  .add .lbl { font-size: 12px; color: var(--dim); }
   .spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border2); border-top-color: var(--dim); border-radius: 50%; animation: cfg-spin .7s linear infinite; }
   @keyframes cfg-spin { to { transform: rotate(360deg); } }
 </style>
