@@ -78,7 +78,13 @@
     jobsFor = key;
     for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
   });
-  let logOpen = $state(false);
+  // 记录卡片：最近上线 / 操作日志。记住上次看的 tab；没记过的话有上线记录先看上线，没有就看日志
+  const HIST_KEY = 'pilot.managed.histTab';
+  let histPick = $state<'' | 'ships' | 'log'>((() => { try { const v = localStorage.getItem(HIST_KEY); return v === 'ships' || v === 'log' ? v : ''; } catch { return ''; } })());
+  const histTab = $derived(histPick || (managed.ships.length ? 'ships' : 'log'));
+  function setHist(t: 'ships' | 'log') { histPick = t; try { localStorage.setItem(HIST_KEY, t); } catch { /* 存不了就只在这次有效 */ } }
+  const LOG_LIMIT = 20;
+  let logAll = $state(false);
   $effect(() => { void loadJev(); });
   // 日志按「时间 + 站点 + 条目 + 类型」作 key；同一秒批量暂停 / 退出多个站点时会撞，重复的加序号（撞 key 会让整个列表渲染失败）
   const activityKeys = $derived.by(() => {
@@ -97,7 +103,7 @@
   const feed = $derived(managed.activity.map((a, i) => ({ a, k: activityKeys[i] })).filter((x) => !logDay || dayOf(x.a.ts) === logDay));
   function pickDay(date: string, report: boolean) {
     if (report) { managed.tab = 'digests'; void openDigest(date); return; }
-    logDay = date; logOpen = true;
+    logDay = date; histPick = 'log';
     requestAnimationFrame(() => logEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }
   async function moveSite(id: string, from: string, to: string) {
@@ -439,34 +445,42 @@
         </div>
       {/each}
 
-      {#if groups.length}<RecentShips items={managed.ships} />{/if}
-      <div class="card oplog" class:open={logOpen} bind:this={logEl}>
-        <button class="log-h" onclick={() => (logOpen = !logOpen)} aria-expanded={logOpen}>
-          <Icon name="activity" />操作日志
-          <span class="sub">{managed.activity.length ? `${managed.activity.length} 条 · 最近 ${when(managed.activity[0].ts)}` : '还没有记录'}</span>
-          {#if logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<span role="button" tabindex="0" class="x" aria-label="看全部" onclick={(e) => { e.stopPropagation(); logDay = ''; }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); logDay = ''; } }}>×</span></span>{/if}
-          <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </button>
-        {#if logOpen}
-          {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
-        <div class="list feed">
-          {#each feed as { a, k } (k)}
-            <div class="li ev">
-              <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
-              <div class="ev-main">
-                <b>{a.title}</b>
-                {#if a.change || a.source}<div class="ev-why"><WhyChips change={a.change} source={a.source} /></div>{/if}
-                <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
-              </div>
-              <span class="ev-r">
-                <span class="faint t" data-tip={full(a.ts)}>{when(a.ts)}</span>
-                {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
-              </span>
+      {#if groups.length || managed.activity.length}
+        <!-- 记录：最近上线 / 操作日志 两个 tab，同一张卡片 -->
+        <div class="card hist" bind:this={logEl}>
+          <div class="hist-h">
+            <div class="seg" role="tablist" aria-label="记录">
+              <button role="tab" class:on={histTab === 'ships'} aria-selected={histTab === 'ships'} onclick={() => setHist('ships')}><Icon name="rocket" size={12} />最近上线<span class="hc">{managed.ships.length}</span></button>
+              <button role="tab" class:on={histTab === 'log'} aria-selected={histTab === 'log'} onclick={() => setHist('log')}><Icon name="activity" size={12} />操作日志<span class="hc">{managed.activity.length}</span></button>
             </div>
-          {/each}
+            {#if histTab === 'log' && logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<button class="x" aria-label="看全部" data-tip="看全部" onclick={() => (logDay = '')}>×</button></span>{/if}
+            <span class="grow"></span>
+            <span class="sub">{histTab === 'ships' ? '近 14 天，所有托管站点' : managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
+          </div>
+          {#if histTab === 'ships'}
+            <RecentShips items={managed.ships} />
+          {:else}
+            {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
+            <div class="list feed">
+              {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k } (k)}
+                <div class="li ev">
+                  <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
+                  <div class="ev-main">
+                    <b>{a.title}</b>
+                    {#if a.change || a.source}<div class="ev-why"><WhyChips change={a.change} source={a.source} /></div>{/if}
+                    <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
+                  </div>
+                  <span class="ev-r">
+                    <span class="faint t" data-tip={full(a.ts)}>{when(a.ts)}</span>
+                    {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
+                  </span>
+                </div>
+              {/each}
+              {#if feed.length > LOG_LIMIT}<button class="li log-more" onclick={() => (logAll = !logAll)}>{logAll ? '收起' : `显示更多（共 ${feed.length} 条）`}</button>{/if}
+            </div>
+          {/if}
         </div>
-        {/if}
-      </div>
+      {/if}
     {/if}
    </div>
    {/key}
@@ -475,16 +489,17 @@
 
 <style>
   .bad { color: var(--err); font-weight: 600; }
-  .oplog { padding-top: 12px; padding-bottom: 12px; }
-  .log-h { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
-  .log-h :global(.ico) { color: var(--dim); }
-  .log-h .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
+  .hist-h { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; }
+  .hist-h .seg button { display: inline-flex; align-items: center; gap: 5px; }
+  .hist-h .hc { font-size: 11px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .hist-h .sub { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .hist-h .grow { flex: 1; }
+  .day-chip .x { border: 0; background: none; padding: 0; font: inherit; color: inherit; }
+  .log-more { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
+  .log-more:hover { color: var(--text); }
   .day-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 8px; border-radius: 999px; background: var(--accent-soft); font-size: 11px; font-weight: 400; color: var(--dim); }
   .day-chip .x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
   .day-chip .x:hover { background: var(--su-hover); color: var(--text); }
-  .log-h .chev { margin-left: auto; color: var(--faint); transition: transform .16s var(--su-ease); }
-  .oplog.open .log-h .chev { transform: rotate(180deg); }
-  .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }
   .grp.off { background: #fcfbf9; }
   .more-wrap { position: relative; display: inline-flex; font-weight: 400; }
   .ic-btn.on { background: var(--su-hover); color: var(--text); }

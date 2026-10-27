@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 托管页「最近上线」：所有托管站点最近 14 天上线的改动，新的在前。
+  // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 14 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动还是你确认的；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
   import Icon from './Icon.svelte';
@@ -31,8 +31,8 @@
   const shortPath = (u: string) => { try { const x = new URL(u); return x.pathname + x.search || '/'; } catch { return u; } };
 </script>
 
-<div class="card rs">
-  <h3><Icon name="rocket" />最近上线<span class="sub">{items.length ? `近 14 天 ${items.length} 条` : '最近 14 天没有上线'}</span></h3>
+<div class="rs">
+  {#if !items.length}<p class="hint">最近 14 天托管站点没有上线改动。</p>{/if}
   {#if items.length}
     <ol class="rows">
       {#each shown as x (x.item.id)}
@@ -76,8 +76,6 @@
 <DiffModal />
 
 <style>
-  .rs > h3 { margin-bottom: 8px; }
-  .rs:has(.rows) > h3 { margin-bottom: 10px; }
   .rows { list-style: none; margin: 0 -18px; padding: 0; }
   .rows > li { border-top: 1px solid var(--border); }
   .row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 18px; }
