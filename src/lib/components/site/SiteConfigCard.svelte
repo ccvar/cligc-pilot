@@ -26,7 +26,7 @@
     try { shown = { ...shown, [k]: await invoke<string>('site_config_reveal', { id: site.id, key: k }) }; }
     catch (e) { say(String(e), 'err'); }
   }
-  const hideAll = () => { if (Object.keys(shown).length) shown = {}; };
+  const hideAll = () => { if (Object.keys(shown).length) shown = {}; editShow = false; };
 
   async function load() {
     try { cs = await invoke<ConfigState>('site_config_state', { id: site.id }); } catch { cs = null; }
@@ -34,8 +34,8 @@
   $effect(() => { void site.id; void site.build.env_keys.length; void site.deploy.mode; shown = {}; void load(); });
   // 默认收起；换站点重新收起
   let open = $state(false);
-  $effect(() => { void site.id; open = false; editing = ''; adding = false; });
-  function toggle() { open = !open; if (!open) { editing = ''; adding = false; shown = {}; } }
+  $effect(() => { void site.id; open = false; editing = ''; val = ''; adding = false; });
+  function toggle() { open = !open; if (!open) { editing = ''; val = ''; adding = false; shown = {}; } }
 
   async function save(k: string, v: string) {
     if (!v.trim()) return;
@@ -55,6 +55,25 @@
     await setSiteEnv(site.id, [], [k]);
     await load();
   }
+  // 编辑时先带上原值：公开变量直接用，密钥从钥匙串取（输入框里默认打码，可以点眼睛看），自动值带自动的那个
+  let orig = $state('');
+  let editShow = $state(false);
+  async function startEdit(v: ConfigVar) {
+    editShow = false; orig = ''; val = '';
+    if (v.set && !v.secret) orig = v.value;
+    else if (v.set) {
+      try { orig = shown[v.key] ?? (await invoke<string>('site_config_reveal', { id: site.id, key: v.key })); }
+      catch (e) { say(String(e), 'err'); }
+    } else if (v.auto) orig = v.auto;
+    val = orig;
+    editing = v.key;
+  }
+  async function saveEdit(k: string) {
+    if (val.trim() === orig.trim()) { editing = ''; return; } // 没改就不写
+    await save(k, val);
+  }
+  // 进入编辑时聚焦并全选，直接输入就是替换，按方向键可以在原值上改
+  function focusSelect(el: HTMLInputElement) { el.focus(); el.select(); }
   let addBusy = $state(false);
   async function addNew() {
     const k = newKey.trim();
@@ -137,10 +156,12 @@
               </div>
               {#if editing === v.key}
                 <div class="vcol edit">
-                  <!-- svelte-ignore a11y_autofocus -->
-                  <input class="tin mono small" type={v.secret ? 'password' : 'text'} bind:value={val} placeholder={v.set ? '新值（覆盖原来的）' : '填写值'} autocomplete="off" spellcheck="false" autofocus onkeydown={(e) => { if (e.key === 'Enter') void save(v.key, val); if (e.key === 'Escape') editing = ''; }} />
-                  <button class="btn tiny primary" onclick={() => save(v.key, val)} disabled={!val.trim()}>保存</button>
-                  <button class="btn tiny ghost" onclick={() => (editing = '')}>取消</button>
+                  <span class="field">
+                    <input class="ein mono" use:focusSelect type={v.secret && !editShow ? 'password' : 'text'} bind:value={val} placeholder={v.auto ? `留空就用自动值 ${v.auto}` : '填写值'} aria-label={`${v.key} 的值`} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void saveEdit(v.key); if (e.key === 'Escape') editing = ''; }} />
+                    {#if v.secret}<button class="ic-btn in-eye" class:on={editShow} onclick={() => (editShow = !editShow)} aria-label={editShow ? '隐藏输入的值' : '显示输入的值'} data-tip={editShow ? '隐藏' : '显示'}><Icon name={editShow ? 'eye-off' : 'eye'} size={12} /></button>{/if}
+                  </span>
+                  <button class="btn tiny primary ebtn" onclick={() => saveEdit(v.key)} disabled={!val.trim()}>保存</button>
+                  <button class="btn tiny ebtn" onclick={() => (editing = '')}>取消</button>
                 </div>
               {:else}
                 <div class="vcol">
@@ -148,13 +169,13 @@
                   {:else if v.set}<code class="val" class:masked={!isShown} title={isShown ? shown[v.key] : ''}>{isShown ? shown[v.key] || '（空）' : '••••••••'}</code><button class="ic-btn eye" class:on={isShown} onclick={() => reveal(v.key)} aria-label={isShown ? `隐藏 ${v.key}` : `显示 ${v.key}`} data-tip={isShown ? '隐藏' : '显示值（鼠标离开这张卡会自动隐藏）'}><Icon name={isShown ? 'eye-off' : 'eye'} size={12} /></button>
                   {:else if v.auto}<code class="val" title={v.auto}>{v.auto}</code><span class="flag ok" data-tip="没填值时按站点域名自动给，改域名会跟着变；填了就用你填的">自动</span>
                   {:else if v.remote}<span class="flag ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就填新值，同步时会覆盖线上的">线上已有</span>
-                  {:else if v.declared}<span class="flag no">未填</span><button class="link-btn fill" onclick={() => { editing = v.key; val = ''; }}>填写</button>{/if}
+                  {:else if v.declared}<span class="flag no">未填</span><button class="link-btn fill" onclick={() => startEdit(v)}>填写</button>{/if}
                   {#if v.differ}<span class="flag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>
                   {:else if v.pending && cs.target}<span class="flag warn" data-tip={`这个值还没写到${dest}`}>未同步</span>{/if}
                   <!-- 操作图标平时不显示，鼠标停在这一行或键盘焦点进来时出现在值后面（一直占着位置，出现时不挤动） -->
                   <span class="acts" class:busy={syncingKey === v.key}>
                   {#if canSyncOne(v)}<button class="ic-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing} aria-label={`只同步 ${v.key}`} data-tip={`只把它同步到${dest}（会先确认）`}>{#if syncingKey === v.key}<span class="spin"></span>{:else}<Icon name="upload" size={13} />{/if}</button>{/if}
-                  {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => { editing = v.key; val = ''; }} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
+                  {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => startEdit(v)} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
                   {#if v.set}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : ck === 'reset' ? `${v.key} 改回自动` : `清除 ${v.key} 的值`} data-tip={ck === 'delete' ? '删除这个变量' : ck === 'reset' ? '改回自动' : '清除值（变量保留，变成未填）'}><Icon name={ck === 'delete' ? 'trash' : ck === 'reset' ? 'undo' : 'eraser'} size={13} /></button>{/if}
                   </span>
                 </div>
@@ -199,7 +220,15 @@
   .kcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
-  .vcol.edit .tin { flex: 1; min-width: 0; }
+  /* 行内编辑框：细边框、和按钮一样高，聚焦时边框加深加一圈淡光；不用全局输入框那种 1.5px 粗框 */
+  .field { position: relative; flex: 1; min-width: 0; max-width: 520px; display: flex; }
+  .ein { flex: 1; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); color: var(--text); font-size: 12px; outline: none; transition: border-color .12s, box-shadow .12s; }
+  .ein:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
+  .ein:focus { border-color: color-mix(in srgb, var(--border2) 30%, var(--dim)); box-shadow: var(--su-ring); }
+  .ein::placeholder { color: var(--faint); }
+  .field:has(.in-eye) .ein { padding-right: 28px; }
+  .in-eye { position: absolute; right: 2px; top: 2px; width: 22px; height: 22px; }
+  .ebtn { height: 26px; }
   .val { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val.masked { color: var(--faint); letter-spacing: 1px; }
   .tag { flex: none; font-size: 10px; padding: 0 6px; line-height: 16px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
