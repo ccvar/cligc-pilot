@@ -68,9 +68,10 @@
     val = orig;
     editing = v.key;
   }
-  async function saveEdit(k: string) {
+  async function saveEdit(v: ConfigVar) {
     if (val.trim() === orig.trim()) { editing = ''; return; } // 没改就不写
-    await save(k, val);
+    if (!val.trim()) { if (v.set) { editing = ''; await clear(v); } return; } // 清空再保存＝清除值（会先确认）
+    await save(v.key, val);
   }
   // 进入编辑时聚焦并全选，直接输入就是替换，按方向键可以在原值上改
   function focusSelect(el: HTMLInputElement) { el.focus(); el.select(); }
@@ -155,11 +156,11 @@
               </div>
               {#if editing === v.key}
                 <div class="vcol edit">
-                  <span class="field">
-                    <input class="ein mono" style:width={`${Math.max(val.length, 18) + 2}ch`} use:focusSelect type={v.secret && !editShow ? 'password' : 'text'} bind:value={val} placeholder={v.auto ? `留空就用自动值 ${v.auto}` : '填写值'} aria-label={`${v.key} 的值`} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void saveEdit(v.key); if (e.key === 'Escape') editing = ''; }} />
+                  <span class="efield">
+                    <input class="ein mono" style:width={`${Math.max(val.length, 18) + 2}ch`} use:focusSelect type={v.secret && !editShow ? 'password' : 'text'} bind:value={val} placeholder={v.auto && v.set ? `留空保存＝改回自动值 ${v.auto}` : v.set ? '留空保存＝清除值' : v.auto ? `留空就用自动值 ${v.auto}` : '填写值'} aria-label={`${v.key} 的值`} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void saveEdit(v); if (e.key === 'Escape') editing = ''; }} />
                     {#if v.secret}<button class="ic-btn in-eye" class:on={editShow} onclick={() => (editShow = !editShow)} aria-label={editShow ? '隐藏输入的值' : '显示输入的值'} data-tip={editShow ? '隐藏' : '显示'}><Icon name={editShow ? 'eye-off' : 'eye'} size={12} /></button>{/if}
                   </span>
-                  <button class="btn tiny primary ebtn" onclick={() => saveEdit(v.key)} disabled={!val.trim()}>保存</button>
+                  <button class="btn tiny primary ebtn" onclick={() => saveEdit(v)} disabled={!val.trim() && !v.set}>保存</button>
                   <button class="btn tiny ebtn" onclick={() => (editing = '')}>取消</button>
                 </div>
               {:else}
@@ -174,8 +175,8 @@
                   <!-- 操作图标平时不显示，鼠标停在这一行或键盘焦点进来时出现在值后面（一直占着位置，出现时不挤动） -->
                   <span class="acts" class:busy={syncingKey === v.key}>
                   {#if canSyncOne(v)}<button class="ic-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing} aria-label={`只同步 ${v.key}`} data-tip={`只把它同步到${dest}（会先确认）`}>{#if syncingKey === v.key}<span class="spin"></span>{:else}<Icon name="upload" size={13} />{/if}</button>{/if}
-                  {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => startEdit(v)} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
-                  {#if v.set}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : ck === 'reset' ? `${v.key} 改回自动` : `清除 ${v.key} 的值`} data-tip={ck === 'delete' ? '删除这个变量' : ck === 'reset' ? '改回自动' : '清除值（变量保留，变成未填）'}><Icon name={ck === 'delete' ? 'trash' : ck === 'reset' ? 'undo' : 'eraser'} size={13} /></button>{/if}
+                  {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => startEdit(v)} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值（清空再保存就是清除）' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
+                  {#if v.set && clearKind(v) !== 'clear'}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : `${v.key} 改回自动`} data-tip={ck === 'delete' ? '删除这个变量' : '改回自动'}><Icon name={ck === 'delete' ? 'trash' : 'undo'} size={13} /></button>{/if}
                   </span>
                 </div>
               {/if}
@@ -223,9 +224,9 @@
   /* 行内编辑框：细边框、和按钮一样高，聚焦时边框加深加一圈淡光；不用全局输入框那种 1.5px 粗框 */
   /* 边框画在外面这个框上（固定 26px，和旁边的按钮一样高），里面的输入框没有边框、没有阴影 */
   /* 宽度跟着内容走（等宽字体，按字符数算），最少 18 个字符宽，最多到这一列的宽度 */
-  .field { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
-  .field:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
-  .field:focus-within { border-color: color-mix(in srgb, var(--border2) 25%, var(--dim)); }
+  .efield { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
+  .efield:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
+  .efield:focus-within { border-color: color-mix(in srgb, var(--border2) 25%, var(--dim)); }
   .ein { flex: 0 1 auto; min-width: 0; max-width: 100%; text-align: left; height: 100%; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12px; outline: none; -webkit-appearance: none; appearance: none; }
   .ein::placeholder { color: var(--faint); }
   .in-eye { flex: none; width: 22px; height: 22px; margin-right: 1px; }
