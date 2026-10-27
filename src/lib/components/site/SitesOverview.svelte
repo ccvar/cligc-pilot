@@ -13,7 +13,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
@@ -104,10 +104,13 @@
             <div class="iss-mask" onclick={() => (issuesOpen = false)}></div>
             <div class="iss-pop">
               {#each issues as g (g.k)}
-                <button class="iss-g" class:soft={g.soft} onclick={() => pickIssue(g.k)}>
-                  <span class="iss-t"><b>{g.l}</b><span class="iss-n">{g.rows.length}</span></span>
-                  <span class="iss-sites">{g.rows.slice(0, 3).map((r) => r.name).join('、')}{g.rows.length > 3 ? ` 等 ${g.rows.length} 个` : ''}</span>
-                </button>
+                <div class="iss-row">
+                  <button class="iss-g" class:soft={g.soft} onclick={() => pickIssue(g.k)}>
+                    <span class="iss-t"><b>{g.l}</b><span class="iss-n">{g.rows.length}</span></span>
+                    <span class="iss-sites">{g.rows.slice(0, 3).map((r) => r.domain || r.name).join('、')}{g.rows.length > 3 ? ` 等 ${g.rows.length} 个` : ''}</span>
+                  </button>
+                  <button class="iss-x" onclick={() => ignoreIssues(g.rows, g.k)} aria-label="忽略这条提醒" data-tip="忽略：情况有变化（比如又失败一次）会再提醒"><Icon name="x" size={12} /></button>
+                </div>
               {/each}
             </div>
           {/if}
@@ -223,6 +226,11 @@
   .iss .chev { transition: transform .15s; }
   .iss .chev.open { transform: rotate(180deg); }
   .iss.soft { background: var(--su-hover); color: var(--dim); font-weight: 500; }
+  .iss-row { position: relative; }
+  .iss-g { width: 100%; box-sizing: border-box; }
+  .iss-x { position: absolute; bottom: 7px; right: 8px; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s; }
+  .iss-row:hover .iss-x, .iss-x:focus-visible { opacity: 1; }
+  .iss-x:hover { background: var(--su-hover); color: var(--text); }
   .iss-mask { position: fixed; inset: 0; z-index: 30; }
   .iss-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: 300px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
   .iss-g { display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: left; padding: 8px 10px; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--text); }

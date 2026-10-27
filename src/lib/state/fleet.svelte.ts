@@ -78,8 +78,27 @@ export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
   { k: 'proposed', l: '有改动等你确认' },
   { k: 'nodata', l: '数据源没接上', soft: true },
 ];
+// 「要看看」里的提醒可以忽略：记下当时的情况（签名），情况变了（又失败一次、出了别的错）会重新提醒。只存在这台电脑上
+const IGNORE_KEY = 'pilot.fleet.ignoredIssues';
+function issueSig(r: SiteRow, k: SiteFilter): string {
+  if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${r.failed}`;
+  if (k === 'dataerr') return r.summary.errors.join('|');
+  if (k === 'down') return r.summary.data_end;
+  if (k === 'proposed') return String(r.proposed);
+  return 'x';
+}
+function loadIgnored(): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(IGNORE_KEY) || '{}'); } catch { return {}; }
+}
+export const ignored = $state<{ map: Record<string, string> }>({ map: loadIgnored() });
+export function ignoreIssues(rows: SiteRow[], k: SiteFilter) {
+  const map = { ...ignored.map };
+  for (const r of rows) map[`${k}:${r.id}`] = issueSig(r, k);
+  ignored.map = map;
+  try { localStorage.setItem(IGNORE_KEY, JSON.stringify(map)); } catch { /* 存不了就只在这次有效 */ }
+}
 export function issueRows(rows: SiteRow[], k: SiteFilter): SiteRow[] {
-  return applyFilter(rows, '', k, '');
+  return applyFilter(rows, '', k, '').filter((r) => ignored.map[`${k}:${r.id}`] !== issueSig(r, k));
 }
 
 export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRow[] {

@@ -56,7 +56,8 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
             let dir = state.sites.data_dir(&s.id);
             let q = crate::site_ops::load_queue(&dir);
             let count = |st: &str| q.iter().filter(|i| i.status == st).count();
-            let last = crate::site_deploy::load_history(&dir).into_iter().next();
+            // 你自己取消的上线不算失败：按最近一次没被取消的那次算
+            let last = crate::site_deploy::load_history(&dir).into_iter().find(|d| d.ok || !d.error.contains("已取消"));
             let job = state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running").map(|j| j.title).unwrap_or_default();
             let last_ts = last.as_ref().map(|d| d.ts).unwrap_or(0);
             SiteRow {
