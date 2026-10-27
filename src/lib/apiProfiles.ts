@@ -10,9 +10,15 @@ export interface ApiProfile {
   default_model: string;
   max_output_tokens: number;
   key_configured: boolean;
+  /** 上一次「测试连接」的结果（本地存着）；没测过为 null / undefined */
+  check_ok?: boolean | null;
+  check_at?: number;
+  check_message?: string;
+  /** 最近一次用它跑通一轮对话的时间（秒），0＝没用过 */
+  last_used?: number;
 }
 
-export type ApiProfileInput = Omit<ApiProfile, 'id' | 'key_configured'> & { id?: string };
+export type ApiProfileInput = Omit<ApiProfile, 'id' | 'key_configured' | 'check_ok' | 'check_at' | 'check_message' | 'last_used'> & { id?: string };
 
 export interface ApiTestResult {
   ok: boolean;

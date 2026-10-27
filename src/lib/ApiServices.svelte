@@ -3,6 +3,7 @@
   import { tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import BrainIcon from './BrainIcon.svelte';
+  import { ago } from '$lib/components/site/fmt';
   import Dropdown from './Dropdown.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import ApiServiceMenu from './ApiServiceMenu.svelte';
@@ -169,8 +170,17 @@
     if (!profile.enabled) return '已停用';
     if (!profile.key_configured) return '待配置密钥';
     if (!profile.models.length) return '待添加模型';
-    return results[profile.id] ? results[profile.id].ok ? '连接已验证' : '连接失败' : '已配置 · 未测试';
+    if (results[profile.id]) return results[profile.id].ok ? '连接已验证' : '连接失败';
+    // 没在这次打开设置时测过：看本地记着的上次测试，和最近有没有用它跑通过对话（跑通了就说明连接是好的）
+    const used = profile.last_used ?? 0, at = profile.check_at ?? 0;
+    if (profile.check_ok === false && at >= used) return '连接失败';
+    if (used) return `可用 · ${ago(used)}用过`;
+    if (profile.check_ok) return '连接已验证';
+    return '已配置 · 未测试';
   }
+  const verified = (p: ApiProfile) => p.enabled && (results[p.id] ? results[p.id].ok : (!!p.last_used && !(p.check_ok === false && (p.check_at ?? 0) >= p.last_used)) || (p.check_ok === true));
+  const failed = (p: ApiProfile) => p.enabled && (results[p.id] ? !results[p.id].ok : p.check_ok === false && (p.check_at ?? 0) >= (p.last_used ?? 0));
+  const stateTip = (p: ApiProfile) => results[p.id]?.message ?? (failed(p) ? p.check_message || '上次测试连接失败' : p.last_used ? `最近一次用它跑通对话：${ago(p.last_used)}` : p.check_ok ? p.check_message : null) ?? status(p);
 </script>
 
 <section class="api-services" aria-label="API 服务">
@@ -183,7 +193,7 @@
         <div class="service-row">
           <span class="service-icon" aria-hidden="true">{@render providerIcon(profile.protocol)}</span>
           <div class="service-copy"><b title={profile.name}>{profile.name}</b><small title={`${apiProtocolLabel(profile.protocol)} · ${profile.base_url}${profile.default_model ? ` · ${profile.default_model}` : ''}`}>{apiEndpointHost(profile.base_url)}{profile.default_model ? ` · ${profile.default_model}` : ` · ${apiProtocolLabel(profile.protocol)}`}</small></div>
-          <span class="connection-state" class:verified={profile.enabled && results[profile.id]?.ok} class:failed={profile.enabled && results[profile.id]?.ok === false} title={results[profile.id]?.message ?? status(profile)}><i aria-hidden="true"></i><span>{status(profile)}</span></span>
+          <span class="connection-state" class:verified={verified(profile)} class:failed={failed(profile)} title={stateTip(profile)}><i aria-hidden="true"></i><span>{status(profile)}</span></span>
           <ApiServiceMenu name={profile.name} enabled={profile.enabled} busy={!!busy} onedit={() => edit(profile)} ontest={() => test(profile)} ontoggle={() => toggle(profile)} ondelete={() => deleteTarget = profile} />
         </div>
         <!-- 测完才有这一行；没测过不占位置（原来空着也留一行，把「用量与账单」推得离服务名很远） -->

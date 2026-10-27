@@ -67,6 +67,69 @@ pub struct ApiProfileView {
     #[serde(flatten)]
     pub profile: ApiProfile,
     pub key_configured: bool,
+    /// 上一次「测试连接」的结果（存在本地，重开设置也在）；没测过为 None
+    pub check_ok: Option<bool>,
+    pub check_at: u64,
+    pub check_message: String,
+    /// 最近一次用它跑通一轮对话的时间（取自本地用量日志）；能跑通就说明连接是好的
+    pub last_used: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CheckRecord {
+    ok: bool,
+    at: u64,
+    message: String,
+}
+
+fn checks_path(data_dir: &Path) -> std::path::PathBuf {
+    data_dir.join("api_profile_checks.json")
+}
+
+fn read_checks(data_dir: &Path) -> std::collections::HashMap<String, CheckRecord> {
+    std::fs::read(checks_path(data_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn record_check(data_dir: &Path, id: &str, ok: bool, message: &str) {
+    let mut all = read_checks(data_dir);
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    all.insert(id.to_string(), CheckRecord { ok, at, message: message.chars().take(300).collect() });
+    if let Ok(raw) = serde_json::to_vec_pretty(&all) {
+        let _ = std::fs::write(checks_path(data_dir), raw);
+    }
+}
+
+/// 用量日志里每个 API 服务最近一次跑通的时间（只读文件尾部一段，够看最近的用量）
+fn last_used_map(data_dir: &Path) -> std::collections::HashMap<String, u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut out = std::collections::HashMap::new();
+    let Ok(mut f) = std::fs::File::open(data_dir.join("usage_log.jsonl")) else { return out };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(512 * 1024)));
+    let mut raw = Vec::new();
+    if f.read_to_end(&mut raw).is_err() {
+        return out;
+    }
+    for line in String::from_utf8_lossy(&raw).lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if let (Some(id), Some(ts)) = (v["brain"].as_str().and_then(|b| b.strip_prefix("api:")), v["ts"].as_u64()) {
+            let e = out.entry(id.to_string()).or_insert(0);
+            *e = (*e).max(ts);
+        }
+    }
+    out
+}
+
+fn view(profile: ApiProfile, key_configured: bool, checks: &std::collections::HashMap<String, CheckRecord>, used: &std::collections::HashMap<String, u64>) -> ApiProfileView {
+    let c = checks.get(&profile.id);
+    ApiProfileView {
+        check_ok: c.map(|c| c.ok),
+        check_at: c.map(|c| c.at).unwrap_or(0),
+        check_message: c.map(|c| c.message.clone()).unwrap_or_default(),
+        last_used: used.get(&profile.id).copied().unwrap_or(0),
+        profile,
+        key_configured,
+    }
 }
 
 // Deliberately neither Debug nor Serialize: credentials cannot accidentally be
@@ -353,6 +416,7 @@ fn key_input(api_key: Option<String>) -> Result<Option<String>, String> {
 
 fn list_with(data_dir: &Path, secrets: &impl SecretStore) -> Result<Vec<ApiProfileView>, String> {
     let _lock = lock_store(data_dir)?;
+    let (checks, used) = (read_checks(data_dir), last_used_map(data_dir));
     read_profiles(data_dir)?
         .into_iter()
         .map(|profile| {
@@ -361,10 +425,7 @@ fn list_with(data_dir: &Path, secrets: &impl SecretStore) -> Result<Vec<ApiProfi
             if let Some(mut key) = key {
                 key.zeroize();
             }
-            Ok(ApiProfileView {
-                profile,
-                key_configured,
-            })
+            Ok(view(profile, key_configured, &checks, &used))
         })
         .collect()
 }
@@ -497,10 +558,7 @@ fn save_with(
         key.zeroize();
     }
     write_result?;
-    Ok(ApiProfileView {
-        profile,
-        key_configured,
-    })
+    Ok(view(profile, key_configured, &read_checks(data_dir), &last_used_map(data_dir)))
 }
 
 pub fn save(
@@ -737,12 +795,17 @@ pub async fn list_models(data_dir: &Path, id: &str) -> Result<Vec<String>, Strin
 /// Read-only authentication/catalog check. No prompt, generation, tool call,
 /// billing request or local conversation content is sent by this operation.
 pub async fn test(data_dir: &Path, id: &str) -> Result<ApiTestResult, String> {
-    let models = list_models(data_dir, id).await?;
-    Ok(ApiTestResult {
-        ok: true,
-        message: "连接与模型列表认证成功；未调用模型生成，具体模型及工具能力以实际会话为准".into(),
-        model_count: models.len(),
-    })
+    // 结果存下来：重开设置、重启以后也看得到上次测试的结论
+    let models = match list_models(data_dir, id).await {
+        Ok(m) => m,
+        Err(e) => {
+            record_check(data_dir, id, false, &e);
+            return Err(e);
+        }
+    };
+    let message = "连接与模型列表认证成功；未调用模型生成，具体模型及工具能力以实际会话为准";
+    record_check(data_dir, id, true, message);
+    Ok(ApiTestResult { ok: true, message: message.into(), model_count: models.len() })
 }
 
 #[cfg(test)]
