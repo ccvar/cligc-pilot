@@ -443,6 +443,14 @@ export async function setSiteEnv(id: string, set: [string, string][], remove: st
     return true;
   } catch (e) { say(String(e), 'err'); return false; }
 }
+/** 配置变量「从线上读取」：只填 Pilot 里还没有的值，返回一句结果。 */
+export async function pullSiteConfig(id: string): Promise<string> {
+  const r = await invoke<{ message: string; site: Site }>('site_config_pull', { id });
+  sites.list = sites.list.map((s) => (s.id === r.site.id ? r.site : s));
+  sites.envKeys = r.site.build.env_keys;
+  if (sites.draft?.id === id) sites.draft.build.env_keys = r.site.build.env_keys;
+  return r.message;
+}
 /** 下线并删除：从网上撤下来（Cloudflare Pages 项目、域名指向；迁移站点先恢复域名），再从 Pilot 移除，可选把文件夹移到废纸篓。 */
 export async function takedownSite(s: Site) {
   const live = s.domain || (s.deploy.project ? `${s.deploy.project}.pages.dev` : '');

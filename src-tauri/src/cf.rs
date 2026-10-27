@@ -189,6 +189,53 @@ pub async fn set_pages_env(token: &str, account_id: &str, project: &str, vars: &
     cf_send(token, reqwest::Method::PATCH, &format!("/accounts/{account_id}/pages/projects/{project}"), Some(body)).await.map(|_| ())
 }
 
+/// Pages 项目生产环境的变量：公开变量带值，密钥只有名字（Cloudflare 不返回密钥的值）。
+pub async fn pages_env_vars(token: &str, account_id: &str, project: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let v = cf_get(token, &format!("/accounts/{account_id}/pages/projects/{project}"))
+        .await
+        .map_err(|e| if e.contains("404") || e.contains("8000007") { format!("Pages 项目「{project}」还没建：线上没有可读的变量") } else { e })?;
+    Ok(env_from_map(&v["result"]["deployment_configs"]["production"]["env_vars"]))
+}
+
+fn env_from_map(env: &Value) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = env
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter(|(_, x)| !x.is_null())
+                .map(|(k, x)| (k.clone(), if x["type"].as_str() == Some("secret_text") { None } else { x["value"].as_str().map(str::to_string) }))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+/// Worker 现在的变量和密钥（脚本设置里的绑定）：公开变量带值，密钥只有名字。
+pub async fn worker_vars(token: &str, account_id: &str, script: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let v = cf_get(token, &format!("/accounts/{account_id}/workers/scripts/{script}/settings"))
+        .await
+        .map_err(|e| if e.contains("404") || e.contains("10007") { format!("Worker「{script}」还没上线过：线上没有可读的变量") } else { e })?;
+    Ok(vars_from_bindings(&v["result"]["bindings"]))
+}
+
+fn vars_from_bindings(b: &Value) -> Vec<(String, Option<String>)> {
+    b.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let name = x["name"].as_str()?.to_string();
+                    match x["type"].as_str()? {
+                        "plain_text" => Some((name, x["text"].as_str().map(str::to_string))),
+                        "secret_text" => Some((name, None)),
+                        _ => None,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 写一个 Worker 密钥（只动这一个，不影响 Worker 的其它绑定）。Worker 还没部署过会失败。
 pub async fn put_worker_secret(token: &str, account_id: &str, script: &str, name: &str, value: &str) -> Result<(), String> {
     let body = serde_json::json!({"name": name, "text": value, "type": "secret_text"});
@@ -592,6 +639,14 @@ pub async fn purge_hosts(token: &str, zone_id: &str, hosts: &[String]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_vars_keep_values_but_not_secrets() {
+        let env = serde_json::json!({"B": {"type": "plain_text", "value": "1"}, "A": {"type": "secret_text"}, "GONE": null});
+        assert_eq!(env_from_map(&env), vec![("A".to_string(), None), ("B".to_string(), Some("1".to_string()))]);
+        let b = serde_json::json!([{"type": "plain_text", "name": "X", "text": "y"}, {"type": "secret_text", "name": "S"}, {"type": "kv_namespace", "name": "KV"}]);
+        assert_eq!(vars_from_bindings(&b), vec![("X".to_string(), Some("y".to_string())), ("S".to_string(), None)]);
+    }
+
 
     #[test]
     fn route_patterns_match_hosts() {
@@ -783,4 +838,5 @@ pub async fn set_pages_bindings(token: &str, account_id: &str, project: &str, d1
     let cfg = Value::Object(cfg);
     let body = serde_json::json!({ "deployment_configs": { "production": cfg.clone(), "preview": cfg } });
     cf_send(token, reqwest::Method::PATCH, &format!("/accounts/{account_id}/pages/projects/{project}"), Some(body)).await.map(|_| ())
+
 }

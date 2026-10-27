@@ -604,6 +604,32 @@ pub async fn site_config_sync(state: tauri::State<'_, AppState>, id: String) -> 
     crate::site_config::sync(&site, &state.conns, &code, &state.sites.data_dir(&id)).await
 }
 
+/// 从线上读取配置变量：服务器上的 env 文件、Pages 环境变量、Worker 绑定。只填 Pilot 里还没有的值，
+/// 两边不一样的保留 Pilot 的；Cloudflare 的密钥读不到值，只记下「线上已有」。
+#[tauri::command]
+pub async fn site_config_pull(state: tauri::State<'_, AppState>, id: String) -> Result<ConfigPulled, String> {
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    let pulled = crate::site_config::pull(&site, &state.conns, &code).await?;
+    let site = if pulled.fill.is_empty() {
+        site
+    } else {
+        let keys = sites::save_env(&id, &pulled.fill, &[])?;
+        state.sites.update(&id, now(), |s| {
+            s.build.env_keys = keys;
+            Ok(())
+        })?
+    };
+    let message = crate::site_config::record_pull(&site, &code, &state.sites.data_dir(&id), &pulled)?;
+    Ok(ConfigPulled { message, site })
+}
+
+#[derive(Serialize)]
+pub struct ConfigPulled {
+    message: String,
+    site: Site,
+}
+
 /// 保存站点设置。代码来源（source / 仓库 / 文件夹）在导入后不可改，只能删掉重导。
 #[tauri::command]
 pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, String> {

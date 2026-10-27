@@ -5,7 +5,7 @@
   import Icon from './Icon.svelte';
   import type { ConfigState, ConfigVar, Site } from '$lib/types';
   import { say, confirmDialog } from '$lib/state/app.svelte.js';
-  import { sites, setSiteEnv } from '$lib/state/sites.svelte.js';
+  import { sites, setSiteEnv, pullSiteConfig } from '$lib/state/sites.svelte.js';
   import { ago, full } from './fmt';
 
   let { site }: { site: Site } = $props();
@@ -16,6 +16,7 @@
   let adding = $state(false);
   let newVal = $state('');
   let syncing = $state(false);
+  let pulling = $state(false);
 
   async function load() {
     try { cs = await invoke<ConfigState>('site_config_state', { id: site.id }); } catch { cs = null; }
@@ -49,6 +50,12 @@
     catch (e) { say(String(e), 'err'); }
     finally { syncing = false; }
   }
+  async function pull() {
+    pulling = true;
+    try { say(await pullSiteConfig(site.id)); await load(); }
+    catch (e) { say(String(e), 'err'); }
+    finally { pulling = false; }
+  }
   const tag = (v: ConfigVar) => (v.secret ? '密钥' : '公开');
   // 同步到哪儿：说人话（不说「部署目标」）——Pages / Workers 是 Cloudflare，VPS 是你的服务器
   const dest = $derived(cs?.target === 'vps' ? '服务器' : 'Cloudflare');
@@ -56,21 +63,23 @@
 
 <div class="card cfg">
   <h3><Icon name="key" />配置变量<span class="grow"></span>
-    {#if cs?.target && cs.vars.length}<button class="btn tiny" class:primary={cs.needs_sync} onclick={sync} disabled={syncing} data-tip={`写到 ${cs.target_label}；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
+    {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>{/if}
+    {#if cs?.target && cs.vars.length}<button class="btn tiny" class:primary={cs.needs_sync} onclick={sync} disabled={syncing || pulling} data-tip={`写到 ${cs.target_label}；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
   </h3>
   <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? (dest === '服务器' ? '服务器' : 'Cloudflare')}。值不会显示，也不会进仓库。</p>
   {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到{dest}：下次上线时会自动同步，也可以现在点「同步到{dest}」。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
+  {#if cs?.target && cs.missing.length}<p class="sync-ok">还有 {cs.missing.length} 个没填。{dest}上要是已经配过，点「从线上读取」把已有的值拿回来。</p>{/if}
 
   {#if cs && cs.vars.length}
     <ul class="vars">
       {#each cs.vars as v (v.key)}
-        <li class:missing={v.declared && !v.set && !v.auto}>
+        <li class:missing={v.declared && !v.set && !v.auto && !v.remote}>
           <div class="vk">
             <span class="mono k">{v.key}</span>
             <span class="tag" class:secret={v.secret}>{tag(v)}</span>
             {#if !v.declared}<span class="tag">手动添加</span>{/if}
             <span class="grow"></span>
-            {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else}<span class="st no">未填</span>{/if}
+            {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else if v.remote}<span class="st ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就在这里填新值，同步时会覆盖线上的"><Icon name="check" size={11} />线上已有</span>{:else}<span class="st no">未填</span>{/if}
           </div>
           {#if v.desc}<small class="desc">{v.desc}</small>{/if}
           {#if !v.set && v.auto}<small class="auto">自动用 <code>{v.auto}</code>（按站点域名，改域名会跟着变）</small>{/if}
@@ -82,7 +91,7 @@
             </div>
           {:else}
             <div class="acts">
-              <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set ? '修改值' : v.auto ? '改成别的' : '填写'}</button>
+              <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set || v.remote ? '修改值' : v.auto ? '改成别的' : '填写'}</button>
               {#if v.set}<button class="link-btn danger" onclick={() => clear(v.key)}>{v.auto ? '清除（改回自动）' : '清除'}</button>{/if}
             </div>
           {/if}

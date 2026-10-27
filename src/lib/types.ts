@@ -239,7 +239,7 @@ export interface MakeCheck { key: string; label: string; level: 'ok' | 'warn' | 
 export interface TodoInput { key: string; label: string; placeholder: string; value: string }
 export interface SiteTodo { id: string; title: string; why: string; kind: 'input' | 'ai' | 'confirm' | 'suggest' | string; affects_goal: boolean; where: string; inputs: TodoInput[] }
 /** 站点配置变量（值存在 Pilot，不返回给界面） */
-export interface ConfigVar { key: string; desc: string; secret: boolean; declared: boolean; set: boolean; /** 没填值时 Pilot 自动给的值（如 SITE_URL＝https://<站点域名>） */ auto: string }
+export interface ConfigVar { key: string; desc: string; secret: boolean; declared: boolean; set: boolean; /** 没填值时 Pilot 自动给的值（如 SITE_URL＝https://<站点域名>） */ auto: string; /** Pilot 里没值，但读到线上已经设了（Cloudflare 的密钥读不到值） */ remote: boolean }
 export interface ConfigState { vars: ConfigVar[]; missing: string[]; target: string; target_label: string; needs_sync: boolean; synced_at: number; env_file: string }
 /** todos：null＝AI 还没写 .pilot/todo.json */
 export interface MakeState { conventions: boolean; todos: SiteTodo[] | null; config: ConfigVar[]; steps: MakeStep[]; checks: MakeCheck[]; built_at: number; profile?: boolean }

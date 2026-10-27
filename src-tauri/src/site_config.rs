@@ -23,6 +23,9 @@ pub struct ConfigVar {
     pub set: bool,
     /// 没填值时 Pilot 自动给的值（比如 SITE_URL＝https://<站点域名>）；填了就用填的
     pub auto: String,
+    /// Pilot 里没有值，但从线上读到它已经设过（Cloudflare 的密钥只给名字不给值）
+    #[serde(default)]
+    pub remote: bool,
 }
 
 /// 解析 `.env.example`：变量上方的注释是说明，`[secret]` / `[public]` 标明类别；没标的按名字猜。
@@ -88,15 +91,20 @@ fn public_prefix(u: &str) -> bool {
 }
 
 /// `.env.example` 里声明了、但没标 [secret] / [public] 的变量：按名字猜。
-/// 名字里带这些词的都当密钥（DATABASE_URL、SENTRY_DSN、SMTP_PASS 这类连接串、凭据也算）。
+/// 名字里带这些词的都当密钥（SENTRY_DSN、SMTP_PASS 这类凭据也算）；带 URL / URI 的只有像连接串的才算
+/// （DATABASE_URL、REDIS_URL、WEBHOOK_URL……），BASE_URL、SITE_URL 这类站点地址是公开的。
 fn guess_secret(k: &str) -> bool {
     let u = k.to_ascii_uppercase();
-    // 站点地址类（SITE_URL）是 Pilot 自动给的公开值，名字里的 URL 不算
-    let site_url = u.ends_with("SITE_URL") || u == "SITE" || u == "PUBLIC_SITE";
-    !public_prefix(&u) && !site_url && SECRET_WORDS.iter().any(|w| u.contains(w))
+    if public_prefix(&u) {
+        return false;
+    }
+    let url = u.contains("URL") || u.contains("URI");
+    (url && CONN_WORDS.iter().any(|w| u.contains(w))) || SECRET_WORDS.iter().any(|w| u.contains(w))
 }
 
-const SECRET_WORDS: [&str; 15] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PRIVATE", "URL", "DSN", "CRED", "AUTH", "CERT", "SIGNING", "SALT", "HASH"];
+const SECRET_WORDS: [&str; 14] = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PASS", "PRIVATE", "DSN", "CRED", "AUTH", "CERT", "SIGNING", "SALT", "HASH"];
+/// 名字里有 URL 时，再带这些词才像带凭据的连接串
+const CONN_WORDS: [&str; 12] = ["DATABASE", "DB_", "_DB", "REDIS", "MONGO", "POSTGRES", "MYSQL", "AMQP", "RABBIT", "HOOK", "SMTP", "CONN"];
 
 /// 没在 `.env.example` 里声明、在 Pilot 里手动加的变量：一律按密钥处理（不进命令行、Pages 里存成 secret_text），
 /// 只有框架约定会打进前端包的前缀（PUBLIC_ 等）例外——那种值本来就在页面源码里。
@@ -114,11 +122,11 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
     let declared = example_path(site, code).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| parse_example(&t)).unwrap_or_default();
     let mut out: Vec<ConfigVar> = declared
         .into_iter()
-        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true })
+        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true, remote: false })
         .collect();
     for k in &site.build.env_keys {
         if !out.iter().any(|v| &v.key == k) {
-            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new() });
+            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new(), remote: false });
         }
     }
     out
@@ -180,6 +188,9 @@ pub struct SyncRecord {
     pub hash: String,
     pub keys: Vec<String>,
     pub at: u64,
+    /// 上次「从线上读取」时线上已经设了、但读不到值的变量（Cloudflare 的密钥）
+    #[serde(default)]
+    pub remote: Vec<String>,
 }
 
 pub fn load_sync(site_dir: &Path) -> SyncRecord {
@@ -216,10 +227,15 @@ pub struct ConfigState {
 }
 
 pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
-    let vars = vars(site, code);
-    let missing = vars.iter().filter(|v| v.declared && !v.set && v.auto.is_empty()).map(|v| v.key.clone()).collect();
     let target = target_of(site);
     let rec = load_sync(site_dir);
+    let mut vars = vars(site, code);
+    if rec.target == target {
+        for v in vars.iter_mut().filter(|v| !v.set) {
+            v.remote = rec.remote.contains(&v.key);
+        }
+    }
+    let missing = vars.iter().filter(|v| v.declared && !v.set && v.auto.is_empty() && !v.remote).map(|v| v.key.clone()).collect();
     let values = effective_values(site, code);
     let changed = rec.target != target || rec.hash != values_hash(site, &values);
     // 删光了但以前同步过：也要同步一次（把那边的删掉）
@@ -308,26 +324,167 @@ pub async fn sync(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path) 
         }
         _ => unreachable!(),
     };
-    save_sync(site_dir, &SyncRecord { target: target.into(), hash: values_hash(site, &values), keys: values.iter().map(|(k, _)| k.clone()).collect(), at: crate::now_secs() })?;
+    save_sync(site_dir, &SyncRecord { target: target.into(), hash: values_hash(site, &values), keys: values.iter().map(|(k, _)| k.clone()).collect(), at: crate::now_secs(), remote: rec.remote.iter().filter(|k| !remove.contains(k) && !values.iter().any(|(v, _)| v == *k)).cloned().collect() })?;
     Ok(note)
+}
+
+/// 解析 env 文件：`KEY=VALUE` 一行一个；跳过注释和空行，去掉 `export ` 和成对的引号。
+/// 行尾的 `# …` 不当注释（Pilot 写的值不加引号，docker / systemd 的 env 文件也不认行内注释）。
+pub fn parse_env_file(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        let t = t.strip_prefix("export ").unwrap_or(t).trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = t.split_once('=') else { continue };
+        let k = k.trim();
+        if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let v = v.trim();
+        let v = if v.len() >= 2 && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\''))) {
+            v[1..v.len() - 1].to_string()
+        } else {
+            v.to_string()
+        };
+        out.push((k.to_string(), v));
+    }
+    out
+}
+
+/// 从线上读回来的结果（只对 .env.example 里声明的、或 Pilot 已经管着的变量）。
+#[derive(Default, Debug)]
+pub struct Pulled {
+    /// Pilot 里没有、线上有值：填进 Pilot
+    pub fill: Vec<(String, String)>,
+    /// 两边一样
+    pub same: usize,
+    /// 两边都有、但不一样（保留 Pilot 的，下次同步会推上去）
+    pub differ: Vec<String>,
+    /// 线上设了、但读不到值（Cloudflare 的密钥）
+    pub hidden: Vec<String>,
+    /// 线上有、但没在 .env.example 里声明的（不导入，线上照常保留）
+    pub extra: Vec<String>,
+    /// Pilot 里有、线上没有的
+    pub local_only: Vec<String>,
+    /// 两边都有，但线上的值读不到、比不了（Cloudflare 的密钥）
+    pub unknown: usize,
+}
+
+impl Pulled {
+    /// 读完以后两边确定一致：「同步」按钮不用再提醒
+    pub fn in_sync(&self) -> bool {
+        self.differ.is_empty() && self.local_only.is_empty() && self.unknown == 0
+    }
+}
+
+/// 线上变量（值读不到的是 None）和 Pilot 里的对一遍。
+pub fn compare_remote(remote: &[(String, Option<String>)], known: &[String], local: &[(String, String)]) -> Pulled {
+    let mut p = Pulled::default();
+    for (k, v) in remote {
+        if !known.contains(k) {
+            p.extra.push(k.clone());
+            continue;
+        }
+        let mine = local.iter().find(|(lk, _)| lk == k).map(|(_, lv)| lv);
+        match (v, mine) {
+            (None, None) => p.hidden.push(k.clone()),
+            (None, Some(_)) => p.unknown += 1,
+            (Some(v), None) if !v.is_empty() => p.fill.push((k.clone(), v.clone())),
+            (Some(_), None) => {}
+            (Some(v), Some(m)) if v == m => p.same += 1,
+            (Some(_), Some(_)) => p.differ.push(k.clone()),
+        }
+    }
+    p.local_only = local.iter().filter(|(k, _)| !remote.iter().any(|(r, _)| r == k)).map(|(k, _)| k.clone()).collect();
+    p
+}
+
+/// 从线上读取：读线上现在的变量，和 Pilot 里的对一遍。值由调用方存进钥匙串，再调 `record_pull`。
+pub async fn pull(site: &Site, conns: &ConnStore, code: &Path) -> Result<Pulled, String> {
+    let remote = read_remote(site, conns).await?;
+    let known: Vec<String> = vars(site, code).into_iter().map(|v| v.key).collect();
+    Ok(compare_remote(&remote, &known, &effective_values(site, code)))
+}
+
+/// 读取完记一笔：哪些密钥线上有但读不到（不再显示「未填」）；两边一致的话，把「同步」的提醒也消掉。
+/// `site`、`code` 要用存完值以后的。返回一句给人看的结果。
+pub fn record_pull(site: &Site, code: &Path, site_dir: &Path, p: &Pulled) -> Result<String, String> {
+    let target = target_of(site);
+    let mut rec = load_sync(site_dir);
+    if rec.target != target {
+        rec = SyncRecord { target: target.into(), ..Default::default() };
+    }
+    rec.remote = p.hidden.clone();
+    if p.in_sync() {
+        let values = effective_values(site, code);
+        rec.hash = values_hash(site, &values);
+        rec.keys = values.into_iter().map(|(k, _)| k).collect();
+        rec.at = crate::now_secs();
+    }
+    save_sync(site_dir, &rec)?;
+    let mut parts = vec![];
+    if !p.fill.is_empty() {
+        parts.push(format!("读回 {} 个值", p.fill.len()));
+    }
+    if p.same > 0 {
+        parts.push(format!("{} 个和线上一样", p.same));
+    }
+    if !p.hidden.is_empty() {
+        parts.push(format!("{} 个密钥线上已设（Cloudflare 不给看值）", p.hidden.len()));
+    }
+    if !p.differ.is_empty() {
+        parts.push(format!("{} 和线上不一样，保留 Pilot 里的（同步时会写上去）", p.differ.join("、")));
+    }
+    if !p.extra.is_empty() {
+        parts.push(format!("线上另有 {} 个没在 .env.example 里声明的变量，没导入", p.extra.len()));
+    }
+    Ok(if parts.is_empty() { "线上没有这个站点用得到的变量".into() } else { parts.join("；") })
+}
+
+/// 读线上现在的配置变量：服务器读 env 文件；Pages 读项目的生产环境变量；Workers 读脚本设置里的绑定。
+pub async fn read_remote(site: &Site, conns: &ConnStore) -> Result<Vec<(String, Option<String>)>, String> {
+    match target_of(site) {
+        "vps" => {
+            let ssh = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接".to_string())?;
+            Ok(parse_env_file(&read_server_env(&ssh, &env_file(site)).await?).into_iter().map(|(k, v)| (k, Some(v))).collect())
+        }
+        t @ ("pages" | "workers") => {
+            let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
+            let token = crate::keychain::get_key_async(&cf.id).await?;
+            if site.deploy.project.trim().is_empty() {
+                return Err("请先在站点设置里填写 Pages 项目 / Worker 名称".into());
+            }
+            if t == "pages" {
+                crate::cf::pages_env_vars(&token, &cf.account_id, &site.deploy.project).await
+            } else {
+                crate::cf::worker_vars(&token, &cf.account_id, &site.deploy.project).await
+            }
+        }
+        _ => Err("还没配置部署：没有线上可以读".into()),
+    }
 }
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// 用 Pilot 的部署密钥登录服务器：读出现有的 env 文件，合并后原子写回（权限 600）。
-async fn write_server_env(ssh: &crate::conns::Connection, path: &str, set: &[(String, String)], remove: &[String]) -> Result<(), String> {
+fn check_env_path(path: &str) -> Result<(), String> {
     if !path.starts_with('/') || path.contains("..") || path.ends_with('/') {
         return Err(format!("配置文件路径不对：{path}"));
     }
+    Ok(())
+}
+
+/// 用 Pilot 的部署密钥读服务器上的 env 文件（不存在就是空）。
+async fn read_server_env(ssh: &crate::conns::Connection, path: &str) -> Result<String, String> {
+    check_env_path(path)?;
     let shim = crate::site_vps::shim(&ssh.id)?;
     let target = format!("{}@{}", ssh.ssh_user, ssh.ssh_host);
-    let ssh_bin = shim.bin_dir().join("ssh");
-    let port = ssh.ssh_port.to_string();
-    let q = shell_quote(path);
-    let read = tokio::process::Command::new(&ssh_bin)
-        .args(["-p", &port, &target, &format!("cat {q} 2>/dev/null || true")])
+    let read = tokio::process::Command::new(shim.bin_dir().join("ssh"))
+        .args(["-p", &ssh.ssh_port.to_string(), &target, &format!("cat {} 2>/dev/null || true", shell_quote(path))])
         .stdin(std::process::Stdio::null())
         .output()
         .await
@@ -335,7 +492,18 @@ async fn write_server_env(ssh: &crate::conns::Connection, path: &str, set: &[(St
     if !read.status.success() {
         return Err(format!("读取服务器上的 {path} 失败：{}（先在站点设置里为部署授权）", String::from_utf8_lossy(&read.stderr).trim()));
     }
-    let merged = merge_env_file(&String::from_utf8_lossy(&read.stdout), set, remove);
+    Ok(String::from_utf8_lossy(&read.stdout).into_owned())
+}
+
+/// 用 Pilot 的部署密钥登录服务器：读出现有的 env 文件，合并后原子写回（权限 600）。
+async fn write_server_env(ssh: &crate::conns::Connection, path: &str, set: &[(String, String)], remove: &[String]) -> Result<(), String> {
+    let existing = read_server_env(ssh, path).await?;
+    let shim = crate::site_vps::shim(&ssh.id)?;
+    let target = format!("{}@{}", ssh.ssh_user, ssh.ssh_host);
+    let ssh_bin = shim.bin_dir().join("ssh");
+    let port = ssh.ssh_port.to_string();
+    let q = shell_quote(path);
+    let merged = merge_env_file(&existing, set, remove);
     let dir = Path::new(path).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "/".into());
     let cmd = format!("mkdir -p {d} && umask 077 && cat > {t} && chmod 600 {t} && mv {t} {q}", d = shell_quote(&dir), t = shell_quote(&format!("{path}.pilot-tmp")));
     let mut child = tokio::process::Command::new(&ssh_bin)
@@ -373,10 +541,10 @@ mod tests {
 
     #[test]
     fn connection_strings_and_credentials_count_as_secrets() {
-        for k in ["DATABASE_URL", "SMTP_PASS", "SENTRY_DSN", "GOOGLE_CREDENTIALS", "AUTH_SECRET", "TLS_CERT", "JWT_SIGNING_KEY", "DB_PASSWD"] {
+        for k in ["DATABASE_URL", "REDIS_URL", "MONGODB_URI", "SLACK_WEBHOOK_URL", "SMTP_PASS", "SENTRY_DSN", "GOOGLE_CREDENTIALS", "AUTH_SECRET", "TLS_CERT", "JWT_SIGNING_KEY", "DB_PASSWD"] {
             assert!(guess_secret(k), "{k}");
         }
-        for k in ["SITE_URL", "PUBLIC_SITE_URL", "PUBLIC_API_URL", "NEXT_PUBLIC_KEY", "GA_ID", "CONTACT_EMAIL"] {
+        for k in ["SITE_URL", "BASE_URL", "API_BASE_URL", "CDN_URL", "PUBLIC_SITE_URL", "PUBLIC_API_URL", "NEXT_PUBLIC_KEY", "GA_ID", "CONTACT_EMAIL"] {
             assert!(!guess_secret(k), "{k}");
         }
         // 没声明的变量一律当密钥，只有前端前缀例外
@@ -386,7 +554,7 @@ mod tests {
 
     #[test]
     fn ga_variable_is_found_by_name() {
-        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new() };
+        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new(), remote: false };
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID"), v("PUBLIC_GA_ID")]).as_deref(), Some("PUBLIC_GA_ID"));
         assert_eq!(ga_key(&[v("PUBLIC_SITE_URL"), v("PUBLIC_GA4_ID")]).as_deref(), Some("PUBLIC_GA4_ID"));
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID")]).as_deref(), Some("GA_MEASUREMENT_ID"));
@@ -417,5 +585,42 @@ mod tests {
         assert_eq!(derived(&s, "SITE").as_deref(), Some("https://ngneo.com"));
         assert_eq!(derived(&s, "PUBLIC_GA_ID"), None);
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn server_env_file_is_read_back() {
+        let text = "# 注释\n\nexport A=1\nB=\"two words\"\nC='x=y'\nD=a # b\nbad line\nE=\n";
+        assert_eq!(
+            parse_env_file(text),
+            vec![("A".into(), "1".into()), ("B".into(), "two words".into()), ("C".into(), "x=y".into()), ("D".into(), "a # b".into()), ("E".into(), String::new())]
+        );
+        // Pilot 自己写进去的，读回来一样
+        let written = merge_env_file("", &[("K".into(), "v w".into())], &[]);
+        assert_eq!(parse_env_file(&written), vec![("K".to_string(), "v w".to_string())]);
+    }
+
+    #[test]
+    fn pulling_fills_only_what_pilot_lacks() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let remote = vec![
+            ("BASE_URL".to_string(), Some("https://a.com".to_string())),
+            ("SITE_URL".to_string(), Some("https://a.com".to_string())),
+            ("API_KEY".to_string(), None),
+            ("TOKEN".to_string(), Some("new".to_string())),
+            ("STRAY".to_string(), Some("1".to_string())),
+            ("EMPTY".to_string(), Some(String::new())),
+        ];
+        let known = s(&["BASE_URL", "SITE_URL", "API_KEY", "TOKEN", "EMPTY", "LOCAL"]);
+        let local = vec![("SITE_URL".to_string(), "https://a.com".to_string()), ("TOKEN".to_string(), "old".to_string()), ("LOCAL".to_string(), "x".to_string())];
+        let p = compare_remote(&remote, &known, &local);
+        assert_eq!(p.fill, vec![("BASE_URL".to_string(), "https://a.com".to_string())]);
+        assert_eq!(p.same, 1);
+        assert_eq!(p.differ, s(&["TOKEN"]));
+        assert_eq!(p.hidden, s(&["API_KEY"]));
+        assert_eq!(p.extra, s(&["STRAY"]));
+        assert_eq!(p.local_only, s(&["LOCAL"]));
+        assert!(!p.in_sync());
+        let p = compare_remote(&remote[..2], &known, &local[..1]);
+        assert!(p.in_sync());
     }
 }
