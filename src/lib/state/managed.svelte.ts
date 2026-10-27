@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem, AiCost } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -150,6 +150,23 @@ export function newGroup(sites: string[] = []) {
   managed.editor = { ...blankGroup(o?.config, o?.groups.length ?? 0), sites: [...sites] };
 }
 export const CODE_LABEL: Record<string, string> = { review: '代码改动人审', small: '小的代码改动自动上线', all: '代码改动自动上线' };
+/** 本月 AI 花费的短写：能估金额就写美元，全是订阅额度就写 token；没用过返回空 */
+export function costText(c?: AiCost | null): string {
+  if (!c || !c.turns) return '';
+  if (c.usd >= 0.01) return `$${c.usd >= 100 ? Math.round(c.usd) : c.usd.toFixed(2)}`;
+  return `${kTok(c.tokens)} token`;
+}
+/** 悬停说明：金额怎么来的、订阅额度里的、每条上线改动摊多少 */
+export function costTip(c: AiCost, shipped: number, scope = '这个站点'): string {
+  const lines = [`${scope}这个月的 AI 用量：${c.turns} 轮，折算 ${kTok(c.tokens)} token`];
+  if (c.usd >= 0.01) lines.push(`按官方价约 $${c.usd.toFixed(2)}（API 连接的部分；实际以账单为准）`);
+  if (c.sub_tokens) lines.push(`订阅额度内 ${kTok(c.sub_tokens)} token（Claude Code、Codex 不按 token 收钱）`);
+  if (c.unpriced_tokens) lines.push(`${kTok(c.unpriced_tokens)} token 认不出型号价格，没算进金额`);
+  if (shipped) lines.push(`本月上线 ${shipped} 条，每条约 ${c.usd >= 0.01 ? `$${(c.usd / shipped).toFixed(2)}` : `${kTok(Math.round(c.tokens / shipped))} token`}`);
+  else lines.push('本月还没有上线的改动');
+  if (c.rough) lines.push('含开始记账前的粗估（那时只记了每个会话的总量）');
+  return lines.join('\n');
+}
 export const kTok = (v: number) => (v >= 1e6 ? `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M` : v >= 1e3 ? `${Math.round(v / 1e3)}K` : String(v));
 /** 这个站点本周的托管额度满了没有：满了返回一句说明（和后端 over_budget 同口径），没满返回空。 */
 export function budgetFull(b?: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number }): string {

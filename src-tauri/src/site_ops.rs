@@ -13,7 +13,7 @@ use crate::sites::Site;
 pub struct Opportunity {
     /// 稳定键：类型 + 页面（+ 查询词），用于去重与「驳回后不再提」。
     pub key: String,
-    /// low_ctr | striking | declining | content_gap | crawl_issue | sitemap_error
+    /// low_ctr | striking | declining | content_gap | crawl_issue | sitemap_error | cannibal | stale_year | stale
     pub kind: String,
     pub title: String,
     pub page: String,
@@ -269,12 +269,194 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
         }
     }
 
-    for mut group in [low, striking, declining, gap, tech] {
+    let cannibal = cannibal_opportunities(&qp, min_impr);
+
+    for mut group in [low, striking, declining, gap, tech, cannibal] {
         group.sort_by(|a, b| b.score.total_cmp(&a.score));
         group.truncate(10);
         out.extend(group);
     }
     out.sort_by(|a, b| b.score.total_cmp(&a.score));
+    out
+}
+
+/// 6) 同一个站点的两个页面被同一批搜索词带出来、都排不上去（Google 不确定该排哪个）→ 合并或拉开角度。
+/// 每对页面一条，列出它们共同的搜索词。最好的页面已经在前 3 名的词不算（已经有赢家了）。
+fn cannibal_opportunities(qp: &[Row], min_impr: f64) -> Vec<Opportunity> {
+    let mut by_query: HashMap<&str, Vec<&Row>> = HashMap::new();
+    for r in qp {
+        by_query.entry(r.key.as_str()).or_default().push(r);
+    }
+    // (强页, 弱页) → 共同的搜索词（强页那一行、弱页那一行）
+    let mut pairs: HashMap<(String, String), Vec<(&Row, &Row)>> = HashMap::new();
+    for rows in by_query.values() {
+        let total: f64 = rows.iter().map(|r| r.impressions).sum();
+        if total < min_impr * 2.0 || rows.iter().any(|r| r.position > 0.0 && r.position <= 3.0) {
+            continue;
+        }
+        let mut cand: Vec<&Row> = rows.iter().copied().filter(|r| r.impressions >= (total * 0.15).max(10.0) && (4.0..=40.0).contains(&r.position)).collect();
+        if cand.len() < 2 {
+            continue;
+        }
+        cand.sort_by(|a, b| b.clicks.total_cmp(&a.clicks).then(b.impressions.total_cmp(&a.impressions)));
+        let (a, b) = (cand[0], cand[1]);
+        pairs.entry((a.key2.clone(), b.key2.clone())).or_default().push((a, b));
+    }
+    let mut out = Vec::new();
+    for ((strong, weak), mut shared) in pairs {
+        shared.sort_by(|x, y| (y.0.impressions + y.1.impressions).total_cmp(&(x.0.impressions + x.1.impressions)));
+        let impr: f64 = shared.iter().map(|(a, b)| a.impressions + b.impressions).sum();
+        let clicks: f64 = shared.iter().map(|(a, b)| a.clicks + b.clicks).sum();
+        // 按展现加权的平均排名：second＝false 取强页那一行、true 取弱页那一行
+        let avg = |second: bool| {
+            let pick = |x: &(&Row, &Row)| if second { (x.1.position, x.1.impressions) } else { (x.0.position, x.0.impressions) };
+            let w: f64 = shared.iter().map(|x| pick(x).1).sum();
+            shared.iter().map(|x| pick(x).0 * pick(x).1).sum::<f64>() / w.max(1.0)
+        };
+        let (pa, pb) = (avg(false), avg(true));
+        let pos = pa.min(pb);
+        let queries: Vec<Row> = shared
+            .iter()
+            .take(8)
+            .map(|(a, b)| {
+                let i = a.impressions + b.impressions;
+                Row { key: a.key.clone(), key2: String::new(), clicks: a.clicks + b.clicks, impressions: i, ctr: if i > 0.0 { (a.clicks + b.clicks) / i } else { 0.0 }, position: a.position.min(b.position) }
+            })
+            .collect();
+        let mut pair = [strong.clone(), weak.clone()];
+        pair.sort();
+        out.push(Opportunity {
+            key: format!("cannibal:{}|{}", pair[0], pair[1]),
+            kind: "cannibal".into(),
+            title: format!("{} 和 {} 在抢同样的搜索词", path_of(&strong), path_of(&weak)),
+            page: strong.clone(),
+            source: "data".into(),
+            evidence: format!(
+                "{n} 个搜索词同时把这两个页面带出来：{strong}（平均排名 {pa:.1}）和 {weak}（平均排名 {pb:.1}），近 28 天合计展现 {impr:.0}。\
+Google 不确定该排哪个，两个都上不去。先读两个页面，判断是不是在讲同一件事：\
+是，就把 {weak} 里有用、{strong} 没有的内容并进 {strong}，{weak} 改成 301 跳转到 {strong}（按站点现有的跳转方式，比如 _redirects），站内指向 {weak} 的链接改指 {strong}，sitemap 里去掉 {weak}；\
+不是，就让 {weak} 的标题、H1 和开头换一个明确不同的角度（比如一个讲教程、一个讲对比），两页之间互相加一条链接。在说明里写清你选了哪种、为什么。",
+                n = shared.len(),
+            ),
+            queries,
+            clicks,
+            impressions: impr,
+            ctr: if impr > 0.0 { clicks / impr } else { 0.0 },
+            position: pos,
+            score: impr * (expected_ctr(3.0) - expected_ctr(pos)).max(0.0),
+            change: "content".into(),
+            ..Default::default()
+        });
+    }
+    out
+}
+
+/// 字符串里的 4 位年份（前后不是数字）。
+fn years_in(s: &str) -> Vec<i32> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    for i in 0..b.len().saturating_sub(3) {
+        if b[i..i + 4].iter().all(u8::is_ascii_digit) && (i == 0 || !b[i - 1].is_ascii_digit()) && b.get(i + 4).is_none_or(|c| !c.is_ascii_digit()) {
+            if let Ok(y) = s[i..i + 4].parse::<i32>() {
+                if (2000..=2100).contains(&y) {
+                    out.push(y);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 页面多久没更新算「久未更新」
+pub const STALE_DAYS: i64 = 180;
+
+/// 7) 内容过时：要从构建产物读页面的标题和更新日期，所以单独算（扫描时调用）。只看近 28 天有流量的页面。
+/// - 标题里的年份比今年早（12 月 15 日起，今年也算：该换成明年了）→ 改标题和描述里的年份（stale_year，改标题 / 描述）；
+/// - 页面上写的更新日期在半年以前、还有点击 → 逐段核对有时效的信息（stale，改正文，一律留给你确认）。
+pub fn stale_opportunities(site: &Site, site_dir: &Path, facts: &[crate::site_make::PageFacts], today: chrono::NaiveDate) -> Vec<Opportunity> {
+    use chrono::Datelike;
+    let dir = cache_dir(site_dir);
+    let pages: Vec<Row> = read_json(&dir, "gsc_pages.json");
+    let pages_prev: Vec<Row> = read_json(&dir, "gsc_pages_prev.json");
+    let by_path: HashMap<String, &Row> = pages.iter().map(|r| (path_of(&r.key), r)).collect();
+    let prev: HashMap<String, &Row> = pages_prev.iter().map(|r| (path_of(&r.key), r)).collect();
+    let min_impr = site.ops.min_impressions.max(10) as f64;
+    let year = today.year();
+    let late_dec = today.month() == 12 && today.day() >= 15;
+    let target = if late_dec { year + 1 } else { year };
+    let (mut years, mut old) = (Vec::new(), Vec::new());
+    for f in facts {
+        let Some(r) = by_path.get(&f.path).or_else(|| by_path.get(f.path.trim_end_matches('/'))) else { continue };
+        if r.clicks < 3.0 && r.impressions < min_impr {
+            continue;
+        }
+        let stale_y: Vec<i32> = years_in(&f.title).into_iter().filter(|y| *y < target && *y >= year - 10).collect();
+        if let Some(y) = stale_y.iter().max() {
+            years.push(Opportunity {
+                key: format!("stale_year:{}:{target}", r.key),
+                kind: "stale_year".into(),
+                title: format!("{} 标题里还写着 {y} 年", f.path),
+                page: r.key.clone(),
+                source: "data".into(),
+                evidence: format!(
+                    "标题「{}」里的年份是 {y}，{}。搜索的人看到旧年份会以为内容过时，点击率会掉（近 28 天展现 {:.0}、点击 {:.0}）。\
+把标题和描述里表示「今年 / 最新」的年份改成 {target}；讲历史事件的年份不要改；正文里的数字这一轮不动。",
+                    f.title,
+                    if late_dec { format!("马上就是 {target} 年了") } else { format!("现在是 {year} 年") },
+                    r.impressions,
+                    r.clicks
+                ),
+                queries: vec![],
+                clicks: r.clicks,
+                impressions: r.impressions,
+                ctr: r.ctr,
+                position: r.position,
+                score: 10.0 + r.clicks * 2.0 + r.impressions * 0.02,
+                change: "meta".into(),
+                ..Default::default()
+            });
+            continue;
+        }
+        let Ok(updated) = chrono::NaiveDate::parse_from_str(&f.updated, "%Y-%m-%d") else { continue };
+        let days = (today - updated).num_days();
+        if days < STALE_DAYS || r.clicks < 5.0 {
+            continue;
+        }
+        let months = days / 30;
+        let trend = prev
+            .get(&f.path)
+            .filter(|p| p.clicks >= 10.0 && r.clicks < p.clicks * 0.8)
+            .map(|p| format!("，比前 28 天的 {:.0} 次少了 {:.0}%", p.clicks, (1.0 - r.clicks / p.clicks) * 100.0))
+            .unwrap_or_default();
+        old.push(Opportunity {
+            key: format!("stale:{}", r.key),
+            kind: "stale".into(),
+            title: format!("{} 已经 {months} 个月没更新", f.path),
+            page: r.key.clone(),
+            source: "data".into(),
+            evidence: format!(
+                "页面上写的更新日期是 {}（{months} 个月前），近 28 天还有 {:.0} 次点击{trend}。\
+逐段核对有时效的信息：费率、活动和奖励、支持的币种和地区、操作步骤和界面说明、监管规定；过时的改掉，\
+查不到可靠来源的不要编，在说明里列出来留给我核对。改完把页面上的更新日期（dateModified 等）改成今天。",
+                f.updated, r.clicks
+            ),
+            queries: vec![],
+            clicks: r.clicks,
+            impressions: r.impressions,
+            ctr: r.ctr,
+            position: r.position,
+            prev_clicks: prev.get(&f.path).map(|p| p.clicks).unwrap_or(0.0),
+            score: r.clicks * (1.0 + months as f64 / 12.0),
+            change: "content".into(),
+            ..Default::default()
+        });
+    }
+    let mut out = Vec::new();
+    for mut group in [years, old] {
+        group.sort_by(|a, b| b.score.total_cmp(&a.score));
+        group.truncate(10);
+        out.extend(group);
+    }
     out
 }
 
@@ -731,6 +913,49 @@ mod tests {
             "id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 0
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn two_pages_sharing_the_same_queries_are_flagged_once() {
+        let t = tempfile::tempdir().unwrap();
+        let c = cache_dir(t.path());
+        let r = |k: &str, k2: &str, clicks: f64, impr: f64, pos: f64| serde_json::json!({"key":k,"key2":k2,"clicks":clicks,"impressions":impr,"ctr":clicks/impr,"position":pos});
+        write(&c, "gsc_query_page.json", serde_json::json!([
+            r("gate 邀请码", "https://x.com/a", 5.0, 400.0, 9.0),
+            r("gate 邀请码", "https://x.com/b", 1.0, 300.0, 14.0),
+            r("gate 返佣", "https://x.com/a", 3.0, 200.0, 11.0),
+            r("gate 返佣", "https://x.com/b", 1.0, 150.0, 16.0),
+            // 已经有页面排在第 2：不算抢
+            r("gate 注册", "https://x.com/a", 50.0, 500.0, 2.0),
+            r("gate 注册", "https://x.com/b", 1.0, 200.0, 18.0),
+        ]));
+        let opps: Vec<Opportunity> = opportunities(&site(), t.path()).into_iter().filter(|o| o.kind == "cannibal").collect();
+        assert_eq!(opps.len(), 1, "{opps:?}");
+        assert_eq!(opps[0].page, "https://x.com/a");
+        assert_eq!(opps[0].queries.len(), 2);
+        assert_eq!(opps[0].key, "cannibal:https://x.com/a|https://x.com/b");
+    }
+
+    #[test]
+    fn stale_titles_and_old_pages_become_refresh_tasks() {
+        use crate::site_make::PageFacts;
+        assert_eq!(years_in("2025 年最好用的交易所 (2024 版) 12025"), vec![2025, 2024]);
+        let t = tempfile::tempdir().unwrap();
+        let c = cache_dir(t.path());
+        let r = |k: &str, clicks: f64, impr: f64| serde_json::json!({"key":k,"clicks":clicks,"impressions":impr,"ctr":clicks/impr,"position":8.0});
+        write(&c, "gsc_pages.json", serde_json::json!([r("https://x.com/best/", 20.0, 900.0), r("https://x.com/guide/", 30.0, 800.0), r("https://x.com/new/", 30.0, 800.0), r("https://x.com/quiet/", 0.0, 2.0)]));
+        let f = |path: &str, title: &str, updated: &str| PageFacts { path: path.into(), title: title.into(), h1: String::new(), updated: updated.into() };
+        let facts = [f("/best/", "2025 最好用的交易所", "2026-09-01"), f("/guide/", "怎么买 USDT", "2025-12-01"), f("/new/", "怎么提币", "2026-09-01"), f("/quiet/", "2020 老文章", "2020-01-01")];
+        let day = |s: &str| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let kinds = |v: &[Opportunity]| v.iter().map(|o| (o.kind.clone(), o.page.clone())).collect::<Vec<_>>();
+        let opps = stale_opportunities(&site(), t.path(), &facts, day("2026-10-27"));
+        assert_eq!(kinds(&opps), vec![("stale_year".to_string(), "https://x.com/best/".to_string()), ("stale".to_string(), "https://x.com/guide/".to_string())]);
+        assert_eq!(opps[0].change, "meta");
+        assert_eq!(opps[1].change, "content");
+        // 12 月 15 日以后，标题里写着今年也该换了
+        let opps = stale_opportunities(&site(), t.path(), &[f("/best/", "2026 最好用的交易所", "2026-12-01")], day("2026-12-20"));
+        assert_eq!(opps[0].key, "stale_year:https://x.com/best/:2027");
+        assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "2026 最好用的交易所", "2026-12-01")], day("2026-12-01")).is_empty());
     }
 
     #[test]

@@ -217,6 +217,9 @@ pub struct ManagedSite {
     /// 下一次自动运行的任务（scan / health / plan / report / review / watch）和到点时间；托管停着就是空 / 0。
     pub next_task: String,
     pub next_at: u64,
+    /// 这个月（本地时间 1 号起）的 AI 用量和花费、上线了几条
+    pub cost: crate::usage::Cost,
+    pub shipped_month: usize,
 }
 
 #[derive(Serialize)]
@@ -226,6 +229,16 @@ pub struct ManagedOverview {
     pub groups: Vec<ManagedGroup>,
     pub shipped_today: usize,
     pub waiting: usize,
+    /// 所有托管站点这个月的 AI 用量合计、上线条数
+    pub cost_month: crate::usage::Cost,
+    pub shipped_month: usize,
+}
+
+/// 本地时间这个月 1 号零点
+pub fn month_start() -> i64 {
+    use chrono::Datelike;
+    let today = chrono::Local::now().date_naive();
+    today.with_day(1).and_then(|d| d.and_hms_opt(0, 0, 0)).and_then(|d| d.and_local_timezone(chrono::Local).earliest()).map(|d| d.timestamp()).unwrap_or(0)
 }
 
 #[tauri::command]
@@ -235,6 +248,10 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
     let cfg = sync(&state);
     let mut shipped_today = 0;
     let mut waiting_total = 0;
+    let month = month_start();
+    let mut cost_month = crate::usage::Cost::default();
+    let mut shipped_month_total = 0;
+    let convs = state.convos.list();
     let sites = state
         .sites
         .list()
@@ -252,7 +269,15 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             let stg = crate::site_stage::stage_of(&s, &dir);
             let running = !cfg.paused && group.is_some_and(|g| g.active_for(&s.id));
             let (next_task, next_at) = if running { crate::site_runner::next_run(&s, &dir, true).unwrap_or_default() } else { Default::default() };
+            let conn_id = crate::site_cmds::site_conn_id(&s.id);
+            crate::usage::backfill_site(&dir, &convs.iter().filter(|c| c.origin == "ops" && c.conn_id == conn_id).collect::<Vec<_>>());
+            let cost = crate::usage::site_cost(&dir, month);
+            cost_month.add(&cost);
+            let shipped_month = q.iter().filter(|i| i.deployed_at as i64 >= month && matches!(i.status.as_str(), "deployed" | "done")).count();
+            shipped_month_total += shipped_month;
             ManagedSite {
+                cost,
+                shipped_month,
                 stage: stg.stage.clone(),
                 stage_manual: !stg.manual.is_empty(),
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
@@ -273,7 +298,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             }
         })
         .collect();
-    ManagedOverview { groups: cfg.groups.clone(), config: cfg, sites, shipped_today, waiting: waiting_total }
+    ManagedOverview { groups: cfg.groups.clone(), config: cfg, sites, shipped_today, waiting: waiting_total, cost_month, shipped_month: shipped_month_total }
 }
 
 #[tauri::command]

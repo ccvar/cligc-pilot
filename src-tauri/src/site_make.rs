@@ -785,6 +785,73 @@ pub fn articles(out: &Path) -> Vec<Article> {
     list
 }
 
+/// 判断内容是否过时用的页面信息：标题、H1、页面上写的发布 / 更新日期。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PageFacts {
+    /// 网址路径，如 `/guides/buy-usdt/`
+    pub path: String,
+    pub title: String,
+    pub h1: String,
+    /// 最近一次更新的日期 YYYY-MM-DD：结构化数据的 dateModified / datePublished、article:modified_time、`<time datetime>` 里最新的；都没有就空
+    pub updated: String,
+}
+
+pub fn page_facts(out: &Path) -> Vec<PageFacts> {
+    real_pages(out).into_iter().map(|(f, html)| facts_of(&page_url(out, &f), &html)).collect()
+}
+
+fn facts_of(path: &str, html: &str) -> PageFacts {
+    let low = html.to_ascii_lowercase();
+    let text = |t: &str| inner(html, &low, t).map(|x| strip_tags(x).split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    let mut dates: Vec<String> = Vec::new();
+    let mut push = |d: &str| {
+        let d: String = d.trim().chars().take(10).collect();
+        if d.len() == 10 && d.as_bytes()[4] == b'-' && d.as_bytes()[7] == b'-' && d[..4].chars().all(|c| c.is_ascii_digit()) {
+            dates.push(d);
+        }
+    };
+    let mut from = 0;
+    while let Some(i) = low[from..].find("<script") {
+        let a = from + i;
+        let Some(j) = low[a..].find('>') else { break };
+        let start = a + j + 1;
+        let end = low[start..].find("</script>").map(|k| start + k).unwrap_or(low.len());
+        from = end;
+        if !low[a..start].contains("ld+json") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(html[start..end].trim()) else { continue };
+        let mut nodes: Vec<serde_json::Value> = match v {
+            serde_json::Value::Array(a) => a,
+            other => vec![other],
+        };
+        if let Some(g) = nodes.iter().find_map(|n| n.get("@graph").and_then(|g| g.as_array()).cloned()) {
+            nodes.extend(g);
+        }
+        for n in &nodes {
+            for k in ["dateModified", "datePublished"] {
+                if let Some(d) = n[k].as_str() {
+                    push(d);
+                }
+            }
+        }
+    }
+    for m in tags(html, &low, "meta") {
+        let p = attr(m, "property").or_else(|| attr(m, "name")).unwrap_or_default().to_ascii_lowercase();
+        if matches!(p.as_str(), "article:modified_time" | "article:published_time" | "og:updated_time") {
+            if let Some(c) = attr(m, "content") {
+                push(&c);
+            }
+        }
+    }
+    for t in tags(html, &low, "time") {
+        if let Some(d) = attr(t, "datetime") {
+            push(&d);
+        }
+    }
+    PageFacts { path: path.to_string(), title: text("title"), h1: text("h1"), updated: dates.into_iter().max().unwrap_or_default() }
+}
+
 const REQUIRED: &[(&str, &[&str])] = &[("关于", &["about", "关于"]), ("联系", &["contact", "联系"]), ("隐私政策", &["privacy", "隐私"])];
 const LISTING: &[&str] = &["tag", "categor", "page/", "archive", "search", "blog/index", "posts/index"];
 const EXTRA_PLACEHOLDERS: &[&str] = &["敬请期待", "coming soon", "待补", "your-email", "example@example.com", "xxx-xxxx"];
@@ -1105,6 +1172,18 @@ pub fn readiness(out: &Path) -> Vec<Check> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_facts_take_the_newest_date_on_the_page() {
+        let html = r#"<html><head><title>2025 最好用的交易所</title><meta property="article:published_time" content="2025-01-03T08:00:00Z">
+<script type="application/ld+json">{"@type":"Article","datePublished":"2025-01-03","dateModified":"2025-06-10T00:00:00+08:00"}</script></head>
+<body><h1>交易所 <b>推荐</b></h1><time datetime="2024-12-01">去年</time></body></html>"#;
+        let f = facts_of("/best/", html);
+        assert_eq!(f.title, "2025 最好用的交易所");
+        assert_eq!(f.h1, "交易所 推荐");
+        assert_eq!(f.updated, "2025-06-10");
+        assert_eq!(facts_of("/x/", "<title>没日期</title>").updated, "");
+    }
 
     fn req() -> CreateSiteRequest {
         CreateSiteRequest { name: "Coffee Notes".into(), about: "手冲咖啡入门指南".into(), stack: "astro".into(), parent_dir: "/tmp".into(), goals: vec!["广告变现".into()], ..Default::default() }

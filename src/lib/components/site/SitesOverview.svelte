@@ -18,6 +18,7 @@
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
+  import BackgroundNotice from './BackgroundNotice.svelte';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
@@ -146,6 +147,7 @@
    {#key fleet.tab}
    <div class="pane">
     {#if fleet.tab === 'sites'}
+      <BackgroundNotice />
       {#if fleet.filter !== 'all' || fleet.tag}
         <div class="only">只看：{onlyLabel}{onlyLabel && fleet.tag ? ' · ' : ''}{fleet.tag ? `#${fleet.tag}` : ''}<span class="faint"> · {filtered.length} 个站点</span><button class="link-btn" onclick={() => { fleet.filter = 'all'; fleet.tag = ''; }}>看全部</button></div>
       {/if}

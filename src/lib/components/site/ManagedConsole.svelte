@@ -21,14 +21,16 @@
   import RecentShips from './RecentShips.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
+  import BackgroundNotice from './BackgroundNotice.svelte';
+  import { openBackground } from '$lib/state/background.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
-  import type { ManagedGroup, DayCount } from '$lib/types';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
+  import type { ManagedGroup, DayCount, AiCost } from '$lib/types';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -186,13 +188,18 @@
     return [...m.values()];
   }
   function groupSummary(g: ManagedGroup) {
-    let shipped = 0, need = 0, failed = 0, next = 0, nextSite = '';
+    let shipped = 0, need = 0, failed = 0, next = 0, nextSite = '', shippedMonth = 0;
+    const cost: AiCost = { tokens: 0, usd: 0, sub_tokens: 0, unpriced_tokens: 0, rough: false, turns: 0 };
     for (const id of g.sites) {
       const s = sitesById.get(id); if (!s) continue;
       shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed;
       if (s.next_at && (!next || s.next_at < next)) { next = s.next_at; nextSite = s.name; }
+      if (s.cost) {
+        cost.tokens += s.cost.tokens; cost.usd += s.cost.usd; cost.sub_tokens += s.cost.sub_tokens; cost.unpriced_tokens += s.cost.unpriced_tokens; cost.turns += s.cost.turns; cost.rough ||= s.cost.rough;
+        shippedMonth += s.shipped_month;
+      }
     }
-    return { shipped, need, failed, next, nextSite };
+    return { shipped, need, failed, next, nextSite, cost, shippedMonth };
   }
   // 下一次自动运行：到点时间写成「马上 / 今天 15:00 / 明天 14:36 / 周五 16:27 / 11月3日 09:00」
   const NEXT_TASK: Record<string, string> = { scan: '扫描', health: '体检', plan: '制定计划', report: '周报', review: '复盘', watch: '上线后检查' };
@@ -255,24 +262,25 @@
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
       <h1>托管运营<InfoTip text={'每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。\n方案和站点都能单独暂停。'} label="托管方案说明" /> {#if allOff}<span class="pill warn">全部已暂停</span>{/if}</h1>
-      <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}</p>
+      <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}{#if o && costText(o.cost_month)}{' · '}<span class="cost-h" data-tip={costTip(o.cost_month, o.shipped_month, '所有托管站点')}>本月 AI {costText(o.cost_month)}</span>{/if}</p>
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={13} />新增方案</button>
       <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
-      {#if o?.sites.length}
-        <div class="more-wrap">
-          <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="托管运营的整体操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '生成日报、暂停 / 恢复全部'}><Icon name="sliders" size={15} /></button>
-          {#if moreOpen}
-            <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-            <div class="more-mask" onclick={() => (moreOpen = false)}></div>
-            <div class="more-pop" role="menu">
+      <div class="more-wrap">
+        <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="托管运营的整体操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '后台运行与备份、生成日报、暂停 / 恢复全部'}><Icon name="sliders" size={15} /></button>
+        {#if moreOpen}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div class="more-mask" onclick={() => (moreOpen = false)}></div>
+          <div class="more-pop" role="menu">
+            <button role="menuitem" onclick={() => { moreOpen = false; openBackground(); }}><Icon name="clock" size={14} /><span><b>后台运行与备份</b><small>开机自动启动、不让电脑睡眠、把 Pilot 的数据备份到 GitHub</small></span></button>
+            {#if o?.sites.length}
               <button role="menuitem" onclick={() => { moreOpen = false; void digestNow(); }}><Icon name="news" size={14} /><span><b>生成今日日报</b><small>把今天各站点做了什么汇总成一份</small></span></button>
               <button role="menuitem" onclick={() => { moreOpen = false; void setSitesActive(groups, allOff, '全部托管站点'); }}><Icon name={allOff ? 'play' : 'pause'} size={14} /><span><b>{allOff ? '恢复全部站点的托管' : '暂停全部站点的托管'}</b><small>{allOff ? '把所有站点的托管开关都打开' : '把所有站点的托管开关都关掉，之后可以一个个恢复'}</small></span></button>
-            </div>
-          {/if}
-        </div>
-      {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
   </header>
   <nav class="tabs">
@@ -323,6 +331,7 @@
         {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
     {:else}
+      <BackgroundNotice />
       {#if groups.length}<RunChart daily={managed.daily} digests={managed.digests} onpick={pickDay} />{/if}
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
@@ -333,7 +342,7 @@
         {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
-            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
+            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}{#if costText(sum.cost)}{' · '}<span data-tip={costTip(sum.cost, sum.shippedMonth, '这个方案')}>本月 AI {costText(sum.cost)}</span>{/if}</span>
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
@@ -397,6 +406,7 @@
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
+                      {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>本月 {costText(s.cost)}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}

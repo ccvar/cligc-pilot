@@ -5,6 +5,8 @@ mod jev_checks;
 mod link_check;
 mod monitor;
 mod index_check;
+mod background;
+mod backup;
 mod agent;
 mod bing;
 mod api_agent;
@@ -3611,8 +3613,18 @@ fn apply_usage(c: &mut Conversation, res: &agent::TurnResult, data_dir: &std::pa
                 output: u.output,
                 cache_read: u.cache_read,
                 cache_create: u.cache_create,
+                rough: false,
             },
         );
+        // 运营作业开的会话：另记到站点自己的用量里（按月看每个站点的 AI 花费）
+        if c.origin == "ops" {
+            if let Some(site_id) = c.conn_id.strip_prefix("site:") {
+                usage::append_site(
+                    &data_dir.join("sites").join(site_id),
+                    &usage::UsageEntry { ts: now_secs() as i64, brain: c.brain.clone(), model: c.model.clone(), input: u.input, output: u.output, cache_read: u.cache_read, cache_create: u.cache_create, rough: false },
+                );
+            }
+        }
     }
 }
 
@@ -4789,7 +4801,10 @@ pub fn run() {
                 window_memory::restore(&w, &data_dir);
             }
             // 每次启动都把主窗口显示并置前——修复自动更新 relaunch 后 macOS 不激活、窗口看不到（要点 Dock 才出来）。
-            show_main(app.handle());
+            // 开机自动启动（带 --background）除外：只在菜单栏 / 托盘常驻，后台照常运营
+            if !std::env::args().any(|a| a == background::BACKGROUND_ARG) {
+                show_main(app.handle());
+            }
             #[cfg(target_os = "windows")]
             if let Some(w) = app.get_webview_window("main") {
                 style_titlebar_windows(&w);
@@ -5082,6 +5097,14 @@ pub fn run() {
             fleet_cmds::check_site_links,
             fleet_cmds::site_monitor,
             fleet_cmds::check_site_monitor,
+            background::background_status,
+            background::background_set,
+            background::background_dismiss_notice,
+            backup::backup_status,
+            backup::backup_set,
+            backup::backup_now,
+            backup::backup_preview,
+            backup::backup_restore,
             fleet_cmds::set_site_flags,
             fleet_cmds::data_sources_overview,
             fleet_cmds::auto_bind_sites,

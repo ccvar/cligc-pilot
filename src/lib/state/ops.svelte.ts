@@ -22,7 +22,7 @@ export const STAGE_FOCUS: Record<string, string> = {
 };
 export const LEVEL_LABEL: Record<number, string> = { 1: '1 · 只分析', 2: '2 · 出方案', 3: '3 · 自动提 PR', 4: '4 · 低风险自动上线', 5: '5 · 全托管' };
 export const KIND_LABEL: Record<string, string> = {
-  plan: 'AI 计划', low_ctr: '点击率偏低', striking: '排名 8–20', declining: '点击下滑', content_gap: '内容缺口', crawl_issue: '抓取错误', sitemap_error: 'sitemap 报错',
+  plan: 'AI 计划', low_ctr: '点击率偏低', striking: '排名 8–20', declining: '点击下滑', content_gap: '内容缺口', crawl_issue: '抓取错误', sitemap_error: 'sitemap 报错', cannibal: '页面互相抢词', stale_year: '标题年份过时', stale: '内容久未更新',
 };
 export const CHANGE_LABEL: Record<string, string> = {
   meta: '改标题 / 描述', content: '补内容', internal_links: '加内链', new_content: '写新内容', technical: '修技术问题',

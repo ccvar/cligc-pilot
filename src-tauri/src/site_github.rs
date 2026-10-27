@@ -123,6 +123,15 @@ pub async fn create_repo(token: &str, name: &str, private: bool, description: &s
     v["full_name"].as_str().map(str::to_string).ok_or_else(|| "GitHub 没有返回仓库名".into())
 }
 
+/// 仓库是不是私有的；仓库不存在返回 Ok(None)。
+pub async fn repo_private(token: &str, repo: &str) -> Result<Option<bool>, String> {
+    match call(token, reqwest::Method::GET, &format!("/repos/{repo}"), None).await {
+        Ok(v) => Ok(Some(v["private"].as_bool().unwrap_or(false))),
+        Err(e) if e.contains("找不到资源") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// 仓库是否为空（没有任何提交）。
 pub async fn repo_is_empty(token: &str, repo: &str) -> Result<bool, String> {
     match call(token, reqwest::Method::GET, &format!("/repos/{repo}/commits?per_page=1"), None).await {

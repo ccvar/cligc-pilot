@@ -532,8 +532,18 @@ export interface ManagedSite {
   /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
   next_task: string; next_at: number;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
+  /** 这个月的 AI 用量和花费、上线了几条 */
+  cost: AiCost; shipped_month: number;
 }
-export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }
+export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number; cost_month: AiCost; shipped_month: number }
+/** AI 用量：tokens＝折算 token；usd＝能按官方价估出金额的部分（API 连接）；sub_tokens＝走订阅额度的；unpriced_tokens＝按量计费但认不出价格的 */
+export interface AiCost { tokens: number; usd: number; sub_tokens: number; unpriced_tokens: number; rough: boolean; turns: number }
+/** 后台停过的一段：closed＝客户端没开，asleep＝电脑睡着了 */
+export interface BgGap { from: number; to: number; kind: string }
+export interface BackgroundStatus { launch_at_login: boolean; can_keep_awake: boolean; keep_awake: boolean; awake_now: boolean; gaps: BgGap[]; stopped_week: number; notice: BgGap | null; exe: string }
+export interface BackupSettings { enabled: boolean; conn_id: string; repo: string; last_at: number; last_ok: boolean; last_msg: string; last_files: number; last_bytes: number; last_try: number }
+export interface BackupStatus { settings: BackupSettings; running: boolean; files: number; bytes: number }
+export interface BackupManifest { at: number; version: string; host: string; sites: number; files: number; bytes: number }
 /** 托管日报的结构化内容（新版日报才有） */
 export interface DigestNeed { site_id: string; site_name: string; title: string; why: string }
 export interface DigestEvent { kind: string; label: string; title: string; detail: string }

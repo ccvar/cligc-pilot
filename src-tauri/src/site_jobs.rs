@@ -127,6 +127,11 @@ impl Jobs {
         self.inner.lock().unwrap().get(site_id).map(|s| s.state.clone())
     }
 
+    /// 正在跑的作业数（所有站点）
+    pub fn running_count(&self) -> usize {
+        self.inner.lock().unwrap().values().filter(|s| s.state.status == "running").count()
+    }
+
     pub fn running(&self, site_id: &str) -> bool {
         self.snapshot(site_id).is_some_and(|s| s.status == "running")
     }

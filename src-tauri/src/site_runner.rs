@@ -295,6 +295,8 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
 
 /// 一个运营作业最多跑多久：到点就停掉里面的命令和 AI 回合，按失败收尾，不让站点被一个卡死的作业占着。
 const MAX_JOB_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
+/// 调度同时最多起这么多个运营作业（手动点的不算在内、也不受它限制）
+const MAX_PARALLEL_JOBS: usize = 3;
 
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {
@@ -304,6 +306,8 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
     tauri::async_runtime::spawn(async move {
+        // 作业跑着的时候不让电脑自动睡眠（睡过去 AI 回合和构建会被打断）
+        let _awake = crate::background::job_guard();
         let started = now();
         let site_dir = ctx.site_dir(&site.id);
         // 任务本体放进单独的协程：里面 panic 了也能走到 job.finish，不会让作业一直显示「进行中」直到重启
@@ -391,7 +395,12 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     let site_dir = ctx.site_dir(&site.id);
     refresh_data(ctx, site, job).await;
     job.step("scan", "running", "");
-    let opps = crate::site_data::ranked_opportunities(site, &site_dir).await;
+    let mut opps = crate::site_data::ranked_opportunities(site, &site_dir).await;
+    // 内容过时要读页面的标题和更新日期：用最近一次上线的构建产物（没有就用代码目录里的）
+    if let Ok(out) = crate::syndicate::built_out(&ctx.state(), site) {
+        let facts = crate::site_make::page_facts(&out);
+        opps.extend(site_ops::stale_opportunities(site, &site_dir, &facts, chrono::Local::now().date_naive()));
+    }
     // 托管方案开了「跳过无关搜索词」：判断模型认为和站点定位基本无关的不交给 AI（看板里照样列出来、标明相关度低），省下改动额度
     let skip = crate::managed::load(&ctx.state().data_dir).group_of(&site.id).is_some_and(|g| g.skip_offtopic);
     let (wanted, offtopic): (Vec<_>, Vec<_>) = opps.iter().cloned().partition(|o| !skip || o.relevance.is_none_or(|r| r >= OFFTOPIC_BELOW));
@@ -608,6 +617,10 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
 /// 某个机会实际可用的最高档位：新内容、技术问题、被复盘降档的类型最多到第 3 档；只分析档不处理。
 pub fn effective_level(site: &Site, item: &QueueItem) -> u8 {
     let mut level = site.ops.level;
+    // 改事实（久未更新的页面）、合并或拉开页面（两个页面抢词）：不管什么档位都留给你确认
+    if matches!(item.opp.kind.as_str(), "stale" | "cannibal") {
+        return level.min(3);
+    }
     if level >= 5 {
         // 全托管：技术问题、复盘降档的类型留给你确认；新内容是否自动发布在上线那一步按托管设置判断。
         if item.opp.change == "technical" || site.ops.downgraded.iter().any(|d| d == &item.opp.change) {
@@ -709,6 +722,16 @@ fn evidence_block(o: &Opportunity) -> String {
         }
     }
     s
+}
+
+/// 改动方向：两个页面抢词、内容过时这两类有自己的做法（依据里写了具体步骤），其余按改动类型。
+fn guidance(o: &Opportunity) -> &'static str {
+    match o.kind.as_str() {
+        "cannibal" => "按依据里的步骤二选一：合并（保留强的页面，弱的做 301 跳转）或拉开两个页面的角度。只动这两个页面、跳转配置和指向它们的站内链接。",
+        "stale" => "只核对和更新有时效的信息（数字、活动、步骤、规定），保持原有结构和语气；拿不准的不要改，写进说明。不改网址。",
+        "stale_year" => "只改标题和描述里表示「今年 / 最新」的年份，其它文字不动。不改正文、不改网址。",
+        _ => change_guidance(&o.change),
+    }
 }
 
 fn change_guidance(change: &str) -> &'static str {
@@ -855,7 +878,7 @@ async fn propose(ctx: &Ctx, site: &Site, item: &QueueItem) -> Result<String, Str
 这一轮只出方案，不要修改文件。我确认后会在这条会话里让你动手。",
         title = item.opp.title,
         ev = evidence_block(&item.opp),
-        guide = change_guidance(&item.opp.change),
+        guide = guidance(&item.opp),
     );
     let (conv_id, _) = run_conversation(ctx, site, "plan", "", msg).await?;
     site_ops::update_item(&ctx.site_dir(&site.id), &item.id, now(), |i| {
@@ -950,7 +973,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         title = item.opp.title,
         ev = evidence_block(&item.opp),
         base = site.default_branch,
-        guide = change_guidance(&item.opp.change),
+        guide = guidance(&item.opp),
         // 托管方案里写了代码改动的规则（见 plan_brief 的【代码改动】）；没托管就按保守的来
         code_rule = if group_rules(ctx, site).is_some() { "代码能不能改、改多少，按上面【代码改动】的规则。" } else { "能用站点现有的数据字段和组件做到，就只改内容和数据；确实要改代码，只做最小的改动。" },
         build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
@@ -2418,6 +2441,9 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             let st = ctx.state();
             // 老数据迁移、站点档位与所在方案的自主程度对齐
             let mcfg = crate::managed_cmds::sync(&st);
+            // 心跳（记下后台停过的时段）、按设置挡不挡睡眠（见 background）
+            let managed_active = !mcfg.paused && mcfg.groups.iter().any(|g| g.sites.iter().any(|s| g.active_for(s)));
+            crate::background::tick(&st.data_dir, managed_active);
             // 每日摘要：过了设定的时间、今天还没发过、有托管站点
             let hour: u8 = chrono::Local::now().format("%H").to_string().parse().unwrap_or(0);
             if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && !mcfg.groups.iter().all(|g| g.sites.is_empty()) {
@@ -2439,7 +2465,14 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             crate::monitor::schedule(&app);
             // 新页面收录：上线 3 天起用 URL 检查确认 Google 编入索引没有（见 index_check）
             crate::index_check::schedule(&app);
+            // Pilot 自己的数据：每周备份到 GitHub 私有仓库（打开了才备份，见 backup）
+            crate::backup::schedule(&app);
+            // 同时最多跑这么多个运营作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建
+            let mut busy = st.site_jobs.running_count();
             for site in st.sites.list() {
+                if busy >= MAX_PARALLEL_JOBS {
+                    break;
+                }
                 if st.site_jobs.running(&site.id) {
                     continue;
                 }
@@ -2452,7 +2485,9 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     // 上线后检查优先：有到期的就先跑它
                     let site_dir = st.sites.data_dir(&site.id);
                     if site_ops::load_queue(&site_dir).iter().any(watch_is_due) {
-                        let _ = start(ctx.clone(), &site.id, "watch", "schedule", None);
+                        if start(ctx.clone(), &site.id, "watch", "schedule", None).is_ok() {
+                            busy += 1;
+                        }
                         continue;
                     }
                 }
@@ -2467,7 +2502,9 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                         continue;
                     }
                     if due(schedule_of(&site, task, in_plan), last, now()) {
-                        let _ = start(ctx.clone(), &site.id, task, "schedule", None);
+                        if start(ctx.clone(), &site.id, task, "schedule", None).is_ok() {
+                            busy += 1;
+                        }
                         break; // 每站每轮最多起一个，下一轮再看别的
                     }
                 }
