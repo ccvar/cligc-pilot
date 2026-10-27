@@ -17,6 +17,7 @@
       <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
       <span>{opp.title}</span>
     </button>
+    {#if opp.relevance != null && opp.relevance < 1.5}<span class="rel" data-tip="判断模型（Jev）认为这组搜索词和站点定位关系不大（相关度 {opp.relevance.toFixed(1)}/3），排到了后面；相关度低于 0.75 的不会自动交给 AI 处理">相关度低</span>{/if}
     <span class="chg">{CHANGE_LABEL[opp.change] ?? opp.change}</span>
     {#if queued}
       <span class="pill {queued.status === 'dismissed' ? '' : 'line'}">{queued.status === 'dismissed' ? '已驳回' : '已在待处理'}</span>
@@ -49,6 +50,7 @@
   .opp-title:hover .chev { color: var(--text); }
   .opp.open .chev { transform: rotate(90deg); }
   .chg { flex: none; color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+  .rel { flex: none; font-size: 11px; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
   .acts { display: inline-flex; gap: 4px; flex: none; }
   .opp-body { margin: 8px 0 2px 16px; font-size: 12.5px; color: var(--dim); animation: su-in .18s var(--su-ease) backwards; }
   .opp-body p { margin: 0 0 6px; line-height: 1.65; max-width: 72ch; }

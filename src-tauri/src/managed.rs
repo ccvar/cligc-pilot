@@ -607,6 +607,67 @@ fn prose_of(line: &str) -> String {
     out
 }
 
+/// 这次改动里值得做内容质检的页面文件：新页面，或者正文加了不少（≥ 200 字）的已有页面。删掉的不算。
+/// 返回（文件路径，是不是新文件），最多 5 个。
+pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
+    split_diff(diff)
+        .into_iter()
+        .filter(|f| !f.deleted && is_page_file(&f.file))
+        .filter(|f| f.new_file || f.added.iter().map(|l| text_units(&prose_of(l))).sum::<usize>() >= 200)
+        .map(|f| (f.file, f.new_file))
+        .take(5)
+        .collect()
+}
+
+/// 页面源文件 → （标题，正文纯文字）：去掉 frontmatter（标题从里面的 title: 取）、代码块、import 行和 HTML 标签。
+/// 正文截到 `max_chars` 个字符（判断模型单个问题有上下文上限）。
+pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
+    let mut title = String::new();
+    let mut body = String::new();
+    let (mut in_front, mut in_code, mut first) = (false, false, true);
+    for line in src.lines() {
+        let t = line.trim();
+        if first && t == "---" {
+            in_front = true;
+            first = false;
+            continue;
+        }
+        first = false;
+        if in_front {
+            if t == "---" {
+                in_front = false;
+            } else if let Some(v) = t.strip_prefix("title:") {
+                title = v.trim().trim_matches(['"', '\'']).to_string();
+            }
+            continue;
+        }
+        if t.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code || t.starts_with("import ") || t.starts_with("export ") {
+            continue;
+        }
+        let text = prose_of(t);
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if title.is_empty() {
+            if let Some(h) = text.strip_prefix("# ") {
+                title = h.trim().to_string();
+            }
+        }
+        body.push_str(text);
+        body.push('\n');
+        if body.chars().count() >= max_chars {
+            body = body.chars().take(max_chars).collect();
+            break;
+        }
+    }
+    (title, body)
+}
+
 /// 一个文件在差异里的改动。
 #[derive(Default)]
 struct FileDiff {

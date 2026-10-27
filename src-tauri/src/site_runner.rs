@@ -354,13 +354,21 @@ async fn refresh_data(ctx: &Ctx, site: &Site, job: &Job) {
 // 机会扫描
 // ---------------------------------------------------------------------------
 
+/// 相关度（0–3）低于这个就算「和站点定位基本无关」，扫描时不入队
+const OFFTOPIC_BELOW: f64 = 0.75;
+
 async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     refresh_data(ctx, site, job).await;
     job.step("scan", "running", "");
-    let opps = site_ops::opportunities(site, &site_dir);
-    let added = site_ops::enqueue(&site_dir, &opps, now(), COOLDOWN)?;
+    let opps = crate::site_data::ranked_opportunities(site, &site_dir).await;
+    // 判断模型认为和站点定位基本无关的搜索词不交给 AI 处理（看板里照样列出来、标明相关度低），省下改动额度
+    let (wanted, offtopic): (Vec<_>, Vec<_>) = opps.iter().cloned().partition(|o| o.relevance.is_none_or(|r| r >= OFFTOPIC_BELOW));
+    let added = site_ops::enqueue(&site_dir, &wanted, now(), COOLDOWN)?;
     job.line(&format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
+    if !offtopic.is_empty() {
+        job.line(&format!("{} 个机会的搜索词和站点定位基本无关（判断模型 Jev），没有入队", offtopic.len()));
+    }
     job.step("scan", "ok", &format!("新入队 {} 个", added.len()));
     ctx.emit_queue(&site.id);
     if site.ops.level < 2 {
@@ -994,6 +1002,30 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     }
     if level >= 5 && verdict == "auto" && shipped_today(&site_dir) >= managed.daily_changes as usize {
         verdict = format!("今天已自动上线 {} 条（上限），这一条留给你确认或明天再上", managed.daily_changes);
+    }
+    // 判断模型（Jev）内容质检：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
+    // 没配、关着或调用失败都不影响原来的判定（只会加严，不会放宽）
+    if level >= 5 && verdict == "auto" {
+        if let Some(jev) = crate::typesafe::for_feature(crate::typesafe::Feature::Gate) {
+            let files = crate::managed::content_page_files(&diff);
+            if !files.is_empty() {
+                job.line("判断模型（Jev）内容质检…");
+                let positioning = crate::site_stage::load_positioning(&site_dir).text;
+                let target = if item.opp.target.trim().is_empty() { item.opp.queries.first().map(|q| q.key.clone()).unwrap_or_default() } else { item.opp.target.clone() };
+                match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &site.app_dir(&wt), &files).await {
+                    Ok(quality) => {
+                        let why = crate::jev_checks::gate_verdict(&quality);
+                        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
+                        if why.is_empty() {
+                            job.line("内容质检通过");
+                        } else {
+                            verdict = format!("内容质检没过（判断模型 Jev）：{why}，留给你确认");
+                        }
+                    }
+                    Err(e) => job.line(&format!("内容质检没做成（{e}），按原来的规则判定")),
+                }
+            }
+        }
     }
     // 推送 + 开 PR（GitHub）；本地来源留在本地分支。检查没通过的不推送。
     let mut pr = crate::site_github::Pr::default();

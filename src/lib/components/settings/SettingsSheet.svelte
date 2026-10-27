@@ -5,6 +5,7 @@
   import type { Brain } from '$lib/types';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import ApiServices from '$lib/ApiServices.svelte';
+  import TypeSafeSection from './TypeSafeSection.svelte';
   import type { ApiProfile } from '$lib/apiProfiles';
   import AppIcon from '$lib/AppIcon.svelte';
   import PlusIcon from '$lib/components/icons/PlusIcon.svelte';
@@ -309,6 +310,7 @@
         </div>
       {/if}
       <ApiServices profiles={app.apiProfiles} onchange={(profiles: ApiProfile[]) => { app.apiProfiles = profiles; }} />
+      <TypeSafeSection />
 
       <div class="sec-head mt"><span>关于</span></div>
       <div class="brain-row">

@@ -305,10 +305,19 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     }
     let _ = write_json(&dir, "meta.json", &meta);
     // 机会列表跟着数据一起重算，模型的查询工具和看板读的是同一份。
-    let opps = crate::site_ops::opportunities(site, site_dir);
+    let opps = ranked_opportunities(site, site_dir).await;
     let _ = write_json(&dir, "opportunities.json", &opps);
     let _ = write_json(&dir, "summary.json", &compute_summary(site_dir));
     meta
+}
+
+/// 按规则算出机会，配了判断模型（Jev）就再按「和站点定位的相关度」调整排序（打过的有缓存，不重复问）。
+pub async fn ranked_opportunities(site: &Site, site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
+    let mut opps = crate::site_ops::opportunities(site, site_dir);
+    if let Some(jev) = crate::typesafe::for_feature(crate::typesafe::Feature::Rank) {
+        crate::jev_checks::rank_opportunities(&jev, site, site_dir, &mut opps).await;
+    }
+    opps
 }
 
 /// 全部站点总览用的一行摘要（每次拉数据后写一份小文件，站点再多也只读小文件）。

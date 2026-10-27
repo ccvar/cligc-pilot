@@ -45,6 +45,10 @@ pub struct Opportunity {
     pub expect_query: String,
     #[serde(default)]
     pub expect_note: String,
+    /// 判断模型（Jev）给的「这组搜索词和站点定位的相关度」0–3；None＝没打（没配 Jev / 站点没写定位 / 技术类机会）。
+    /// score 已经按它调整过。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance: Option<f64>,
 }
 
 /// 各排名位置的大致点击率（用于判断「点击率是否明显偏低」，只求量级正确）。
@@ -127,6 +131,7 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_metric: String::new(),
             expect_query: String::new(),
             expect_note: String::new(),
+            relevance: None,
         });
     }
     // 2) 排名 8–20（第一页边缘 / 第二页）→ 补内容、加内链
@@ -160,6 +165,7 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_metric: String::new(),
             expect_query: String::new(),
             expect_note: String::new(),
+            relevance: None,
         });
     }
     // 3) 点击明显下滑（与前 28 天比）
@@ -192,6 +198,7 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_metric: String::new(),
             expect_query: String::new(),
             expect_note: String::new(),
+            relevance: None,
         });
     }
     // 4) 有需求但没有像样的页面（所有页面都排在 20 名以后）
@@ -226,6 +233,7 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_metric: String::new(),
             expect_query: String::new(),
             expect_note: String::new(),
+            relevance: None,
         });
     }
     // 5) 技术问题：Bing 抓取错误、Search Console sitemap 报错
@@ -303,6 +311,9 @@ pub struct QueueItem {
     /// 白名单判定结论：auto（可自动上线）或不可自动上线的原因。
     #[serde(default)]
     pub verdict: String,
+    /// 托管自动上线前判断模型（Jev）的内容质检结果（没做就是空）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality: Vec<crate::jev_checks::PageQuality>,
     #[serde(default)]
     pub merge_sha: String,
     #[serde(default)]

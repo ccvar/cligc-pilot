@@ -351,6 +351,8 @@ export interface Opportunity {
   score: number;
   change: string;
   evidence: string;
+  /** 判断模型（Jev）给的「搜索词和站点定位的相关度」0–3；没打就没有这个字段 */
+  relevance?: number;
 }
 export interface Dashboard {
   meta: CacheMeta;
@@ -396,6 +398,8 @@ export interface OpsItem {
   pr_url: string;
   change_kind: string;
   verdict: string;
+  /** 托管自动上线前判断模型（Jev）的内容质检结果 */
+  quality?: PageQuality[];
   merge_sha: string;
   deployed_at: number;
   review: string;
@@ -499,3 +503,24 @@ export interface StageInfo { stage: string; auto_stage: string; reason: string; 
 export interface Positioning { text: string; by: string; updated: number }
 export interface SiteStageView extends StageInfo { positioning: Positioning }
 export interface SitePlan { site_id: string; site_name: string; plan: { date: string; conv_id: string; stage?: string; notes?: string; tasks: PlanTask[] }; positioning: Positioning; stage: StageInfo }
+/** 判断模型（Jev）对一个页面的内容质检：分数 0–3，概率 0–1 */
+export interface PageQuality {
+  page: string;
+  answers?: number | null;
+  substance: number;
+  on_topic: number;
+  unsourced: number;
+  leftover: number;
+  reasons: string[];
+}
+/** 设置里的判断模型（TypeSafe） */
+export interface TypeSafeStatus {
+  configured: boolean;
+  key_prefix: string;
+  model: string;
+  use_gate: boolean;
+  use_rank: boolean;
+  verified_at: number;
+  month_tokens: number;
+  month_cost_usd: number;
+}

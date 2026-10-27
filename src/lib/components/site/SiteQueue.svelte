@@ -153,6 +153,14 @@
             {#if i.verdict && i.status === 'proposed'}
               <p class="verdict" class:ok={i.verdict === 'auto'}>{i.verdict === 'auto' ? '整份改动都在白名单内，检查已通过。' : `不能自动上线：${i.verdict}`}</p>
             {/if}
+            {#if i.quality?.length}
+              <!-- 判断模型（Jev）的内容质检：每页一行分数，没过的标出原因 -->
+              <div class="quality">
+                {#each i.quality as q, qi (`${q.page}:${qi}`)}
+                  <p class:bad={q.reasons.length > 0}><span class="qp">{q.page.split('/').pop()}</span>{#if q.answers != null}<span>回答问题 {q.answers.toFixed(1)}/3</span>{/if}<span>信息量 {q.substance.toFixed(1)}/3</span><span>相关 {q.on_topic.toFixed(1)}/3</span>{#if q.unsourced >= 0.5}<span>数据来源存疑 {Math.round(q.unsourced * 100)}%</span>{/if}{#if q.leftover >= 0.5}<span>遗留说明 {Math.round(q.leftover * 100)}%</span>{/if}</p>
+                {/each}
+              </div>
+            {/if}
             {#if i.note}<p class="verdict">{i.note}</p>{/if}
             {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
             {#if i.checks?.length}
@@ -246,6 +254,10 @@
   .br { font-size: 11.5px; }
   .verdict { margin: 0; font-size: 12px; line-height: 1.55; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 7px; padding: 5px 9px; align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; }
   .verdict.ok { color: var(--ok); background: var(--su-ok-soft); }
+  .quality { display: flex; flex-direction: column; gap: 2px; }
+  .quality p { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11.5px; color: var(--dim); }
+  .quality p.bad { color: var(--su-warn-ink); }
+  .quality .qp { font-weight: 600; color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .acts { gap: 6px; margin-top: 4px; }
   .foot { font-size: 11.5px; color: var(--faint); }
   .diff-modal { width: min(900px, calc(100vw - 32px)); }

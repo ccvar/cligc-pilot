@@ -1,5 +1,7 @@
 mod acp;
 mod store_file;
+mod typesafe;
+mod jev_checks;
 mod agent;
 mod bing;
 mod api_agent;
@@ -5052,6 +5054,10 @@ pub fn run() {
             launch_cmds::import_cf_project,
             launch_cmds::launch_status,
             launch_cmds::launch_auto_bind,
+            typesafe::typesafe_status,
+            typesafe::typesafe_save,
+            typesafe::typesafe_test,
+            typesafe::typesafe_remove,
             launch_cmds::site_to_github,
             launch_cmds::ga4_to_config,
             launch_cmds::site_pages_dns_replace,
