@@ -334,8 +334,8 @@
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
-            {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
+            {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
             <span class="more-wrap">
@@ -397,7 +397,6 @@
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
-                      {#if on && s.next_at}<span class="next-t" data-tip={NEXT_TIP}><Icon name="clock" size={11} />下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}
@@ -407,6 +406,7 @@
                     <button class="btn tiny" onclick={() => toggleProgress(id)}>收起结果</button>
                   {/if}
                   <span class="grow"></span>
+                  {#if on && s?.next_at}<span class="next-t" data-tip={NEXT_TIP}><Icon name="clock" size={11} />下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
                   <!-- 不常用的：立即执行、移到别的方案、退出托管，收进悬停才出现的菜单 -->
                   <span class="more-wrap gs-more" class:on={siteMenu === id}>
                     <button class="ic-btn ic-sm" onclick={() => (siteMenu = siteMenu === id ? '' : id)} aria-label="这个站点的操作" aria-haspopup="menu" aria-expanded={siteMenu === id} data-tip={siteMenu === id ? null : '立即执行、移到别的方案'}><Icon name="more" size={15} /></button>
@@ -569,9 +569,9 @@
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
   .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
   .gq-n { font-size: 12px; }
-  /* 下一次运行：方案标题上用小胶囊（时钟 + 时间，字色正常）跟灰色概况分开；站点行带个时钟、比状态文字深一点 */
-  .next-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
-  .next-t { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
+  /* 下一次运行：放在右边（方案标题上是箭头左边的绿色小胶囊，站点行在「…」和开关左边），一列对齐好扫 */
+  .next-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
+  .next-t { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--dim); white-space: nowrap; }
   .next-t :global(svg) { color: var(--ok); }
   .ship-l { border: 0; background: none; padding: 0; font: inherit; color: var(--faint); cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
   .ship-l:hover { color: var(--text); text-decoration-color: currentColor; }
@@ -581,6 +581,7 @@
   .grp-tg .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
   .grp-tg .chev.up { transform: rotate(180deg); }
   .grp-tg:hover .chev { color: var(--dim); }
+  .grp-tg .next-chip + .chev { margin-left: 10px; }
   .gs .grow { flex: 1; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
