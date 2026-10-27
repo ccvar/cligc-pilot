@@ -266,21 +266,21 @@
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={13} />新增方案</button>
+      <button class="btn small" onclick={openBackground} data-tip="开机自动启动、不让电脑睡眠、把 Pilot 的数据每周备份到 GitHub"><Icon name="clock" size={13} />后台运行与备份</button>
       <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
+      {#if o?.sites.length}
       <div class="more-wrap">
-        <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="托管运营的整体操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '后台运行与备份、生成日报、暂停 / 恢复全部'}><Icon name="sliders" size={15} /></button>
+        <button class="ic-btn" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="托管运营的整体操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '生成日报、暂停 / 恢复全部'}><Icon name="sliders" size={15} /></button>
         {#if moreOpen}
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
           <div class="more-mask" onclick={() => (moreOpen = false)}></div>
           <div class="more-pop" role="menu">
-            <button role="menuitem" onclick={() => { moreOpen = false; openBackground(); }}><Icon name="clock" size={14} /><span><b>后台运行与备份</b><small>开机自动启动、不让电脑睡眠、把 Pilot 的数据备份到 GitHub</small></span></button>
-            {#if o?.sites.length}
               <button role="menuitem" onclick={() => { moreOpen = false; void digestNow(); }}><Icon name="news" size={14} /><span><b>生成今日日报</b><small>把今天各站点做了什么汇总成一份</small></span></button>
               <button role="menuitem" onclick={() => { moreOpen = false; void setSitesActive(groups, allOff, '全部托管站点'); }}><Icon name={allOff ? 'play' : 'pause'} size={14} /><span><b>{allOff ? '恢复全部站点的托管' : '暂停全部站点的托管'}</b><small>{allOff ? '把所有站点的托管开关都打开' : '把所有站点的托管开关都关掉，之后可以一个个恢复'}</small></span></button>
-            {/if}
           </div>
         {/if}
       </div>
+      {/if}
     </div>
   </header>
   <nav class="tabs">

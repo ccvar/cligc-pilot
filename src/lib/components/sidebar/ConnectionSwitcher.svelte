@@ -4,6 +4,7 @@
   import SshMark from '$lib/components/icons/SshMark.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import DistroMark from '$lib/components/icons/DistroMark.svelte';
+  import { openBackground } from '$lib/state/background.svelte.js';
   import GearIcon from '$lib/components/icons/GearIcon.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import { connections, openLocalWorkspace, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, probeOs, remoteConns, openRemote, accountConns, openAccounts } from '$lib/state/connections.svelte.js';
@@ -89,6 +90,7 @@
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
         <button class="cs-act" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshConnect(); }}><SshMark size={15} />新建远程连接</button>
         <button type="button" class="cs-act" role="menuitem" onclick={openConnectionSetup}><GearIcon />管理连接与模型…</button>
+        <button type="button" class="cs-act" role="menuitem" onclick={() => { connections.switcherOpen = false; openBackground(); }}><Icon name="clock" size={15} />后台运行与备份…</button>
       </div>
     </div>
   {/if}
