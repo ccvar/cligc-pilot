@@ -154,9 +154,9 @@
   let showAll = $state<Set<string>>(new Set());
   function toggleShowAll(id: string) { const n = new Set(showAll); if (n.has(id)) n.delete(id); else n.add(id); showAll = n; }
   let siteMenu = $state('');
-  let siteQ = $state('');
-  const matchSite = (id: string) => { const k = siteQ.trim().toLowerCase(); const s = sitesById.get(id); return !k || siteName(id).toLowerCase().includes(k) || !!s?.domain?.toLowerCase().includes(k); };
-  const matchCount = $derived(siteQ.trim() ? groups.reduce((n, g) => n + g.sites.filter(matchSite).length, 0) : 0);
+  // 方案里的站点搜索（每个方案各自一个）
+  let siteQ = $state<Record<string, string>>({});
+  const matchSite = (id: string, q: string) => { const k = q.toLowerCase(); const s = sitesById.get(id); return siteName(id).toLowerCase().includes(k) || !!s?.domain?.toLowerCase().includes(k); };
   function orderSites(g: ManagedGroup) {
     const rank = (id: string) => {
       const s = sitesById.get(id);
@@ -298,20 +298,13 @@
       {/if}
     {:else}
       {#if groups.length}<RunChart daily={managed.daily} digests={managed.digests} onpick={pickDay} />{/if}
-      {#if o && o.sites.length > 6}
-        <!-- 站点多了不好找：按站点名 / 域名在所有方案里筛，滚动时固定在顶上 -->
-        <div class="gq-bar">
-          <label class="gq"><Icon name="search" size={13} /><input type="search" bind:value={siteQ} placeholder="在所有方案里搜索站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') siteQ = ''; }} /></label>
-          {#if siteQ.trim()}<span class="faint gq-n">{matchCount ? `找到 ${matchCount} 个站点` : '没有匹配的站点'}</span>{/if}
-        </div>
-      {/if}
       {#each groups as g (g.id)}
-      {#if !siteQ.trim() || g.sites.some(matchSite)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
-        {@const gOpen = siteQ.trim() ? true : (grpOpen[g.id] ?? !gOff)}
+        {@const gOpen = grpOpen[g.id] ?? !gOff}
+        {@const gq = (siteQ[g.id] ?? '').trim()}
         {@const sum = groupSummary(g)}
-        {@const ordered = siteQ.trim() ? orderSites(g).filter(matchSite) : orderSites(g)}
-        {@const visible = showAll.has(g.id) || siteQ.trim() ? ordered : ordered.slice(0, SITE_LIMIT)}
+        {@const ordered = gq ? orderSites(g).filter((id) => matchSite(id, gq)) : orderSites(g)}
+        {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
@@ -355,6 +348,13 @@
             {/if}
             <button type="button" class="rule-more" onclick={() => editGroup(g)} data-tip={`${hiddenRules(g).join('\n')}\n点一下查看或修改`}>还有 {hiddenRules(g).length} 项<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
           </div>
+          {#if g.sites.length > 5}
+            <!-- 站点多了不好找：在这个方案里按站点名 / 域名筛 -->
+            <div class="gq-bar">
+              <label class="gq"><Icon name="search" size={13} /><input type="search" bind:value={siteQ[g.id]} placeholder="在这个方案里搜索站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') siteQ[g.id] = ''; }} /></label>
+              {#if gq}<span class="faint gq-n">{ordered.length ? `找到 ${ordered.length} 个` : '没有匹配的站点'}</span>{/if}
+            </div>
+          {/if}
           {#if g.sites.length}
             <div class="list gsites">
               {#each visible as id (id)}
@@ -408,14 +408,13 @@
                   </div>
                 {/if}
               {/each}
-              {#if ordered.length > SITE_LIMIT && !siteQ.trim()}
+              {#if ordered.length > SITE_LIMIT && !gq}
                 <button class="li gs-all" onclick={() => toggleShowAll(g.id)}>{showAll.has(g.id) ? '收起' : `显示全部 ${ordered.length} 个站点`}</button>
               {/if}
             </div>
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
           {/if}
         </div>
-      {/if}
       {/each}
 
       <div class="card oplog" class:open={logOpen} bind:this={logEl}>
@@ -526,7 +525,7 @@
   .gs-all:hover { color: var(--text); background: #fcfbf9; }
   .grp.shut > h3 { margin-bottom: 0; }
   /* 方案标题整行（名称、标签、概况、空白处）都能点开收起，箭头在右边 */
-  .gq-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 12px; margin: -10px 0 10px; padding: 10px 0 8px; background: var(--bg); }
+  .gq-bar { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
   .gq { position: relative; display: flex; align-items: center; width: min(360px, 100%); color: var(--faint); }
   .gq :global(svg) { position: absolute; left: 9px; pointer-events: none; }
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
