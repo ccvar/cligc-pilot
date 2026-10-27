@@ -63,7 +63,7 @@
   .err-note { color: var(--err); background: var(--err-soft); border: 1px solid var(--err-border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
-  .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
+  .btn { background: #fff; color: var(--text); border: 1px solid var(--border2); border-radius: 8px; padding: 6.5px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
   .btn:hover { background: #f6f5f1; }
   .btn:disabled { opacity: .5; cursor: default; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }

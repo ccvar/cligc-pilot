@@ -61,13 +61,13 @@
 <style>
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
-  .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
+  .btn { background: #fff; color: var(--text); border: 1px solid var(--border2); border-radius: 8px; padding: 6.5px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
   .btn:hover { background: #f6f5f1; }
   .btn:disabled { opacity: .5; cursor: default; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.primary:hover { background: var(--accent-h); }
   .btn.ghost { border-color: var(--border); }
-  .btn.small { padding: 4px 10px; font-size: 12px; }
+  .btn.small { padding: 4.5px 10px; font-size: 12px; }
   .icon-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 8px; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; }
   .icon-btn:hover { background: #f1efe9; color: var(--text); }
   .icon-btn:disabled { opacity: .55; cursor: default; }

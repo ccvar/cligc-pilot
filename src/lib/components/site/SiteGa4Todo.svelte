@@ -77,7 +77,7 @@
   .own { display: flex; align-items: center; gap: 10px; }
   /* 输入框和按钮拼成一组：同一高度、同一圆角，中间一条分隔线 */
   .group { display: inline-flex; align-items: stretch; height: 30px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card, #fff); overflow: hidden; transition: border-color .12s, box-shadow .12s; }
-  .group:focus-within { border-color: var(--text); box-shadow: 0 0 0 3px rgba(30, 25, 15, .06); }
+  .group:focus-within { border-color: var(--text); }
   .group input { width: 180px; border: none; outline: none; background: none; padding: 0 10px; font-size: 12.5px; color: var(--text); }
   .group input::placeholder { color: var(--faint); }
   .group button { border: none; border-left: 1px solid var(--border); background: #f7f6f2; padding: 0 14px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text); cursor: pointer; transition: background-color .12s, color .12s; }

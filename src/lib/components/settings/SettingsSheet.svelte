@@ -273,7 +273,7 @@
                     <div class="cust-chip"><span class="cust-id">{id}</span><button class="cust-x" title="删除" onclick={() => removeCustom(r.b, id)}>×</button></div>
                   {/each}
                   <div class="cust-add">
-                    <input class="tin" bind:value={settings.customDraft[r.b]} placeholder={r.b === 'codex' ? '如 gpt-5.5 / o3' : r.b === 'grok' ? '如 grok-4.6' : '如 claude-opus-4-8'}
+                    <input class="tin" bind:value={settings.customDraft[r.b]} placeholder={r.b === 'codex' ? '如 gpt-5.5 / o3' : r.b === 'grok' ? '如 grok-4.6' : '如 claude-opus-5-5'}
                       spellcheck="false" autocapitalize="off" autocorrect="off" onkeydown={(e) => e.key === 'Enter' && addCustom(r.b)} />
                     <button class="btn sm" onclick={() => addCustom(r.b)} disabled={!(settings.customDraft[r.b] ?? '').trim()}>添加</button>
                   </div>
@@ -336,19 +336,22 @@
   .cli-copy:hover { background: rgba(0, 0, 0, .06); color: var(--text); }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */
-  .tin { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; }
+  .tin { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1px solid var(--border2); border-radius: 8px; padding: 5.5px 10px; transition: border-color .12s, box-shadow .12s; }
   /* 单行输入（text/password/number/datetime-local）：显式统一高 --ctl-h，内容垂直居中；
      去掉竖向 padding 防 macOS 原生步进器/日期控件把高度顶开。textarea 不定高，不吃这条。 */
   input.tin { height: var(--ctl-h); box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: normal; }
+  .tin:hover { border-color: #d3d0c7; }
   .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
+  .tin::placeholder { color: var(--faint); }
   /* ---- 按钮 / 弹窗 ---- */
   /* 动作按钮统一尺度：13px 字 + 6px 14px 内边距，高约 30px（与输入框/下拉同高，主次同高）。 */
-  .btn { background: #fff; color: var(--text); border: 1.5px solid var(--border2); border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
+  /* 边框 1px（和应用其它地方一致），上下内边距补 0.5px，高度不变 */
+  .btn { background: #fff; color: var(--text); border: 1px solid var(--border2); border-radius: 8px; padding: 6.5px 14px; cursor: pointer; font-size: 13px; line-height: 1.25; }
   .btn:hover { background: #f6f5f1; }
   .btn:disabled { opacity: .5; cursor: default; }
   .btn.ghost { border-color: var(--border); }
-  .btn.small { padding: 4px 10px; font-size: 12px; }
-  .btn.sm { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
+  .btn.small { padding: 4.5px 10px; font-size: 12px; }
+  .btn.sm { padding: 5.5px 12px; font-size: 12px; border-radius: 8px; }
   /* 无边框动作按钮（头部次要动作）：去边框去底，仅 hover 有淡底 */
   .btn.bare { border: none; background: none; }
   .btn.bare:hover { background: var(--rail); border-color: transparent; }
@@ -424,7 +427,7 @@
   .claude-token-copy code { padding: 1px 4px; border-radius: 4px; background: #efede7; color: var(--text); font: 500 9.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .claude-token-entry { display: flex; align-items: center; gap: 6px; }
   .claude-token-entry input { min-width: 0; flex: 1; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--border2); border-radius: 7px; outline: none; background: #fff; color: var(--text); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .claude-token-entry input:focus { border-color: #c7a599; box-shadow: 0 0 0 2px rgb(160 60 43 / 8%); }
+  .claude-token-entry input:focus { border-color: #c7a599; }
   .claude-token-entry .btn { flex: none; }
   /* 状态点放进与 .icon-btn 同宽(27px)的居中盒，右缘、图标中心都与本地模型区的刷新图标对齐。 */
   .brain-dot { flex: none; width: 27px; display: inline-flex; align-items: center; justify-content: center; }
@@ -472,9 +475,10 @@
   .cust-id { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cust-x { flex: none; background: none; border: none; color: var(--faint); font-size: 15px; line-height: 1; padding: 0 3px; border-radius: 5px; cursor: pointer; }
   .cust-x:hover { color: var(--err); background: #fff; }
+  /* 加自定义模型：输入框和「添加」同高 28px、同字号 */
   .cust-add { display: flex; gap: 6px; align-items: center; }
-  .cust-add .tin { flex: 1; min-width: 0; width: auto; }
-  .cust-add .btn { flex: none; }
+  .cust-add .tin { flex: 1; min-width: 0; width: auto; height: 28px; font-size: 12px; }
+  .cust-add .btn { flex: none; box-sizing: border-box; height: 28px; padding: 0 12px; }
   .hint { color: var(--dim); font-size: 12px; margin: 2px 0; line-height: 1.6; }
   .tin { width: 100%; }
 </style>

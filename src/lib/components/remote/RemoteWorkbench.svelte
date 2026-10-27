@@ -244,7 +244,7 @@
   .ssh-target :global(svg.distro) { transform: translateY(1px); }
   /* 表单控件统一尺度（桌面紧凑密度）：13px 字 + 5px 10px 内边距 + 8px 圆角，单行高约 30px。
      composer 聊天输入框不吃这套（下方 composer 专属规则钉回 14px 大字）。 */
-  textarea { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1.5px solid var(--border2); border-radius: 8px; padding: 5px 10px; }
+  textarea { font-family: inherit; font-size: 13px; color: var(--text); background: #fff; border: 1px solid var(--border2); border-radius: 8px; padding: 5.5px 10px; }
   textarea:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
   /* 输入框（仿 Claude Code：整块圆角边框，聚焦时高亮，发送按钮嵌在框内） */
   .composer-wrap .composer { position: relative; background: #fff; border: 1px solid var(--border2); border-radius: 12px; box-shadow: none; transition: border-color .12s, box-shadow .12s; }

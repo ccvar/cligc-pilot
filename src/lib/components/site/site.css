@@ -17,7 +17,8 @@
 .su input.tin { height: var(--ctl-h); padding-top: 0; padding-bottom: 0; line-height: normal; }
 .su textarea.tin { resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .su .tin:hover { border-color: #d3d0c7; }
-.su .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: var(--su-ring); }
+/* 输入框聚焦只把边框加深，不加外圈阴影（全应用统一） */
+.su .tin:focus { outline: none; border-color: #b7b2a6; box-shadow: none; }
 .su .tin::placeholder { color: var(--faint); }
 .su .tin.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 /* 和 .btn.small（26px）排在同一行的输入框：同高、同字号、同圆角 */
