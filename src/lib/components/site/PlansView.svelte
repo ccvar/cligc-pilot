@@ -6,7 +6,8 @@
   import WhyChips from './WhyChips.svelte';
   import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
-  import { openSite } from '$lib/state/sites.svelte.js';
+  import { openSite, sites as siteState } from '$lib/state/sites.svelte.js';
+  import SiteJobPanel from './SiteJobPanel.svelte';
   import type { ManagedSite, SitePlan } from '$lib/types';
 
   let { sites, plans }: { sites: ManagedSite[]; plans: SitePlan[] } = $props();
@@ -31,6 +32,20 @@
   const p = $derived(cur ? planOf(cur.id) : undefined);
   const prog = $derived(progress(p));
 
+  // 正在跑的作业（制定计划、立即执行…）：按钮显示进行中，下面直接看进度；点过「制定」的站点跑完后结果留着
+  const jobOf = (id: string) => siteState.jobs[id];
+  const busy = (s: ManagedSite) => !!s.job || jobOf(s.id)?.status === 'running';
+  const job = $derived(cur ? jobOf(cur.id) : undefined);
+  const running = $derived(!!cur && busy(cur));
+  let watched = $state<Set<string>>(new Set());
+  async function makePlan() {
+    if (!cur || running) return;
+    const id = cur.id;
+    watched = new Set([...watched, id]);
+    await runTask(id, 'plan');
+  }
+  const showJob = $derived(!!job && (running || (!!cur && watched.has(cur.id) && job.kind.startsWith('ops:'))));
+
   let openTask = $state<Set<number>>(new Set());
   let noteOpen = $state(false);
   let posOpen = $state(false);
@@ -51,6 +66,7 @@
       <button class="site" class:on={cur?.id === s.id} onclick={() => (picked = s.id)} aria-current={cur?.id === s.id}>
         <SiteIcon id={s.id} size={15} />
         <span class="nm">{s.name}</span>
+        {#if busy(s)}<span class="spin" aria-label="正在跑任务"></span>{/if}
         {#if g.tone}<i class="dot {g.tone}" aria-label={g.tone === 'err' ? '有失败' : '有要你处理的'}></i>{/if}
         <span class="pg">{sp ? `${g.done}/${g.total}` : '—'}</span>
       </button>
@@ -66,8 +82,9 @@
         <span class="sub">{p ? `${md(p.plan.date)}制定 · ${prog.done}/${prog.total} 已上线` : '还没有计划'}</span>
         <span class="grow"></span>
         {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
-        <button class="btn tiny" onclick={() => runTask(cur.id, 'plan')} disabled={!!cur.job}><Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}</button>
+        <button class="btn tiny" onclick={makePlan} disabled={running} data-tip={running ? '这个站点正在跑任务，跑完才能再制定' : null}>{#if running}<span class="spin"></span>{job?.title || cur.job}中…{:else}<Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}{/if}</button>
       </header>
+      {#if showJob && job}<div class="job"><SiteJobPanel {job} logOpen={running} /></div>{/if}
       {#if p && prog.total}<div class="bar" aria-hidden="true"><i style:width="{(prog.done / prog.total) * 100}%"></i></div>{/if}
 
       {#if p?.plan.notes}
@@ -113,7 +130,7 @@
             </li>
           {/each}
         </ol>
-      {:else}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
+      {:else if !showJob}<p class="hint">每周自动制定一次；也可以现在就让 AI 先做一份。</p>{/if}
     </section>
   {:else}<p class="hint">还没有托管的站点。</p>{/if}
 </div></div>
@@ -141,6 +158,7 @@
   .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
   .stg.growing { background: var(--su-run-soft); color: var(--su-run); }
   .stg.established { background: var(--su-ok-soft); color: var(--ok); }
+  .job { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .bar { height: 3px; border-radius: 2px; background: var(--accent-soft); overflow: hidden; margin-top: -4px; }
   .bar i { display: block; height: 100%; background: var(--ok); border-radius: 2px; }
 
