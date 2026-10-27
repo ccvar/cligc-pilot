@@ -242,7 +242,12 @@
       </div>
       <div class="field"><span class="lbl"><TypeSafeMark size={13} />上线前内容质检（判断模型）</span>
         <div class="seg"><button class:on={g.jev_gate !== false} onclick={() => g && (g.jev_gate = true)} disabled={!jev.configured}>做质检</button><button class:on={g.jev_gate === false} onclick={() => g && (g.jev_gate = false)} disabled={!jev.configured}>不做</button></div>
-        <small>{#if jev.configured}规则都过了、马上要自动上线时，再让判断模型看一眼新页面和大改的页面：要讲清楚目标搜索问题、信息够具体、和站点定位相关、没有没来源的数字和遗留的说明文字，有一项不过就留给你确认，分数记在待处理条目上。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认开着。{/if}</small>
+        {#if jev.configured && g.jev_gate !== false}
+          <div class="sub-opt"><span>质检没过时</span>
+            <div class="seg"><button class:on={g.jev_rewrite !== false} onclick={() => g && (g.jev_rewrite = true)}>先让 AI 重写一次</button><button class:on={g.jev_rewrite === false} onclick={() => g && (g.jev_rewrite = false)}>直接留给你</button></div>
+          </div>
+        {/if}
+        <small>{#if jev.configured}规则都过了、马上要自动上线时，再让判断模型看一眼新页面和大改的页面：要讲清楚目标搜索问题、信息够具体、和站点定位相关、没有没来源的数字和遗留的说明文字。有一项不过：选「先让 AI 重写一次」就把原因交回 AI 在同一分支上改一遍、重新构建和质检，过了照常自动上线，还不过才留给你确认；选「直接留给你」就不重写。分数记在待处理条目上。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认开着。{/if}</small>
       </div>
 
       {/if}
@@ -369,4 +374,5 @@
   .codex-warn { margin-top: 8px; padding: 9px 11px; border-radius: 8px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12px; line-height: 1.6; }
   .codex-warn b { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
   .codex-warn p { margin: 4px 0 0; }
+  .sub-opt { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--dim); }
 </style>

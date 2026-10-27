@@ -1037,6 +1037,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     }
     // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
     // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）
+    let mut rewrite: Option<(String, Vec<String>)> = None;
     if level >= 5 && verdict == "auto" && managed.jev_gate {
         if let Some(jev) = crate::typesafe::client() {
             let files = crate::managed::content_page_files(&diff);
@@ -1050,14 +1051,46 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
                         if why.is_empty() {
                             job.line("内容质检通过");
+                        } else if managed.jev_rewrite && !item.jev_rewritten {
+                            // 先不留给你：把原因交回 AI 重写一次，再走一遍检查和质检
+                            rewrite = Some((why, files.iter().map(|(f, _)| f.clone()).collect()));
                         } else {
-                            verdict = format!("内容质检没过（判断模型 Jev）：{why}，留给你确认");
+                            verdict = format!("内容质检没过（判断模型 Jev）{}：{why}，留给你确认", if item.jev_rewritten { "，AI 按原因重写过一次还是没过" } else { "" });
                         }
                     }
                     Err(e) => job.line(&format!("内容质检没做成（{e}），按原来的规则判定")),
                 }
             }
         }
+    }
+    if let Some((why, files)) = rewrite {
+        job.line(&format!("内容质检没过：{why}。交回 AI 按原因重写一次"));
+        site_ops::update_item(&site_dir, &item.id, now(), |i| i.jev_rewritten = true)?;
+        let msg = format!(
+            "你刚才在当前分支上为「{title}」做的改动，Pilot 上线前用判断模型做内容质检没有通过：\n{why}\n\n\
+请只针对这些问题修改这些文件：{files}\n\
+- 把目标搜索问题正面讲清楚，补具体的步骤、数字、例子，删掉空泛的套话；\n\
+- 数字和测试结果要写清来源（或删掉拿不准的），不要编；\n\
+- 删掉正文里写给编辑或 AI 的说明文字；\n\
+- 不要扩大改动范围，不要改网址、依赖、构建和部署配置。\n\
+改完运行构建（`{build}`）确认通过，用 `git add` 和 `git commit` 提交到当前分支。不要推送、不要开 PR、不要部署。\n\
+最后用两三句话说明这次改了什么。",
+            title = item.opp.title,
+            files = files.join("、"),
+            build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
+        );
+        let (_, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
+        if job.canceled() {
+            return Err("已取消".into());
+        }
+        let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(400).collect()).unwrap_or_default();
+        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.ai_summary = format!("{}\n\n（质检没过后重写：{summary}）", i.ai_summary));
+        if crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
+            crate::site_git::git_ok(&wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads", ":(exclude).pilot-api-home"], "").await?;
+            let _ = crate::site_git::git_commit_ok(&wt, &["commit", "-qm", &format!("ops: revise {} after quality check", path_of(&item.opp.page))]).await;
+        }
+        // 再走一遍：构建、检查、规则、质检（这次 jev_rewritten 已经记上，不会再重写）
+        return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
     }
     // 推送 + 开 PR（GitHub）；本地来源留在本地分支。检查没通过的不推送。
     let mut pr = crate::site_github::Pr::default();

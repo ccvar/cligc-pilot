@@ -490,6 +490,8 @@ export interface ManagedGroup {
   min_page_chars: number;
   /** 自动上线前用判断模型（Jev）做内容质检（接上 TypeSafe 才生效）；老数据没有＝开 */
   jev_gate?: boolean;
+  /** 质检没过时先让 AI 按原因重写一次 */
+  jev_rewrite?: boolean;
   /** 判断模型认为和站点定位基本无关的搜索词不交给 AI 处理；老数据没有＝开 */
   skip_offtopic?: boolean;
   created_at: number;

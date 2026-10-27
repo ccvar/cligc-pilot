@@ -122,6 +122,9 @@ pub struct ManagedGroup {
     /// 自动上线前用判断模型（Jev）做内容质检；接上 TypeSafe 才生效，见 jev_checks
     #[serde(default = "yes")]
     pub jev_gate: bool,
+    /// 质检没过时，先把原因交回给 AI 在同一分支上重写一次，再检查一遍；还不过才留给你确认
+    #[serde(default = "yes")]
+    pub jev_rewrite: bool,
     /// 判断模型认为和站点定位基本无关的搜索词，扫描时不交给 AI 处理（看板里照样列出）
     #[serde(default = "yes")]
     pub skip_offtopic: bool,
@@ -205,6 +208,7 @@ impl ManagedGroup {
             min_page_chars: default_min_page(),
             code_changes: default_code(),
             jev_gate: true,
+            jev_rewrite: true,
             skip_offtopic: true,
             created_at: 0,
         }

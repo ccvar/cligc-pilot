@@ -370,7 +370,7 @@
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
             {#if jev.configured}
               <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
-              {#if g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
+              {#if g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', `自动上线前让判断模型（Jev）检查新页面和大改的页面，${g.jev_rewrite !== false ? '不过先让 AI 按原因重写一次，还不过才留给你确认' : '不过就留给你确认'}`)}{/if}
               {@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}
             {/if}
             <button type="button" class="rule-more" onclick={() => editGroup(g)} data-tip={`${hiddenRules(g).join('\n')}\n点一下查看或修改`}>还有 {hiddenRules(g).length} 项<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>

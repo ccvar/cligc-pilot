@@ -366,6 +366,9 @@ pub struct QueueItem {
     /// 验收严重失败、回滚后 AI 自动重做过几次（最多 1 次）。
     #[serde(default)]
     pub retries: u32,
+    /// 内容质检没过后，AI 已经按原因重写过一次（只重写一次）。
+    #[serde(default)]
+    pub jev_rewritten: bool,
     /// 上次失败的原因，重做时交给 AI。
     #[serde(default)]
     pub retry_note: String,
