@@ -17,7 +17,7 @@
   <div class="su-mask" role="presentation" onclick={closeMigrate}></div>
   <div class="su modal mgd" role="dialog" aria-modal="true" aria-label="改版已有站点">
     <header class="sheet-head">
-      <b><Icon name="route" size={15} /> 改版已有站点</b>
+      <b><Icon name="revamp" size={15} /> 改版已有站点</b>
       <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeMigrate} disabled={d.busy}>×</button>
     </header>
     <div class="sheet-body">

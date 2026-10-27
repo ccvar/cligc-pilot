@@ -222,7 +222,7 @@
 
 <div class="card mg">
   <h3>
-    <Icon name="route" />改版进度<span class="sub">{launched && v ? `原站 ${v.domain} → 新站 ${v.meta.cutover.host}` : `原站 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
+    <Icon name="revamp" />改版进度<span class="sub">{launched && v ? `原站 ${v.domain} → 新站 ${v.meta.cutover.host}` : `原站 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
     <span class="grow"></span>
     <button class="ic-btn ic-sm" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新改版进度"><RefreshIcon spinning={loading} /></button>
   </h3>

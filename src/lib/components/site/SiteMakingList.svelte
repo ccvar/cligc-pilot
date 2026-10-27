@@ -88,7 +88,7 @@
       <p class="hint">{list.length ? `${list.length} 个制作中` : '从零做一个新站点'}</p>
     </div>
     <div class="row">
-      <button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />改版已有站点</button>
+      <button class="btn small" onclick={() => openMigrate()}><Icon name="revamp" size={13} />改版已有站点</button>
       <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button>
     </div>
   </header>
@@ -101,7 +101,7 @@
         {@const planN = ms.filter((x) => migrate.view[x.id]?.stage === 'plan').length}
         <div class="card batch">
           <div class="bh">
-            <b><Icon name="route" size={14} />改版中 {ms.length} 个</b>
+            <b><Icon name="revamp" size={14} />改版中 {ms.length} 个</b>
             <span class="chips">{#each byStage as st (st.key)}<span class="pill">{st.label} {st.n}</span>{/each}</span>
             <span class="grow"></span>
             <button class="btn tiny" onclick={() => openMigrate(true)}><Icon name="plus" size={11} />批量改版</button>
@@ -117,7 +117,7 @@
           <Icon name="sparkles" size={20} />
           <b>还没有制作中的站点</b>
           <small>填一段定位、选好技术栈，剩下的交给 AI。</small>
-          <div class="row"><button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />改版已有站点</button><button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button></div>
+          <div class="row"><button class="btn small" onclick={() => openMigrate()}><Icon name="revamp" size={13} />改版已有站点</button><button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button></div>
         </div>
       {:else}
         <div class="grid">
