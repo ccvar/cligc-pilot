@@ -6,7 +6,7 @@
   import LineChart from './LineChart.svelte';
   import OpportunityRow from './OpportunityRow.svelte';
   import SiteReports from './SiteReports.svelte';
-  import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import GscMark from '$lib/components/icons/GscMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import GaMark from '$lib/components/icons/GaMark.svelte';
   import { ago as agoTs, full, num, pct as pctF, delta as dlt } from './fmt';
@@ -49,7 +49,7 @@
       <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
     <!-- 只显示还接着的数据源的错误（解绑后上次同步留下的报错不再挂着） -->
-    {#if site.data.gsc_site && d?.meta.gsc.error}<div class="err-note src"><GoogleMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
+    {#if site.data.gsc_site && d?.meta.gsc.error}<div class="err-note src"><GscMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
     {#if site.data.ga4_property && d?.meta.ga4.error}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}
     {#if site.data.bing_site && d?.meta.bing.error}<div class="err-note src"><BingMark size={13} />Bing：{d.meta.bing.error}</div>{:else if !site.data.bing_site && site.data.bing_auth}<div class="soft-note src"><BingMark size={13} />Bing：已把 {site.domain} 加到 Bing，正在验证，通过后开始拉数据。</div>{/if}
 
@@ -58,7 +58,7 @@
         {#if site.data.gsc_site}
           {@const moved = d.gsc_prev_totals.position > 0 ? d.gsc_prev_totals.position - d.gsc_totals.position : 0}
           <section class="grp" style="--n:4">
-            <header><GoogleMark size={12} />Google 搜索<span class="faint">{d.meta.gsc.end ? `截至 ${md(d.meta.gsc.end)}` : ''}</span></header>
+            <header><GscMark size={12} />Google 搜索<span class="faint">{d.meta.gsc.end ? `截至 ${md(d.meta.gsc.end)}` : ''}</span></header>
             <div class="stats">
               {#each [
                 { l: '点击', v: n(d.gsc_totals.clicks), dl: dlt(d.gsc_totals.clicks, d.gsc_prev_totals.clicks) },
@@ -90,13 +90,13 @@
           </section>
         {/if}
       </div>
-      <p class="faint note src"><GoogleMark size={11} />Search Console 数据有 2–3 天延迟。</p>
+      <p class="faint note src"><GscMark size={11} />Search Console 数据有 2–3 天延迟。</p>
 
       {#if d.gsc_daily.length || d.ga4_daily.length}
         <div class="card">
           <h3><Icon name="trend" />趋势 <span class="sub">近 90 天</span></h3>
           {#if d.gsc_daily.length}
-            <div class="chart-src src"><GoogleMark size={12} />Google 搜索</div>
+            <div class="chart-src src"><GscMark size={12} />Google 搜索</div>
             <LineChart labels={d.gsc_daily.map((r) => r.key)} series={[
               { label: '点击', color: '#2f6fd8', values: d.gsc_daily.map((r) => r.clicks) },
               { label: '展现', color: '#9b8ee0', values: d.gsc_daily.map((r) => r.impressions) },
@@ -125,7 +125,7 @@
       <div class="two">
         <div class="card">
           <h3><Icon name="search" />查询词 <span class="grow"></span>
-            {#if site.data.bing_site && site.data.gsc_site}<span class="seg mini"><button class="src" class:on={qTab === 'gsc'} onclick={() => (qTab = 'gsc')}><GoogleMark size={11} />Google</button><button class="src" class:on={qTab === 'bing'} onclick={() => (qTab = 'bing')}><BingMark size={11} />Bing</button></span>{/if}
+            {#if site.data.bing_site && site.data.gsc_site}<span class="seg mini"><button class="src" class:on={qTab === 'gsc'} onclick={() => (qTab = 'gsc')}><GscMark size={11} />Google</button><button class="src" class:on={qTab === 'bing'} onclick={() => (qTab = 'bing')}><BingMark size={11} />Bing</button></span>{/if}
           </h3>
           <table class="tbl">
             <thead><tr><th>查询词</th><th class="num">点击</th><th class="num">展现</th><th class="num">点击率</th><th class="num">排名</th></tr></thead>
@@ -145,7 +145,7 @@
         <div class="card">
           <h3><Icon name="file" />页面 <span class="grow"></span>
             <span class="seg mini">
-              {#if site.data.gsc_site}<button class="src" class:on={pTab === 'gsc'} onclick={() => (pTab = 'gsc')}><GoogleMark size={11} />Google</button>{/if}
+              {#if site.data.gsc_site}<button class="src" class:on={pTab === 'gsc'} onclick={() => (pTab = 'gsc')}><GscMark size={11} />Google</button>{/if}
               {#if site.data.ga4_property}<button class="src" class:on={pTab === 'ga4'} onclick={() => (pTab = 'ga4')}><GaMark size={11} />GA4</button>{/if}
               {#if site.data.bing_site}<button class="src" class:on={pTab === 'bing'} onclick={() => (pTab = 'bing')}><BingMark size={11} />Bing</button>{/if}
             </span>

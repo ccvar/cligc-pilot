@@ -9,6 +9,7 @@
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import GscMark from '$lib/components/icons/GscMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
@@ -217,7 +218,7 @@
     <div class="lstep" class:done={st.gsc}>
       <span class="n">{st.gsc ? '✓' : 5}</span>
       <div class="lb">
-        <b><span class="si"><GoogleMark size={13} /></span>Search Console</b>
+        <b><span class="si"><GscMark size={13} /></span>Search Console</b>
         <small>{st.gsc ? `已绑定 ${site.data.gsc_site}` : manage ? '在 Cloudflare 写 DNS 验证记录、验证所有权、添加网域资源并提交 sitemap。' : 'Search Console 里已经有这个站点的话，点右上角刷新会按域名自动绑上；自动验证并添加需要授予管理权限的 Google 账号。'}</small>
         {#if !st.gsc}<div class="row">
           {#if manage}<button class="btn tiny" onclick={() => setupGsc(site, manage)} disabled={!!busy || !site.domain}><Icon name="shield" size={11} />{busy === 'gsc' ? '验证中（最多约 1 分半）…' : '自动验证并添加'}</button>

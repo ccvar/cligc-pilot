@@ -4,6 +4,8 @@
   import type { Site } from '$lib/types';
   import Dropdown from '$lib/Dropdown.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
+  import GscMark from '$lib/components/icons/GscMark.svelte';
+  import GaMark from '$lib/components/icons/GaMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -78,8 +80,8 @@
   <h3><Icon name="database" />数据源<span class="grow"></span>{#if !editing}<button class="ic-btn ic-sm" onclick={onedit} disabled={locked} aria-label="修改数据源" data-tip={locked ? '先保存或取消正在改的那一张' : '修改数据源'}><Icon name="pencil" size={14} /></button>{/if}</h3>
   {#if !editing}
     <dl class="kv">
-      <dt><span class="dt-ic"><GoogleMark size={13} />GA4</span></dt><dd>{site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未接入'}</dd>
-      <dt><span class="dt-ic"><GoogleMark size={13} />Search Console</span></dt><dd>{site.data.gsc_site || '未接入'}</dd>
+      <dt><span class="dt-ic"><GaMark size={13} />GA4</span></dt><dd>{site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未接入'}</dd>
+      <dt><span class="dt-ic"><GscMark size={13} />Search Console</span></dt><dd>{site.data.gsc_site || '未接入'}</dd>
       <dt><span class="dt-ic"><BingMark size={13} />Bing</span></dt><dd>{site.data.bing_site || (site.data.bing_auth ? '已加到 Bing，正在验证' : '未接入')}</dd>
       <dt>IndexNow</dt><dd>{site.data.indexnow_key ? '已配置：上线后自动提交有变化的页面' : '未配置'}{#if !site.data.indexnow_key && site.domain}<button class="link-btn ix" onclick={setupIndexNow} disabled={ixBusy}>{ixBusy ? '处理中…' : '生成密钥并写入验证文件'}</button>{/if}</dd>
       <dt>运营机会</dt><dd>近 28 天展现低于 {site.ops.min_impressions} 的页面和查询词不算</dd>
