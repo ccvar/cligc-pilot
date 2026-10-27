@@ -2,7 +2,6 @@
   import './site.css';
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
-  import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app, confirmDialog } from '$lib/state/app.svelte.js';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
@@ -135,6 +134,37 @@
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   });
+  // 方案卡片：暂停的方案默认收起，其余默认展开（grpToggled 记的是和默认相反的那些）
+  let grpToggled = $state<Set<string>>(new Set());
+  function toggleGrp(id: string) { const n = new Set(grpToggled); if (n.has(id)) n.delete(id); else n.add(id); grpToggled = n; }
+  // 站点多的方案先显示 SITE_LIMIT 个，要你处理的、失败的、正在跑的排前面
+  const SITE_LIMIT = 6;
+  let showAll = $state<Set<string>>(new Set());
+  function toggleShowAll(id: string) { const n = new Set(showAll); if (n.has(id)) n.delete(id); else n.add(id); showAll = n; }
+  let siteMenu = $state('');
+  function orderSites(g: ManagedGroup) {
+    const rank = (id: string) => {
+      const s = sitesById.get(id);
+      if (s && (s.waiting || budgetFull(s.budget))) return 0;
+      if (s?.job || sites.jobs[id]?.status === 'running') return 1;
+      return g.stopped.includes(id) ? 3 : 2;
+    };
+    return [...g.sites].map((id, i) => ({ id, i, r: rank(id) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.id);
+  }
+  function groupSummary(g: ManagedGroup) {
+    let shipped = 0, need = 0, failed = 0;
+    for (const id of g.sites) { const s = sitesById.get(id); if (!s) continue; shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed; }
+    return { shipped, need, failed };
+  }
+  /** 「规则详情」的悬停说明：没放在卡片上的那些规则 */
+  function ruleDetail(g: ManagedGroup) {
+    const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
+    const lines = [`可以做的动作：${acts}`, `新页面：${g.new_content === 'auto' ? `检查通过直接上线${g.min_page_chars ? `，正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : '等你看过再上线'}`];
+    if (g.fallback_brain) lines.push(`备用模型：${modelLabel(g.fallback_brain, g.fallback_model)}`);
+    if (g.guidelines?.trim()) lines.push('有内容准则');
+    if (g.topics?.trim()) lines.push(`${g.topics.split('\n').filter((l) => l.trim()).length} 个选题`);
+    return `${lines.join('\n')}\n点一下查看或修改`;
+  }
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
   // 运营目标是编辑时勾的几个预设拼起来的（再加自己写的话）：拆回预设，卡片上显示成一排名称，
@@ -244,8 +274,15 @@
     {:else}
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
-        <div class="card grp" class:off={gOff}>
-          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}<span class="sub">{g.sites.length} 个站点</span><span class="grow"></span>
+        {@const gOpen = gOff ? grpToggled.has(g.id) : !grpToggled.has(g.id)}
+        {@const sum = groupSummary(g)}
+        {@const ordered = orderSites(g)}
+        {@const visible = showAll.has(g.id) ? ordered : ordered.slice(0, SITE_LIMIT)}
+        <div class="card grp" class:off={gOff} class:shut={!gOpen}>
+          <h3><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
+            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
+            <span class="grow"></span>
+            {#if gOff && g.sites.length}<button class="link-btn fold" onclick={() => toggleGrp(g.id)}>{gOpen ? '收起' : '展开'}</button>{/if}
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
             <span class="more-wrap">
               <button class="ic-btn ic-sm" class:on={planMenu === g.id} onclick={() => (planMenu = planMenu === g.id ? '' : g.id)} aria-label="这个方案的操作" aria-haspopup="menu" aria-expanded={planMenu === g.id} data-tip={planMenu === g.id ? null : '编辑、暂停这个方案'}><Icon name="more" size={16} /></button>
@@ -259,61 +296,72 @@
               {/if}
             </span>
           </h3>
+          {#if gOpen}
           {#if g.goal?.trim()}
             {@const gp = goalParts(g.goal)}
-            <!-- 运营目标：预设显示成名称胶囊（悬停看完整说明），自己写的话接在后面、默认一行，点开看全文 -->
+            <!-- 运营目标：预设显示成小标签（悬停看完整说明），自己写的话接在后面、默认一行，点开看全文 -->
             <div class="goal" class:open={goalOpen.has(g.id)}>
-              <span class="goal-lbl"><Icon name="target" size={13} />目标</span>
-              {#each gp.presets as p (p.key)}<span class="goal-pill" data-tip={p.goal}><Icon name={p.icon} size={12} />{p.name}</span>{/each}
+              <span class="goal-lbl"><Icon name="target" size={12} />目标</span>
+              {#each gp.presets as p (p.key)}<span class="goal-pill" data-tip={p.goal}>{p.name}</span>{/each}
               {#if gp.rest}
                 <button class="goal-t" onclick={() => toggleGoal(g.id)} data-tip={goalOpen.has(g.id) ? '收起' : `点开看全文：${gp.rest}`}>{gp.rest}</button>
               {/if}
             </div>
           {/if}
-          <!-- 第一行只看：模型（带厂商图标）和发布规则，文字压短尽量一行放下；第二行是能直接点的开关 -->
+          <!-- 规则只留一行最要紧的：模型、怎么上线、每天几条、每周用量、两个判断模型开关；其余（动作、内容准则、新页规则、备用模型）在「规则详情」里 -->
           <div class="rules">
-            <span class="model"><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.fallback_brain}<span class="faint fb">备用</span><BrainIcon brain={modelIcon(g.fallback_brain)} size={12} /><span class="trunc faint">{modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 没有逐条确认的钩子：托管时只能改每次改动的工作文件夹、断网运行，推送和上线由 Pilot 执行">断网运行</span>{/if}</span>
-            <span class="acts" data-tip={(g.actions ?? []).length === 5 ? '标题描述、内容、内链、新页面、技术问题都可以做' : `可以做：${(g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}`}><Icon name="checks" size={12} /><span class="trunc">{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span></span>
-            {#if g.guidelines?.trim()}<button type="button" class="rule-link" data-tip={`AI 写作和修改都按这份内容准则来，点一下查看或修改：\n${guidePreview(g.guidelines)}`} onclick={() => editGroup(g, 'guidelines')}><Icon name="doc" size={12} />内容准则</button>{/if}
-            {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
-            <span data-tip={g.new_content === 'auto' ? `AI 写好的新页面检查通过就直接上线${g.min_page_chars ? `；正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : 'AI 写好的新页面等你看过再上线'}><Icon name="file" size={12} />新页{g.new_content === 'auto' ? '自动发' : '人审'}{g.min_page_chars ? ` ≥${g.min_page_chars}字` : ''}</span>
+            <span class="model" data-tip={g.fallback_brain ? `备用：${modelLabel(g.fallback_brain, g.fallback_model)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
             {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '人审上线', small: '小改自动上线', all: '自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
             <span data-tip="每个站点每天最多自动上线这么多条，超出的留给你确认"><Icon name="rocket" size={12} />每天 ≤{g.daily_changes} 条</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
-          </div>
-          {#if jev.configured}
-            <div class="rules toggles">
+            {#if jev.configured}
               <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
               {#if g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
               {@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}
-            </div>
-          {/if}
+            {/if}
+            <button type="button" class="rule-link" onclick={() => editGroup(g)} data-tip={ruleDetail(g)}>规则详情</button>
+          </div>
           {#if g.sites.length}
             <div class="list gsites">
-              {#each g.sites as id (id)}
+              {#each visible as id (id)}
                 {@const s = sitesById.get(id)}
                 {@const on = !g.stopped.includes(id)}
-                <div class="li gs">
+                {@const need = s ? s.waiting - s.failed : 0}
+                <div class="li gs" class:stopped={!on}>
                   <button class="gs-name" onclick={() => openSite(id)}><SiteIcon {id} size={15} /><span>{siteName(id)}</span></button>
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
-                  {#if s}<span class="gs-meta faint">本周上线 {s.shipped_week}{#if s.waiting}{' · '}<span class="warn-text">需要你 {s.waiting}</span>{/if}{#if budgetFull(s.budget)}{' · '}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}</span>{/if}
+                  {#if s}
+                    <span class="gs-meta">
+                      {#if s.shipped_week}<span class="faint">本周上线 {s.shipped_week}</span>{/if}
+                      {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
+                      {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
+                      {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
+                      {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
+                    </span>
+                  {/if}
                   {#if s?.job || sites.jobs[id]?.status === 'running'}
                     <button class="pill run gs-job" onclick={() => toggleProgress(id)} aria-expanded={progress.has(id)} data-tip="看进度"><span class="spin"></span>{s?.job || sites.jobs[id]?.title}中<Icon name={progress.has(id) ? 'x' : 'arrow'} size={10} /></button>
                   {:else if progress.has(id) && sites.jobs[id]}
-                    <button class="btn tiny gs-run" onclick={() => toggleProgress(id)}>收起结果</button>
-                  {:else}
-                    <button class="btn tiny gs-run" onclick={() => runNow(id)} data-tip="现在执行一整轮：沿用或制定本周计划，再按方案改排在前面的几条（全自动的会自动上线）"><Icon name="play" size={10} />立即执行</button>
+                    <button class="btn tiny" onclick={() => toggleProgress(id)}>收起结果</button>
                   {/if}
                   <span class="grow"></span>
-                  <div class="gs-move" data-tip="把这个站点移到别的方案，或退出托管">
-                    <Dropdown compact value={g.id} onchange={(v) => moveSite(id, g.id, v)} options={[
-                      ...groups.map((x) => ({ value: x.id, label: x.name, sub: AUTONOMY_LABEL[x.autonomy] ?? '' })),
-                      { value: '__new', label: '新建方案…', sub: '用这个站点新建一个方案' },
-                      { value: '__out', label: '退出托管', sub: '改为自己运营' },
-                    ]} />
-                  </div>
-                  <span class="gs-state" class:on >{on ? '托管中' : '已暂停'}</span>
-                  <button class="switch" class:on role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '暂停这个站点的托管（规则保留）' : '恢复这个站点的托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
+                  <!-- 不常用的：立即执行、移到别的方案、退出托管，收进悬停才出现的菜单 -->
+                  <span class="more-wrap gs-more" class:on={siteMenu === id}>
+                    <button class="ic-btn ic-sm" onclick={() => (siteMenu = siteMenu === id ? '' : id)} aria-label="这个站点的操作" aria-haspopup="menu" aria-expanded={siteMenu === id} data-tip={siteMenu === id ? null : '立即执行、移到别的方案'}><Icon name="more" size={15} /></button>
+                    {#if siteMenu === id}
+                      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                      <span class="more-mask" onclick={() => (siteMenu = '')}></span>
+                      <span class="more-pop" role="menu">
+                        <button role="menuitem" disabled={!!s?.job} onclick={() => { siteMenu = ''; void runNow(id); }}><Icon name="play" size={14} /><span><b>立即执行</b><small>沿用或制定本周计划，再按方案改排在前面的几条</small></span></button>
+                        {#each groups.filter((x) => x.id !== g.id) as x (x.id)}
+                          <button role="menuitem" onclick={() => { siteMenu = ''; void moveSite(id, g.id, x.id); }}><Icon name="arrow" size={14} /><span><b>移到「{x.name}」</b><small>{AUTONOMY_LABEL[x.autonomy] ?? ''}</small></span></button>
+                        {/each}
+                        <button role="menuitem" onclick={() => { siteMenu = ''; void moveSite(id, g.id, '__new'); }}><Icon name="plus" size={14} /><span><b>新建方案…</b><small>用这个站点新建一个方案</small></span></button>
+                        <button role="menuitem" onclick={() => { siteMenu = ''; void moveSite(id, g.id, '__out'); }}><Icon name="x" size={14} /><span><b>退出托管</b><small>改为自己运营</small></span></button>
+                      </span>
+                    {/if}
+                  </span>
+                  <button class="switch" class:on role="switch" aria-checked={on} aria-label="{on ? '停止' : '启用'}托管 {siteName(id)}" data-tip={on ? '托管中，点一下暂停这个站点（规则保留）' : '已暂停，点一下恢复托管'} onclick={() => setSiteActive(id, !on)}><i></i></button>
                 </div>
                 {#if progress.has(id) && sites.jobs[id]}
                   {@const conv = opsConvOf(id, sites.jobs[id].started_at)}
@@ -326,8 +374,12 @@
                   </div>
                 {/if}
               {/each}
+              {#if ordered.length > SITE_LIMIT}
+                <button class="li gs-all" onclick={() => toggleShowAll(g.id)}>{showAll.has(g.id) ? '收起' : `显示全部 ${ordered.length} 个站点`}</button>
+              {/if}
             </div>
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
+          {/if}
         </div>
       {/each}
 
@@ -384,25 +436,21 @@
   .more-pop b { font-size: 13px; font-weight: 500; }
   .more-pop small { font-size: 11px; color: var(--faint); line-height: 1.4; }
   /* 运营目标：方案里最重要的一条，比下面的规则深一级；预设是胶囊，自己写的话一行省略、点开看全文 */
-  .goal { display: flex; align-items: center; gap: 6px; min-width: 0; margin: -4px 0 12px; font-size: 13px; color: var(--text); }
+  .goal { display: flex; align-items: center; gap: 5px; min-width: 0; margin: -4px 0 10px; font-size: 12.5px; color: var(--text); }
   .goal.open { flex-wrap: wrap; }
   .goal-lbl { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; color: var(--dim); font-size: 12px; }
-  .goal-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; background: var(--rail); border: 1px solid var(--border); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
-  .goal-pill :global(.ico) { color: var(--dim); }
+  .goal-pill { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--accent-soft); font-size: 11.5px; color: var(--dim); white-space: nowrap; cursor: default; }
   .goal-t { flex: 1; min-width: 0; margin-left: 4px; padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--dim); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .goal.open .goal-t { white-space: normal; flex-basis: 100%; margin-left: 0; color: var(--text); line-height: 1.6; }
   .goal-t:hover { color: var(--text); }
   /* 一行放下：每项不折行，模型名和动作列表太长时省略号收起；窄到放不下时才换行 */
-  .rules { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; min-width: 0; }
+  .rules { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; min-width: 0; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
   .rules > span.model { flex: 0 1 auto; min-width: 0; }
-  .rules > span.acts { flex: 0 1 auto; min-width: 0; }
   .rules > .rule-link { flex: none; display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 0; font: inherit; color: inherit; white-space: nowrap; cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
   .rules > .rule-link:hover { color: var(--text); text-decoration-color: currentColor; }
   .rules .trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .rules .model .fb { margin-left: 4px; }
   .rules :global(svg) { flex: none; }
-  .rules.toggles { margin-top: -4px; gap: 6px 18px; }
   @container page (max-width: 760px) { .rules { flex-wrap: wrap; } }
   .rules :global(.ico) { color: var(--faint); }
   .codex-off { margin-left: 4px; font-size: 11px; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 999px; padding: 0 6px; }
@@ -423,18 +471,22 @@
   .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
   .stg.growing { background: var(--su-run-soft); color: var(--su-run); }
   .stg.established { background: var(--su-ok-soft); color: var(--ok); }
-  .gs-run { opacity: .55; transition: opacity .12s; }
-  .gs:hover .gs-run, .gs-run:focus-visible { opacity: 1; }
   .gs-job { flex: none; border: none; cursor: pointer; gap: 5px; }
   .gs-prog { padding-top: 4px; padding-bottom: 14px; background: #fcfbf9; }
   .gs-prog :global(pre.log) { max-height: 200px; }
   .gp-acts { margin-top: 10px; gap: 6px; }
-  .gs-move { flex: none; }
-  .gs-move :global(.dd-trigger) { max-width: 180px; font-size: 12px; color: var(--dim); }
-  .gs-meta { font-size: 11.5px; white-space: nowrap; }
+  .gs-meta { display: inline-flex; align-items: center; gap: 10px; font-size: 11.5px; white-space: nowrap; }
+  .su .err-text { color: var(--err); }
+  .gsum .warn-text, .gsum .err-text { font-weight: 400; }
+  .gs.stopped .gs-name { color: var(--dim); font-weight: 500; }
+  /* 站点的「…」菜单：平时隐藏，悬停这一行或打开时才出现 */
+  .gs-more { opacity: 0; transition: opacity .12s; }
+  .gs:hover .gs-more, .gs-more:focus-within, .gs-more.on { opacity: 1; }
+  .gs-all { display: block; width: 100%; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
+  .gs-all:hover { color: var(--text); background: #fcfbf9; }
+  .grp.shut > h3 { margin-bottom: 0; }
+  .fold { font-size: 12px; color: var(--dim); }
   .gs .grow { flex: 1; }
-  .gs-state { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
-  .gs-state.on { color: var(--ok); }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
   .switch.on { background: var(--ok); }
