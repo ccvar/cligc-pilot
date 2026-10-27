@@ -263,7 +263,10 @@
   .th:hover { color: var(--text); }
   tr.clickable { cursor: pointer; }
   .site-cell b { display: block; font-size: 13px; font-weight: 600; }
-  .site-cell { max-width: 0; width: 34%; }
+  /* 站点列按内容宽、至少 230px、最多 300px（更长的省略），多出来的宽度分给后面的数字列；
+     原来是 34%，窗口一宽它就占掉一大块，窄的时候又把后面挤出卡片 */
+  .site-cell { width: 230px; }
+  .site-cell > b, .site-cell > small { max-width: 300px; }
   .site-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .site-cell b { display: flex !important; align-items: center; gap: 8px; min-width: 0; }
   .site-cell .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
