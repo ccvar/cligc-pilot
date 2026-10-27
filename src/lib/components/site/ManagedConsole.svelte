@@ -155,14 +155,14 @@
     for (const id of g.sites) { const s = sitesById.get(id); if (!s) continue; shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed; }
     return { shipped, need, failed };
   }
-  /** 「规则详情」的悬停说明：没放在卡片上的那些规则 */
-  function ruleDetail(g: ManagedGroup) {
+  /** 没放在卡片上的那些规则（「还有 N 项」的悬停说明） */
+  function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
     const lines = [`可以做的动作：${acts}`, `新页面：${g.new_content === 'auto' ? `检查通过直接上线${g.min_page_chars ? `，正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : '等你看过再上线'}`];
     if (g.fallback_brain) lines.push(`备用模型：${modelLabel(g.fallback_brain, g.fallback_model)}`);
     if (g.guidelines?.trim()) lines.push('有内容准则');
     if (g.topics?.trim()) lines.push(`${g.topics.split('\n').filter((l) => l.trim()).length} 个选题`);
-    return `${lines.join('\n')}\n点一下查看或修改`;
+    return lines;
   }
   let goalOpen = $state<Set<string>>(new Set());
   function toggleGoal(id: string) { const n = new Set(goalOpen); if (n.has(id)) n.delete(id); else n.add(id); goalOpen = n; }
@@ -317,7 +317,7 @@
               {#if g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
               {@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}
             {/if}
-            <button type="button" class="rule-link" onclick={() => editGroup(g)} data-tip={ruleDetail(g)}>规则详情</button>
+            <button type="button" class="rule-more" onclick={() => editGroup(g)} data-tip={`${hiddenRules(g).join('\n')}\n点一下查看或修改`}>还有 {hiddenRules(g).length} 项<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
           </div>
           {#if g.sites.length}
             <div class="list gsites">
@@ -445,8 +445,9 @@
   .rules { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; min-width: 0; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
   .rules > span.model { flex: 0 1 auto; min-width: 0; }
-  .rules > .rule-link { flex: none; display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 0; font: inherit; color: inherit; white-space: nowrap; cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
-  .rules > .rule-link:hover { color: var(--text); text-decoration-color: currentColor; }
+  /* 「还有 N 项」：不是一条规则，是看其余规则的入口，所以不带图标、颜色最淡 */
+  .rules > .rule-more { flex: none; display: inline-flex; align-items: center; gap: 2px; border: 0; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--faint); white-space: nowrap; cursor: pointer; transition: color .12s; }
+  .rules > .rule-more:hover { color: var(--text); }
   .rules .trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .rules :global(svg) { flex: none; }
   @container page (max-width: 760px) { .rules { flex-wrap: wrap; } }
