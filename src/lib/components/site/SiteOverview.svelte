@@ -76,8 +76,10 @@
     </div>
   {/if}
 
-  {#if hasData}<SiteSummary {site} />{/if}
+  {#if hasData}<SiteSummary {site} {binds} />{/if}
 
+  <!-- 有数据时数据源并进「近 28 天」的标题行；还没有数据时单独一张卡，方便去接入 -->
+  {#if !hasData}
   <div class="card">
     <h3><Icon name="chart" />数据与收录 <span class="grow"></span><button class="ic-btn ic-sm" onclick={() => (sites.tab = 'settings')} aria-label="数据与收录设置" data-tip="在设置里接入 GA4、Search Console、Bing"><Icon name="sliders" size={14} /></button></h3>
     <div class="binds">
@@ -89,6 +91,7 @@
       {/each}
     </div>
   </div>
+  {/if}
 
   <div class="cards">
     <div class="card">
