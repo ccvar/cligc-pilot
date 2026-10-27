@@ -18,7 +18,8 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, CODE_LABEL, setGroupRule } from '$lib/state/managed.svelte.js';
+  import type { ManagedGroup } from '$lib/types';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -137,6 +138,15 @@
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
   const md = (iso: string) => { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(iso); return m ? `${+m[1]}月${+m[2]}日` : iso; };
 </script>
+
+{#snippet jevRule(g: ManagedGroup, rule: 'jev_gate' | 'skip_offtopic', label: string, what: string)}
+  {@const on = g[rule] !== false}
+  <button type="button" class="rule-tg" class:off={!on} role="switch" aria-checked={on} aria-label={`${label}：${on ? '开' : '关'}`}
+    data-tip={`${what}\n现在${on ? '开着，点一下关掉' : '关着，点一下打开'}`} onclick={() => setGroupRule(g, rule, !on)}>
+    <TypeSafeMark size={12} />{label}<span class="tg" aria-hidden="true"><i></i></span>
+  </button>
+{/snippet}
+
 
 <ManagedGroupEditor />
 <div class="su page mc">
@@ -282,8 +292,9 @@
             <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}{g.min_page_chars ? ` · ≥ ${g.min_page_chars} 字` : ''}</span>
             {#if g.autonomy === 'auto'}<span><Icon name="code" size={12} />{CODE_LABEL[g.code_changes ?? 'all']}</span>{/if}
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
-            {#if jev.configured && g.autonomy === 'auto' && g.jev_gate !== false}<span data-tip="自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认"><TypeSafeMark size={12} />上线前质检</span>{/if}
-            {#if jev.configured && g.skip_offtopic !== false}<span data-tip="判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理"><TypeSafeMark size={12} />跳过无关搜索词</span>{/if}
+            <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
+            {#if jev.configured && g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
+            {#if jev.configured}{@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}{/if}
             <span><Icon name="gauge" size={12} />每站每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限 token'}</span>
           </div>
           {#if g.sites.length}
@@ -399,6 +410,15 @@
   .rules { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; }
   .rules :global(.ico) { color: var(--faint); }
+  /* 判断模型规则的小开关：标签本身可点，右边一个迷你开关表示开 / 关 */
+  .rule-tg { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 1px 0; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .rule-tg:hover { color: var(--text); }
+  .rule-tg.off { color: var(--faint); }
+  .rule-tg.off :global(img) { filter: grayscale(1); opacity: .5; }
+  .rule-tg .tg { position: relative; width: 22px; height: 12px; border-radius: 999px; background: var(--ok, #12805c); transition: background-color .15s; margin-left: 2px; }
+  .rule-tg .tg i { position: absolute; top: 2px; left: 12px; width: 8px; height: 8px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .rule-tg.off .tg { background: var(--border2, #d6d3cb); }
+  .rule-tg.off .tg i { left: 2px; }
   .gsites { margin-bottom: -8px; }
   .gs { display: flex; align-items: center; gap: 10px; padding-top: 8px; padding-bottom: 8px; }
   .gs-name { display: inline-flex; align-items: center; gap: 8px; border: none; background: none; padding: 0; font: inherit; font-size: 13px; font-weight: 550; color: var(--text); cursor: pointer; min-width: 0; }

@@ -5,4 +5,4 @@
 </script>
 
 <!-- TypeSafe（判断模型 Jev）标识 -->
-<img src={SRC} width={size} height={size} alt="" aria-hidden="true" style="display:block;border-radius:50%" />
+<img src={SRC} width={size} height={size} alt="" aria-hidden="true" style="display:inline-block;flex:none;vertical-align:-2px;border-radius:50%" />

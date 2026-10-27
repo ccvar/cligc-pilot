@@ -345,5 +345,5 @@
   .act b { font-size: 12.5px; font-weight: 600; }
   .act small { font-size: 11px; color: var(--faint); line-height: 1.45; }
   .chosen + .sec { border-top: none; padding-top: 4px; }
-  .lbl :global(img) { display: inline-block; vertical-align: -2px; margin-right: 5px; }
+  .lbl :global(img) { margin-right: 5px; }
 </style>

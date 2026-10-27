@@ -166,6 +166,15 @@ export async function saveGroup(): Promise<boolean> {
   } catch (e) { say(String(e), 'err'); return false; }
   finally { managed.saving = false; }
 }
+/** 方案卡片上直接开关一条规则（不用打开编辑器）：判断模型的上线前质检 / 跳过无关搜索词。 */
+export async function setGroupRule(g: ManagedGroup, rule: 'jev_gate' | 'skip_offtopic', on: boolean) {
+  try {
+    await invoke<ManagedGroup>('save_managed_group', { group: { ...g, [rule]: on } });
+    await loadManaged();
+    const label = rule === 'jev_gate' ? '上线前内容质检' : '跳过和站点定位无关的搜索词';
+    say(`「${g.name}」${on ? '开启' : '关闭'}了${label}`);
+  } catch (e) { say(String(e), 'err'); }
+}
 export async function deleteGroup(g: ManagedGroup) {
   if (!(await confirmDialog(`删除托管方案「${g.name}」？里面的 ${g.sites.length} 个站点会退出托管，改为你自己运营（Pilot 照常同步数据、找机会、体检，不再自动改代码）。`, { title: '删除托管方案', kind: 'warning', confirmText: '删除' }))) return;
   try { await invoke('delete_managed_group', { id: g.id }); managed.editor = null; await refreshSites(); void loadFleet(); await loadManaged(); say(`已删除「${g.name}」`); }
