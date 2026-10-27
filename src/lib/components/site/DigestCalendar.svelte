@@ -1,12 +1,17 @@
 <script lang="ts">
-  // 日报日历：一列一周、一行一天（周一到周日），最近 26 周。
+  // 日报日历：一列一周、一行一天（周一到周日），按卡片宽度铺满，最多一年（53 周）。
   // 颜色深浅＝那天 AI 做了多少事（上线、出计划、待你确认）；红点＝那天有回滚或失败。
   // 有日报的日子能点开，带细边框；正在看的那天描深边。
   import type { DayCount } from '$lib/types';
 
   let { digests, daily, selected, onpick }: { digests: string[]; daily: DayCount[]; selected: string | null; onpick: (name: string) => void } = $props();
 
-  const WEEKS = 26;
+  // 格子至少 13px、间隔 3px；左边星期标签占 14px + 6px。窄的时候少放几周，宽到一年放得下就把格子放大（最大 18px）。
+  const MIN = 13, GAP = 3, LABEL = 20;
+  let width = $state(0);
+  const room = $derived(width - LABEL + GAP);
+  const WEEKS = $derived(width ? Math.max(13, Math.min(53, Math.floor(room / (MIN + GAP)))) : 26);
+  const CELL = $derived(WEEKS < 53 ? MIN : Math.min(18, Math.floor(room / 53) - GAP));
   const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const byDate = $derived(new Map(daily.map((d) => [d.date, d])));
   const hasReport = $derived(new Set(digests));
@@ -31,7 +36,7 @@
     return out;
   });
   // 月份标在这个月第一天所在的那一列（第一列总是标上）
-  const monthOf = (col: Cell[], w: number) => { const first = col.find((c) => c.day === 1); return first ? `${first.month}月` : w === 0 ? `${col[0].month}月` : ''; };
+  const monthOf = (col: Cell[], w: number) => { const first = col.find((c) => c.day === 1 && !c.future); return first ? `${first.month}月` : w === 0 ? `${col[0].month}月` : ''; };
 
   function tip(c: Cell) {
     const d = byDate.get(c.date);
@@ -40,7 +45,7 @@
   }
 </script>
 
-<div class="cal" style:--weeks={WEEKS}>
+<div class="cal" style:--weeks={WEEKS} style:--c="{CELL}px" style:--g="{GAP}px" bind:clientWidth={width}>
   <div class="months" aria-hidden="true">{#each weeks as col, w (w)}<span>{monthOf(col, w)}</span>{/each}</div>
   <div class="body">
     <div class="wd" aria-hidden="true"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span></span></div>
@@ -63,7 +68,7 @@
 </div>
 
 <style>
-  .cal { --c: 12px; --g: 3px; display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; overflow-x: auto; }
+  .cal { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; overflow: hidden; }
   .months { display: grid; grid-template-columns: repeat(var(--weeks), var(--c)); gap: var(--g); margin-left: calc(14px + var(--g) * 2); font-size: 10px; color: var(--faint); line-height: 1; height: 11px; }
   .months span { white-space: nowrap; overflow: visible; }
   .body { display: flex; gap: calc(var(--g) * 2); }

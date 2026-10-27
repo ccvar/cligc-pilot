@@ -324,7 +324,7 @@ pub struct DayCount {
 #[tauri::command]
 pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<DayCount> {
     use chrono::TimeZone;
-    let since = (chrono::Local::now().timestamp().max(0) as u64).saturating_sub(days.unwrap_or(190) * 86_400);
+    let since = (chrono::Local::now().timestamp().max(0) as u64).saturating_sub(days.unwrap_or(372).min(800) * 86_400);
     let mut map: std::collections::BTreeMap<String, DayCount> = Default::default();
     for a in managed::activity(&state.data_dir, 20_000).into_iter().filter(|a| a.ts >= since) {
         let Some(t) = chrono::Local.timestamp_opt(a.ts as i64, 0).single() else { continue };
