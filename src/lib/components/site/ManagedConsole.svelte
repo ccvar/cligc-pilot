@@ -11,6 +11,8 @@
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { mdRender } from '$lib/state/messages.svelte.js';
   import { launcher } from '$lib/state/launcher.svelte.js';
+  import BrainIcon from '$lib/BrainIcon.svelte';
+  import { modelIcon } from '$lib/state/models';
   import { openSite } from '$lib/state/sites.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
@@ -284,19 +286,24 @@
             <!-- 运营目标默认只显示一行，点开看全文 -->
             <button class="goal" class:open={goalOpen.has(g.id)} onclick={() => toggleGoal(g.id)} data-tip={goalOpen.has(g.id) ? null : '点开看完整的运营目标'}><span class="goal-t">{g.goal}</span><span class="goal-more">{goalOpen.has(g.id) ? '收起' : '展开'}</span></button>
           {/if}
+          <!-- 第一行只看：模型（带厂商图标）和发布规则，文字压短尽量一行放下；第二行是能直接点的开关 -->
           <div class="rules">
-            <span><Icon name="checks" size={12} />{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span>
-            {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
+            <span class="model"><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.fallback_brain}<span class="faint fb">备用</span><BrainIcon brain={modelIcon(g.fallback_brain)} size={12} /><span class="trunc faint">{modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 没有逐条确认的钩子：托管时只能改每次改动的工作文件夹、断网运行，推送和上线由 Pilot 执行">断网运行</span>{/if}</span>
+            <span class="acts" data-tip={(g.actions ?? []).length === 5 ? '标题描述、内容、内链、新页面、技术问题都可以做' : `可以做：${(g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}`}><Icon name="checks" size={12} /><span class="trunc">{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span></span>
+            {#if g.guidelines?.trim()}<span data-tip="AI 按这份内容准则写"><Icon name="doc" size={12} />有准则</span>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
-            <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 没有逐条确认的钩子：托管时只能改每次改动的工作文件夹、断网运行，推送和上线由 Pilot 执行">断网运行</span>{/if}</span>
-            <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}{g.min_page_chars ? ` · ≥ ${g.min_page_chars} 字` : ''}</span>
-            {#if g.autonomy === 'auto'}<span><Icon name="code" size={12} />{CODE_LABEL[g.code_changes ?? 'all']}</span>{/if}
-            <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
-            <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
-            {#if jev.configured && g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
-            {#if jev.configured}{@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}{/if}
-            <span><Icon name="gauge" size={12} />每站每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限 token'}</span>
+            <span data-tip={g.new_content === 'auto' ? `AI 写好的新页面检查通过就直接上线${g.min_page_chars ? `；正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : 'AI 写好的新页面等你看过再上线'}><Icon name="file" size={12} />新页{g.new_content === 'auto' ? '自动发' : '人审'}{g.min_page_chars ? ` ≥${g.min_page_chars}字` : ''}</span>
+            {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '代码人审', small: '小改代码自动', all: '代码自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
+            <span data-tip="每个站点每天最多自动上线这么多条，超出的留给你确认"><Icon name="rocket" size={12} />每天 ≤{g.daily_changes} 条</span>
+            <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
           </div>
+          {#if jev.configured}
+            <div class="rules toggles">
+              <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
+              {#if g.autonomy === 'auto'}{@render jevRule(g, 'jev_gate', '上线前质检', '自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认')}{/if}
+              {@render jevRule(g, 'skip_offtopic', '跳过无关搜索词', '判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理')}
+            </div>
+          {/if}
           {#if g.sites.length}
             <div class="list gsites">
               {#each g.sites as id (id)}
@@ -407,8 +414,16 @@
   .goal.open .goal-t { white-space: normal; color: var(--text); }
   .goal-more { flex: none; font-size: 12px; color: var(--faint); }
   .goal:hover .goal-more { color: var(--text); text-decoration: underline; }
-  .rules { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
-  .rules > span { display: inline-flex; align-items: center; gap: 5px; }
+  /* 一行放下：每项不折行，模型名和动作列表太长时省略号收起；窄到放不下时才换行 */
+  .rules { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; min-width: 0; }
+  .rules > span { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
+  .rules > span.model { flex: 0 1 auto; min-width: 0; }
+  .rules > span.acts { flex: 0 1 auto; min-width: 0; }
+  .rules .trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .rules .model .fb { margin-left: 4px; }
+  .rules :global(svg) { flex: none; }
+  .rules.toggles { margin-top: -4px; gap: 6px 18px; }
+  @container page (max-width: 760px) { .rules { flex-wrap: wrap; } }
   .rules :global(.ico) { color: var(--faint); }
   .codex-off { margin-left: 4px; font-size: 11px; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 999px; padding: 0 6px; }
   /* 判断模型规则的小开关：标签本身可点，右边一个迷你开关表示开 / 关 */
