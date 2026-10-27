@@ -1,13 +1,13 @@
 <script lang="ts">
   // 托管控制台「需要你」页：左边「全部」+ 有事的站点（带条数），右边按「待你确认 / 失败了 / 上线后待核对」分组，
   // 每条一行，点开看原因并直接处理（看改动、上线、驳回、重试、回滚…，动作和任务队列里的是同一套）。
-  import { escClose } from '$lib/escClose';
+  import DiffModal from './DiffModal.svelte';
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import WhyChips from './WhyChips.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
-  import { ops, acceptItem, dismissItem, workItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
+  import { acceptItem, dismissItem, workItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
@@ -140,13 +140,7 @@
   {/if}
 </div>
 
-{#if ops.diff}
-  <div class="su-mask" role="presentation" onclick={() => (ops.diff = null)}></div>
-  <div class="su modal diff-modal" use:escClose={() => (ops.diff = null)} role="dialog" aria-modal="true" aria-label="改动差异">
-    <header class="sheet-head"><b>{ops.diff.item.opp.title}</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => (ops.diff = null)}>×</button></header>
-    <div class="sheet-body"><pre class="diff">{#each ops.diff.text.split('\n') as l, n (n)}<span class={l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''}>{l}{'\n'}</span>{/each}</pre></div>
-  </div>
-{/if}
+<DiffModal />
 
 <style>
   .stucks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
@@ -205,11 +199,6 @@
   .acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .acts .link-btn { font-size: 11.5px; margin-left: 4px; }
 
-  .diff-modal { width: min(900px, calc(100vw - 32px)); }
-  pre.diff { margin: 0; font-size: 11.5px; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-  pre.diff .add { background: #e8f5ec; color: #135c34; }
-  pre.diff .del { background: #fdecec; color: #8f1d1d; }
-  pre.diff .hunk { color: #2f5fb8; }
 
   @container (max-width: 640px) {
     .nv { grid-template-columns: minmax(0, 1fr); }

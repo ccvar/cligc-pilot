@@ -107,6 +107,23 @@ pub fn pending_across_sites(state: tauri::State<'_, AppState>) -> Vec<PendingIte
     out
 }
 
+/// 托管站点最近 days 天上线过的改动（含之后被回滚的），新的在前：托管页「最近上线」用。
+#[tauri::command]
+pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<PendingItem> {
+    let since = crate::now_secs().saturating_sub(days.unwrap_or(14).min(90) * 86_400);
+    let cfg = crate::managed::load(&state.data_dir);
+    let mut out: Vec<PendingItem> = Vec::new();
+    for s in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
+        for item in crate::site_ops::load_queue(&state.sites.data_dir(&s.id)) {
+            if item.deployed_at >= since && matches!(item.status.as_str(), "deployed" | "rolled_back" | "done") {
+                out.push(PendingItem { site_id: s.id.clone(), site_name: s.name.clone(), item });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.item.deployed_at.cmp(&a.item.deployed_at));
+    out
+}
+
 #[tauri::command]
 pub fn set_site_flags(state: tauri::State<'_, AppState>, id: String, pinned: Option<bool>, tags: Option<Vec<String>>) -> Result<Site, String> {
     let tags = tags.map(|t| crate::sites::normalize_tags(&t)).transpose()?;

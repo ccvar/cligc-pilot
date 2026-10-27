@@ -5074,6 +5074,7 @@ pub fn run() {
             launch_cmds::ga4_accounts,
             fleet_cmds::sites_overview,
             fleet_cmds::pending_across_sites,
+            fleet_cmds::recent_ships,
             fleet_cmds::set_site_flags,
             fleet_cmds::data_sources_overview,
             fleet_cmds::auto_bind_sites,

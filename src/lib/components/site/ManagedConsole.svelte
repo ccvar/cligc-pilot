@@ -18,6 +18,7 @@
   import PlansView from './PlansView.svelte';
   import RunChart from './RunChart.svelte';
   import PlanSpark from './PlanSpark.svelte';
+  import RecentShips from './RecentShips.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
@@ -438,6 +439,7 @@
         </div>
       {/each}
 
+      {#if groups.length}<RecentShips items={managed.ships} />{/if}
       <div class="card oplog" class:open={logOpen} bind:this={logEl}>
         <button class="log-h" onclick={() => (logOpen = !logOpen)} aria-expanded={logOpen}>
           <Icon name="activity" />操作日志
