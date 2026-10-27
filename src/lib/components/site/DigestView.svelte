@@ -117,7 +117,7 @@
 </div>
 
 <style>
-  .dg { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 16px; }
+  .dg { margin-top: 18px; display: flex; flex-direction: column; gap: 16px; }
   .meta { margin: 0; font-size: 12px; color: var(--faint); }
   .meta b { color: var(--text); font-weight: 600; }
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
