@@ -1,5 +1,5 @@
 //! 网站在线监测：每小时打开一次每个站点的首页（打不开连续两次就通知），每天看一眼 HTTPS 证书还有多久过期，
-//! 每周用 RDAP 查一次域名到期日。证书 14 天内、域名 30 天内到期会提醒。只发网络请求，不用 AI。
+//! 每周用 RDAP 查一次域名到期日。证书 14 天内、域名 60 天内到期会提醒。只发网络请求，不用 AI。
 //! 结果存在站点数据目录的 cache/uptime.json。
 
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ const HOUR: u64 = 3600;
 const DAY: u64 = 86_400;
 /// 证书 / 域名还剩多少天开始提醒
 pub const CERT_WARN_DAYS: i64 = 14;
-pub const DOMAIN_WARN_DAYS: i64 = 30;
+pub const DOMAIN_WARN_DAYS: i64 = 60;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Ping {

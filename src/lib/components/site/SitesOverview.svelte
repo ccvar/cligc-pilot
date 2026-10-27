@@ -72,7 +72,7 @@
     `已发 ${c.published} 篇${c.failed ? ` · ${c.failed} 篇发布失败` : ''}`,
     '点一下打开分发',
   ].join('\n');
-  const status = (r: SiteRow) => r.site_down ? { t: '打不开', c: 'err' } : r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.links_broken ? { t: `${r.links_broken} 个推广链接失效`, c: 'err' } : r.cert_err ? { t: '证书有问题', c: 'err' } : r.cert_days != null && r.cert_days <= 14 ? { t: r.cert_days < 0 ? '证书已过期' : `证书 ${r.cert_days} 天后过期`, c: r.cert_days <= 3 ? 'err' : 'warn' } : r.domain_days != null && r.domain_days <= 30 ? { t: r.domain_days < 0 ? '域名已过期' : `域名 ${r.domain_days} 天后到期`, c: r.domain_days <= 7 ? 'err' : 'warn' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
+  const status = (r: SiteRow) => r.site_down ? { t: '打不开', c: 'err' } : r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.links_broken ? { t: `${r.links_broken} 个推广链接失效`, c: 'err' } : r.cert_err ? { t: '证书有问题', c: 'err' } : r.cert_days != null && r.cert_days <= 14 ? { t: r.cert_days < 0 ? '证书已过期' : `证书 ${r.cert_days} 天后过期`, c: r.cert_days <= 3 ? 'err' : 'warn' } : r.domain_days != null && r.domain_days <= 60 ? { t: r.domain_days < 0 ? '域名已过期' : `域名 ${r.domain_days} 天后到期`, c: r.domain_days <= 7 ? 'err' : 'warn' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
 
 {#snippet delta(cur: number, prev: number)}

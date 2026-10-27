@@ -25,9 +25,9 @@ export function clicksChange(r: SiteRow): number {
   const p = r.summary.gsc_clicks_prev;
   return p > 0 ? (r.summary.gsc_clicks - p) / p : 0;
 }
-/** 证书 14 天内、域名 30 天内到期，或证书出错 */
+/** 证书 14 天内、域名 60 天内到期，或证书出错（和 monitor.rs 的提醒天数一致） */
 export function expiring(r: SiteRow): boolean {
-  return !!r.cert_err || (r.cert_days != null && r.cert_days <= 14) || (r.domain_days != null && r.domain_days <= 30);
+  return !!r.cert_err || (r.cert_days != null && r.cert_days <= 14) || (r.domain_days != null && r.domain_days <= 60);
 }
 /** 需要你关注：有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
@@ -95,7 +95,7 @@ function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'links') return String(r.links_broken ?? 0);
   if (k === 'offline') return String(r.down_since ?? 0);
   // 按「哪几样要处理」记：天数每天在变，不能用天数，不然忽略了第二天又冒出来
-  if (k === 'expiry') return `${r.cert_err ? 'e' : ''}${r.cert_days != null && r.cert_days <= 14 ? 'c' : ''}${r.domain_days != null && r.domain_days <= 30 ? 'd' : ''}`;
+  if (k === 'expiry') return `${r.cert_err ? 'e' : ''}${r.cert_days != null && r.cert_days <= 14 ? 'c' : ''}${r.domain_days != null && r.domain_days <= 60 ? 'd' : ''}`;
   if (k === 'dataerr') return r.summary.errors.join('|');
   if (k === 'down') return r.summary.data_end;
   if (k === 'proposed') return String(r.proposed);

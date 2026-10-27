@@ -33,7 +33,7 @@
     return { t: d < 0 ? `${date(t)}（已过期）` : `${date(t)}（还剩 ${d} 天）`, c: d <= 3 ? 'err' : d <= warn ? 'warn' : '' };
   }
   const cert = $derived(m ? expiry(m.cert_expires, m.cert_err, 14) : null);
-  const dom = $derived(m ? expiry(m.domain_expires, m.domain_err, 30) : null);
+  const dom = $derived(m ? expiry(m.domain_expires, m.domain_err, 60) : null);
 </script>
 
 <div class="card mon">
@@ -47,7 +47,7 @@
       <dt>近 7 天</dt>
       <dd>{#if m.uptime < 0}<span class="faint">还没检查过</span>{:else}可用 <b class:err={m.uptime < 0.99}>{(m.uptime * 100).toFixed(m.uptime === 1 ? 0 : 1)}%</b>{#if m.avg_ms} · 平均 {m.avg_ms} 毫秒打开{/if} · 查了 {m.checks} 次{#if m.down && m.last?.err}<div class="err">{m.last.err}</div>{/if}{/if}</dd>
       <dt>HTTPS 证书</dt><dd class={cert?.c} data-tip={m.cert_checked ? `${ago(m.cert_checked)}查的；14 天内到期会提醒` : null}>{cert?.t}</dd>
-      <dt>域名到期</dt><dd class={dom?.c} data-tip={m.domain_checked ? `${ago(m.domain_checked)}查的（公开注册信息 RDAP）；30 天内到期会提醒` : null}>{dom?.t}</dd>
+      <dt>域名到期</dt><dd class={dom?.c} data-tip={m.domain_checked ? `${ago(m.domain_checked)}查的（公开注册信息 RDAP）；60 天内到期会提醒` : null}>{dom?.t}</dd>
     </dl>
   {/if}
 </div>
