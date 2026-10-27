@@ -69,7 +69,7 @@
         <span class="t">{folder.label}</span>
       </button>
     {/if}
-    <p class="foot">也可以直接拖进来，或粘贴截图</p>
+    <p class="foot">也可以直接拖入或粘贴</p>
   </div>
 {/if}
 
