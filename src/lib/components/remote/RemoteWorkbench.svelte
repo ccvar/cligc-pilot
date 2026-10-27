@@ -15,6 +15,7 @@
   import { workbench, reconnectTerm, toggleWbTerm, toggleWbChat, toggleWbFiles, missingSshCredential, repairActiveSshCredential, startWbResize } from '$lib/state/workbench.svelte.js';
   import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
   import AttachButton from '$lib/components/common/AttachButton.svelte';
+  import AttachTray from '$lib/components/common/AttachTray.svelte';
   // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层，和对话输入框一样
   let grown = $state(false);
   const compact = $derived((!launcher.lDraft || !grown) && !launcher.lDraft.includes('\n') && !composer.attachments.length && !composer.attaching);
@@ -87,18 +88,7 @@
           <div class="wb-start composer-wrap">
             <div class="composer" class:compact class:fileover={composer.composerFileOver} role="group" aria-label="远程消息输入"
               ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={onComposerDrop}>
-              {#if composer.attachments.length || composer.attaching}
-                <div class="attach-row">
-                  {#each composer.attachments as a, i (a.path)}
-                    <div class="attach-chip">
-                      {#if a.preview}<img class="attach-img" src={a.preview} alt="" />{:else}<span class="attach-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9 1.8H4.5A1.3 1.3 0 0 0 3.2 3.1v9.8a1.3 1.3 0 0 0 1.3 1.3h7a1.3 1.3 0 0 0 1.3-1.3V5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M9 1.8v3.7h3.8" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg></span>{/if}
-                      <span class="attach-name" title={a.name}>{a.name}</span>
-                      <button class="attach-x" aria-label="移除附件" onclick={() => removeAttachment(i)}>×</button>
-                    </div>
-                  {/each}
-                  {#if composer.attaching}<span class="attach-loading">上传中…</span>{/if}
-                </div>
-              {/if}
+              <AttachTray items={composer.attachments} uploading={composer.attaching} onremove={removeAttachment} />
               <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="1" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
                 oninput={(e) => composerGrown(e.currentTarget, grown, (v) => (grown = v))}
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
@@ -331,14 +321,6 @@
   .th-info small :global(svg), .th-info small :global(img) { vertical-align: -2px; }
   .composer-wrap { flex: none; padding: 10px 24px 20px; }
   .composer-wrap .composer { max-width: 760px; margin: 0 auto; }
-  .attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 2px; }
-  .attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; padding: 3px 4px 3px 6px; background: var(--panel); border: 1px solid var(--border2); border-radius: 8px; font-size: 12px; }
-  .attach-img { width: 24px; height: 24px; object-fit: cover; border-radius: 4px; flex: none; }
-  .attach-ic { color: var(--dim); flex: none; display: inline-flex; }
-  .attach-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-  .attach-x { flex: none; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
-  .attach-x:hover { color: var(--err); }
-  .attach-loading { font-size: 11px; color: var(--dim); }
   .hint { color: var(--dim); font-size: 12px; margin: 2px 0; line-height: 1.6; }
   .warn-text { color: var(--warn); }
 </style>

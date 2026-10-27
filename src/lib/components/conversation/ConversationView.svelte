@@ -20,6 +20,7 @@
   import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
   import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
   import AttachButton from '$lib/components/common/AttachButton.svelte';
+  import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
   import { openSaveTmpl } from '$lib/state/library.svelte.js';
   import { importCfProject } from '$lib/state/launch.svelte.js';
@@ -403,18 +404,7 @@
           <button class="queued-x" aria-label="清除等待消息" onclick={()=>{if(scoped)delete panes.splitQueued[id];else clearQueued();}}>×</button>
         </div>
       {/if}
-      {#if attachments.length}
-        <div class="attach-row">
-          {#each attachments as a, i (a.path)}
-            <div class="attach-chip">
-              {#if a.preview}<img class="attach-img" src={a.preview} alt="" />{:else}<span class="attach-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9 1.8H4.5A1.3 1.3 0 0 0 3.2 3.1v9.8a1.3 1.3 0 0 0 1.3 1.3h7a1.3 1.3 0 0 0 1.3-1.3V5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M9 1.8v3.7h3.8" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg></span>{/if}
-              <span class="attach-name" title={a.name}>{a.name}</span>
-              <button class="attach-x" aria-label="移除附件" onclick={() => {if(paneState)paneState.files=paneState.files.filter((_,n)=>n!==i);else removeAttachment(i);}}>×</button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-      {#if uploading}<span class="attach-loading">上传中…</span>{/if}
+      <AttachTray items={attachments} {uploading} onremove={(i)=>{if(paneState)paneState.files=paneState.files.filter((_,n)=>n!==i);else removeAttachment(i);}} />
       <textarea bind:value={()=>draft,(v)=>scoped?setPaneText(id,v):setLegacyDraft(v)} use:paneInput={scoped?id:''} aria-label={`给 ${context?.title||'当前对话'} 发消息`} rows="1" placeholder={viewBusy ? (compact ? '输入下一条，回车排队' : '输入下一条，回车排队，等这轮结束自动发送') : suggestion ? `${suggestion}（按 Tab 填入）` : compact ? '继续说…（Shift+Enter 换行）' : '继续说…（Enter 发送，Shift+Enter 换行，可粘贴/拖入文件）'}
         oninput={(e)=>watchGrow(e.currentTarget, id||'main')}
         oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
@@ -717,12 +707,6 @@
   .queued-x { flex: none; border: none; background: none; color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 3px; }
   .queued-x:hover { color: var(--err); }
   .send.queue { background: var(--accent); color: #fff; }
-  .attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 2px; }
-  .attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; padding: 3px 4px 3px 6px; background: var(--panel); border: 1px solid var(--border2); border-radius: 8px; font-size: 12px; }
-  .attach-img { width: 24px; height: 24px; object-fit: cover; border-radius: 4px; flex: none; }
-  .attach-ic { color: var(--dim); flex: none; display: inline-flex; }
-  .attach-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-  .attach-x { flex: none; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
   /* 用户气泡里的附件卡（只读，白底衬在浅色气泡上） */
   .ub-atts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .ub-atts.only { margin-top: 0; }
@@ -739,8 +723,6 @@
   @keyframes phpulse { 0%, 100% { opacity: .55; } 50% { opacity: .9; } }
   .ub-att-ic { flex: none; display: inline-flex; color: var(--dim); }
   .ub-att-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-  .attach-x:hover { color: var(--err); }
-  .attach-loading { font-size: 11px; color: var(--dim); }
   .x { background: none; border: none; color: var(--faint); font-size: 20px; cursor: pointer; line-height: 1; }
   .x:hover { color: var(--err); }
   .dim { color: var(--dim); }
