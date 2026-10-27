@@ -66,8 +66,9 @@
 </script>
 
 {#snippet delta(cur: number, prev: number)}
+  <!-- 前 28 天是 0 算不出变化，就不显示 -->
   {@const d = change(cur, prev)}
-  {#if d === 'new'}<span class="dl new" data-tip="前 28 天是 0，没法算涨了多少：可能那时还没有流量，也可能那时还没装统计 / 没接上数据">前期为 0</span>{:else if d !== null && Math.abs(d) >= 0.005}<span class="dl" class:up={d > 0} class:down={d < 0}>{d > 0 ? '↑' : '↓'}{Math.abs(d * 100) >= 100 ? Math.round(Math.abs(d * 100)) : Math.abs(d * 100).toFixed(1)}%</span>{/if}
+  {#if typeof d === 'number' && Math.abs(d) >= 0.005}<span class="dl" class:up={d > 0} class:down={d < 0}>{d > 0 ? '↑' : '↓'}{Math.abs(d * 100) >= 100 ? Math.round(Math.abs(d * 100)) : Math.abs(d * 100).toFixed(1)}%</span>{/if}
 {/snippet}
 
 {#snippet spark(vals: number[])}
@@ -262,7 +263,6 @@
   .th-l { display: inline-flex; align-items: center; gap: 2px; }
   td.num .v { display: block; font-variant-numeric: tabular-nums; }
   .dl { display: block; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .dl.new { color: var(--faint); font-weight: 400; cursor: default; }
   .of { color: var(--faint); font-weight: 400; }
   .bi { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--dim); }
   .c-trend { width: 96px; }
