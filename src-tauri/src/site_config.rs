@@ -26,6 +26,12 @@ pub struct ConfigVar {
     /// Pilot 里没有值，但从线上读到它已经设过（Cloudflare 的密钥只给名字不给值）
     #[serde(default)]
     pub remote: bool,
+    /// 公开变量在 Pilot 里存的值（密钥不带，要看得单独点「显示」）
+    #[serde(default)]
+    pub value: String,
+    /// 上次「从线上读取」时两边的值不一样（保留了 Pilot 的，还没同步上去）
+    #[serde(default)]
+    pub differ: bool,
 }
 
 /// 解析 `.env.example`：变量上方的注释是说明，`[secret]` / `[public]` 标明类别；没标的按名字猜。
@@ -122,11 +128,11 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
     let declared = example_path(site, code).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| parse_example(&t)).unwrap_or_default();
     let mut out: Vec<ConfigVar> = declared
         .into_iter()
-        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true, remote: false })
+        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true, remote: false, value: String::new(), differ: false })
         .collect();
     for k in &site.build.env_keys {
         if !out.iter().any(|v| &v.key == k) {
-            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new(), remote: false });
+            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new(), remote: false, value: String::new(), differ: false });
         }
     }
     out
@@ -191,6 +197,9 @@ pub struct SyncRecord {
     /// 上次「从线上读取」时线上已经设了、但读不到值的变量（Cloudflare 的密钥）
     #[serde(default)]
     pub remote: Vec<String>,
+    /// 上次「从线上读取」时值和线上不一样的变量；同步一次就一致了
+    #[serde(default)]
+    pub differ: Vec<String>,
 }
 
 pub fn load_sync(site_dir: &Path) -> SyncRecord {
@@ -230,9 +239,14 @@ pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
     let target = target_of(site);
     let rec = load_sync(site_dir);
     let mut vars = vars(site, code);
-    if rec.target == target {
-        for v in vars.iter_mut().filter(|v| !v.set) {
-            v.remote = rec.remote.contains(&v.key);
+    let stored = sites::load_env(&site.id);
+    for v in vars.iter_mut() {
+        if rec.target == target {
+            v.remote = !v.set && rec.remote.contains(&v.key);
+            v.differ = v.set && rec.differ.contains(&v.key);
+        }
+        if v.set && !v.secret {
+            v.value = stored.iter().find(|(k, _)| k == &v.key).map(|(_, x)| x.clone()).unwrap_or_default();
         }
     }
     let missing = vars.iter().filter(|v| v.declared && !v.set && v.auto.is_empty() && !v.remote).map(|v| v.key.clone()).collect();
@@ -324,7 +338,7 @@ pub async fn sync(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path) 
         }
         _ => unreachable!(),
     };
-    save_sync(site_dir, &SyncRecord { target: target.into(), hash: values_hash(site, &values), keys: values.iter().map(|(k, _)| k.clone()).collect(), at: crate::now_secs(), remote: rec.remote.iter().filter(|k| !remove.contains(k) && !values.iter().any(|(v, _)| v == *k)).cloned().collect() })?;
+    save_sync(site_dir, &SyncRecord { target: target.into(), hash: values_hash(site, &values), keys: values.iter().map(|(k, _)| k.clone()).collect(), at: crate::now_secs(), remote: rec.remote.iter().filter(|k| !remove.contains(k) && !values.iter().any(|(v, _)| v == *k)).cloned().collect(), differ: vec![] })?;
     Ok(note)
 }
 
@@ -418,6 +432,7 @@ pub fn record_pull(site: &Site, code: &Path, site_dir: &Path, p: &Pulled) -> Res
         rec = SyncRecord { target: target.into(), ..Default::default() };
     }
     rec.remote = p.hidden.clone();
+    rec.differ = p.differ.clone();
     if p.in_sync() {
         let values = effective_values(site, code);
         rec.hash = values_hash(site, &values);
@@ -554,7 +569,7 @@ mod tests {
 
     #[test]
     fn ga_variable_is_found_by_name() {
-        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new(), remote: false };
+        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new(), remote: false, value: String::new(), differ: false };
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID"), v("PUBLIC_GA_ID")]).as_deref(), Some("PUBLIC_GA_ID"));
         assert_eq!(ga_key(&[v("PUBLIC_SITE_URL"), v("PUBLIC_GA4_ID")]).as_deref(), Some("PUBLIC_GA4_ID"));
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID")]).as_deref(), Some("GA_MEASUREMENT_ID"));

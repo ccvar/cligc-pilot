@@ -4998,6 +4998,7 @@ pub fn run() {
             site_cmds::site_config_state,
             site_cmds::site_config_sync,
             site_cmds::site_config_pull,
+            site_cmds::site_config_reveal,
             site_cmds::save_site,
             site_cmds::remove_site,
             site_cmds::site_takedown,

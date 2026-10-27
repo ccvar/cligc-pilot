@@ -624,6 +624,16 @@ pub async fn site_config_pull(state: tauri::State<'_, AppState>, id: String) -> 
     Ok(ConfigPulled { message, site })
 }
 
+/// 配置变量卡上点「显示」：取一个已填变量在 Pilot 里存的值（只给界面看，不进日志、不给 AI）。
+#[tauri::command]
+pub fn site_config_reveal(state: tauri::State<'_, AppState>, id: String, key: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    if !site.build.env_keys.contains(&key) {
+        return Err(format!("{key} 还没有值"));
+    }
+    sites::load_env(&id).into_iter().find(|(k, _)| k == &key).map(|(_, v)| v).ok_or_else(|| format!("钥匙串里没找到 {key} 的值"))
+}
+
 #[derive(Serialize)]
 pub struct ConfigPulled {
     message: String,

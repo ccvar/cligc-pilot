@@ -17,11 +17,19 @@
   let newVal = $state('');
   let syncing = $state(false);
   let pulling = $state(false);
+  // 点「显示」临时取出来的密钥值：离开这张卡、换站点就清掉
+  let shown = $state<Record<string, string>>({});
+  async function reveal(k: string) {
+    if (shown[k] !== undefined) { const n = { ...shown }; delete n[k]; shown = n; return; }
+    try { shown = { ...shown, [k]: await invoke<string>('site_config_reveal', { id: site.id, key: k }) }; }
+    catch (e) { say(String(e), 'err'); }
+  }
+  const hideAll = () => { if (Object.keys(shown).length) shown = {}; };
 
   async function load() {
     try { cs = await invoke<ConfigState>('site_config_state', { id: site.id }); } catch { cs = null; }
   }
-  $effect(() => { void site.id; void site.build.env_keys.length; void site.deploy.mode; void load(); });
+  $effect(() => { void site.id; void site.build.env_keys.length; void site.deploy.mode; shown = {}; void load(); });
 
   async function save(k: string, v: string) {
     if (!v.trim()) return;
@@ -61,7 +69,7 @@
   const dest = $derived(cs?.target === 'vps' ? '服务器' : 'Cloudflare');
 </script>
 
-<div class="card cfg">
+<div class="card cfg" onpointerleave={hideAll} role="group" aria-label="配置变量">
   <h3><Icon name="key" />配置变量<span class="grow"></span>
     {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>{/if}
     {#if cs?.target && cs.vars.length}<button class="btn tiny" class:primary={cs.needs_sync} onclick={sync} disabled={syncing || pulling} data-tip={`写到 ${cs.target_label}；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
@@ -78,9 +86,12 @@
             <span class="mono k">{v.key}</span>
             <span class="tag" class:secret={v.secret}>{tag(v)}</span>
             {#if !v.declared}<span class="tag">手动添加</span>{/if}
+            {#if v.differ}<span class="tag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>{/if}
             <span class="grow"></span>
             {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else if v.remote}<span class="st ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就在这里填新值，同步时会覆盖线上的"><Icon name="check" size={11} />线上已有</span>{:else}<span class="st no">未填</span>{/if}
           </div>
+          {#if v.set && !v.secret}<code class="val" title={v.value}>{v.value || '（空）'}</code>
+          {:else if v.set && v.secret}<div class="val-row">{#if shown[v.key] !== undefined}<code class="val" title={shown[v.key]}>{shown[v.key] || '（空）'}</code>{:else}<code class="val masked">••••••••</code>{/if}<button class="ic-btn eye" class:on={shown[v.key] !== undefined} onclick={() => reveal(v.key)} aria-label={shown[v.key] !== undefined ? `隐藏 ${v.key}` : `显示 ${v.key}`} data-tip={shown[v.key] !== undefined ? '隐藏' : '显示值（鼠标离开这张卡会自动隐藏）'}><Icon name={shown[v.key] !== undefined ? 'eye-off' : 'eye'} size={12} /></button></div>{/if}
           {#if v.desc}<small class="desc">{v.desc}</small>{/if}
           {#if !v.set && v.auto}<small class="auto">自动用 <code>{v.auto}</code>（按站点域名，改域名会跟着变）</small>{/if}
           {#if editing === v.key}
@@ -129,6 +140,12 @@
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
   .tag.secret { background: #f3ecf9; color: #6b3fa0; }
+  .tag.warn { background: #fbf0dc; color: #8a5a08; }
+  .val { align-self: flex-start; max-width: 100%; box-sizing: border-box; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .val.masked { color: var(--faint); letter-spacing: 1px; }
+  .val-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .val-row .val { min-width: 0; }
+  .val-row .eye { width: 22px; height: 22px; }
   .st { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; }
   .st.ok { color: var(--ok); }
   .st.no { color: #8a5a08; }
