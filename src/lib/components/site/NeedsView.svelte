@@ -54,14 +54,14 @@
     <div class="empty"><Icon name="check" size={14} />没有需要你处理的事。<InfoTip text={'这里只放要你动手的：判定不能自动上线的改动、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。'} label="需要你说明" /></div>
   {:else}
     <div class="nv">
-      <nav class="slist" aria-label="站点">
+      <nav class="slist" aria-label="站点"><div class="sl-in">
         <button class="site" class:on={!sel} onclick={() => (picked = '')}><Icon name="inbox" size={14} /><span class="nm">全部</span><span class="pg">{needs.length}</span></button>
         {#each bySite as s (s.id)}
           <button class="site" class:on={sel === s.id} onclick={() => (picked = s.id)}>
             <SiteIcon id={s.id} size={15} /><span class="nm">{s.name}</span>{#if s.bad}<i class="dot" aria-label="有失败"></i>{/if}<span class="pg">{s.n}</span>
           </button>
         {/each}
-      </nav>
+      </div></nav>
 
       <section class="detail">
         <header class="hd"><b class="title">{sel ? bySite.find((s) => s.id === sel)?.name : '全部'}</b><span class="sub">{shown.length} 件事要你处理</span><InfoTip text={'这里只放要你动手的：判定不能自动上线的改动、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。'} label="需要你说明" />
@@ -132,10 +132,12 @@
   .stuck > span { flex: 1; min-width: 0; }
   .stuck .link-btn { flex: none; color: inherit; }
 
-  .nvc { padding: 0; overflow: hidden; container-type: inline-size; }
+  .nvc { padding: 0; overflow: clip; container-type: inline-size; }
   .empty { display: flex; align-items: center; gap: 8px; padding: 16px 18px; font-size: 13px; color: var(--dim); }
   .nv { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
-  .slist { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); max-height: 70vh; overflow-y: auto; }
+  /* 分隔线画在整列上（跟右边一样高）；列表本身滚动时贴在顶上 */
+  .slist { border-right: 1px solid var(--border); min-width: 0; }
+  .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; }
   .site { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; text-align: left; min-width: 0; }
   .site:hover { background: var(--su-hover); color: var(--text); }
   .site.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
@@ -181,7 +183,8 @@
 
   @container (max-width: 640px) {
     .nv { grid-template-columns: minmax(0, 1fr); }
-    .slist { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); max-height: none; }
+    .slist { border-right: 0; border-bottom: 1px solid var(--border); }
+    .sl-in { position: static; flex-direction: row; flex-wrap: wrap; max-height: none; }
     .site { flex: none; }
     .site .nm { flex: none; }
   }
