@@ -386,7 +386,7 @@
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
                   {#if s}
                     <span class="gs-meta">
-                      {#if s.shipped_week}<span class="faint">本周上线 {s.shipped_week}</span>{/if}
+                      {#if s.shipped_week}<button class="ship-l" onclick={() => openSite(id, 'queue', 'live')} data-tip="看这个站点的上线记录（任务队列 · 已上线）">本周上线 {s.shipped_week}</button>{/if}
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
@@ -556,6 +556,8 @@
   .next-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
   .next-t { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
   .next-t :global(svg) { color: var(--ok); }
+  .ship-l { border: 0; background: none; padding: 0; font: inherit; color: var(--faint); cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
+  .ship-l:hover { color: var(--text); text-decoration-color: currentColor; }
   .stuck-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-left: 2px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
