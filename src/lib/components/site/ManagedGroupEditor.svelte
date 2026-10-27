@@ -95,7 +95,18 @@
   const topicCount = $derived((g?.topics ?? '').split('\n').filter((l) => l.trim()).length);
   const canNext = $derived(!!g && !!g.name.trim() && (!isNew || g.sites.length > 0) && (step !== 2 || g.actions.length > 0));
   let lastFor = '';
-  $effect(() => { const k = g ? g.id || 'new' : ''; if (k !== lastFor) { lastFor = k; step = 1; q = ''; } });
+  $effect(() => {
+    const k = g ? g.id || 'new' : '';
+    if (k === lastFor) return;
+    lastFor = k; q = '';
+    // 从方案卡片点「内容准则」进来：直接到第 2 步、光标放进准则框
+    const focus = untrack(() => managed.editorFocus);
+    step = focus === 'guidelines' ? 2 : 1;
+    if (focus) {
+      untrack(() => (managed.editorFocus = ''));
+      if (focus === 'guidelines') requestAnimationFrame(() => { const el = document.getElementById('ge-guide') as HTMLTextAreaElement | null; el?.focus(); el?.scrollIntoView({ block: 'center' }); });
+    }
+  });
   const siteName = (id: string) => sites.list.find((x) => x.id === id)?.name ?? id;
 </script>
 

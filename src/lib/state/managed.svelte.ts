@@ -21,6 +21,8 @@ class ManagedState {
   count = $derived(this.overview?.sites.length ?? 0);
   /** 正在新建 / 编辑的托管方案（弹窗）。 */
   editor = $state<ManagedGroup | null>(null);
+  /** 打开编辑器时直接到哪一步、聚焦哪一栏（比如从方案卡片点「内容准则」）；编辑器读一次就清掉 */
+  editorFocus = $state<'' | 'guidelines'>('');
   /** 托管方案里展开了进度的站点（切走再回来保持展开）。 */
   progress = $state<Set<string>>(new Set());
 }
@@ -150,7 +152,7 @@ export function budgetFull(b?: { changes_used: number; changes_limit: number; to
   return '';
 }
 
-export function editGroup(g: ManagedGroup) { managed.editor = JSON.parse(JSON.stringify(g)); }
+export function editGroup(g: ManagedGroup, focus: '' | 'guidelines' = '') { managed.editorFocus = focus; managed.editor = JSON.parse(JSON.stringify(g)); }
 export async function saveGroup(): Promise<boolean> {
   const g = managed.editor;
   if (!g) return false;

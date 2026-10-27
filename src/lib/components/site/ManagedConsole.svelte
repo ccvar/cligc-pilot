@@ -42,6 +42,11 @@
   });
 
   // 规则摘要里显示模型名：沿用启动页的「服务 + 模型」选项
+  // 内容准则的悬停预览：去掉 Markdown 标题符号和空行，取前几行
+  const guidePreview = (t: string) => {
+    const lines = t.split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).filter(Boolean);
+    return lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n…' : '');
+  };
   const modelLabel = (b: string, m: string) => launcher.comboOpts.find((x) => x.value === `${b}::${m}`)?.label ?? (m || b);
   const siteName = (id: string) => sitesById.get(id)?.name ?? id;
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
@@ -290,7 +295,7 @@
           <div class="rules">
             <span class="model"><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.fallback_brain}<span class="faint fb">备用</span><BrainIcon brain={modelIcon(g.fallback_brain)} size={12} /><span class="trunc faint">{modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 没有逐条确认的钩子：托管时只能改每次改动的工作文件夹、断网运行，推送和上线由 Pilot 执行">断网运行</span>{/if}</span>
             <span class="acts" data-tip={(g.actions ?? []).length === 5 ? '标题描述、内容、内链、新页面、技术问题都可以做' : `可以做：${(g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}`}><Icon name="checks" size={12} /><span class="trunc">{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span></span>
-            {#if g.guidelines?.trim()}<span data-tip="AI 按这份内容准则写"><Icon name="doc" size={12} />有准则</span>{/if}
+            {#if g.guidelines?.trim()}<button type="button" class="rule-link" data-tip={`AI 写作和修改都按这份内容准则来，点一下查看或修改：\n${guidePreview(g.guidelines)}`} onclick={() => editGroup(g, 'guidelines')}><Icon name="doc" size={12} />内容准则</button>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
             <span data-tip={g.new_content === 'auto' ? `AI 写好的新页面检查通过就直接上线${g.min_page_chars ? `；正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : 'AI 写好的新页面等你看过再上线'}><Icon name="file" size={12} />新页{g.new_content === 'auto' ? '自动发' : '人审'}{g.min_page_chars ? ` ≥${g.min_page_chars}字` : ''}</span>
             {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '代码人审', small: '小改代码自动', all: '代码自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
@@ -419,6 +424,8 @@
   .rules > span { display: inline-flex; align-items: center; gap: 5px; flex: none; white-space: nowrap; }
   .rules > span.model { flex: 0 1 auto; min-width: 0; }
   .rules > span.acts { flex: 0 1 auto; min-width: 0; }
+  .rules > .rule-link { flex: none; display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 0; font: inherit; color: inherit; white-space: nowrap; cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
+  .rules > .rule-link:hover { color: var(--text); text-decoration-color: currentColor; }
   .rules .trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .rules .model .fb { margin-left: 4px; }
   .rules :global(svg) { flex: none; }
