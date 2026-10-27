@@ -431,6 +431,42 @@ fn used_targets(state: &AppState, except_site: &str) -> HashMap<String, String> 
     m
 }
 
+/// 全部站点列表里每个渠道的一行简介（图标 + 悬停说明用）。
+#[derive(Serialize, Clone, Debug)]
+pub struct ChannelBrief {
+    pub kind: String,
+    pub target_name: String,
+    pub target_url: String,
+    pub mode: String,
+    pub daily_limit: u32,
+    pub enabled: bool,
+    /// 已发布到这个渠道的文章数
+    pub published: usize,
+    /// 发布失败、还没重发成功的文章数
+    pub failed: usize,
+}
+
+/// 这个站点配了哪些分发渠道（只读本地文件，不联网）。
+pub fn channel_briefs(site_dir: &Path) -> Vec<ChannelBrief> {
+    let f = load(site_dir);
+    f.channels
+        .iter()
+        .map(|c| {
+            let mine = f.deliveries.iter().filter(|d| d.channel_id == c.id);
+            ChannelBrief {
+                kind: c.kind.clone(),
+                target_name: c.target_name.clone(),
+                target_url: c.target_url.clone(),
+                mode: c.mode.clone(),
+                daily_limit: c.daily_limit,
+                enabled: c.enabled,
+                published: mine.clone().filter(|d| d.status == "published").count(),
+                failed: mine.filter(|d| d.status == "failed").count(),
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn syndication_state(state: tauri::State<'_, AppState>, site_id: String) -> Result<SyndicationState, String> {
     let site = state.sites.get(&site_id)?;

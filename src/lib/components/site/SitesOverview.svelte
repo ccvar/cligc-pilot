@@ -8,8 +8,9 @@
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import GaMark from '$lib/components/icons/GaMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
+  import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
-  import type { SiteRow } from '$lib/types';
+  import type { SiteRow, ChannelBrief } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
@@ -62,6 +63,15 @@
     return () => document.removeEventListener('keydown', esc);
   });
   function pickIssue(k: typeof fleet.filter) { fleet.filter = k; fleet.tab = 'sites'; issuesOpen = false; }
+  // 分发渠道图标的悬停说明：平台 · 博客名、发布方式、每天上限、已发几篇（失败几篇）
+  const CH_KIND: Record<string, string> = { blogger: 'Blogger', wordpress: 'WordPress.com', telegram: 'Telegram' };
+  const CH_MODE: Record<string, string> = { manual: '手动', review: '先给我看', draft: '存成草稿', auto: '自动发布' };
+  const chTip = (c: ChannelBrief) => [
+    `${CH_KIND[c.kind] ?? c.kind} · ${c.target_name || c.target_url}`,
+    c.enabled ? `${CH_MODE[c.mode] ?? '先给我看'}${c.mode === 'auto' ? ` · 每天最多 ${c.daily_limit} 篇` : ''}` : '已暂停',
+    `已发 ${c.published} 篇${c.failed ? ` · ${c.failed} 篇发布失败` : ''}`,
+    '点一下打开分发',
+  ].join('\n');
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
 
@@ -163,7 +173,7 @@
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
                     <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={r.summary.errors.length && st.t === '数据源出错' ? r.summary.errors.join('\n') : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
-                    <small><span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github' && r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
+                    <small><span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github' && r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#if r.channels?.length}<span class="chs">{#each r.channels as c, i (i)}<button class="ch" class:off={!c.enabled} class:bad={c.failed > 0} onclick={(e) => { e.stopPropagation(); openSite(r.id, 'distribute'); }} aria-label={chTip(c)} data-tip={chTip(c)}><ConnectionMark kind={c.kind} size={12} /></button>{/each}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
                     {@const sm = r.summary}
@@ -277,6 +287,12 @@
   .spark { display: block; }
   .gh { display: inline-flex; align-items: center; border: 0; background: none; padding: 0; color: var(--faint); cursor: pointer; }
   .gh:hover { color: var(--text); }
+  /* 分发渠道：平台图标一排，暂停的变淡，有发布失败的加个红点 */
+  .chs { display: inline-flex; align-items: center; gap: 4px; }
+  .ch { position: relative; display: inline-flex; align-items: center; border: 0; background: none; padding: 0; cursor: pointer; }
+  .ch.off { opacity: .4; filter: grayscale(1); }
+  .ch.bad::after { content: ''; position: absolute; top: -2px; right: -2px; width: 5px; height: 5px; border-radius: 50%; background: var(--err); }
+  .ch:hover { transform: translateY(-1px); }
   .am { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
   .am::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--border2); }
   .am-auto::before { background: var(--ok); }

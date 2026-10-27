@@ -433,7 +433,10 @@ export interface SiteSummary {
   /** Google 近 28 天有展示的页面数、站点地图提交的网址数、Bing 索引里的网址数 */
   google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
 }
+/** 全部站点列表上的一个分发渠道 */
+export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
 export interface SiteRow {
+  channels?: ChannelBrief[];
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
   level: number;
   /** 所在托管方案名（没托管为空） */
