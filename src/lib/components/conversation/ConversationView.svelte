@@ -18,7 +18,7 @@
   import { permits, permitDesc, togglePermitCmd, respondPermit } from '$lib/state/permits.svelte.js';
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
   import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
-  import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
+  import { legacyComposer, composer, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
   import AttachMenu from '$lib/components/common/AttachMenu.svelte';
   import AttachTray from '$lib/components/common/AttachTray.svelte';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
@@ -34,6 +34,30 @@
   let openUser = $state<Set<string>>(new Set());
   // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层（按分屏的格子各记各的）
   let grown = $state<Record<string, boolean>>({});
+  // 从访达拖文件进来：拖到整条对话（消息区或输入框）上就盖一层「松开即可添加」，松手在哪都加进去（按分屏的格子各记各的）。
+  // dragleave 在子元素之间移动也会触发、relatedTarget 还常常是空的：晚一点再收，期间又来 dragover 就不收。
+  let fileOver = $state<Record<string, boolean>>({});
+  const overTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  function dropOver(e: DragEvent, key: string) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    clearTimeout(overTimers[key]);
+    if (!fileOver[key]) fileOver[key] = true;
+  }
+  function dropLeave(key: string) {
+    clearTimeout(overTimers[key]);
+    overTimers[key] = setTimeout(() => (fileOver[key] = false), 80);
+  }
+  function dropFiles(e: DragEvent, key: string, scoped: boolean, id: string) {
+    clearTimeout(overTimers[key]);
+    fileOver[key] = false;
+    const files = e.dataTransfer?.files;
+    if (!files?.length) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (scoped) void uploadPaneFiles(id, files); else attachFiles(files);
+  }
   function watchGrow(t: HTMLTextAreaElement, key: string) { composerGrown(t, !!grown[key], (v) => (grown[key] = v)); }
   // 消息列表的 key：按时间戳 + 角色（同一秒的重复消息再加序号），中间一条被隐藏时后面的 <details> 展开态、缩略图不会串到别的消息上
   function messageKeys(ms: Message[]): string[] {
@@ -371,7 +395,10 @@
   {@const suggestion=suggestionFor(context,viewBusy)}
   {@const messageKey=messageKeys(messages)}
   {@const compact=(!draft || !grown[id||'main']) && !draft.includes('\n') && !attachments.length && !(queued && queued.convId===activeConvId) && !uploading}
-  <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}>
+  {@const dropKey=id||'main'}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="thread" use:paneScroll={scoped?id:''} onscroll={(e)=>{if(!scoped)onThreadScroll(e);}}
+    ondragover={(e)=>dropOver(e,dropKey)} ondragleave={()=>dropLeave(dropKey)} ondrop={(e)=>dropFiles(e,dropKey,scoped,id)}>
     <div class="thread-inner" >
       {#each messages as m, i (messageKey[i])}
         {@render bubble(m, i === messages.length - 1,context)}
@@ -383,7 +410,8 @@
     {#if scoped && panes.splitErrors[id]}<p class="pane-error" role="alert">{panes.splitErrors[id]}</p>{/if}
   </div>
 
-  <div class="composer-wrap">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="composer-wrap" ondragover={(e)=>dropOver(e,dropKey)} ondragleave={()=>dropLeave(dropKey)} ondrop={(e)=>dropFiles(e,dropKey,scoped,id)}>
     {#if activeConvIsCf}
       <div class="cf-bar">
         <span class="tipwrap" data-tip={cfReady ? '在本机跑起来看效果（关预览窗即停）' : '先让 AI 建出页面再预览'}><button class="cb-prev" onclick={()=>scoped?panePrefill(id,()=>void startPreview()):void startPreview()} disabled={cf.previewBusy || !cfReady}><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M1.6 8s2.4-4.4 6.4-4.4S14.4 8 14.4 8s-2.4 4.4-6.4 4.4S1.6 8 1.6 8Z" stroke="currentColor" stroke-width="1.2" /><circle cx="8" cy="8" r="1.9" stroke="currentColor" stroke-width="1.2" /></svg>{cf.previewBusy ? '启动中…' : '预览'}</button></span>
@@ -392,10 +420,7 @@
         <span class="tipwrap" data-tip={cfReady ? '变成一个站点：接 GitHub、域名、GA4 / Search Console 数据，开始运营' : '先让 AI 建出页面'}><button class="cb-prev dim" onclick={()=>context && void importCfProject(context.conn_id, context.site_slug)} disabled={!cfReady || viewBusy}><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="6.6" stroke="currentColor" stroke-width="1.5" /><path d="M3.6 10h12.8M10 3.4c1.9 1.8 2.9 4.1 2.9 6.6s-1 4.8-2.9 6.6M10 3.4C8.1 5.2 7.1 7.5 7.1 10s1 4.8 2.9 6.6" stroke="currentColor" stroke-width="1.3" /></svg>转为站点</button></span>
       </div>
     {/if}
-    <div class="composer" class:compact class:fileover={!scoped&&composer.composerFileOver} role="group" aria-label="消息输入"
-      ondragover={(e)=>{if(scoped){if(e.dataTransfer?.types.includes('Files'))e.preventDefault();}else onComposerDragOver(e);}}
-      ondragleave={(e)=>{if(!scoped)onComposerDragLeave(e);}}
-      ondrop={(e)=>{if(scoped&&e.dataTransfer?.files.length){e.preventDefault();e.stopPropagation();void uploadPaneFiles(id,e.dataTransfer.files);}else if(!scoped)onComposerDrop(e);}}>
+    <div class="composer" class:compact class:fileover={fileOver[dropKey]} role="group" aria-label="消息输入">
       {#if queued && queued.convId === activeConvId}
         <div class="queued-row">
           <span class="queued-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.3" /><path d="M8 4.7V8l2.2 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
@@ -446,6 +471,16 @@
     </div>
     {#if meta.conn?.kind==='github' && activeConv?.brain==='codex'}<p class="gh-codex-note">{CODEX_GITHUB_NOTE}</p>{/if}
   </div>
+  <!-- 拖文件进来时盖住整个对话格子（父级 .pane / .main 都是定位容器）；不吃鼠标事件，拖放照样落在下面的消息区 / 输入框上 -->
+  {#if fileOver[dropKey]}
+    <div class="drop-veil" aria-hidden="true">
+      <div class="dv-box">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /><path d="M4.5 14.5v3a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+        <b>松开即可添加到对话</b>
+        <small>图片、文档、代码文件都可以，单个不超过 25MB</small>
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
 <style>
@@ -483,11 +518,11 @@
   .composer-wrap .composer { position: relative; background: #fff; border: 1px solid var(--border2); border-radius: 12px; box-shadow: none; transition: border-color .12s, box-shadow .12s; }
   .composer-wrap .composer:focus-within { border-color: #b7b2a6; box-shadow: none; }
   .composer-wrap .composer.fileover { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
-  .composer-wrap .composer.fileover::after {
-    content: '松开即可添加文件'; position: absolute; inset: 4px; z-index: 8; display: flex; align-items: center; justify-content: center;
-    border: 1px dashed color-mix(in srgb, var(--accent) 58%, transparent); border-radius: 9px;
-    background: color-mix(in srgb, #fff 92%, var(--accent)); color: var(--accent); font-size: 13px; font-weight: 600; pointer-events: none;
-  }
+  .drop-veil { position: absolute; inset: 0; z-index: 40; display: flex; padding: 12px; pointer-events: none; background: color-mix(in srgb, var(--bg, #faf9f6) 72%, transparent); backdrop-filter: blur(1.5px); animation: dvin .12s ease-out; }
+  .dv-box { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border: 2px dashed color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 16px; background: color-mix(in srgb, var(--accent) 6%, transparent); color: var(--accent); text-align: center; }
+  .dv-box b { font-size: 15px; font-weight: 600; }
+  .dv-box small { color: var(--dim); font-size: 12px; }
+  @keyframes dvin { from { opacity: 0; } to { opacity: 1; } }
   .composer-wrap textarea { width: 100%; resize: none; border: none; background: none; box-shadow: none; padding: 14px 52px 14px 17px; font-size: 14px; line-height: 1.6; max-height: 200px; display: block; }
   .composer-wrap textarea:focus { outline: none; box-shadow: none; border: none; }
   .composer .send { position: absolute; right: 9px; bottom: 9px; width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .12s, transform .08s; }

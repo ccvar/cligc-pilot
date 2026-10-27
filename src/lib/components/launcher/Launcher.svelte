@@ -29,7 +29,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="center launch-center" data-tauri-drag-region onmousedown={startDrag}>
-  <div class="launcher">
+  <!-- 拖文件到起始页任何地方都算（输入框亮起来提示松手），不必瞄准输入框 -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="launcher" ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={(e) => onComposerDrop(e, true)}>
     {#if app.isSitesHub}
       <h1>想让它在{hubSite ? `「${hubSite.name}」` : '哪个站点'}里做点什么？</h1>
       <p class="sub">在左下角选站点。它能改这个站点的代码、查 GA4 / Search Console / Bing 数据；上线由 Pilot 在站点页执行，模型拿不到 Cloudflare 凭据。</p>
@@ -50,9 +52,7 @@
       <p class="sub">像聊天一样把需求说清楚；需要处理文件时，可以接入一个本地文件夹。</p>
     {/if}
 
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="composer big" class:fileover={composer.composerFileOver}
-        ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={(e) => onComposerDrop(e, true)}>
+      <div class="composer big" class:fileover={composer.composerFileOver}>
           <AttachTray items={composer.attachments} uploading={composer.attaching} onremove={removeAttachment} />
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
             placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
