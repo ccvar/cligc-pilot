@@ -177,7 +177,7 @@
   .fname-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: default; }
   .file-rename { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
   .file-rename input { min-width: 0; width: 100%; box-sizing: border-box; border: 1px solid var(--border2); border-radius: 3px; padding: 1px 3px; background: var(--bg, white); color: var(--text); font: inherit; }
-  .file-rename input:focus { outline: 1px solid var(--dim); }
+  .file-rename input:focus { outline: 1px solid #b7b2a6; }
   .file-rename small { color: #c53b32; font-size: 11px; white-space: normal; }
   .fdelete-state { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
   .fdelete-spin { width: 9px; height: 9px; border: 1.4px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: rspin .7s linear infinite; }

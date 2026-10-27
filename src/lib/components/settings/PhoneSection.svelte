@@ -237,7 +237,7 @@
   .g-btn { display: inline-flex; align-items: center; gap: 5px; }
   .mail-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px 31px; border-top: 1px solid #f1f0ec; }
   .mi { height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--border2); border-radius: 7px; outline: none; background: #fff; color: var(--text); font: inherit; font-size: 12.5px; }
-  .mi:focus { border-color: #c7a599; }
+  .mi:focus { border-color: #b7b2a6; }
   .hint { margin: 0; color: var(--dim); font-size: 11.5px; line-height: 1.6; }
   .lnk { border: none; background: none; padding: 0; font: inherit; color: #1a73e8; cursor: pointer; }
   .lnk:hover { text-decoration: underline; }

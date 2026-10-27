@@ -277,7 +277,7 @@
   input:not([type="checkbox"]),textarea { box-sizing:border-box; width:100%; min-width:0; border:1px solid var(--border2,#e1dfd8); border-radius:8px; color:var(--text); background:var(--bg,#fff); font:inherit; font-size:12px; outline:none; }
   input:not([type="checkbox"]) { height:30px; padding:0 9px; }
   textarea { padding:7px 9px; line-height:1.5; resize:vertical; min-height:50px; max-height:160px; }
-  input:focus,textarea:focus { border-color:var(--accent); }
+  input:focus,textarea:focus { border-color: #b7b2a6; }
   input:disabled,textarea:disabled { opacity:.55; }
   input::placeholder,textarea::placeholder { color:var(--faint); }
   .field-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
@@ -307,7 +307,8 @@
   .editor-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
   .editor-footer > span { color:var(--faint); font-size:10px; line-height:1.4; }
   .editor-footer > div { display:flex; align-items:center; gap:6px; flex:none; }
-  .button { height:27px; border:1px solid var(--border2); border-radius:7px; background:transparent; padding:0 10px; color:var(--text); font:inherit; font-size:11.5px; cursor:pointer; }
+  /* 和设置里的小按钮（.btn.small）一样：圆角 8px、12px 字 */
+  .button { height:27px; border:1px solid var(--border2); border-radius:8px; background:transparent; padding:0 10px; color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
   .button:hover:not(:disabled) { background:var(--rail); }
   .button.primary { color:#fff; background:var(--accent); border-color:var(--accent); }
   .button.primary:hover:not(:disabled) { background:var(--accent-h); }

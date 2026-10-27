@@ -575,7 +575,7 @@
   .gq { position: relative; display: flex; align-items: center; width: min(220px, 100%); color: var(--faint); }
   .gq :global(svg) { position: absolute; left: 9px; pointer-events: none; }
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
-  .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
+  .gq input:focus { border-color: #b7b2a6; }
   .gq-n { font-size: 12px; }
   /* 下一次运行：放在右边（方案标题上是箭头左边的绿色小胶囊，站点行在「…」和开关左边），一列对齐好扫 */
   .next-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }

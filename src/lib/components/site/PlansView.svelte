@@ -191,7 +191,7 @@
   .sq { position: sticky; top: -10px; z-index: 1; display: block; margin: -10px 0 4px; padding: 10px 0 6px; background: var(--card); color: var(--faint); }
   .sq :global(svg) { position: absolute; left: 9px; top: 50%; margin-top: -4px; pointer-events: none; }
   .sq input { display: block; width: 100%; height: 28px; padding: 0 8px 0 28px; border: 1px solid var(--border2); border-radius: 7px; background: transparent; font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
-  .sq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
+  .sq input:focus { border-color: #b7b2a6; }
   .none { margin: 6px 8px; font-size: 12px; color: var(--faint); }
   .site { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; text-align: left; min-width: 0; }
   .site:hover { background: var(--su-hover); color: var(--text); }

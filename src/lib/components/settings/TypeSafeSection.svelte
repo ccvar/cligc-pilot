@@ -141,11 +141,12 @@
   .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
   .field > span { color:var(--dim); font-size:11px; }
   input:not([type="checkbox"]) { box-sizing:border-box; width:100%; height:30px; padding:0 9px; border:1px solid var(--border2,#e1dfd8); border-radius:8px; color:var(--text); background:var(--bg,#fff); font:inherit; font-size:12px; outline:none; }
-  input:focus { border-color:var(--accent); }
+  input:focus { border-color: #b7b2a6; }
   .where { margin:0; color:var(--faint); font-size:10.5px; line-height:1.5; }
   .foot { display:flex; align-items:center; gap:6px; }
   .grow { flex:1; }
-  .button { height:27px; border:1px solid var(--border2); border-radius:7px; background:transparent; padding:0 10px; color:var(--text); font:inherit; font-size:11.5px; cursor:pointer; }
+  /* 和设置里的小按钮（.btn.small）一样：圆角 8px、12px 字 */
+  .button { height:27px; border:1px solid var(--border2); border-radius:8px; background:transparent; padding:0 10px; color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
   .button:hover:not(:disabled) { background:var(--rail); }
   .button:disabled { opacity:.45; cursor:default; }
   .button.primary { color:#fff; background:var(--accent); border-color:var(--accent); }

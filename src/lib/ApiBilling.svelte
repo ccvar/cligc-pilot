@@ -158,7 +158,7 @@
   .key-form label { display:block; color:var(--dim); margin-bottom:4px; }
   .key-input { display:flex; gap:5px; min-width:0; }
   input { box-sizing:border-box; min-width:0; flex:1; height:28px; border:1px solid var(--border2); border-radius:7px; padding:0 8px; background:var(--bg,#fff); color:var(--text); font:inherit; outline:none; }
-  input:focus { border-color:var(--accent); }
+  input:focus { border-color: #b7b2a6; }
   input::placeholder { color:var(--faint); }
   .save { flex:none; border:1px solid var(--border2); background:var(--bg,#fff); color:var(--text); border-radius:7px; padding:0 8px; }
   .save:hover:not(:disabled) { background:var(--rail); }

@@ -69,7 +69,7 @@
   .setup ol { margin: 0; padding-left: 16px; color: var(--dim); font-size: 11.5px; line-height: 1.7; }
   .setup code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #f3f2ee; padding: 1px 4px; border-radius: 4px; color: var(--text); user-select: all; }
   .mi { height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--border2); border-radius: 7px; outline: none; background: #fff; color: var(--text); font: inherit; font-size: 12.5px; }
-  .mi:focus { border-color: #c7a599; }
+  .mi:focus { border-color: #b7b2a6; }
   .act { display: flex; justify-content: flex-end; gap: 6px; }
   .lnk { border: none; background: none; padding: 0; font: inherit; color: #1a73e8; cursor: pointer; }
   .lnk:hover { text-decoration: underline; }

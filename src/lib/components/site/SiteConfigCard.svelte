@@ -226,7 +226,7 @@
   /* 宽度跟着内容走（等宽字体，按字符数算），最少 18 个字符宽，最多到这一列的宽度 */
   .efield { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
   .efield:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
-  .efield:focus-within { border-color: color-mix(in srgb, var(--border2) 25%, var(--dim)); }
+  .efield:focus-within { border-color: #b7b2a6; }
   .ein { flex: 0 1 auto; min-width: 0; max-width: 100%; text-align: left; height: 100%; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12px; outline: none; -webkit-appearance: none; appearance: none; }
   .ein::placeholder { color: var(--faint); }
   .in-eye { flex: none; width: 22px; height: 22px; margin-right: 1px; }

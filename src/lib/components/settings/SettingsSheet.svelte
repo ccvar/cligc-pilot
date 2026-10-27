@@ -427,7 +427,7 @@
   .claude-token-copy code { padding: 1px 4px; border-radius: 4px; background: #efede7; color: var(--text); font: 500 9.5px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
   .claude-token-entry { display: flex; align-items: center; gap: 6px; }
   .claude-token-entry input { min-width: 0; flex: 1; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--border2); border-radius: 7px; outline: none; background: #fff; color: var(--text); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .claude-token-entry input:focus { border-color: #c7a599; }
+  .claude-token-entry input:focus { border-color: #b7b2a6; }
   .claude-token-entry .btn { flex: none; }
   /* 状态点放进与 .icon-btn 同宽(27px)的居中盒，右缘、图标中心都与本地模型区的刷新图标对齐。 */
   .brain-dot { flex: none; width: 27px; display: inline-flex; align-items: center; justify-content: center; }
