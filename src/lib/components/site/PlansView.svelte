@@ -28,6 +28,8 @@
   }
 
   let picked = $state('');
+  let q = $state('');
+  const shownSites = $derived.by(() => { const k = q.trim().toLowerCase(); return k ? sites.filter((s) => s.name.toLowerCase().includes(k) || s.domain?.toLowerCase().includes(k)) : sites; });
   const cur = $derived(sites.find((s) => s.id === picked) ?? sites.find((s) => progress(planOf(s.id)).tone) ?? sites[0]);
   const p = $derived(cur ? planOf(cur.id) : undefined);
   const prog = $derived(progress(p));
@@ -60,7 +62,9 @@
 
 <div class="card pvc"><div class="pv">
   <nav class="slist" aria-label="站点"><div class="sl-in">
-    {#each sites as s (s.id)}
+    <!-- 搜索固定在列表顶上：列表滚动时一直在 -->
+    <label class="sq"><Icon name="search" size={13} /><input type="search" bind:value={q} placeholder="搜索站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') q = ''; }} /></label>
+    {#each shownSites as s (s.id)}
       {@const sp = planOf(s.id)}
       {@const g = progress(sp)}
       <button class="site" class:on={cur?.id === s.id} onclick={() => (picked = s.id)} aria-current={cur?.id === s.id}>
@@ -70,7 +74,7 @@
         {#if g.tone}<i class="dot {g.tone}" aria-label={g.tone === 'err' ? '有失败' : '有要你处理的'}></i>{/if}
         <span class="pg">{sp ? `${g.done}/${g.total}` : '—'}</span>
       </button>
-    {/each}
+    {:else}<p class="none">没有匹配「{q.trim()}」的站点</p>{/each}
   </div></nav>
 
   {#if cur}
@@ -141,6 +145,11 @@
   /* 分隔线画在整列上（跟右边一样高）；列表本身滚动时贴在顶上 */
   .slist { border-right: 1px solid var(--border); min-width: 0; }
   .sl-in { position: sticky; top: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; max-height: 80vh; overflow-y: auto; }
+  .sq { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; gap: 6px; margin: -10px -8px 4px; padding: 10px 8px 6px; background: var(--card); color: var(--faint); }
+  .sq input { flex: 1; min-width: 0; height: 28px; padding: 0 8px 0 26px; margin-left: -25px; border: 1px solid var(--border2); border-radius: 7px; background: transparent; font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
+  .sq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
+  .sq :global(svg) { position: relative; left: 8px; flex: none; pointer-events: none; }
+  .none { margin: 6px 8px; font-size: 12px; color: var(--faint); }
   .site { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; text-align: left; min-width: 0; }
   .site:hover { background: var(--su-hover); color: var(--text); }
   .site.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
@@ -194,6 +203,7 @@
     .pv { grid-template-columns: minmax(0, 1fr); }
     .slist { border-right: 0; border-bottom: 1px solid var(--border); }
     .sl-in { position: static; flex-direction: row; flex-wrap: wrap; max-height: none; }
+    .sq { position: static; flex-basis: 100%; margin: 0 0 4px; padding: 0; }
     .site { flex: none; }
     .site .nm { flex: none; }
   }
