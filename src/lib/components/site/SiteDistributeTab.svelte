@@ -338,24 +338,25 @@
       {#if edit}<div class="ed-box">{@render editor(edit)}</div>{/if}
     {/if}
     {#if st && !brainOk}<p class="hint warn">写摘要用站点「设置 → 运营」里的模型服务，现在是 {st.brain || '未设置'}，不支持：请改成 Claude Code 或 API 连接。</p>{/if}
-  </div>
-
-  <div class="card">
-    <h3><Icon name="wand" />摘要设置<span class="grow"></span>
-      {#if sdOpen}
-        <button class="btn tiny quiet" onclick={cancelSettings}>取消</button><button class="btn tiny primary" onclick={saveSettings} disabled={sdSaving || !sdDirty}>{sdSaving ? '保存中…' : '保存'}</button>
-      {:else}
+    <!-- 摘要设置（所有渠道共用）：一行收在渠道卡片底部，点「调整」在这里展开 -->
+    <div class="sd-row">
+      <span class="sd-lbl"><Icon name="wand" size={13} />摘要</span>
+      {#if !sdOpen}
+        {@const v = st?.settings}
+        <p class="sd-sum">
+          <span class="pill-l">{lenText(v?.length ?? '')}</span>
+          <span class:dim={!v?.extra}>{v?.extra ? `补充要求：${v.extra}` : '没有补充要求'}</span>
+          <span class:warnt={v?.referral_on} class:dim={!v?.referral_on}>{v?.referral_on ? '带推广链接' : '不带推广链接'}</span>
+        </p>
+        <span class="grow"></span>
         <button class="btn tiny quiet" onclick={() => (sdOpen = true)}><Icon name="sliders" size={12} />调整</button>
+      {:else}
+        <span class="sd-note">所有渠道共用</span>
+        <span class="grow"></span>
+        <button class="btn tiny quiet" onclick={cancelSettings}>取消</button><button class="btn tiny primary" onclick={saveSettings} disabled={sdSaving || !sdDirty}>{sdSaving ? '保存中…' : '保存'}</button>
       {/if}
-    </h3>
-    {#if !sdOpen}
-      {@const v = st?.settings}
-      <p class="sd-sum">
-        <span class="pill-l">{lenText(v?.length ?? '')}</span>
-        <span class:dim={!v?.extra}>{v?.extra ? `补充要求：${v.extra}` : '没有补充要求'}</span>
-        <span class:warnt={v?.referral_on} class:dim={!v?.referral_on}>{v?.referral_on ? '带推广链接' : '不带推广链接'}</span>
-      </p>
-    {:else}
+    </div>
+    {#if sdOpen}
     <div class="grid sg">
       <span class="lbl">长度</span>
       <span class="seg">
@@ -493,6 +494,13 @@
   .sg .seg { justify-self: start; margin: 0; }
   .sg .ck { padding-top: 4px; }
   .ref { display: flex; flex-direction: column; gap: 6px; }
+  .sd-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); min-width: 0; }
+  .sd-lbl { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .sd-lbl :global(.ico) { color: var(--dim); }
+  .sd-note { font-size: 12px; color: var(--faint); }
+  .sd-row > .grow { flex: 1; }
+  .sd-row + .grid.sg { margin-top: 10px; }
+  .sd-row .sd-sum { margin: 0; flex: 0 1 auto; }
   .sd-sum { margin: 2px 0 0; display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text); min-width: 0; }
   .sd-sum > span:not(.pill-l) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .sd-sum .dim { color: var(--faint); }
