@@ -32,6 +32,9 @@ pub struct ConfigVar {
     /// 上次「从线上读取」时两边的值不一样（保留了 Pilot 的，还没同步上去）
     #[serde(default)]
     pub differ: bool,
+    /// 有值，但这个值还没同步到部署目标（改过、新加的，或者从没同步过）
+    #[serde(default)]
+    pub pending: bool,
 }
 
 /// 解析 `.env.example`：变量上方的注释是说明，`[secret]` / `[public]` 标明类别；没标的按名字猜。
@@ -128,11 +131,11 @@ pub fn vars(site: &Site, code: &Path) -> Vec<ConfigVar> {
     let declared = example_path(site, code).and_then(|p| std::fs::read_to_string(p).ok()).map(|t| parse_example(&t)).unwrap_or_default();
     let mut out: Vec<ConfigVar> = declared
         .into_iter()
-        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true, remote: false, value: String::new(), differ: false })
+        .map(|(key, desc, secret)| ConfigVar { set: site.build.env_keys.contains(&key), auto: derived(site, &key).unwrap_or_default(), key, desc, secret, declared: true, remote: false, value: String::new(), differ: false, pending: false })
         .collect();
     for k in &site.build.env_keys {
         if !out.iter().any(|v| &v.key == k) {
-            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new(), remote: false, value: String::new(), differ: false });
+            out.push(ConfigVar { key: k.clone(), desc: String::new(), secret: undeclared_secret(k), declared: false, set: true, auto: String::new(), remote: false, value: String::new(), differ: false, pending: false });
         }
     }
     out
@@ -200,6 +203,9 @@ pub struct SyncRecord {
     /// 上次「从线上读取」时值和线上不一样的变量；同步一次就一致了
     #[serde(default)]
     pub differ: Vec<String>,
+    /// 每个变量同步上去的值的指纹（不存值）：单个变量也能同步，各自判断有没有改过
+    #[serde(default)]
+    pub vals: std::collections::BTreeMap<String, String>,
 }
 
 pub fn load_sync(site_dir: &Path) -> SyncRecord {
@@ -222,6 +228,24 @@ pub fn values_hash(site: &Site, values: &[(String, String)]) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// 一个变量值的指纹：同步目标 + 键 + 值。
+fn value_fp(site: &Site, k: &str, v: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(format!("{}|{}|{}|{k}={v}", target_of(site), site.deploy.project, env_file(site)));
+    format!("{:x}", h.finalize())[..16].to_string()
+}
+
+/// 已经同步上去的值的指纹。早先的记录只有整体指纹：和现在的值一致就当全部同步过。
+fn synced_fps(site: &Site, rec: &SyncRecord, values: &[(String, String)]) -> std::collections::BTreeMap<String, String> {
+    if rec.target != target_of(site) {
+        return Default::default();
+    }
+    if rec.vals.is_empty() && !rec.hash.is_empty() && rec.hash == values_hash(site, values) {
+        return values.iter().map(|(k, v)| (k.clone(), value_fp(site, k, v))).collect();
+    }
+    rec.vals.clone()
+}
+
 #[derive(Serialize, Clone)]
 pub struct ConfigState {
     pub vars: Vec<ConfigVar>,
@@ -233,6 +257,8 @@ pub struct ConfigState {
     pub needs_sync: bool,
     pub synced_at: u64,
     pub env_file: String,
+    /// 以前同步过、现在 Pilot 里删掉了的：下次整体同步会从部署目标那边删掉
+    pub will_remove: Vec<String>,
 }
 
 pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
@@ -240,7 +266,10 @@ pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
     let rec = load_sync(site_dir);
     let mut vars = vars(site, code);
     let stored = sites::load_env(&site.id);
+    let values = effective_values(site, code);
+    let fps = synced_fps(site, &rec, &values);
     for v in vars.iter_mut() {
+        v.pending = !target.is_empty() && values.iter().find(|(k, _)| k == &v.key).is_some_and(|(k, x)| fps.get(k) != Some(&value_fp(site, k, x)));
         if rec.target == target {
             v.remote = !v.set && rec.remote.contains(&v.key);
             v.differ = v.set && rec.differ.contains(&v.key);
@@ -250,11 +279,11 @@ pub fn state(site: &Site, code: &Path, site_dir: &Path) -> ConfigState {
         }
     }
     let missing = vars.iter().filter(|v| v.declared && !v.set && v.auto.is_empty() && !v.remote).map(|v| v.key.clone()).collect();
-    let values = effective_values(site, code);
-    let changed = rec.target != target || rec.hash != values_hash(site, &values);
-    // 删光了但以前同步过：也要同步一次（把那边的删掉）
-    let needs_sync = !target.is_empty() && (!values.is_empty() || !rec.keys.is_empty()) && changed;
-    ConfigState { vars, missing, target: target.into(), target_label: target_label(site), needs_sync, synced_at: rec.at, env_file: if target == "vps" { env_file(site) } else { String::new() } }
+    let will_remove: Vec<String> = if rec.target == target { rec.keys.iter().filter(|k| !values.iter().any(|(v, _)| v == *k)).cloned().collect() } else { vec![] };
+    // 有没同步的值，或者删掉了但以前同步过（要把那边的删掉）
+    let pending = values.iter().any(|(k, v)| fps.get(k) != Some(&value_fp(site, k, v)));
+    let needs_sync = !target.is_empty() && (pending || !will_remove.is_empty());
+    ConfigState { vars, missing, target: target.into(), target_label: target_label(site), needs_sync, synced_at: rec.at, env_file: if target == "vps" { env_file(site) } else { String::new() }, will_remove }
 }
 
 /// 合并写服务器上的 env 文件：Pilot 管的键替换或追加，删掉的键去掉，其它行原样保留。
@@ -338,7 +367,73 @@ pub async fn sync(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path) 
         }
         _ => unreachable!(),
     };
-    save_sync(site_dir, &SyncRecord { target: target.into(), hash: values_hash(site, &values), keys: values.iter().map(|(k, _)| k.clone()).collect(), at: crate::now_secs(), remote: rec.remote.iter().filter(|k| !remove.contains(k) && !values.iter().any(|(v, _)| v == *k)).cloned().collect(), differ: vec![] })?;
+    save_sync(
+        site_dir,
+        &SyncRecord {
+            target: target.into(),
+            hash: values_hash(site, &values),
+            keys: values.iter().map(|(k, _)| k.clone()).collect(),
+            at: crate::now_secs(),
+            remote: rec.remote.iter().filter(|k| !remove.contains(k) && !values.iter().any(|(v, _)| v == *k)).cloned().collect(),
+            differ: vec![],
+            vals: values.iter().map(|(k, v)| (k.clone(), value_fp(site, k, v))).collect(),
+        },
+    )?;
+    Ok(note)
+}
+
+/// 只同步一个变量（写这一个，其它变量和那边已有的都不动）。Worker 的公开变量随每次上线带上，没法单独写。
+pub async fn sync_one(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Path, key: &str) -> Result<String, String> {
+    let target = target_of(site);
+    if target.is_empty() {
+        return Err("还没配置部署：配置变量只在 Pilot 构建时使用".into());
+    }
+    let values = effective_values(site, code);
+    let (k, v) = values.iter().find(|(k, _)| k == key).cloned().ok_or_else(|| format!("{key} 还没有值，没法同步"))?;
+    let secret = secret_map(site, code).get(&k).copied().unwrap_or(true);
+    let note = match target {
+        "pages" | "workers" => {
+            if target == "workers" && !secret {
+                return Err(format!("{k} 是 Worker 的公开变量，会在每次上线时随部署带上，没法单独同步"));
+            }
+            let cf = conns.get(&site.deploy.cf_conn_id).map_err(|_| "请先在站点设置里选择 Cloudflare 连接".to_string())?;
+            let token = crate::keychain::get_key(&cf.id)?;
+            if site.deploy.project.trim().is_empty() {
+                return Err("请先在站点设置里填写 Pages 项目 / Worker 名称".into());
+            }
+            if target == "pages" {
+                if crate::cf::get_pages_project(&token, &cf.account_id, &site.deploy.project).await?.is_none() {
+                    return Err(format!("Pages 项目「{}」还没建：先在上线向导里创建，或上线一次", site.deploy.project));
+                }
+                crate::cf::set_pages_env(&token, &cf.account_id, &site.deploy.project, &[(k.clone(), v.clone(), secret)], &[]).await?;
+                format!("已把 {k} 写入 Pages 项目「{}」（生产和预览）", site.deploy.project)
+            } else {
+                crate::cf::put_worker_secret(&token, &cf.account_id, &site.deploy.project, &k, &v)
+                    .await
+                    .map_err(|e| if e.contains("404") || e.contains("10007") { format!("Worker「{}」还没上线过：先上线一次再同步密钥", site.deploy.project) } else { e })?;
+                format!("已把 {k} 写入 Worker「{}」的密钥", site.deploy.project)
+            }
+        }
+        "vps" => {
+            let ssh = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接".to_string())?;
+            write_server_env(&ssh, &env_file(site), &[(k.clone(), v.clone())], &[]).await?;
+            format!("已把 {k} 写入服务器上的 {}（其它行原样保留）", env_file(site))
+        }
+        _ => unreachable!(),
+    };
+    let mut rec = load_sync(site_dir);
+    rec.vals = synced_fps(site, &rec, &values);
+    if rec.target != target {
+        rec = SyncRecord { target: target.into(), ..Default::default() };
+    }
+    rec.vals.insert(k.clone(), value_fp(site, &k, &v));
+    if !rec.keys.contains(&k) {
+        rec.keys.push(k.clone());
+    }
+    rec.differ.retain(|x| x != &k);
+    rec.remote.retain(|x| x != &k);
+    rec.at = crate::now_secs();
+    save_sync(site_dir, &rec)?;
     Ok(note)
 }
 
@@ -374,7 +469,7 @@ pub struct Pulled {
     /// Pilot 里没有、线上有值：填进 Pilot
     pub fill: Vec<(String, String)>,
     /// 两边一样
-    pub same: usize,
+    pub same: Vec<String>,
     /// 两边都有、但不一样（保留 Pilot 的，下次同步会推上去）
     pub differ: Vec<String>,
     /// 线上设了、但读不到值（Cloudflare 的密钥）
@@ -408,7 +503,7 @@ pub fn compare_remote(remote: &[(String, Option<String>)], known: &[String], loc
             (None, Some(_)) => p.unknown += 1,
             (Some(v), None) if !v.is_empty() => p.fill.push((k.clone(), v.clone())),
             (Some(_), None) => {}
-            (Some(v), Some(m)) if v == m => p.same += 1,
+            (Some(v), Some(m)) if v == m => p.same.push(k.clone()),
             (Some(_), Some(_)) => p.differ.push(k.clone()),
         }
     }
@@ -427,16 +522,25 @@ pub async fn pull(site: &Site, conns: &ConnStore, code: &Path) -> Result<Pulled,
 /// `site`、`code` 要用存完值以后的。返回一句给人看的结果。
 pub fn record_pull(site: &Site, code: &Path, site_dir: &Path, p: &Pulled) -> Result<String, String> {
     let target = target_of(site);
+    let values = effective_values(site, code);
     let mut rec = load_sync(site_dir);
+    rec.vals = synced_fps(site, &rec, &values);
     if rec.target != target {
         rec = SyncRecord { target: target.into(), ..Default::default() };
     }
     rec.remote = p.hidden.clone();
     rec.differ = p.differ.clone();
+    // 和线上一样的、刚从线上读回来的：算已同步；不一样的、线上没有的：算没同步
+    for (k, v) in values.iter().filter(|(k, _)| p.same.contains(k) || p.fill.iter().any(|(f, _)| f == k)) {
+        rec.vals.insert(k.clone(), value_fp(site, k, v));
+        if !rec.keys.contains(k) {
+            rec.keys.push(k.clone());
+        }
+    }
+    for k in p.differ.iter().chain(&p.local_only) {
+        rec.vals.remove(k);
+    }
     if p.in_sync() {
-        let values = effective_values(site, code);
-        rec.hash = values_hash(site, &values);
-        rec.keys = values.into_iter().map(|(k, _)| k).collect();
         rec.at = crate::now_secs();
     }
     save_sync(site_dir, &rec)?;
@@ -444,8 +548,8 @@ pub fn record_pull(site: &Site, code: &Path, site_dir: &Path, p: &Pulled) -> Res
     if !p.fill.is_empty() {
         parts.push(format!("读回 {} 个值", p.fill.len()));
     }
-    if p.same > 0 {
-        parts.push(format!("{} 个和线上一样", p.same));
+    if !p.same.is_empty() {
+        parts.push(format!("{} 个和线上一样", p.same.len()));
     }
     if !p.hidden.is_empty() {
         parts.push(format!("{} 个密钥线上已设（Cloudflare 不给看值）", p.hidden.len()));
@@ -569,7 +673,7 @@ mod tests {
 
     #[test]
     fn ga_variable_is_found_by_name() {
-        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new(), remote: false, value: String::new(), differ: false };
+        let v = |k: &str| ConfigVar { key: k.into(), desc: String::new(), secret: false, declared: true, set: false, auto: String::new(), remote: false, value: String::new(), differ: false, pending: false };
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID"), v("PUBLIC_GA_ID")]).as_deref(), Some("PUBLIC_GA_ID"));
         assert_eq!(ga_key(&[v("PUBLIC_SITE_URL"), v("PUBLIC_GA4_ID")]).as_deref(), Some("PUBLIC_GA4_ID"));
         assert_eq!(ga_key(&[v("GA_MEASUREMENT_ID")]).as_deref(), Some("GA_MEASUREMENT_ID"));
@@ -629,7 +733,7 @@ mod tests {
         let local = vec![("SITE_URL".to_string(), "https://a.com".to_string()), ("TOKEN".to_string(), "old".to_string()), ("LOCAL".to_string(), "x".to_string())];
         let p = compare_remote(&remote, &known, &local);
         assert_eq!(p.fill, vec![("BASE_URL".to_string(), "https://a.com".to_string())]);
-        assert_eq!(p.same, 1);
+        assert_eq!(p.same, s(&["SITE_URL"]));
         assert_eq!(p.differ, s(&["TOKEN"]));
         assert_eq!(p.hidden, s(&["API_KEY"]));
         assert_eq!(p.extra, s(&["STRAY"]));
@@ -637,5 +741,25 @@ mod tests {
         assert!(!p.in_sync());
         let p = compare_remote(&remote[..2], &known, &local[..1]);
         assert!(p.in_sync());
+    }
+
+    #[test]
+    fn each_variable_remembers_what_was_synced() {
+        let mut site: Site = serde_json::from_value(serde_json::json!({"id":"x","name":"A","domain":"a.com","source":"local","created_at":0,"updated_at":0})).unwrap();
+        site.deploy.mode = "vps".into();
+        let values = vec![("A".to_string(), "1".to_string()), ("B".to_string(), "2".to_string())];
+        // 早先只有整体指纹的记录：值没变就当全部同步过
+        let old = SyncRecord { target: "vps".into(), hash: values_hash(&site, &values), keys: vec!["A".into(), "B".into()], ..Default::default() };
+        let fps = synced_fps(&site, &old, &values);
+        assert_eq!(fps.get("A"), Some(&value_fp(&site, "A", "1")));
+        // 改了一个值：只有它算没同步
+        let changed = vec![("A".to_string(), "1".to_string()), ("B".to_string(), "3".to_string())];
+        let rec = SyncRecord { vals: fps, ..old.clone() };
+        let fps = synced_fps(&site, &rec, &changed);
+        assert_eq!(fps.get("A"), Some(&value_fp(&site, "A", "1")));
+        assert_ne!(fps.get("B"), Some(&value_fp(&site, "B", "3")));
+        // 换了部署方式：全部要重新同步
+        site.deploy.mode = "workers".into();
+        assert!(synced_fps(&site, &rec, &changed).is_empty());
     }
 }

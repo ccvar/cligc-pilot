@@ -52,12 +52,34 @@
     newKey = ''; newVal = '';
     adding = false; // 存好了才收起表单；失败时值还在、可以改了再存
   }
+  const names = (ks: string[]) => (ks.length > 6 ? `${ks.slice(0, 6).join('、')} 等 ${ks.length} 个` : ks.join('、'));
   async function sync() {
+    if (!cs) return;
+    const pend = cs.vars.filter((v) => v.pending).map((v) => v.key);
+    const all = cs.vars.filter((v) => v.set || v.auto).length;
+    const lines = [
+      `把 Pilot 里的 ${all} 个变量写到${cs.target_label}，覆盖那边同名变量现在的值${cs.target === 'vps' ? '（文件里其它行不动）' : ''}。`,
+      pend.length ? `其中有改动的：${names(pend)}。` : '',
+      cs.will_remove.length ? `还会从那边删掉 ${names(cs.will_remove)}（Pilot 里已经删了）。` : '',
+      cs.target === 'vps' ? '服务器上的程序一般要重启才会读到新值。' : '',
+    ].filter(Boolean);
+    if (!(await confirmDialog(lines.join('\n'), { title: `同步到${dest}`, kind: cs.will_remove.length ? 'danger' : 'warning', confirmText: '同步' }))) return;
     syncing = true;
     try { say(await invoke<string>('site_config_sync', { id: site.id })); await load(); }
     catch (e) { say(String(e), 'err'); }
     finally { syncing = false; }
   }
+  let syncingKey = $state('');
+  async function syncOne(v: ConfigVar) {
+    if (!cs || syncingKey) return;
+    if (!(await confirmDialog(`只把 ${v.key} 写到${cs.target_label}，覆盖那边 ${v.key} 现在的值；其它变量不动。${cs.target === 'vps' ? '\n服务器上的程序一般要重启才会读到新值。' : ''}`, { title: `同步 ${v.key}`, kind: 'warning', confirmText: '同步' }))) return;
+    syncingKey = v.key;
+    try { say(await invoke<string>('site_config_sync_one', { id: site.id, key: v.key })); await load(); }
+    catch (e) { say(String(e), 'err'); }
+    finally { syncingKey = ''; }
+  }
+  // Worker 的公开变量随每次上线带上，没法单独写
+  const canSyncOne = (v: ConfigVar) => !!cs?.target && v.pending && !(cs.target === 'workers' && !v.secret);
   async function pull() {
     pulling = true;
     try { say(await pullSiteConfig(site.id)); await load(); }
@@ -72,10 +94,10 @@
 <div class="card cfg" onpointerleave={hideAll} role="group" aria-label="配置变量">
   <h3><Icon name="key" />配置变量<span class="grow"></span>
     {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={pull} disabled={pulling || syncing} data-tip={cs.target === 'vps' ? `读 ${cs.env_file} 里已有的值，只补 Pilot 里没填的；两边不一样时保留 Pilot 的` : `读 Cloudflare 上已有的变量，只补 Pilot 里没填的；密钥 Cloudflare 不给看值，只标成「线上已有」`}>{#if pulling}<span class="spin"></span>读取中…{:else}<Icon name="download" size={11} />从线上读取{/if}</button>{/if}
-    {#if cs?.target && cs.vars.length}<button class="btn tiny" class:primary={cs.needs_sync} onclick={sync} disabled={syncing || pulling} data-tip={`写到 ${cs.target_label}；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
+    {#if cs?.target && cs.vars.length}<button class="btn tiny warn" class:hot={cs.needs_sync} onclick={sync} disabled={syncing || pulling || !!syncingKey} data-tip={`覆盖 ${cs.target_label} 里的同名变量（会先确认）；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
   </h3>
   <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? (dest === '服务器' ? '服务器' : 'Cloudflare')}。值不会显示，也不会进仓库。</p>
-  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到{dest}：下次上线时会自动同步，也可以现在点「同步到{dest}」。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
+  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到{dest}：下次上线时会自动同步；也可以现在点「同步到{dest}」全部写上去，或在下面只同步某一个。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
   {#if cs?.target && cs.missing.length}<p class="sync-ok">还有 {cs.missing.length} 个没填。{dest}上要是已经配过，点「从线上读取」把已有的值拿回来。</p>{/if}
 
   {#if cs && cs.vars.length}
@@ -86,6 +108,7 @@
             <span class="mono k">{v.key}</span>
             <span class="tag" class:secret={v.secret}>{tag(v)}</span>
             {#if !v.declared}<span class="tag">手动添加</span>{/if}
+            {#if v.pending && !v.differ && cs.target}<span class="tag warn" data-tip={`这个值还没写到${dest}`}>未同步</span>{/if}
             {#if v.differ}<span class="tag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>{/if}
             <span class="grow"></span>
             {#if v.set}<span class="st ok"><Icon name="check" size={11} />已填</span>{:else if v.auto}<span class="st ok" data-tip="没填值时按站点域名自动给；填了就用你填的"><Icon name="check" size={11} />自动</span>{:else if v.remote}<span class="st ok" data-tip="线上已经设了这个密钥，Cloudflare 不给读它的值；要改就在这里填新值，同步时会覆盖线上的"><Icon name="check" size={11} />线上已有</span>{:else}<span class="st no">未填</span>{/if}
@@ -103,6 +126,7 @@
           {:else}
             <div class="acts">
               <button class="link-btn" onclick={() => { editing = v.key; val = ''; }}>{v.set || v.remote ? '修改值' : v.auto ? '改成别的' : '填写'}</button>
+              {#if canSyncOne(v)}<button class="link-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing}>{syncingKey === v.key ? '同步中…' : `只同步这个到${dest}`}</button>{/if}
               {#if v.set}<button class="link-btn danger" onclick={() => clear(v.key)}>{v.auto ? '清除（改回自动）' : '清除'}</button>{/if}
             </div>
           {/if}
@@ -140,7 +164,11 @@
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag { flex: none; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #f1efe9; color: var(--dim); }
   .tag.secret { background: #f3ecf9; color: #6b3fa0; }
-  .tag.warn { background: #fbf0dc; color: #8a5a08; }
+  .tag.warn { background: var(--su-warn-soft, #fbf3dc); color: var(--su-warn-ink, #8a5a08); }
+  /* 同步会覆盖线上的值：按钮用警告色，有改动没同步时底色再深一点 */
+  .btn.warn { color: var(--su-warn-ink, #8a5a08); border-color: color-mix(in srgb, var(--su-warn-ink, #8a5a08) 35%, transparent); }
+  .btn.warn:hover:not(:disabled) { background: var(--su-warn-soft, #fbf3dc); }
+  .btn.warn.hot { background: var(--su-warn-soft, #fbf3dc); border-color: color-mix(in srgb, var(--su-warn-ink, #8a5a08) 55%, transparent); }
   .val { align-self: flex-start; max-width: 100%; box-sizing: border-box; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val.masked { color: var(--faint); letter-spacing: 1px; }
   .val-row { display: flex; align-items: center; gap: 4px; min-width: 0; }

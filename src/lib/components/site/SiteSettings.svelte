@@ -168,7 +168,7 @@
     </div>
 
     {#if site.deploy.mode === 'vps' && site.deploy.command.trim()}
-      <div class="card wide"><h3><Icon name="key" />VPS 部署授权</h3><VpsAuth {site} /></div>
+      <div class="card wide"><VpsAuth {site} /></div>
     {:else if site.deploy.mode === 'vps'}
       <div class="wide"><SiteVpsCard {site} /></div>
     {/if}

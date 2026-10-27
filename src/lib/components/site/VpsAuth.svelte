@@ -2,6 +2,7 @@
   import './site.css';
   import { invoke } from '@tauri-apps/api/core';
   import type { Site } from '$lib/types';
+  import Icon from './Icon.svelte';
   import { say, confirmDialog } from '$lib/state/app.svelte.js';
 
   // VPS 部署授权：Pilot 专用部署密钥是否已加到服务器上。依据的是「已保存」的站点设置。
@@ -10,6 +11,10 @@
   let st = $state<Status | null>(null);
   let err = $state('');
   let busy = $state(false);
+  // 默认收起，只显示一行「已授权 · root@主机」；没授权（要你操作）或出错时直接展开。换站点重新收起
+  let open = $state(false);
+  $effect(() => { void site.id; open = false; });
+  const expanded = $derived(open || !site.deploy.ssh_conn_id || (!!st && !st.has_key) || !!err);
   async function load() {
     err = '';
     if (!site.deploy.ssh_conn_id) { st = null; return; }
@@ -32,6 +37,10 @@
   }
 </script>
 
+<h3 class="va-head" style:margin-bottom={expanded ? null : '0'}><button class="va-toggle" onclick={() => (open = !expanded)} aria-expanded={expanded}><Icon name="key" />VPS 部署授权
+  {#if st}<span class="va-sub"><span class="dot" class:ok={st.has_key}></span>{st.has_key ? '已授权' : '未授权'} · {st.host}</span>{/if}
+  <svg class="chev" class:up={expanded} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
+{#if expanded}
 <div class="vps">
   {#if !site.deploy.ssh_conn_id}
     <p class="hint">选好 SSH 连接并保存设置后，可以在这里为部署授权。</p>
@@ -52,8 +61,16 @@
   {#if err}<div class="err-note">{err}</div>{/if}
   <small class="faint">发布时 Pilot 只在发布命令运行期间提供这把密钥（ssh / scp 被强制只用它、只认已知主机、不交互），私钥存钥匙串，模型拿不到。</small>
 </div>
+{/if}
 
 <style>
   .vps { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--rail); }
+  .va-toggle { flex: 1; width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+  .va-sub { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--su-warn-ink, #8a5a08); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
+  .chev.up { transform: rotate(180deg); }
+  .va-toggle:hover .chev, .va-toggle:hover .va-sub { color: var(--dim); }
   .key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--faint); }
 </style>

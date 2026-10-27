@@ -624,6 +624,14 @@ pub async fn site_config_pull(state: tauri::State<'_, AppState>, id: String) -> 
     Ok(ConfigPulled { message, site })
 }
 
+/// 只把一个配置变量同步到部署目标。
+#[tauri::command]
+pub async fn site_config_sync_one(state: tauri::State<'_, AppState>, id: String, key: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
+    crate::site_config::sync_one(&site, &state.conns, &code, &state.sites.data_dir(&id), &key).await
+}
+
 /// 配置变量卡上点「显示」：取一个已填变量在 Pilot 里存的值（只给界面看，不进日志、不给 AI）。
 #[tauri::command]
 pub fn site_config_reveal(state: tauri::State<'_, AppState>, id: String, key: String) -> Result<String, String> {
