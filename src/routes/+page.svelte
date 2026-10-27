@@ -51,7 +51,8 @@
   import { updater, openUpdateCenter, initUpdater } from '$lib/state/updater.svelte.js';
   import { openSearch, initSearch } from '$lib/state/search.svelte.js';
   import { app, finishConfirm, initApp } from '$lib/state/app.svelte.js';
-  import { panes, splitConversation, singleConversationDragOver, endConversationDrag, addSplit, focusSplit, initPanes } from '$lib/state/panes.svelte.js';
+  import { panes, splitConversation, singleConversationDragOver, endConversationDrag, addSplit, focusSplit, initPanes, isPageRef, paneRefLabel, closeSplit, startConversationPointerDrag } from '$lib/state/panes.svelte.js';
+  import { leaves } from '$lib/conversationLayout';
   import { modelIcon } from '$lib/state/models';
   import { badImgUrls, initMessages } from '$lib/state/messages.svelte.js';
   import { initConnections, distroOf, connectionDisplayName } from '$lib/state/connections.svelte.js';
@@ -95,6 +96,28 @@
   initSuggest();
   initOpsLive();
 </script>
+
+<!-- 分屏的一格：对话照旧；页面（新对话 / 全部站点 / 站点制作 / 托管运营 / 站点看板）顶上加一条能拖动的标题栏 -->
+{#snippet paneContent(ref: string, paneId: string)}
+  {#if isPageRef(ref)}
+    {#if leaves(panes.conversationLayout).length > 1}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="page-pane-bar" class:focused={panes.splitFocused === paneId} onpointerdown={(e) => startConversationPointerDrag(e, ref)} data-tip="拖动可以换位置">
+        <span class="ppb-t">{paneRefLabel(ref)}</span>
+        <button class="ppb-x" data-no-drag aria-label="关闭窗格" data-tip="关闭窗格" onclick={() => closeSplit(paneId)}>×</button>
+      </div>
+    {/if}
+    <div class="page-pane">
+      {#if ref === 'page:sites'}<SitesOverview />
+      {:else if ref === 'page:making'}<SiteMakingList />
+      {:else if ref === 'page:managed'}<ManagedConsole />
+      {:else if ref === 'page:launcher'}<Launcher />
+      {:else}<SiteWorkbench siteId={ref.slice(6)} />{/if}
+    </div>
+  {:else}
+    {@render splitContent(ref, paneId)}
+  {/if}
+{/snippet}
 
 {#snippet remoteContent(connId: string, paneId: string)}
   {#if connId === app.activeConnId}<RemoteWorkbench {paneId} />{:else}<RemotePane {connId} {paneId} />{/if}
@@ -174,7 +197,12 @@
     {/if}
   {/if}
 
-  {#if panes.splitDragId && panes.splitDragPoint}
+  {#if panes.splitDragId && panes.splitDragPoint && isPageRef(panes.splitDragId)}
+    <div class="conversation-drag-ghost" style={`--drag-x:${panes.splitDragPoint.x}px;--drag-y:${panes.splitDragPoint.y}px`} aria-hidden="true">
+      <span class="conversation-drag-title">{paneRefLabel(panes.splitDragId)}</span>
+      <small class="conversation-drag-sub">拖到右边或下边分屏</small>
+    </div>
+  {:else if panes.splitDragId && panes.splitDragPoint}
     {@const dragConversation=splitConversation(panes.splitDragId)}
     {#if dragConversation}
       <div class="conversation-drag-ghost" style={`--drag-x:${panes.splitDragPoint.x}px;--drag-y:${panes.splitDragPoint.y}px`} aria-hidden="true">
@@ -203,7 +231,7 @@
     {/if}
 
     {#if panes.splitVisible && panes.conversationLayout}
-      <ConversationCanvas layout={panes.conversationLayout} focused={panes.splitFocused} dragging={!!panes.splitDragId} dragConversation={panes.splitDragId} preview={panes.splitPointerPreview} content={splitContent}
+      <ConversationCanvas layout={panes.conversationLayout} focused={panes.splitFocused} dragging={!!panes.splitDragId} dragConversation={panes.splitDragId} preview={panes.splitPointerPreview} content={paneContent}
         onfocus={focusSplit} ondrop={(target,edge)=>{const id=panes.splitDragId;endConversationDrag();void addSplit(id,edge,target);}} onresize={(layout)=>panes.conversationLayout=layout}/>
     {:else if !app.activeConn}
       <Welcome />
@@ -277,6 +305,15 @@
 <style>
   .conversation-drag-ghost{position:fixed;z-index:1000;left:clamp(12px,calc(var(--drag-x) + 14px),calc(100vw - 312px))!important;top:clamp(12px,calc(var(--drag-y) + 12px),calc(100vh - 50px))!important;width:300px;max-width:calc(100vw - 24px);height:38px;box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 12px;background:color-mix(in srgb,var(--bg,#fff) 96%,transparent);border:1px solid var(--border,#e7e5df);border-radius:8px;box-shadow:0 8px 24px #2d29231c;pointer-events:none;color:var(--fg,#282723)}
   .conversation-drag-icon{display:inline-flex;align-items:center;line-height:0;flex:none}
+  /* 分屏里的页面：顶上一条细标题栏（拖动换位置、× 关掉这一格），下面是页面本身 */
+  .page-pane-bar{flex:none;display:flex;align-items:center;gap:8px;height:32px;padding:0 8px 0 16px;border-bottom:1px solid var(--border);background:var(--rail);cursor:grab;user-select:none}
+  .page-pane-bar.focused{background:var(--card)}
+  .page-pane-bar:active{cursor:grabbing}
+  .ppb-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;color:var(--dim)}
+  .page-pane-bar.focused .ppb-t{color:var(--text)}
+  .ppb-x{flex:none;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;color:var(--faint);font-size:16px;line-height:1;cursor:pointer}
+  .ppb-x:hover{background:var(--accent-soft);color:var(--text)}
+  .page-pane{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow:hidden}
   /* 远程分屏：分隔线夹在两块黑底终端之间，用细的深色线，不要一道亮白缝 */
   .remote-split{display:contents;--pane-divider:#3a3632;--pane-divider-hover:#5a544c;--pane-divider-size:.5px}
   .conversation-drag-sub{flex:none;margin-left:auto;font-size:11px;color:var(--faint,#9a958c)}

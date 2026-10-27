@@ -38,6 +38,16 @@
     const promoted=layout.kind==='split'&&(outer??(boundary?local:null));
     hover=promoted?{id:layout.id,edge:promoted}:{id,edge:local};
   }
+  // 页面顶栏带 data-tauri-drag-region（单独显示时按住它能拖窗口）。放进分屏以后按住它不该拖走整个窗口：
+  // 在画布上先拦下这次 mousedown，不让它冒泡到 Tauri 的拖窗口监听和页面里的 startDrag。按钮、输入框照常。
+  function noWindowDrag(node:HTMLElement) {
+    const down=(e:MouseEvent)=>{
+      const t=e.target as HTMLElement;
+      if(t.closest('[data-tauri-drag-region]') && !t.closest('button, a, input, textarea, select, [role="button"], [data-no-drag]'))e.stopPropagation();
+    };
+    node.addEventListener('mousedown',down);
+    return {destroy(){node.removeEventListener('mousedown',down);}};
+  }
   function resize(e:PointerEvent, divider:typeof areas.dividers[number]) {
     if(e.button!==0) return;
     e.preventDefault();
@@ -54,10 +64,10 @@
   }
 </script>
 <div class="canvas-scroll">
-  <div class="canvas" class:multi={areas.panes.length>1} data-pilot-canvas bind:this={canvas}>
+  <div class="canvas" class:multi={areas.panes.length>1} data-pilot-canvas bind:this={canvas} use:noWindowDrag>
     {#each areas.panes as {node,rect} (node.id)}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <section class="pane" class:focused={focused===node.id} aria-label="对话窗格" data-pilot-pane={node.id}
+      <section class="pane" class:focused={focused===node.id} aria-label="分屏窗格" data-pilot-pane={node.id}
         style:left={`${rect.x*100}%`} style:top={`${rect.y*100}%`} style:width={`${rect.width*100}%`} style:height={`${rect.height*100}%`}
         onpointerdown={()=>onfocus(node.id)} onfocusin={()=>onfocus(node.id)} ondragover={(e)=>over(e,node.id)}
         ondragleave={(e)=>{if(!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) hover=null;}}

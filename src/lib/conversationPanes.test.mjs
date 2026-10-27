@@ -22,7 +22,7 @@ function harness(){
     endTurn:(c,id)=>{ctx.splitSnapshots[id]=c;delete ctx.running[id];delete ctx.lives[id];},
     refreshConvos:async()=>{},maybeAutoRetry:()=>{},failTurn:async(e,id)=>{delete ctx.running[id];ctx.restoreSplitQueue(id);},
     invoke:async(command,args)=>{calls.push({command,args});if(command==='send_message')return new Promise((resolve,reject)=>{results[args.convId]={resolve,reject};});return 'saved/file.txt';},
-    conversationProject:c=>c.site_slug,attachmentFilename:f=>f.name,openConv:()=>Promise.resolve(),say:()=>{},view:'thread',draft:'',attachments:[],queued:null,splitSuspended:false,splitVisible:true,conns:[],Date,Uint8Array,
+    conversationProject:c=>c.site_slug,attachmentFilename:f=>f.name,openConv:()=>Promise.resolve(),say:()=>{},view:'thread',SITES_CONN_ID:'__sites__',SITE_PREFIX:'site:',paneTabs:{},tab:'overview',list:[],draft:'',attachments:[],queued:null,splitSuspended:false,splitVisible:true,conns:[],Date,Uint8Array,
   };
   vm.createContext(withStores(ctx));vm.runInContext(code,ctx);return{ctx,calls,results};
 }
@@ -218,4 +218,63 @@ test('returning to a connection opens only that connection and restores its draf
 test('workspace entry points all reset the conversation layout scope',()=>{
   assert.match(sliceSource('lib/state/connections.svelte.ts','export async function selectConn(','export function openLocalWorkspace('),/switchConversationWorkspace\(workspaceOf\(id\)\)/);
   assert.match(sliceSource('lib/state/connections.svelte.ts','export function openLocalWorkspace(','export function distroOf('),/selectConn\(WORKSPACE_CONN_ID\)/);
+});
+
+// ---------- 页面进分屏（新对话 / 全部站点 / 站点制作 / 托管运营 / 站点看板） ----------
+const leafOf=(ctx,ref)=>leaves(ctx.conversationLayout).find(p=>p.conversation===ref).id;
+function sitesHarness(){
+  const h=harness(),{ctx}=h;
+  for(const id of ['a','b'])ctx.splitSnapshots[id]={...ctx.splitSnapshots[id],conn_id:'site:s1',task_type:'site'};
+  ctx.convos=[ctx.splitSnapshots.a,ctx.splitSnapshots.b];ctx.activeConv=ctx.splitSnapshots.a;
+  ctx.conversationLayoutWorkspace='site:*';ctx.activeConnId='site:s1';
+  ctx.selectConn=async id=>{ctx.selects=(ctx.selects??[]).concat(id);ctx.switchConversationWorkspace(ctx.workspaceOf(id));ctx.activeConnId=id;};
+  return h;
+}
+test('the sites hub and every site are one split group, other connections stay separate',()=>{
+  const {ctx}=harness();
+  assert.equal(ctx.workspaceOf('__sites__'),'site:*');
+  assert.equal(ctx.workspaceOf('site:abc'),'site:*');
+  assert.equal(ctx.workspaceOf('conn-a'),'conn-a');
+});
+test('dragging a page next to conversations adds one pane and shows that page without touching running work',async()=>{
+  const {ctx,calls}=sitesHarness();ctx.running.a='site:s1';
+  await ctx.addSplit('page:managed','right',leafOf(ctx,'b'));
+  assert.deepEqual(leaves(ctx.conversationLayout).map(p=>p.conversation),['a','b','page:managed']);
+  await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual(ctx.selects,['__sites__']);assert.equal(ctx.view,'managed');assert.equal(ctx.activeConvId,'');
+  assert.equal(ctx.running.a,'site:s1');assert.equal(ctx.splitDrafts.a.text,'A draft');assert.equal(calls.length,0);
+});
+test('the same page dragged again moves instead of opening a second copy',async()=>{
+  const {ctx}=sitesHarness();
+  await ctx.addSplit('page:sites','right',leafOf(ctx,'b'));
+  await ctx.addSplit('page:sites','left','pa');
+  const refs=leaves(ctx.conversationLayout).map(p=>p.conversation);
+  assert.equal(refs.filter(r=>r==='page:sites').length,1);assert.equal(refs[0],'page:sites');
+});
+test('pages from another split group are refused',async()=>{
+  const {ctx}=harness();const before=ctx.conversationLayout;
+  await ctx.addSplit('page:managed','right',leafOf(ctx,'b'));
+  assert.equal(ctx.conversationLayout,before);
+});
+test('a site board remembers its own tab when it gets focus back',async()=>{
+  const {ctx}=sitesHarness();ctx.paneTabs={s2:'queue'};ctx.tab='settings';
+  await ctx.addSplit('board:s2','right',leafOf(ctx,'b'));await new Promise(r=>setTimeout(r,0));
+  assert.equal(ctx.tab,'queue');assert.equal(ctx.activeConnId,'site:s2');assert.equal(ctx.view,'site');
+});
+test('closing the focused page pane goes back to a conversation pane',async()=>{
+  const {ctx}=sitesHarness();
+  await ctx.addSplit('page:making','right',leafOf(ctx,'b'));await new Promise(r=>setTimeout(r,0));
+  const page=leaves(ctx.conversationLayout).find(p=>p.conversation==='page:making');
+  ctx.closeSplit(page.id);
+  assert.deepEqual(leaves(ctx.conversationLayout).map(p=>p.conversation),['a','b']);
+  assert.equal(ctx.view,'thread');assert.equal(ctx.activeConvId,'a');
+});
+test('sidebar menu items, site rows and the new-chat button can all start a split drag',()=>{
+  assert.match(source,/startConversationPointerDrag\(e, 'page:launcher'\)/);
+  assert.match(source,/startConversationPointerDrag\(e, 'page:sites'\)/);
+  assert.match(source,/startConversationPointerDrag\(e, 'page:making'\)/);
+  assert.match(source,/startConversationPointerDrag\(e, 'page:managed'\)/);
+  assert.match(source,/startConversationPointerDrag\(e, `board:\$\{s\.id\}`\)/);
+  // 对话行本身是按钮：拖动不能因为按下的是按钮就不起；只有删除 × 这类标了 data-no-drag 的不起
+  assert.match(source,/class="convo-x"[^>]*data-no-drag/);
 });

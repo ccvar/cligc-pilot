@@ -93,6 +93,8 @@ class SitesState {
   recent = $state<string[]>(loadRecent());
   loaded = $state(false);
   tab = $state<SiteTab>('overview');
+  /** 分屏里每个站点看板各自停在哪个页签（看板失去焦点时用它显示，切回来时恢复） */
+  paneTabs = $state<Record<string, SiteTab>>({});
   /** 打开「待处理」时要先看哪一栏（从别处跳过来时指定，用一次就清掉）；空＝自动挑有内容的那栏 */
   queueFilter = $state<'' | 'todo' | 'open' | 'live' | 'closed'>('');
   status = $state<Record<string, SiteStatus>>({});

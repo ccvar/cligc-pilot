@@ -7,6 +7,7 @@
   import { siteIdOf, openSite } from '$lib/state/sites.svelte.js';
   import { fleet, trafficDown } from '$lib/state/fleet.svelte.js';
   import { isMaking } from '$lib/state/siteCreate.svelte.js';
+  import { startConversationPointerDrag } from '$lib/state/panes.svelte.js';
 
   // 左栏只放「有对话的站点」：它是对话的入口，不是站点目录。没建过对话的站点不出现——
   // 找站点、管站点都在「全部站点」总览和全局搜索里。顺序：按最近一次对话。
@@ -60,8 +61,9 @@
 
 {#snippet siteRow(s: SiteRow)}
   <div class="site" class:on={s.id === activeId && app.view === 'site'} class:ctx={s.id === activeId && app.view !== 'site'} role="button" tabindex="0" title={s.id === activeId ? '打开站点看板' : s.domain || s.name}
-    onclick={() => openSite(s.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSite(s.id); } }}>
-    <button class="chev" class:open={isOpen(s.id)} aria-label={isOpen(s.id) ? '收起对话' : '展开对话'} aria-expanded={isOpen(s.id)} data-tip={isOpen(s.id) ? '收起对话' : '展开对话（不离开当前页面，可以拖进分屏）'} onclick={(e) => { e.stopPropagation(); toggle(s.id); }} onkeydown={(e) => e.stopPropagation()}>
+    onclick={() => openSite(s.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSite(s.id); } }}
+    onpointerdown={(e) => startConversationPointerDrag(e, `board:${s.id}`)}>
+    <button class="chev" data-no-drag class:open={isOpen(s.id)} aria-label={isOpen(s.id) ? '收起对话' : '展开对话'} aria-expanded={isOpen(s.id)} data-tip={isOpen(s.id) ? '收起对话' : '展开对话（不离开当前页面，可以拖进分屏）'} onclick={(e) => { e.stopPropagation(); toggle(s.id); }} onkeydown={(e) => e.stopPropagation()}>
       <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>
     <span class="ic"><SiteIcon id={s.id} size={14} /></span>

@@ -69,7 +69,7 @@
     {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
     <span class="convo-when">{relTime(c.updated_at)}</span>
   </button>
-  <button class="convo-x" title="删除对话" aria-label="删除对话" onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
+  <button class="convo-x" title="删除对话" aria-label="删除对话" data-no-drag onclick={(e) => { e.stopPropagation(); deleteConv(c.id); }}>×</button>
 </div>
 {/snippet}
 
@@ -78,7 +78,8 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="rail-resize" title="拖动调整宽度" onmousedown={startResize} role="separator" aria-orientation="vertical"></div>
   <div class="rail-head">
-    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话">
+    <!-- 菜单项都能拖进主区分屏（点击＝在当前这一格打开，拖动＝新开一格）；远程连接没有启动页，新对话不能拖 -->
+    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话（拖到右边可以分屏）" onpointerdown={(e) => { if (app.activeConn && !app.isSshConn) startConversationPointerDrag(e, 'page:launcher'); }}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10l7.5-7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
         <path d="M2.5 13.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
@@ -86,17 +87,17 @@
       新对话
     </button>
     {#if app.isSitesMode}
-    <button class="railnav {app.view === 'sites' ? 'on' : ''}" onclick={() => selectConn(SITES_CONN_ID)}>
+    <button class="railnav {app.view === 'sites' ? 'on' : ''}" onclick={() => selectConn(SITES_CONN_ID)} onpointerdown={(e) => startConversationPointerDrag(e, 'page:sites')}>
       <SiteMark size={14} />
       全部站点
       {#if fleet.pendingCount}<span class="nav-cnt" title="{fleet.pendingCount} 条改动等你确认">{fleet.pendingCount}</span>{/if}
     </button>
-    <button class="railnav {app.view === 'making' ? 'on' : ''}" onclick={() => openMaking()}>
+    <button class="railnav {app.view === 'making' ? 'on' : ''}" onclick={() => openMaking()} onpointerdown={(e) => startConversationPointerDrag(e, 'page:making')}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.6 2.4-1.2-1.2a1.2 1.2 0 0 0-1.7 0L2.4 17.5a1.2 1.2 0 0 0 0 1.7l1.2 1.2a1.2 1.2 0 0 0 1.7 0L21.6 4.1a1.2 1.2 0 0 0 0-1.7Z" /><path d="m14 7 3 3" /><path d="M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9" /></svg>
       站点制作
       {#if makingSites().length}<span class="nav-dim">{makingSites().length}</span>{/if}
     </button>
-    <button class="railnav {app.view === 'managed' ? 'on' : ''}" onclick={() => openManaged()}>
+    <button class="railnav {app.view === 'managed' ? 'on' : ''}" onclick={() => openManaged()} onpointerdown={(e) => startConversationPointerDrag(e, 'page:managed')}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8V4H8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /><rect x="4" y="8" width="16" height="12" rx="2" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /><path d="M2 14h2M20 14h2M9 13v2M15 13v2" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
       托管运营
       {#if managed.overview?.config.paused}<span class="nav-dim">已暂停</span>{:else if managed.overview?.waiting}<span class="nav-cnt" title="{managed.overview.waiting} 项需要你">{managed.overview.waiting}</span>{:else if managed.count}<span class="nav-dim">{managed.count}</span>{/if}

@@ -1,4 +1,6 @@
-import { sites } from './sites.svelte.js';
+import { sites, siteIdOf, SITE_PREFIX } from './sites.svelte.js';
+import { SITES_CONN_ID } from './env';
+import { selectConn } from './connections.svelte.js';
 import { type Layout, type Edge, leaves, pane, replacePane, removePane, outerDropEdge, dropEdge, splitPane } from '$lib/conversationLayout';
 import { onDestroy, tick, untrack } from 'svelte';
 import type { Conversation, Brain } from '$lib/types';
@@ -29,8 +31,19 @@ class PanesState {
   splitDrafts = $state<Record<string, PaneDraft>>({});
   splitErrors = $state<Record<string, string>>({});
   splitQueued = $state<Record<string, {text:string;files:Attach[];startedAt:number}>>({});
-  splitVisible = $derived.by(()=>!!this.conversationLayout && app.view === 'thread'
-    && leaves(this.conversationLayout).some(p=>p.conversation===app.activeConvId));
+  /** 主区现在显示的东西（对应分屏里的哪一格）；空＝显示的是不能进分屏的页面（模板库、远程工作台……）。 */
+  mainRef = $derived.by(():string=>{
+    if(app.view==='thread')return app.activeConvId;
+    if(app.view==='launcher')return app.activeConn && !app.isSshConn ? 'page:launcher' : '';
+    if(app.isSitesHub && (app.view==='sites'||app.view==='making'||app.view==='managed'))return `page:${app.view}`;
+    if(app.view==='site' && app.isSiteConn)return `board:${siteIdOf(app.activeConnId)}`;
+    return '';
+  });
+  // 对话哪怕只有一格也走画布（那就是普通的对话页）；页面只有一格时按普通页面显示，两格以上才进画布。
+  splitVisible = $derived.by(()=>{
+    const ref=this.mainRef, all=leaves(this.conversationLayout);
+    return !!ref && all.some(p=>p.conversation===ref) && (all.length>1 || !isPageRef(ref));
+  });
   paneCfReady = $state<Record<string,boolean>>({});
   paneUploading = $state<Record<string,number>>({});
 }
@@ -38,10 +51,30 @@ class PanesState {
 export const panes = new PanesState();
 
 export function splitConversation(id:string):Conversation | null { return panes.splitSnapshots[id] ?? app.convos.find(c=>c.id===id) ?? null; }
+/** 分屏格子里能放的东西：对话（会话 id 原样）、页面（`page:launcher` 新对话 / `page:sites` 全部站点 /
+ *  `page:making` 站点制作 / `page:managed` 托管运营）、某个站点的看板（`board:<站点 id>`）。 */
+export function isPageRef(ref:string):boolean { return ref.startsWith('page:') || ref.startsWith('board:'); }
+
 /** 分屏按「工作区」分组：所有站点的对话算同一个工作区（可以把两个站点的对话拉进同一个分屏、在站点之间切换不清空分屏），
  *  其它连接各自一个。每个分屏里的对话本来就带着自己的连接，发消息、传附件都按对话自己的连接走。 */
 export function workspaceOf(connId:string):string {
-  return connId.startsWith('site:') ? 'site:*' : connId;
+  return connId===SITES_CONN_ID || connId.startsWith('site:') ? 'site:*' : connId;
+}
+/** 一格内容属于哪个分屏组：站点相关的页面都在站点组；新对话跟着当前连接。 */
+function refWorkspace(ref:string):string {
+  if(ref==='page:launcher')return workspaceOf(app.activeConnId);
+  if(isPageRef(ref))return 'site:*';
+  const c=splitConversation(ref);
+  return c?conversationWorkspace(c):'';
+}
+/** 分屏里一格的名字（拖动时的卡片、格子顶部的标题）。 */
+export function paneRefLabel(ref:string):string {
+  if(ref==='page:launcher')return '新对话';
+  if(ref==='page:sites')return '全部站点';
+  if(ref==='page:making')return '站点制作';
+  if(ref==='page:managed')return '托管运营';
+  if(ref.startsWith('board:')){const s=sites.list.find(x=>x.id===ref.slice(6));return s?`${s.name} · 站点看板`:'站点看板';}
+  return splitConversation(ref)?.title??'';
 }
 export function conversationWorkspace(c:Conversation):string {
   return workspaceOf(c.conn_id);
@@ -127,14 +160,55 @@ export function rememberSplit(c:Conversation) {
 }
 export function focusSplit(id:string) {
   const leaf=leaves(panes.conversationLayout).find(p=>p.id===id);
+  if(leaf && isPageRef(leaf.conversation)) {
+    if(refWorkspace(leaf.conversation)!==panes.conversationLayoutWorkspace)return;
+    panes.splitFocused=id;
+    void showPage(leaf.conversation);
+    return;
+  }
   const c=leaf && splitConversation(leaf.conversation);
   if(!c || conversationWorkspace(c)!==panes.conversationLayoutWorkspace)return;
-  if(panes.splitFocused===id && app.activeConvId===c.id)return;
+  if(panes.splitFocused===id && app.activeConvId===c.id && app.view==='thread')return;
   panes.splitFocused=id;
+  app.view='thread';
   app.activeConvId=c.id; app.activeConv=c;thread.threadModel=c.model;thread.threadPerm=c.perm_mode||'full';thread.threadEffort=c.effort||'';
   composer.draft=panes.splitDrafts[c.id]?.text??'';
   composer.draftEl=paneInputs.get(c.id);
   // Connection discovery is not switched here: all pane actions carry their own target.
+}
+/** 让主区显示某个页面（点了分屏里那一格）。左栏高亮、新对话的目标站点都跟着它走。 */
+export async function showPage(ref:string) {
+  if(panes.mainRef===ref)return;
+  ++panes.openConvSeq; // 还在路上的「打开对话」不能再把焦点抢回去
+  if(ref==='page:launcher') {
+    app.activeConvId='';app.activeConv=null;app.view='launcher';
+    return;
+  }
+  if(ref.startsWith('board:')) {
+    const id=ref.slice(6);
+    // 每个看板记着自己停在哪个页签：切回来时恢复（不然会跟着上一个看板的页签走）
+    sites.tab=sites.paneTabs[id]??'overview';
+    if(app.activeConnId!==SITE_PREFIX+id)await selectConn(SITE_PREFIX+id);
+    app.activeConvId='';app.activeConv=null;app.view='site';
+    return;
+  }
+  if(app.activeConnId!==SITES_CONN_ID)await selectConn(SITES_CONN_ID);
+  app.activeConvId='';app.activeConv=null;app.view=ref.slice(5) as typeof app.view;
+}
+/** 主区现在显示的东西要占一格（还没分屏时先把它放进去，再往旁边加）。返回 false＝它不能进分屏。 */
+function ensureMainPane():boolean {
+  const ref=panes.mainRef;
+  if(!ref)return false;
+  if(!isPageRef(ref)){ensureConversationPane();return true;}
+  resetConversationLayout(refWorkspace(ref));
+  const all=leaves(panes.conversationLayout);
+  if(!panes.conversationLayout)panes.conversationLayout=pane(ref);
+  else if(!all.some(p=>p.conversation===ref)) {
+    const target=all.find(p=>p.id===panes.splitFocused)??all[0];
+    panes.conversationLayout=replacePane(panes.conversationLayout,target.id,ref);
+  }
+  panes.splitFocused=leaves(panes.conversationLayout).find(p=>p.conversation===ref)!.id;
+  return true;
 }
 function ensureConversationPane() {
   if(!app.activeConv)return;
@@ -163,15 +237,17 @@ export function closeSplit(id:string) {
   panes.conversationLayout=remaining;
   if(panes.splitFocused===id)focusSplit(leaves(remaining)[0].id);
 }
+// 拖动从哪儿都能起（左栏的菜单项、对话行本身就是按钮），只有输入框和标了 data-no-drag 的（删除 ×、展开箭头）不行
+const NO_DRAG='input,textarea,select,[data-no-drag]';
 export function startConversationDrag(e:DragEvent,id:string) {
-  if((e.target as HTMLElement).closest('button')){e.preventDefault();return;}
+  if((e.target as HTMLElement).closest(NO_DRAG)){e.preventDefault();return;}
   panes.splitDragId=id;
   e.dataTransfer?.setData('application/x-pilot-conversation',id);
   if(e.dataTransfer)e.dataTransfer.effectAllowed='move';
 }
 export function endConversationDrag() {panes.splitDragId='';panes.splitDragPoint=null;panes.singleDropEdge=null;panes.splitPointerPreview=null;}
 export function startConversationPointerDrag(e:PointerEvent,id:string) {
-  if(e.button!==0||e.isPrimary===false||(e.target as HTMLElement).closest('button,input,textarea'))return;
+  if(e.button!==0||e.isPrimary===false||(e.target as HTMLElement).closest(NO_DRAG))return;
   panes.cancelConversationPointerDrag();
   // Pointer-driven dragging is consistent in WebView2 and WKWebView; native HTML drag
   // remains a fallback. Do not start a move until the user crosses the drag threshold.
@@ -192,7 +268,7 @@ export function startConversationPointerDrag(e:PointerEvent,id:string) {
         :{id:target.dataset.pilotPane!,edge:dropEdge(event.clientX-r.left,event.clientY-r.top,r.width,r.height)};
       if(panes.splitPointerPreview.id===leaves(panes.conversationLayout).find(p=>p.conversation===id)?.id)panes.splitPointerPreview=null;
     }
-    else if(!panes.splitVisible&&app.activeConv&&(app.view==='thread'||app.view==='remote')) {
+    else if(!panes.splitVisible&&canStartSplit(id)) {
       const area=element?.closest<HTMLElement>('[data-pilot-workarea]');
       if(area){const r=area.getBoundingClientRect();panes.singleDropEdge=dropEdge(event.clientX-r.left,event.clientY-r.top,r.width,r.height);}
     }
@@ -213,7 +289,23 @@ export function startConversationPointerDrag(e:PointerEvent,id:string) {
   panes.cancelConversationPointerDrag=cancel;
   document.addEventListener('pointermove',move);document.addEventListener('pointerup',up);document.addEventListener('pointercancel',cancel);document.addEventListener('keydown',key);window.addEventListener('blur',cancel);
 }
+/** 还没分屏时，把 ref 拖到主区边上能不能分出一格：主区得是能进分屏的东西，而且不是它自己、同一个分屏组。 */
+function canStartSplit(ref:string):boolean {
+  if(panes.mainRef)return panes.mainRef!==ref && refWorkspace(ref)===refWorkspace(panes.mainRef);
+  return !isPageRef(ref) && !!app.activeConv && app.view==='remote';
+}
+async function addPageSplit(ref:string,edge:Edge,target?:string) {
+  try {
+    if(!panes.splitVisible && !ensureMainPane())return;
+    if(!panes.conversationLayout || refWorkspace(ref)!==panes.conversationLayoutWorkspace)return;
+    const leaf=target??panes.splitFocused;
+    if(leaf!==panes.conversationLayout.id&&!leaves(panes.conversationLayout).some(p=>p.id===leaf))return;
+    panes.conversationLayout=splitPane(panes.conversationLayout,leaf,ref,edge);
+    focusSplit(leaves(panes.conversationLayout).find(p=>p.conversation===ref)!.id);
+  } finally {endConversationDrag();}
+}
 export async function addSplit(id:string,edge:Edge,target?:string) {
+  if(isPageRef(id))return addPageSplit(id,edge,target);
   if(!app.convos.some(c=>c.id===id)&&!panes.splitSnapshots[id])return;
   const existing=splitConversation(id);
   const workspace=panes.conversationLayoutWorkspace, navigation=panes.openConvSeq;
@@ -222,7 +314,8 @@ export async function addSplit(id:string,edge:Edge,target?:string) {
     const c=app.running[id]&&existing ? existing : await invoke<Conversation|null>('get_conversation',{id});
     if(!c || navigation!==panes.openConvSeq || workspace!==panes.conversationLayoutWorkspace
       || conversationWorkspace(c)!==workspace)return;
-    if(!panes.splitVisible)ensureConversationPane();
+    // 主区是页面时先把页面放进一格；远程工作台里开着的对话走原来的路
+    if(!panes.splitVisible && !ensureMainPane())ensureConversationPane();
     if(!panes.conversationLayout)return;
     const leaf=target??panes.splitFocused;
     if(leaf!==panes.conversationLayout.id&&!leaves(panes.conversationLayout).some(p=>p.id===leaf))return;
@@ -234,7 +327,7 @@ export async function addSplit(id:string,edge:Edge,target?:string) {
   finally {endConversationDrag();}
 }
 export function singleConversationDragOver(e:DragEvent) {
-  if(!panes.splitDragId||panes.splitVisible||!app.activeConv||(app.view!=='thread'&&app.view!=='remote'))return;
+  if(!panes.splitDragId||panes.splitVisible||!canStartSplit(panes.splitDragId))return;
   e.preventDefault();
   const r=(e.currentTarget as HTMLElement).getBoundingClientRect();
   panes.singleDropEdge=dropEdge(e.clientX-r.left,e.clientY-r.top,r.width,r.height);
@@ -320,6 +413,22 @@ export function initPanes() {
     untrack(() => {
       if(!panes.conversationLayout || !leaves(panes.conversationLayout).some(p=>p.conversation===c.id))ensureConversationPane();
       else panes.splitSnapshots[c.id]=c;
+    });
+  });
+  // 分屏时从左栏 / 页面里的链接打开一个页面：放进当前聚焦的那一格（和点开对话一样）；已经在分屏里就聚焦它。
+  // 只有一格时不管——那就是普通的页面切换。
+  $effect(() => {
+    const ref=panes.mainRef;
+    if(!ref || !isPageRef(ref))return;
+    untrack(() => {
+      const layout=panes.conversationLayout;
+      if(!layout || panes.conversationLayoutWorkspace!==refWorkspace(ref))return;
+      const all=leaves(layout), hit=all.find(p=>p.conversation===ref);
+      if(hit){panes.splitFocused=hit.id;return;}
+      if(all.length<2)return;
+      const target=all.find(p=>p.id===panes.splitFocused)??all[0];
+      panes.conversationLayout=replacePane(layout,target.id,ref);
+      panes.splitFocused=target.id;
     });
   });
   // Existing actions which prefill the active composer (deploy/readiness/etc.) use draft.

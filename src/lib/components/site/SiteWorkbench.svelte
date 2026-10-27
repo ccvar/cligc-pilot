@@ -18,8 +18,16 @@
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
   import { managed, loadManaged } from '$lib/state/managed.svelte.js';
   import { newChat } from '$lib/state/conversations';
+  import { app } from '$lib/state/app.svelte.js';
 
-  const site = $derived(sites.active);
+  // siteId：分屏里的看板由格子指定站点；不传＝当前站点（普通的站点页）
+  let { siteId: paneSite = '' }: { siteId?: string } = $props();
+  const site = $derived(paneSite ? sites.list.find((s) => s.id === paneSite) ?? null : sites.active);
+  // 分屏里同时开着几个看板时，只有聚焦的那个用全局页签（sites.tab，站点页里的各种「去设置」「去分发」都改它）；
+  // 其余的显示各自上次停的页签
+  const current = $derived(!paneSite || (app.view === 'site' && sites.active?.id === paneSite));
+  const tab = $derived(current ? sites.tab : site ? sites.paneTabs[site.id] ?? 'overview' : 'overview');
+  $effect(() => { const id = site?.id, t = sites.tab; if (current && id) untrack(() => { if (sites.paneTabs[id] !== t) sites.paneTabs[id] = t; }); });
   const st = $derived(site ? sites.status[site.id] : undefined);
   const job = $derived(site ? sites.jobs[site.id] : undefined);
   // 「待处理」的数字：只算要你处理的（待确认、失败、上线后待核对）；托管站点排着等 AI 的另外淡色显示，
@@ -54,7 +62,7 @@
       <div class="wb-title">
         <span class="wb-ic"><SiteIcon id={site.id} size={18} /></span>
         <div class="wb-name">
-          <SiteSwitcher />
+          <SiteSwitcher {site} />
           <small>
             {#if site.domain}<button class="link-btn plain" onclick={() => openUrl(`https://${site.domain}`)}>{site.domain} ↗</button> · {/if}
             {#if site.source === 'github'}<button class="link-btn plain src-link" onclick={() => openUrl(`https://github.com/${site.repo}`)} data-tip="在 GitHub 打开仓库"><GhMark size={12} />{site.repo}</button>{:else if st?.code_dir && st.exists}<button class="link-btn plain src-link" onclick={() => revealItemInDir(st.code_dir)} data-tip="在访达中打开代码文件夹"><Icon name="folder" size={12} />{shortPath(st.code_dir)}</button>{:else}<span class="src-link"><Icon name="folder" size={12} />{shortPath(site.local_dir) || '本地文件夹'}</span>{/if}{site.framework ? ` · ${site.framework}` : ''}
@@ -70,18 +78,20 @@
     </header>
     <nav class="tabs">
       {#each TABS as t (t.key)}
-        <button class:on={sites.tab === t.key} aria-current={sites.tab === t.key ? 'page' : undefined} onclick={() => (sites.tab = t.key)}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && needCount + syndPending}<span class="cnt" data-tip={syndPending ? `${needCount + syndPending} 条要你处理（含分发 ${syndPending} 篇等你确认发布）` : `${needCount} 条要你处理`}>{needCount + syndPending}</span>{:else if t.key === 'queue' && queuedCount}<span class="cnt soft" data-tip="{queuedCount} 条排着等 AI 处理，不用你动手">{queuedCount}</span>{/if}</button>
+        <button class:on={tab === t.key} aria-current={tab === t.key ? 'page' : undefined} onclick={() => { sites.tab = t.key; if (site) sites.paneTabs[site.id] = t.key; }}><Icon name={t.icon} size={13} />{t.label}{#if t.key === 'queue' && needCount + syndPending}<span class="cnt" data-tip={syndPending ? `${needCount + syndPending} 条要你处理（含分发 ${syndPending} 篇等你确认发布）` : `${needCount} 条要你处理`}>{needCount + syndPending}</span>{:else if t.key === 'queue' && queuedCount}<span class="cnt soft" data-tip="{queuedCount} 条排着等 AI 处理，不用你动手">{queuedCount}</span>{/if}</button>
       {/each}
     </nav>
     <div class="page-body">
-      {#key `${site.id}:${sites.tab}`}
+      {#key `${site.id}:${tab}`}
         <div class="pane">
-          {#if sites.tab === 'overview'}<SiteOverview {site} />
-          {:else if sites.tab === 'data'}<SiteDataTab {site} />
-          {:else if sites.tab === 'queue'}<SiteQueue {site} />
-          {:else if sites.tab === 'deploy'}<SiteDeployTab {site} />
-          {:else if sites.tab === 'distribute'}<SiteDistributeTab {site} />
-          {:else}<SiteSettings {site} />{/if}
+          {#if tab === 'overview'}<SiteOverview {site} />
+          {:else if tab === 'data'}<SiteDataTab {site} />
+          {:else if tab === 'queue'}<SiteQueue {site} />
+          {:else if tab === 'deploy'}<SiteDeployTab {site} />
+          {:else if tab === 'distribute'}<SiteDistributeTab {site} />
+          {:else if current}<SiteSettings {site} />
+          <!-- 设置页的草稿全局只有一份：两个看板同时开着设置会互相把草稿换掉，没聚焦的那个先不挂编辑器 -->
+          {:else}<div class="card"><p class="hint">点一下这个窗格继续编辑「{site.name}」的设置。</p></div>{/if}
         </div>
       {/key}
     </div>

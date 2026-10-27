@@ -18,7 +18,9 @@
   let input: HTMLInputElement | undefined = $state();
   let listEl: HTMLDivElement | undefined = $state();
 
-  const cur = $derived(sites.active);
+  // site：分屏里的看板传自己的站点（没聚焦的看板不能显示成当前站点的名字）
+  let { site = null }: { site?: Site | null } = $props();
+  const cur = $derived(site ?? sites.active);
   const items = $derived.by(() => {
     const rank = new Map(sites.recent.map((id, i) => [id, i]));
     const needle = q.trim().toLowerCase();
