@@ -3,6 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { say, confirmDialog } from './app.svelte.js';
+import { openConnectionSetup } from './settings.svelte.js';
+import { openUpdateCenter } from './updater.svelte.js';
+import { isMainWindow } from './env';
 import type { BackgroundStatus, BackupStatus, BackupManifest } from '$lib/types';
 
 class BgState {
@@ -69,6 +72,19 @@ export function initBackground() {
     const t = setInterval(() => void loadBackground(), 10 * 60_000);
     const un = listen('backup-done', () => void loadBackup());
     return () => { clearInterval(t); void un.then((f) => f()); };
+  });
+}
+
+/** macOS 菜单栏里「检查更新… / 设置… / 后台运行与备份…」（Rust 端发到主窗口的 app-menu 事件） */
+export function initAppMenu() {
+  $effect(() => {
+    if (!isMainWindow) return;
+    const un = listen<string>('app-menu', (e) => {
+      if (e.payload === 'update') openUpdateCenter();
+      else if (e.payload === 'settings') openConnectionSetup();
+      else if (e.payload === 'background') openBackground();
+    });
+    return () => void un.then((f) => f());
   });
 }
 

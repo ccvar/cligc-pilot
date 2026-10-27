@@ -4744,6 +4744,77 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// macOS 菜单栏（替换 Tauri 默认的英文菜单）：应用菜单里有「关于」（带应用图标）、「检查更新…」、「设置…」、「后台运行与备份…」；
+/// 另有编辑、视图、窗口三组。自定义项发 `app-menu` 事件给主窗口（update / settings / background），由前端打开对应界面。
+#[cfg(target_os = "macos")]
+fn setup_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{AboutMetadata, PredefinedMenuItem, Submenu};
+    let name = app.package_info().name.clone();
+    let about = PredefinedMenuItem::about(
+        app,
+        Some(&format!("关于 {name}")),
+        Some(AboutMetadata { name: Some(name.clone()), icon: app.default_window_icon().cloned(), copyright: Some("© cligc".into()), ..Default::default() }),
+    )?;
+    let sep = || PredefinedMenuItem::separator(app);
+    let update = MenuItem::with_id(app, "app-menu:update", "检查更新…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "app-menu:settings", "设置…", true, Some("CmdOrCtrl+,"))?;
+    let background = MenuItem::with_id(app, "app-menu:background", "后台运行与备份…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "app-menu:quit", format!("退出 {name}"), true, Some("CmdOrCtrl+Q"))?;
+    let app_menu = Submenu::with_items(
+        app,
+        &name,
+        true,
+        &[
+            &about,
+            &update,
+            &sep()?,
+            &settings,
+            &background,
+            &sep()?,
+            &PredefinedMenuItem::hide(app, Some(&format!("隐藏 {name}")))?,
+            &PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?,
+            &PredefinedMenuItem::show_all(app, Some("全部显示"))?,
+            &sep()?,
+            &quit,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "编辑",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, Some("撤销"))?,
+            &PredefinedMenuItem::redo(app, Some("重做"))?,
+            &sep()?,
+            &PredefinedMenuItem::cut(app, Some("剪切"))?,
+            &PredefinedMenuItem::copy(app, Some("拷贝"))?,
+            &PredefinedMenuItem::paste(app, Some("粘贴"))?,
+            &PredefinedMenuItem::select_all(app, Some("全选"))?,
+        ],
+    )?;
+    let view = Submenu::with_items(app, "视图", true, &[&PredefinedMenuItem::fullscreen(app, Some("进入全屏幕"))?])?;
+    let window = Submenu::with_items(
+        app,
+        "窗口",
+        true,
+        &[&PredefinedMenuItem::minimize(app, Some("最小化"))?, &PredefinedMenuItem::maximize(app, Some("缩放"))?, &sep()?, &PredefinedMenuItem::close_window(app, Some("关闭窗口"))?],
+    )?;
+    app.set_menu(Menu::with_items(app, &[&app_menu, &edit, &view, &window])?)?;
+    Ok(())
+}
+
+/// 应用菜单里的自定义项：退出前停掉本地预览；其余交给主窗口的前端。
+fn on_app_menu(app: &tauri::AppHandle, id: &str) {
+    let Some(what) = id.strip_prefix("app-menu:") else { return };
+    if what == "quit" {
+        stop_preview(&app.state::<AppState>());
+        app.exit(0);
+        return;
+    }
+    show_main(app);
+    let _ = app.emit_to("main", "app-menu", what);
+}
+
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -4793,6 +4864,8 @@ pub fn run() {
                 site_jobs: site_jobs::Jobs::default(),
             });
             setup_tray(app.handle())?;
+            #[cfg(target_os = "macos")]
+            setup_app_menu(app.handle())?;
             site_runner::start_scheduler(app.handle().clone());
             // 邮箱验证码的本机端口（phone.cjs 的 mail-* 命令从这里取）
             tauri::async_runtime::spawn(mail::serve(data_dir.clone()));
@@ -4818,6 +4891,7 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_menu_event(|app, event| on_app_menu(app, event.id.as_ref()))
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, WindowEvent::Resized(_) | WindowEvent::Moved(_)) {
                 if let Some(w) = window.app_handle().get_webview_window("main") {
