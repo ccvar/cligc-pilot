@@ -58,8 +58,16 @@ fn save(site_dir: &Path, r: &LinkReport) {
     }
 }
 
-/// 站外链接里像推广 / 邀请链接的标记（和 managed::touches_money 一个思路，多认几种常见参数名）
-const MARKERS: &[&str] = &["?ref=", "&ref=", "ref_code", "refcode", "invite", "referral", "affiliate", "aff_id", "affid", "promo", "coupon", "inviter"];
+/// 站外链接算推广 / 邀请链接的条件：网址参数名是这些之一，或路径里有这些整段（只看参数名和整段路径，
+/// 不按字面包含判断，不然「promoted」这类普通文章网址也会被当成推广链接）
+const PARAMS: &[&str] = &["ref", "refcode", "ref_code", "referral", "referral_code", "invite", "invitecode", "invite_code", "inviter", "aff", "affid", "aff_id", "affiliate", "promo", "promocode", "promo_code", "coupon"];
+const SEGMENTS: &[&str] = &["invite", "referral", "affiliate", "join", "ref"];
+
+fn looks_like_money(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else { return false };
+    u.query_pairs().any(|(k, _)| PARAMS.contains(&k.to_ascii_lowercase().as_str()))
+        || u.path_segments().is_some_and(|mut s| s.any(|seg| SEGMENTS.contains(&seg.to_ascii_lowercase().as_str())))
+}
 
 /// 从 HTML 里取出所有 href 的值（&amp; 还原）
 fn hrefs(html: &str) -> Vec<String> {
@@ -96,7 +104,7 @@ fn money_links(html: &str, domain: &str) -> Vec<(String, String)> {
                 if !slug.is_empty() {
                     out.push((format!("https://{domain}/go/{slug}"), format!("/go/{slug}")));
                 }
-            } else if !own && MARKERS.iter().any(|m| low.contains(m)) {
+            } else if !own && looks_like_money(h) {
                 let u = h.split('#').next().unwrap_or(h).to_string();
                 out.push((u.clone(), u));
             }
@@ -261,5 +269,7 @@ mod tests {
         let urls: Vec<&str> = got.iter().map(|(u, _)| u.as_str()).collect();
         assert_eq!(urls, vec!["https://gatesor.com/go/okx", "https://gatesor.com/go/okx", "https://accounts.binance.com/register?ref=ABC123", "https://gatesor.com/go/ledger"]);
         assert_eq!(got[0].1, "/go/okx");
+        assert!(!looks_like_money("https://forklog.com/en/libra-token-promoted-by-argentinas-president-plunges-94/"));
+        assert!(looks_like_money("https://www.okx.com/join/OK6667") && looks_like_money("https://x.com/signup?inviteCode=AB"));
     }
 }

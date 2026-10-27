@@ -174,10 +174,14 @@ pub fn site_links(state: tauri::State<'_, AppState>, id: String) -> Result<crate
 
 /// 现在就检查这个站点的推广链接。
 #[tauri::command]
-pub async fn check_site_links(state: tauri::State<'_, AppState>, id: String) -> Result<crate::link_check::LinkReport, String> {
+pub async fn check_site_links(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<crate::link_check::LinkReport, String> {
     let site = state.sites.get(&id)?;
     let out = crate::syndicate::built_out(&state, &site).ok();
-    crate::link_check::check_site(&site, &state.sites.data_dir(&id), out).await
+    let r = crate::link_check::check_site(&site, &state.sites.data_dir(&id), out).await;
+    // 全部站点列表上的「推广链接失效」跟着更新
+    use tauri::Emitter;
+    let _ = app.emit("links-checked", ());
+    r
 }
 
 /// 站点概览「在线情况」卡片：最近的检查、7 天可用率、证书 / 域名到期。
@@ -224,12 +228,14 @@ pub fn site_monitor(state: tauri::State<'_, AppState>, id: String) -> Result<Mon
 
 /// 现在就检查首页、证书和域名。
 #[tauri::command]
-pub async fn check_site_monitor(state: tauri::State<'_, AppState>, id: String) -> Result<MonitorView, String> {
+pub async fn check_site_monitor(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<MonitorView, String> {
     let site = state.sites.get(&id)?;
     if site.domain.trim().is_empty() {
         return Err("这个站点还没有设置域名".into());
     }
     let (m, _) = crate::monitor::check_site(&site, &state.sites.data_dir(&id), true).await;
+    use tauri::Emitter;
+    let _ = app.emit("monitor-checked", ());
     Ok(monitor_view(m))
 }
 
