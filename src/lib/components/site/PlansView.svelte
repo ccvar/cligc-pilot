@@ -133,14 +133,14 @@
 
       {#if p?.plan.notes}
         <div class="box">
-          <div class="box-t"><Icon name="info" size={12} />AI 给你的说明<span class="grow"></span><button class="ic-btn ic-sm fold" class:up={noteOpen} onclick={() => (noteOpen = !noteOpen)} aria-expanded={noteOpen} aria-label={noteOpen ? '收起' : '展开全文'} data-tip={noteOpen ? '收起' : '展开全文'}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></div>
+          <div class="box-t"><button class="box-tg" onclick={() => (noteOpen = !noteOpen)} aria-expanded={noteOpen} tabindex="-1"><Icon name="info" size={12} />AI 给你的说明</button><button class="ic-btn ic-sm fold" class:up={noteOpen} onclick={() => (noteOpen = !noteOpen)} aria-expanded={noteOpen} aria-label={noteOpen ? '收起' : '展开全文'} data-tip={noteOpen ? '收起' : '展开全文'}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></div>
           {#if noteOpen && noteParts.length > 1}<ol class="np">{#each noteParts as x, i (i)}<li>{x}</li>{/each}</ol>
           {:else}<p class:clamp={!noteOpen}>{p.plan.notes}</p>{/if}
         </div>
       {/if}
       {#if p?.positioning.text}
         <div class="box">
-          <div class="box-t"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span><span class="grow"></span>
+          <div class="box-t"><button class="box-tg" onclick={() => (posOpen = !posOpen)} aria-expanded={posOpen} tabindex="-1"><Icon name="target" size={12} />站点定位<span class="faint">{p.positioning.by === 'user' ? '运营人员确认' : 'AI 归纳'}</span></button>
             <button class="ic-btn ic-sm fold" class:up={posOpen} onclick={() => (posOpen = !posOpen)} aria-expanded={posOpen} aria-label={posOpen ? '收起' : '展开全文'} data-tip={posOpen ? '收起' : '展开全文'}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <button class="ic-btn ic-sm" onclick={() => openSite(cur.id, 'overview')} aria-label="修改站点定位" data-tip="修改站点定位（在站点概览里）"><Icon name="pencil" size={13} /></button></div>
           <p class:clamp={!posOpen}>{p.positioning.text}</p>
@@ -219,7 +219,10 @@
   .box { padding: 9px 12px; border-radius: 9px; background: var(--rail); border: 1px solid var(--border); }
   .box-t { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); min-height: 22px; }
   .box-t .faint { font-weight: 400; font-size: 11.5px; }
+  /* 标题整行（标题和右边空白处）都能点开收起，箭头和铅笔在最右 */
+  .box-tg { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
   .box-t .fold svg { transition: transform .16s; }
+  .box-t:hover .fold { color: var(--dim); }
   .box-t .fold.up svg { transform: rotate(180deg); }
   .box p { margin: 3px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .box p.clamp { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
