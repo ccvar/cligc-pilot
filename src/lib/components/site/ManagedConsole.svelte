@@ -17,9 +17,10 @@
   import { openSite } from '$lib/state/sites.svelte.js';
   import DigestCalendar from './DigestCalendar.svelte';
   import PlansView from './PlansView.svelte';
+  import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
-  import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
+  import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
@@ -217,25 +218,7 @@
     {:else if managed.tab === 'plans'}
       <PlansView sites={o?.sites ?? []} plans={managed.plans} />
     {:else if managed.tab === 'needs'}
-      <div class="card">
-        <h3><Icon name="bell" />需要你</h3>
-        <p class="hint">只放要你动手的：判定不能自动上线的改动（新页面待审、改到推荐 / 邀请内容、超出每日上限）、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。</p>
-        {#if !needs.length}<p class="hint">没有需要你处理的事。</p>{/if}
-        {#each stuck as x (x.id)}
-          <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><button class="link-btn" onclick={() => openSite(x.id, 'queue', 'open')}>去看看</button></div>
-        {/each}
-        <table class="tbl">
-          <tbody>
-            {#each needs as n (n.item.id)}
-              <tr class="clickable" onclick={() => openSite(n.site_id, 'queue')}>
-                <td class="nsite"><span><SiteIcon id={n.site_id} size={13} />{n.site_name}</span></td>
-                <td class="trunc">{n.item.opp.title}<div class="nw"><WhyChips change={n.item.opp.change} source={sourceOf(n.item.opp)} kind={n.item.opp.kind} target={n.item.opp.target} /></div><div class="faint" style="font-size:11.5px">{n.item.status === 'deployed' ? n.item.attention : n.item.verdict && n.item.verdict !== 'auto' ? n.item.verdict : n.item.note}</div></td>
-                <td style="width:90px"><span class="pill {n.item.status === 'failed' ? 'err' : 'warn'}">{n.item.status === 'deployed' ? '待核对' : STATUS_LABEL[n.item.status]}</span></td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      <NeedsView {needs} {stuck} />
     {:else if managed.tab === 'digests'}
       <div class="card">
         <h3><Icon name="news" />日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}><Icon name="news" size={11} />生成今日日报</button></h3>
@@ -381,13 +364,6 @@
 </div>
 
 <style>
-  .nsite { width: 150px; min-width: 150px; max-width: 150px; vertical-align: top; }
-  .nsite span { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
-  .stuck { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 9px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.6; }
-  .stuck :global(svg) { flex: none; margin-top: 4px; }
-  .stuck span { flex: 1; }
-  .stuck b { font-weight: 600; }
-  .stuck .link-btn { flex: none; font-size: 12.5px; }
   .bad { color: var(--err); font-weight: 600; }
   .oplog { padding-top: 12px; padding-bottom: 12px; }
   .log-h { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
@@ -478,11 +454,9 @@
   .see { font-size: 11.5px; opacity: 0; transition: opacity .12s; }
   .ev:hover .see { opacity: 1; }
   .ev-why { margin: 3px 0 2px; }
-  .nw { margin: 3px 0; }
   .link-btn.plain { text-decoration: none; color: var(--dim); font-size: inherit; }
   .link-btn.plain:hover { color: var(--text); text-decoration: underline; }
   .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
-  tr.clickable { cursor: pointer; }
   .md { margin-top: 14px; font-size: 13px; line-height: 1.75; border-top: 1px solid var(--border); padding-top: 12px; }
   .md :global(h1) { font-size: 16px; margin: 0 0 8px; }
   .md :global(h2) { font-size: 14px; margin: 16px 0 6px; }
