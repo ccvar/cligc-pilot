@@ -6,10 +6,9 @@
   import { app } from '$lib/state/app.svelte.js';
   import { sidebar } from '$lib/state/sidebar.svelte.js';
   import { connections, selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, remoteConns } from '$lib/state/connections.svelte.js';
-  import { openSshConnect } from '$lib/state/ssh.svelte.js';
   import { startRemoteDrag } from '$lib/state/remotePanes.svelte.js';
 
-  // 远程模式的左栏：新对话下面列出全部远程连接（和站点模式一样），当前这台展开它的对话。
+  // 远程模式的左栏：顶上「新建远程连接」（在 Sidebar），下面列出全部远程连接（和站点模式一样），当前这台展开它的对话。
   let { convRow }: { convRow: Snippet<[Conversation]> } = $props();
   const list = $derived(remoteConns());
   // 每台机器有没有正在跑的对话
@@ -31,10 +30,6 @@
       {#if convs.length}<div class="convs">{#each convs as conv (conv.id)}{@render convRow(conv)}{/each}</div>{/if}
     {/if}
   {/each}
-  <button class="add" onclick={() => openSshConnect()}>
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
-    新建远程连接
-  </button>
 </div>
 
 <style>
@@ -49,8 +44,6 @@
   .main small { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
   .convs { padding: 1px 0 6px 12px; animation: rr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
-  .add { margin: 6px 8px 0; width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; border: none; background: none; border-radius: 9px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; transition: background-color .12s, color .12s; }
-  .add:hover { background: #f5f4f1; color: var(--text); }
   @keyframes pulse { 50% { opacity: .35; } }
   @keyframes rr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }

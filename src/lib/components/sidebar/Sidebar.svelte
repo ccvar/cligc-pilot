@@ -28,6 +28,7 @@
   import { managed, openManaged } from '$lib/state/managed.svelte.js';
   import { selectConn } from '$lib/state/connections.svelte.js';
   import { SITES_CONN_ID } from '$lib/state/env';
+  import { openSshConnect } from '$lib/state/ssh.svelte.js';
 </script>
 
 <!-- 按站点 / 项目分组的对话列表（普通模式直接放；Cloudflare / GitHub 模式放在当前账号下面） -->
@@ -78,14 +79,22 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="rail-resize" title="拖动调整宽度" onmousedown={startResize} role="separator" aria-orientation="vertical"></div>
   <div class="rail-head">
-    <!-- 菜单项都能拖进主区分屏（点击＝在当前这一格打开，拖动＝新开一格）；远程连接没有启动页，新对话不能拖 -->
-    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话（拖到右边可以分屏）" onpointerdown={(e) => { if (app.activeConn && !app.isSshConn) startConversationPointerDrag(e, 'page:launcher'); }}>
+    <!-- 菜单项都能拖进主区分屏（点击＝在当前这一格打开，拖动＝新开一格）。
+         远程模式顶上不放「新对话」（在终端旁边的输入框里就能和 AI 聊这台机器），换成「新建远程连接」 -->
+    {#if app.isSshConn}
+    <button class="newchat" onclick={() => openSshConnect()}>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+      新建远程连接
+    </button>
+    {:else}
+    <button class="newchat" onclick={newChat} disabled={!app.activeConn} title="新对话（拖到右边可以分屏）" onpointerdown={(e) => { if (app.activeConn) startConversationPointerDrag(e, 'page:launcher'); }}>
       <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
         <path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10l7.5-7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
         <path d="M2.5 13.5h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
       </svg>
       新对话
     </button>
+    {/if}
     {#if app.isSitesMode}
     <button class="railnav {app.view === 'sites' ? 'on' : ''}" onclick={() => selectConn(SITES_CONN_ID)} onpointerdown={(e) => startConversationPointerDrag(e, 'page:sites')}>
       <SiteMark size={14} />
