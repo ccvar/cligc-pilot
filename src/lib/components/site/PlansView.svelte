@@ -44,7 +44,7 @@
 </script>
 
 <div class="card pvc"><div class="pv">
-  <nav class="list" aria-label="站点">
+  <nav class="slist" aria-label="站点">
     {#each sites as s (s.id)}
       {@const sp = planOf(s.id)}
       {@const g = progress(sp)}
@@ -121,7 +121,7 @@
 <style>
   .pvc { padding: 0; overflow: hidden; container-type: inline-size; }
   .pv { display: grid; grid-template-columns: 220px minmax(0, 1fr); }
-  .list { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); max-height: 70vh; overflow-y: auto; }
+  .slist { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-right: 1px solid var(--border); max-height: 70vh; overflow-y: auto; }
   .site { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; color: var(--dim); cursor: pointer; text-align: left; min-width: 0; }
   .site:hover { background: var(--su-hover); color: var(--text); }
   .site.on { background: var(--accent-soft); color: var(--text); font-weight: 550; }
@@ -172,7 +172,7 @@
   /* 窄的时候站点列表改成上面一排 */
   @container (max-width: 640px) {
     .pv { grid-template-columns: minmax(0, 1fr); }
-    .list { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); max-height: none; }
+    .slist { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); max-height: none; }
     .site { flex: none; }
     .site .nm { flex: none; }
   }
