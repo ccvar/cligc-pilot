@@ -722,7 +722,7 @@
   .ub-att-img img { display: block; max-width: 260px; max-height: 180px; width: auto; height: auto; }
   .ub-att-img.ph { display: inline-block; width: 128px; height: 96px; cursor: default; animation: phpulse 1.2s ease-in-out infinite; }
   /* 自己发出去的图片：和输入框里一样的方形缩略图（裁成正方形），点开看原图 */
-  .ub-att-img.sq { width: 84px; height: 84px; min-width: 0; border-radius: 12px; }
+  .ub-att-img.sq { width: 112px; height: 112px; min-width: 0; border: none; border-radius: 14px; box-shadow: 0 0 0 1px rgba(30, 28, 24, .06); }
   .ub-att-img.sq img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
   /* 助手消息里的生图产物：与用户附件同款卡片，气泡外基底微调 */
   .gen-imgs { margin-top: 6px; }

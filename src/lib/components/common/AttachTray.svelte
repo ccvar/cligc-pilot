@@ -27,17 +27,18 @@
 {/if}
 
 <style>
-  .tray { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px 2px; }
-  .tile { position: relative; flex: none; width: 160px; height: 84px; display: flex; flex-direction: column; gap: 3px; padding: 9px 10px; border: 1px solid var(--border2); border-radius: 12px; background: var(--panel); font-size: 12px; }
-  .tile.img { width: 84px; padding: 0; overflow: hidden; background: repeating-conic-gradient(#ececea 0 25%, #fff 0 50%) 0 0 / 12px 12px; }
+  .tray { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 14px 2px; }
+  /* 尺寸照 Claude 客户端：112 见方、圆角 14、不描边，只留一圈很淡的阴影线 */
+  .tile { position: relative; flex: none; width: 112px; height: 112px; display: flex; flex-direction: column; gap: 4px; padding: 11px 11px 9px; border-radius: 14px; background: var(--panel); box-shadow: inset 0 0 0 1px rgba(30, 28, 24, .08); font-size: 12px; }
+  .tile.img { padding: 0; overflow: hidden; box-shadow: 0 0 0 1px rgba(30, 28, 24, .06); background: repeating-conic-gradient(#ececea 0 25%, #fff 0 50%) 0 0 / 12px 12px; }
   .zoom { display: block; width: 100%; height: 100%; padding: 0; border: none; background: none; cursor: zoom-in; }
   .tile.img img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .fi { color: var(--dim); display: inline-flex; }
-  .fn { color: var(--text); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+  .fn { color: var(--text); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; word-break: break-all; }
   .fx { margin-top: auto; color: var(--faint); font-size: 10.5px; letter-spacing: .03em; }
-  .rm { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: rgba(30, 28, 24, .72); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s; }
+  .rm { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: rgba(30, 28, 24, .72); color: #fff; cursor: pointer; opacity: 0; transition: opacity .12s; }
   .tile:hover .rm, .rm:focus-visible { opacity: 1; }
   .rm:hover { background: var(--err); }
-  .tile.wait { width: 84px; padding: 0; animation: pulse 1.2s ease-in-out infinite; }
+  .tile.wait { padding: 0; animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: .5; } 50% { opacity: .9; } }
 </style>
