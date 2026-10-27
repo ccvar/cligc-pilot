@@ -56,7 +56,7 @@
   .src-ic { position: relative; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: none; color: var(--dim); cursor: pointer; }
   .src-ic:hover { background: var(--su-hover); color: var(--text); }
   .src-ic:not(.ok):not(.warn) :global(svg) { filter: grayscale(1); opacity: .45; }
-  .src-ic i { position: absolute; right: 3px; bottom: 4px; width: 5px; height: 5px; border-radius: 50%; background: var(--border2); box-shadow: 0 0 0 1px var(--card, #fff); }
+  .src-ic i { position: absolute; right: 4px; bottom: 5px; width: 3.5px; height: 3.5px; border-radius: 50%; background: var(--border2); box-shadow: 0 0 0 1px var(--card, #fff); }
   .src-ic.ok i { background: var(--ok); }
   .src-ic.warn i { background: var(--warn); }
 </style>
