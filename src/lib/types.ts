@@ -506,6 +506,8 @@ export interface DigestEvent { kind: string; label: string; title: string; detai
 export interface DigestSite { site_id: string; site_name: string; events: DigestEvent[] }
 export interface DigestTraffic { site_id: string; site_name: string; clicks: number; clicks_prev: number; views: number; views_prev: number }
 export interface DigestData { date: string; generated_at: number; sites_total: number; shipped: number; planned: number; broken: number; needs: DigestNeed[]; active: DigestSite[]; quiet: string[]; traffic: DigestTraffic[]; no_traffic: string[] }
+/** 日报日历里的一天（只有有动静的日子） */
+export interface DayCount { date: string; shipped: number; planned: number; proposed: number; broken: number }
 export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string; change?: string; source?: string }
 export interface PlanTask { title: string; page: string; change: string; why: string; priority: number; source?: string; query?: string; expect?: { metric?: string; query?: string; note?: string } }
 export interface StageInfo { stage: string; auto_stage: string; reason: string; manual: string }

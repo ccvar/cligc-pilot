@@ -15,6 +15,7 @@
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { modelIcon } from '$lib/state/models';
   import { openSite } from '$lib/state/sites.svelte.js';
+  import DigestCalendar from './DigestCalendar.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
@@ -40,7 +41,7 @@
     void loadManaged();
     if (managed.tab === 'plans') void loadPlans();
     if (managed.tab === 'needs') void loadPending();
-    if (managed.tab === 'digests') void loadDigests();
+    if (managed.tab === 'digests') void loadDigests().then(() => { if (!managed.digest && managed.digests[0]) void openDigest(managed.digests[0]); });
   });
 
   // 规则摘要里显示模型名：沿用启动页的「服务 + 模型」选项
@@ -263,7 +264,7 @@
       <div class="card">
         <h3><Icon name="news" />日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}><Icon name="news" size={11} />生成今日日报</button></h3>
         {#if !managed.digests.length}<p class="hint">还没有日报。每天{o?.config.digest_hour ?? 9} 点后自动生成一份，并发系统通知。</p>{/if}
-        <div class="seg digs">{#each managed.digests as n (n)}<button class:on={managed.digest?.name === n} onclick={() => openDigest(n)}>{md(n)}</button>{/each}</div>
+        {#if managed.digests.length}<DigestCalendar digests={managed.digests} daily={managed.daily} selected={managed.digest?.name ?? null} onpick={openDigest} />{/if}
         {#if managed.digest?.data}<DigestView data={managed.digest.data} />{:else if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
       </div>
       {#if d}
@@ -522,7 +523,6 @@
   .plan small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; }
   .plan small.pg { color: var(--faint); font-size: 11px; }
   .x.mini { width: 16px; height: 16px; font-size: 13px; margin-right: -4px; }
-  .digs { flex-wrap: wrap; margin-bottom: 4px; }
   tr.clickable { cursor: pointer; }
   .md { margin-top: 14px; font-size: 13px; line-height: 1.75; border-top: 1px solid var(--border); padding-top: 12px; }
   .md :global(h1) { font-size: 16px; margin: 0 0 8px; }

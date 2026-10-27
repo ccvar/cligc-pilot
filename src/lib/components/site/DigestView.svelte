@@ -13,6 +13,7 @@
   $effect(() => { void data.date; openDetail = new Set(); showQuiet = false; showNoTraffic = false; });
   function toggle(k: string) { const n = new Set(openDetail); if (n.has(k)) n.delete(k); else n.add(k); openDetail = n; }
 
+  const dateLabel = $derived(/^\d{4}-(\d{2})-(\d{2})$/.test(data.date) ? `${+data.date.slice(5, 7)}月${+data.date.slice(8, 10)}日` : data.date);
   const time = $derived(data.generated_at ? new Date(data.generated_at * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
   const tiles = $derived([
     { k: 'shipped', l: '自动上线', n: data.shipped, tone: 'ok' },
@@ -35,7 +36,7 @@
 </script>
 
 <div class="dg">
-  <p class="meta">托管 {data.sites_total} 个站点 · 过去 24 小时{#if time} · {time} 生成{/if}</p>
+  <p class="meta"><b>{dateLabel}</b> · 托管 {data.sites_total} 个站点 · 过去 24 小时{#if time} · {time} 生成{/if}</p>
 
   <div class="tiles">
     {#each tiles as t (t.k)}
@@ -118,6 +119,7 @@
 <style>
   .dg { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 16px; }
   .meta { margin: 0; font-size: 12px; color: var(--faint); }
+  .meta b { color: var(--text); font-weight: 600; }
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   .tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
   .tile b { font-size: 20px; line-height: 1.2; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }

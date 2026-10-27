@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -14,6 +14,8 @@ class ManagedState {
   activity = $state<ManagedActivity[]>([]);
   plans = $state<SitePlan[]>([]);
   digests = $state<string[]>([]);
+  /** 日报日历：最近半年每天的动态计数 */
+  daily = $state<DayCount[]>([]);
   /** data：新版日报的结构化内容；旧日报只有 Markdown（text） */
   digest = $state<{ name: string; text: string; data: DigestData | null } | null>(null);
   tab = $state<ManagedTab>('groups');
@@ -238,7 +240,10 @@ export async function loadPlans() {
   try { const v = await invoke<SitePlan[]>('managed_plans'); managed.plans = v; } catch (e) { say(String(e), 'err'); }
 }
 export async function loadDigests() {
-  try { const v = await invoke<string[]>('list_digests'); managed.digests = v; } catch (e) { say(String(e), 'err'); }
+  try {
+    const [v, d] = await Promise.all([invoke<string[]>('list_digests'), invoke<DayCount[]>('managed_daily', { days: 190 }).catch(() => [] as DayCount[])]);
+    managed.digests = v; managed.daily = d;
+  } catch (e) { say(String(e), 'err'); }
 }
 export async function openDigest(name: string) {
   try {

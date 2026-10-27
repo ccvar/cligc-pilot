@@ -309,6 +309,38 @@ pub fn list_digests(state: tauri::State<'_, AppState>) -> Vec<String> {
     v
 }
 
+/// 日报日历里的一天：AI 做了多少事、出没出问题。
+#[derive(Serialize, Default)]
+pub struct DayCount {
+    pub date: String,
+    pub shipped: usize,
+    pub planned: usize,
+    pub proposed: usize,
+    /// 回滚 + 失败 + 上线后检查失败
+    pub broken: usize,
+}
+
+/// 最近 days 天每天的托管动态计数（本地日期），只返回有动静的日子。
+#[tauri::command]
+pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<DayCount> {
+    use chrono::TimeZone;
+    let since = (chrono::Local::now().timestamp().max(0) as u64).saturating_sub(days.unwrap_or(190) * 86_400);
+    let mut map: std::collections::BTreeMap<String, DayCount> = Default::default();
+    for a in managed::activity(&state.data_dir, 20_000).into_iter().filter(|a| a.ts >= since) {
+        let Some(t) = chrono::Local.timestamp_opt(a.ts as i64, 0).single() else { continue };
+        let date = t.format("%Y-%m-%d").to_string();
+        let d = map.entry(date.clone()).or_insert_with(|| DayCount { date, ..Default::default() });
+        match a.kind.as_str() {
+            "shipped" => d.shipped += 1,
+            "planned" => d.planned += 1,
+            "proposed" => d.proposed += 1,
+            "rolled_back" | "failed" | "watch_failed" => d.broken += 1,
+            _ => {}
+        }
+    }
+    map.into_values().filter(|d| d.shipped + d.planned + d.proposed + d.broken > 0).collect()
+}
+
 #[tauri::command]
 pub fn read_digest(state: tauri::State<'_, AppState>, name: String) -> Result<String, String> {
     if name.contains('/') || name.contains('\\') || name.contains("..") {
