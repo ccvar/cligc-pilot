@@ -985,6 +985,18 @@ fn codex_sandbox(mode: PermMode) -> &'static str {
     }
 }
 
+/// 无人值守（托管运营）的 Codex：它没有逐条确认的钩子，Pilot 拦不住它跑的命令，
+/// 所以把它关进自带沙盒——只能写这次改动的工作文件夹（计划类任务只读），并且断网：
+/// 推不了代码、上不了线、也传不出东西。推送和上线本来就由 Pilot 在检查通过后执行。
+/// 返回（sandbox，能不能联网）。
+fn codex_sandbox_for(mode: PermMode, unattended: bool) -> (&'static str, bool) {
+    if unattended {
+        (if mode == PermMode::Plan { "read-only" } else { "workspace-write" }, false)
+    } else {
+        (codex_sandbox(mode), true)
+    }
+}
+
 fn validate_codex_model(model: &str) -> Result<Option<String>, String> {
     let model = model.trim();
     if model.is_empty() {
@@ -1037,8 +1049,8 @@ async fn try_run_codex_app_server(
         Ok(server) => server,
         Err(error) => return CodexAppServerAttempt::Unavailable(error),
     };
-    let sandbox = codex_sandbox(mode);
-    let config = serde_json::json!({"sandbox_workspace_write": {"network_access": true}});
+    let (sandbox, network) = codex_sandbox_for(mode, crate::site_runner::is_unattended(turn_id));
+    let config = serde_json::json!({"sandbox_workspace_write": {"network_access": network}});
     let mut thread_id = session_ref.to_string();
 
     if is_first || thread_id.trim().is_empty() {
@@ -1726,6 +1738,7 @@ pub async fn run_turn(
                 &work_dir,
                 mode,
                 lease.as_ref(),
+                crate::site_runner::is_unattended(&turn_id),
             )
             .map(|(cmd, prompt)| (cmd, Some(prompt), None))
         } else {
@@ -2266,14 +2279,12 @@ fn build_codex(
     work_dir: &str,
     perm: PermMode,
     lease: Option<&crate::bridge::Lease>,
+    unattended: bool,
 ) -> Result<(Command, String), String> {
     // codex 无头没有逐工具回传 UI 的能力，权限档位只能落到 sandbox 粗粒度（精细批准以 claude 为主）。
-    // plan＝只读；full＝完全放开；ask/auto＝可写工作区（无法逐命令确认）。
-    let sandbox = match perm {
-        PermMode::Plan => "read-only",
-        PermMode::Full => "danger-full-access",
-        PermMode::Ask | PermMode::Auto => "workspace-write",
-    };
+    // plan＝只读；full＝完全放开；ask/auto＝可写工作区（无法逐命令确认）。无人值守时另见 codex_sandbox_for。
+    let (sandbox, network) = codex_sandbox_for(perm, unattended);
+    let network_arg = format!("sandbox_workspace_write.network_access={network}");
     // codex 没有独立系统提示位：首轮把角色框架并进消息（前端只展示用户原话）。
     let prompt = if is_first {
         match system {
@@ -2289,7 +2300,7 @@ fn build_codex(
     if is_first {
         cmd.arg("--json")
             .args(["--sandbox", sandbox])
-            .args(["-c", "sandbox_workspace_write.network_access=true"])
+            .args(["-c", &network_arg])
             .arg("--skip-git-repo-check");
     } else {
         cmd.arg("resume")
@@ -2297,7 +2308,7 @@ fn build_codex(
             .arg("--json")
             .arg("--skip-git-repo-check")
             .args(["-c", &format!("sandbox_mode={sandbox}")])
-            .args(["-c", "sandbox_workspace_write.network_access=true"]);
+            .args(["-c", &network_arg]);
     }
     // 自定义模型 ID（可选）：非空则用 -c model=<id> 覆盖 codex 本地默认；留空用其默认。
     // 与既有 -c sandbox_* 一致用裸字符串；含空白/形似参数的非法值直接拒。
@@ -3114,6 +3125,25 @@ mod tests {
     }
 
     #[test]
+    fn unattended_codex_is_locked_to_its_workspace_and_offline() {
+        // 对话里照旧：自动档可写工作区、能联网；全自动完全放开
+        assert_eq!(codex_sandbox_for(PermMode::Auto, false), ("workspace-write", true));
+        assert_eq!(codex_sandbox_for(PermMode::Full, false), ("danger-full-access", true));
+        // 托管运营（无人值守）：再高的档位也只能写工作文件夹，而且断网；计划类任务只读
+        assert_eq!(codex_sandbox_for(PermMode::Full, true), ("workspace-write", false));
+        assert_eq!(codex_sandbox_for(PermMode::Auto, true), ("workspace-write", false));
+        assert_eq!(codex_sandbox_for(PermMode::Plan, true), ("read-only", false));
+        let conn: Connection = serde_json::from_value(json!({
+            "id": "c", "name": "c", "kind": "workspace", "skill_dir": ".",
+            "key_prefix": "", "key_kind": "", "created_at": ""
+        })).unwrap();
+        let (cmd, _) = build_codex(&conn, "", "", "", true, None, "x", "", ".", PermMode::Full, None, true).unwrap();
+        let args: Vec<String> = cmd.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w[0] == "--sandbox" && w[1] == "workspace-write"), "{args:?}");
+        assert!(args.iter().any(|a| a == "sandbox_workspace_write.network_access=false"), "{args:?}");
+    }
+
+    #[test]
     fn codex_app_server_validates_model_and_maps_sandbox() {
         assert_eq!(validate_codex_model("").unwrap(), None);
         assert_eq!(
@@ -3140,7 +3170,7 @@ mod tests {
         for (model, effort) in [("gpt-6-sol", "ultra"), ("gpt-6-luna", "max"), ("gpt-6-luna", "ultra")] {
             assert_eq!(validate_codex_model(model).unwrap(), Some(model.into()));
             let (cmd, _) = build_codex(&conn, model, effort, "", true, None,
-                "test", "", ".", PermMode::Plan, None).unwrap();
+                "test", "", ".", PermMode::Plan, None, false).unwrap();
             let args: Vec<String> = cmd.as_std().get_args()
                 .map(|arg| arg.to_string_lossy().into_owned()).collect();
             assert!(args.contains(&format!("model={model}")));
@@ -3331,6 +3361,7 @@ mod tests {
             ".",
             PermMode::Auto,
             None,
+            false,
         )
         .unwrap();
         let first_args: Vec<String> = first
@@ -3356,6 +3387,7 @@ mod tests {
             ".",
             PermMode::Auto,
             None,
+            false,
         )
         .unwrap();
         let astra_args: Vec<String> = astra
@@ -3380,6 +3412,7 @@ mod tests {
             ".",
             PermMode::Auto,
             None,
+            false,
         )
         .unwrap();
         let resume_args: Vec<String> = resume

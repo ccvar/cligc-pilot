@@ -340,11 +340,8 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     if g.name.chars().count() > 40 {
         return Err("方案名太长了".into());
     }
-    for b in [&g.brain, &g.fallback_brain] {
-        if b == "codex" {
-            return Err("托管不能用 Codex（它没有逐条确认的钩子），请选 Claude、Grok 或 API 服务".into());
-        }
-    }
+    // Codex 可以用：它没有逐条确认的钩子，托管时 Pilot 把它关在工作文件夹里并断网运行（见 agent::codex_sandbox_for），
+    // 编辑器里选它会先警告
     if g.brain.is_empty() {
         return Err("请选择主模型".into());
     }
@@ -1112,7 +1109,7 @@ mod group_tests {
         g.paused = true;
         assert!(!g.active_for("a"));
         assert!(validate_group(&ManagedGroup { name: " ".into(), ..g.clone() }).is_err());
-        assert!(validate_group(&ManagedGroup { brain: "codex".into(), ..g }).is_err());
+        assert!(validate_group(&ManagedGroup { brain: "codex".into(), model: "gpt-6-sol".into(), ..g }).is_ok(), "Codex 可以用（托管时断网运行）");
     }
 }
 
@@ -1152,7 +1149,7 @@ mod tests {
         assert!(c.digest);
         assert!(validate_group(&ManagedGroup::from_legacy(&c, "x")).is_ok());
         let g = ManagedGroup::from_legacy(&c, "x");
-        assert!(validate_group(&ManagedGroup { fallback_brain: "codex".into(), ..g.clone() }).is_err());
+        assert!(validate_group(&ManagedGroup { fallback_brain: "codex".into(), fallback_model: "gpt-6-sol".into(), ..g.clone() }).is_ok());
         assert!(validate_group(&ManagedGroup { fallback_brain: "claude".into(), ..g }).is_err(), "备用和主模型一样");
     }
 

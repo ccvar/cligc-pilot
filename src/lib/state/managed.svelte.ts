@@ -156,6 +156,11 @@ export async function saveGroup(): Promise<boolean> {
   if (!g) return false;
   const how = g.autonomy === 'suggest' ? 'AI 会按这个方案每周读数据和站点，出计划和改进建议，不改代码。' : g.autonomy === 'review' ? 'AI 会按这个方案的规则改好页面、跑完检查，每一条都等你确认再上线。' : 'AI 会按这个方案的规则制定计划、自动修改并上线页面内容（依赖、配置、代码、推荐 / 邀请相关内容永远不会自动改），上线后自动检查，变差就回滚。';
   if (!g.id && g.sites.length && !(await confirmDialog(`把 ${g.sites.length} 个站点交给 AI 运营？${how}可以随时停止某个站点、暂停整个方案。`, { title: '新建托管方案', kind: 'info', confirmText: '开始托管' }))) return false;
+  // 这次新选了 Codex：说清楚它在托管里会怎么跑（没有逐条确认，断网、只能改工作文件夹）
+  const before = managed.overview?.groups.find((x) => x.id === g.id);
+  const codexNow = g.brain === 'codex' || g.fallback_brain === 'codex';
+  const codexBefore = !!before && (before.brain === 'codex' || before.fallback_brain === 'codex');
+  if (codexNow && !codexBefore && !(await confirmDialog('Codex 没有逐条确认的钩子，Pilot 拦不住它执行的命令。托管时会把它关在每次改动的工作文件夹里并断开网络：改不到别的文件、推送不了、上不了线；但它也看不了外部网页、截不了图、装不了新依赖。推送和上线照常由 Pilot 在检查通过后执行。确定用 Codex 托管？', { title: '用 Codex 托管', kind: 'warning', confirmText: '确定使用' }))) return false;
   managed.saving = true;
   try {
     await invoke<ManagedGroup>('save_managed_group', { group: g });

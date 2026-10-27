@@ -16,7 +16,9 @@
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
-  const modelOpts = $derived(launcher.comboOpts.filter((x) => !x.value.startsWith('codex::')).map((x) => ({ value: x.value, label: x.label, sub: x.sub, icon: x.icon, disabled: x.disabled })));
+  const modelOpts = $derived(launcher.comboOpts.map((x) => ({ value: x.value, label: x.label, sub: x.value.startsWith('codex::') ? `${x.sub} · 托管时断网运行` : x.sub, icon: x.icon, disabled: x.disabled })));
+  // Codex 没有逐条确认的钩子：托管时 Pilot 把它关在工作文件夹里并断网运行，选它要先看清楚代价
+  const usesCodex = $derived(!!g && (g.brain === 'codex' || g.fallback_brain === 'codex'));
   const primary = $derived(g ? `${g.brain}::${g.model}` : '');
   // 主模型没选（或选的已不可用）：默认第一个可用的
   $effect(() => {
@@ -243,7 +245,14 @@
         <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
         <div class="field"><span class="lbl">备用模型</span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
       </div>
-      <small class="faint">主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。Codex 不能用于托管。</small>
+      <small class="faint">主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。</small>
+      {#if usesCodex}
+        <div class="codex-warn" role="note">
+          <b><Icon name="shield" size={13} />Codex（GPT 本地客户端）托管时会断网运行</b>
+          <p>Codex 没有逐条确认的钩子，Pilot 拦不住它执行的命令。所以托管时把它关在这次改动的工作文件夹里、断开网络：它改不到别的文件，推送不了代码、上不了线，也传不出东西；推送和上线照常由 Pilot 在检查通过后执行。</p>
+          <p>代价是它看不了外部网页、截不了图、装不了新依赖，写需要查资料的新页面效果会差一些。想要 GPT 又不受这些限制，可以在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → API 服务</button>里接入 OpenAI，用「API · OpenAI」的模型。</p>
+        </div>
+      {/if}
      {/if}
     </div>
     <footer class="sheet-foot">
@@ -346,4 +355,7 @@
   .act small { font-size: 11px; color: var(--faint); line-height: 1.45; }
   .chosen + .sec { border-top: none; padding-top: 4px; }
   .lbl :global(img) { margin-right: 5px; }
+  .codex-warn { margin-top: 8px; padding: 9px 11px; border-radius: 8px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12px; line-height: 1.6; }
+  .codex-warn b { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+  .codex-warn p { margin: 4px 0 0; }
 </style>

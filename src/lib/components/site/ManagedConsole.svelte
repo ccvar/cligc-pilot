@@ -288,7 +288,7 @@
             <span><Icon name="checks" size={12} />{(g.actions ?? []).length === 5 ? '全部动作' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、')}</span>
             {#if g.guidelines?.trim()}<span><Icon name="doc" size={12} />有内容准则</span>{/if}
             {#if g.topics?.trim()}<span><Icon name="bulb" size={12} />{g.topics.split('\n').filter((l) => l.trim()).length} 个选题</span>{/if}
-            <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}</span>
+            <span><Icon name="cpu" size={12} />{modelLabel(g.brain, g.model)}{#if g.fallback_brain}<span class="faint"> · 备用 {modelLabel(g.fallback_brain, g.fallback_model)}</span>{/if}{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 没有逐条确认的钩子：托管时只能改每次改动的工作文件夹、断网运行，推送和上线由 Pilot 执行">断网运行</span>{/if}</span>
             <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}{g.min_page_chars ? ` · ≥ ${g.min_page_chars} 字` : ''}</span>
             {#if g.autonomy === 'auto'}<span><Icon name="code" size={12} />{CODE_LABEL[g.code_changes ?? 'all']}</span>{/if}
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
@@ -410,6 +410,7 @@
   .rules { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--dim); margin: -4px 0 10px; }
   .rules > span { display: inline-flex; align-items: center; gap: 5px; }
   .rules :global(.ico) { color: var(--faint); }
+  .codex-off { margin-left: 4px; font-size: 11px; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 999px; padding: 0 6px; }
   /* 判断模型规则的小开关：标签本身可点，右边一个迷你开关表示开 / 关 */
   .rule-tg { display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 1px 0; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
   .rule-tg:hover { color: var(--text); }

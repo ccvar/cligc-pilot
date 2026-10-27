@@ -638,9 +638,6 @@ fn shipped_today(site_dir: &Path) -> usize {
 }
 
 async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
-    if site.ops.brain == "codex" {
-        return Err("无人值守任务不能用 Codex".into());
-    }
     let site_dir = ctx.site_dir(&site.id);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
