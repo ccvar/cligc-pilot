@@ -4,7 +4,8 @@
   import UsageRing from '$lib/UsageRing.svelte';
   import SshMark from '$lib/components/icons/SshMark.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
-  import { sites, openSiteBoard, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
+  import { sites, DEPLOY_LABEL, SITE_PREFIX } from '$lib/state/sites.svelte.js';
+  import { selectConn } from '$lib/state/connections.svelte.js';
   import { gh, loadGhRepos } from '$lib/state/github.svelte.js';
   import CliGuide from '$lib/components/launcher/CliGuide.svelte';
   import WranglerNote from '$lib/components/launcher/WranglerNote.svelte';
@@ -25,6 +26,14 @@
       .map((s) => ({ value: s.id, label: s.name, img: sites.icons[s.id] ?? '', sub: s.domain && s.domain !== s.name ? s.domain : (DEPLOY_LABEL[s.deploy.mode] ?? '').split('（')[0] }));
   });
   const hubSite = $derived(sites.list.find((s) => s.id === launcher.lSite));
+  /** 站点里的新对话换到另一个站点：切过去，留在新对话页，已经输入的文字和附件不丢 */
+  async function switchSite(id: string) {
+    if (!id || id === sites.active?.id) return;
+    const draft = launcher.lDraft, files = composer.attachments;
+    await selectConn(SITE_PREFIX + id);
+    app.view = 'launcher';
+    launcher.lDraft = draft; composer.attachments = files;
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -65,7 +74,8 @@
             {#if app.isSitesHub}
               <Dropdown compact searchable bind:value={launcher.lSite} options={siteOpts} placeholder={sites.list.length ? '选择站点' : '还没有站点'} />
             {:else if app.isSiteConn}
-              <button type="button" class="ssh-target site-target" onclick={() => openSiteBoard()} data-tip="打开站点看板"><SiteIcon id={sites.active?.id ?? ''} size={13} />{sites.active?.name}</button>
+              <!-- 在某个站点里开的新对话：站点也能换（换成别的站点，输入的内容保留） -->
+              <Dropdown compact searchable value={sites.active?.id ?? ''} options={siteOpts} onchange={(v: string) => void switchSite(v)} ariaLabel="对话所在的站点" />
             {:else if app.isSshConn}
               <!-- 远程连接没有站点/项目可选：对象就是那台机器 -->
               <span class="ssh-target"><SshMark size={13} />{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}:{app.activeConn?.ssh_port}</span>
@@ -110,8 +120,6 @@
   /* 启动页：远程连接的目标机器（占站点选择器的位子——那台机器就是本次对话的对象） */
   .ssh-target { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--rail); color: var(--dim); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .ssh-target :global(svg) { color: var(--faint); flex: none; }
-  .site-target { cursor: pointer; font-family: inherit; }
-  .site-target:hover { color: var(--text); }
   .ssh-target :global(svg.distro) { transform: translateY(1px); }
   .workspace-picker { min-width: 0; display: inline-flex; align-items: center; gap: 2px; }
   .workspace-folder { min-width: 0; max-width: 210px; height: 27px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--rail); color: var(--dim); font: inherit; font-size: 11.5px; cursor: pointer; }
