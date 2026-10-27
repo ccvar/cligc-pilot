@@ -160,13 +160,13 @@
           <table class="tbl">
             <thead><tr>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
+              <th class="c-lvl">托管</th>
               <th class="num"><button class="th" onclick={() => sortBy('users')} data-tip="GA4 近 28 天用户（按天加总），下面是和前 28 天比"><GaMark size={11} />用户{arrow('users')}</button></th>
               <th class="num"><button class="th" onclick={() => sortBy('clicks')} data-tip="Google + Bing 近 28 天搜索点击，下面是和前 28 天比"><GscMark size={11} /><BingMark size={11} />搜索点击{arrow('clicks')}</button></th>
               <th class="num c-impr"><button class="th" onclick={() => sortBy('impr')} data-tip="Google + Bing 近 28 天展示"><GscMark size={11} /><BingMark size={11} />展示{arrow('impr')}</button></th>
               <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 28 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
               <th class="num c-idx"><button class="th" onclick={() => sortBy('indexed')} data-tip={'Google：近 28 天有展示的页面 / 站点地图提交的网址（Search Console 接口不再给收录数，用有展示的页面近似）\nBing：索引里的网址数'}><GscMark size={11} /><BingMark size={11} />已编入{arrow('indexed')}</button></th>
               <th class="c-trend"><span class="th-l"><GaMark size={11} />会话趋势</span></th>
-              <th class="c-lvl">托管</th>
               <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
             </tr></thead>
             <tbody>
@@ -177,6 +177,7 @@
                     <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={st.t === '数据源出错' ? r.summary.errors.join('\n') : st.t === '打不开' ? `${r.down_err || '首页打不开'}（连续两次检查都没打开）` : st.t === '证书有问题' ? r.cert_err : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
                     <small><span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github' && r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#if r.channels?.length}<span class="chs">{#each r.channels as c, i (i)}<button class="ch" class:off={!c.enabled} class:bad={c.failed > 0} onclick={(e) => { e.stopPropagation(); openSite(r.id, 'distribute'); }} aria-label={chTip(c)} data-tip={chTip(c)}><ConnectionMark kind={c.kind} size={12} /></button>{/each}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
+                  <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" data-tip={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
                   {#if r.has_data}
                     {@const sm = r.summary}
                     <td class="num">{#if sm.fetched_at}<span class="v">{n(sm.users ?? 0)}</span>{@render delta(sm.users ?? 0, sm.users_prev ?? 0)}{:else}—{/if}</td>
@@ -188,7 +189,6 @@
                   {:else}
                     <td class="num nodata" colspan="2">未接数据</td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
-                  <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" title={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
                   <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
                 </tr>
               {:else}
@@ -301,7 +301,9 @@
   .am-review::before { background: var(--su-run); }
   .am-suggest::before { background: #b9a36a; }
   .am-stopped::before { background: var(--faint); }
-  .am-none { color: var(--faint); }
+  /* 自己运营：灰色但不发虚（原来浅得像禁用） */
+  .am-none { color: var(--dim); }
+  .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
