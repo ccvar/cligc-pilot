@@ -118,8 +118,14 @@ fn record_run(site_dir: &Path, rec: RunRecord) {
     let mut s = load_state(site_dir);
     s.last.insert(rec.task.clone(), rec.started);
     s.runs.insert(0, rec);
-    s.runs.truncate(60);
+    // 托管页的执行记录图要看 30 天：一个站点一天可能跑好几样（扫描、体检、计划…），多留一些
+    s.runs.truncate(200);
     save_state(site_dir, &s);
+}
+
+/// 这个站点最近的运营作业记录（新的在前）。
+pub fn runs_of(site_dir: &Path) -> Vec<RunRecord> {
+    load_state(site_dir).runs
 }
 
 pub fn period(schedule: &str) -> Option<u64> {

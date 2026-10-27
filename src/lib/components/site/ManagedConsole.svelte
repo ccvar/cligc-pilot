@@ -16,6 +16,7 @@
   import { openSite } from '$lib/state/sites.svelte.js';
   import DigestCalendar from './DigestCalendar.svelte';
   import PlansView from './PlansView.svelte';
+  import RunChart from './RunChart.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
@@ -40,6 +41,7 @@
   ];
   $effect(() => {
     void loadManaged();
+    if (managed.tab === 'groups') void loadDigests();
     if (managed.tab === 'plans') void loadPlans();
     if (managed.tab === 'needs') void loadPending();
     if (managed.tab === 'digests') void loadDigests().then(() => { if (!managed.digest && managed.digests[0]) void openDigest(managed.digests[0]); });
@@ -86,6 +88,16 @@
       return n ? `${k}:${n}` : k;
     });
   });
+  // 点执行记录图上没有日报的那天：操作日志只看那一天
+  let logDay = $state('');
+  let logEl = $state<HTMLElement | null>(null);
+  const dayOf = (ts: number) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const feed = $derived(managed.activity.map((a, i) => ({ a, k: activityKeys[i] })).filter((x) => !logDay || dayOf(x.a.ts) === logDay));
+  function pickDay(date: string, report: boolean) {
+    if (report) { managed.tab = 'digests'; void openDigest(date); return; }
+    logDay = date; logOpen = true;
+    requestAnimationFrame(() => logEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
   async function moveSite(id: string, from: string, to: string) {
     if (to === from) return;
     if (to === '__new') { newGroup([id]); return; }
@@ -271,6 +283,7 @@
         {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
     {:else}
+      {#if groups.length}<RunChart daily={managed.daily} digests={managed.digests} onpick={pickDay} />{/if}
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
         {@const gOpen = grpOpen[g.id] ?? !gOff}
@@ -381,16 +394,17 @@
         </div>
       {/each}
 
-      <div class="card oplog" class:open={logOpen}>
+      <div class="card oplog" class:open={logOpen} bind:this={logEl}>
         <button class="log-h" onclick={() => (logOpen = !logOpen)} aria-expanded={logOpen}>
           <Icon name="activity" />操作日志
           <span class="sub">{managed.activity.length ? `${managed.activity.length} 条 · 最近 ${when(managed.activity[0].ts)}` : '还没有记录'}</span>
+          {#if logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<span role="button" tabindex="0" class="x" aria-label="看全部" onclick={(e) => { e.stopPropagation(); logDay = ''; }} onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); logDay = ''; } }}>×</span></span>{/if}
           <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         {#if logOpen}
-          {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{/if}
+          {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
         <div class="list feed">
-          {#each managed.activity as a, i (activityKeys[i])}
+          {#each feed as { a, k } (k)}
             <div class="li ev">
               <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
               <div class="ev-main">
@@ -419,6 +433,9 @@
   .log-h { width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 2px 0; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
   .log-h :global(.ico) { color: var(--dim); }
   .log-h .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
+  .day-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 8px; border-radius: 999px; background: var(--accent-soft); font-size: 11px; font-weight: 400; color: var(--dim); }
+  .day-chip .x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1; }
+  .day-chip .x:hover { background: var(--su-hover); color: var(--text); }
   .log-h .chev { margin-left: auto; color: var(--faint); transition: transform .16s var(--su-ease); }
   .oplog.open .log-h .chev { transform: rotate(180deg); }
   .oplog.open .log-h { margin-bottom: 8px; font-weight: 600; }

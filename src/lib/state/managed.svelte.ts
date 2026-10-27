@@ -290,7 +290,7 @@ export async function setManagedSites(ids: string[], on: boolean, groupId?: stri
 let timer: ReturnType<typeof setTimeout> | null = null;
 function soon() {
   if (timer) return;
-  timer = setTimeout(() => { timer = null; void loadManaged(); if (managed.tab === 'needs') void loadPending(); }, 1000);
+  timer = setTimeout(() => { timer = null; void loadManaged(); if (managed.tab === 'needs') void loadPending(); if (managed.tab === 'groups') void loadDigests(); }, 1000);
 }
 
 export function initManaged() {

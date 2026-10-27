@@ -348,9 +348,11 @@ pub struct DayCount {
     pub proposed: usize,
     /// 回滚 + 失败 + 上线后检查失败
     pub broken: usize,
+    /// 托管站点那天跑了几次运营作业（没产出也算），用来分清「跑了但没事做」和「没跑」
+    pub ran: usize,
 }
 
-/// 最近 days 天每天的托管动态计数（本地日期），只返回有动静的日子。
+/// 最近 days 天每天的托管动态计数（本地日期），只返回有动静或跑过作业的日子。
 #[tauri::command]
 pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<DayCount> {
     use chrono::TimeZone;
@@ -368,6 +370,14 @@ pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Ve
             _ => {}
         }
     }
+    let cfg = managed::load(&state.data_dir);
+    for site in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
+        for r in crate::site_runner::runs_of(&state.sites.data_dir(&site.id)).into_iter().filter(|r| r.started >= since) {
+            let Some(t) = chrono::Local.timestamp_opt(r.started as i64, 0).single() else { continue };
+            let date = t.format("%Y-%m-%d").to_string();
+            map.entry(date.clone()).or_insert_with(|| DayCount { date, ..Default::default() }).ran += 1;
+        }
+    }
     // 有日报的日子，红点跟日报走：日报里说没有回滚或失败，日历上也不标（旧日报只算了回滚）
     for name in list_digests(state.clone()) {
         if let Some(rep) = load_digest(&state, &name) {
@@ -378,7 +388,7 @@ pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Ve
             }
         }
     }
-    map.into_values().filter(|d| d.shipped + d.planned + d.proposed + d.broken > 0).collect()
+    map.into_values().filter(|d| d.shipped + d.planned + d.proposed + d.broken + d.ran > 0).collect()
 }
 
 #[tauri::command]
