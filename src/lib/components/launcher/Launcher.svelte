@@ -49,13 +49,13 @@
       <p class="sub">它通过 Pilot 在 {app.activeConn?.ssh_user}@{app.activeConn?.ssh_host} 上执行命令；每条命令按你选的权限档位确认，凭据始终不交给模型。</p>
     {:else}
       <h1>想让它帮你做点什么？</h1>
-      <p class="sub">像聊天一样把需求说清楚；需要处理文件时，可以接入一个本地文件夹。</p>
+      <p class="sub">像聊天一样把需求说清楚；需要处理文件时，点输入框左下角的「+」接入一个本地文件夹，或者直接把文件拖进来。</p>
     {/if}
 
       <div class="composer big" class:fileover={composer.composerFileOver}>
           <AttachTray items={composer.attachments} uploading={composer.attaching} onremove={removeAttachment} />
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
-            placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
+            placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，点左下角的「+」添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
             oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
             onpaste={(e) => onComposerPaste(e, '', true)}
             onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
@@ -77,13 +77,14 @@
               <input class="cf-proj-in" bind:value={launcher.lSite} placeholder="项目名，如 coffee-landing" spellcheck="false" autocapitalize="off" autocorrect="off" />
               <Dropdown compact bind:value={launcher.lStyle} options={STYLE_OPTS} />
             {:else}
-              <div class="workspace-picker">
-                <button type="button" class="workspace-folder" class:selected={!!launcher.workspaceDir} data-tip={launcher.workspaceDir || '选择一个本地文件夹作为本次自由对话的工作目录'} onclick={chooseWorkspaceFolder}>
+              <!-- 文件夹只从「+」菜单里加（和 Claude 客户端一样）；选好了才在这里显示名字，点它换一个，× 移除 -->
+              {#if launcher.workspaceDir}<div class="workspace-picker">
+                <button type="button" class="workspace-folder selected" data-tip={`${launcher.workspaceDir}（点击换一个）`} onclick={chooseWorkspaceFolder}>
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4.3a1.5 1.5 0 0 1 1.5-1.5h3l1.4 1.6h5a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H3.3a1.5 1.5 0 0 1-1.5-1.5V4.3Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" /></svg>
-                  <span>{launcher.workspaceDir ? workspaceFolderName(launcher.workspaceDir) : '添加文件夹'}</span>
+                  <span>{workspaceFolderName(launcher.workspaceDir)}</span>
                 </button>
-                {#if launcher.workspaceDir}<button type="button" class="workspace-clear" aria-label="移除文件夹" data-tip="移除文件夹，改为纯对话" onclick={() => (launcher.workspaceDir = '')}>×</button>{/if}
-              </div>
+                <button type="button" class="workspace-clear" aria-label="移除文件夹" data-tip="移除文件夹，改为纯对话" onclick={() => (launcher.workspaceDir = '')}>×</button>
+              </div>{/if}
             {/if}
           </div>
           <div class="cb-right">
