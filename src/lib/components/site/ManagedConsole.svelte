@@ -326,7 +326,8 @@
         {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
-            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}{#if sum.next}{' · '}<span data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}>下次 {whenNext(sum.next)}</span>{/if}</span>
+            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
+            {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
@@ -389,7 +390,7 @@
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
-                      {#if on && s.next_at}<span class="faint" data-tip={NEXT_TIP}>下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
+                      {#if on && s.next_at}<span class="next-t" data-tip={NEXT_TIP}><Icon name="clock" size={11} />下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}
@@ -551,6 +552,10 @@
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
   .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
   .gq-n { font-size: 12px; }
+  /* 下一次运行：方案标题上用小胶囊（时钟 + 时间，字色正常）跟灰色概况分开；站点行带个时钟、比状态文字深一点 */
+  .next-chip { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
+  .next-t { display: inline-flex; align-items: center; gap: 4px; color: var(--dim); }
+  .next-t :global(svg) { color: var(--ok); }
   .stuck-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-left: 2px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
