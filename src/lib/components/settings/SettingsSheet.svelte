@@ -397,6 +397,8 @@
      隐式计算成 auto；贴边 footer 的负边距和 WebView 的浮点取整都会因此冒出横向条。 */
   /* scrollbar-gutter: stable —— 一直给滚动条留位置：展开 / 收起连接组时滚动条忽有忽无，整页会左右跳一下 */
   .sheet-body { min-width: 0; padding: 16px 12px 16px 18px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 7px; }
+  /* 正文是定高的纵向 flex：内容超高时子元素会被压缩，带 overflow:hidden 的卡片（本地客户端）会被压成 0 高、只剩一道边框。一律不压缩，超出就滚动 */
+  .sheet-body > * { flex-shrink: 0; }
   .about-update-entry { display: inline-flex; align-items: center; gap: 5px; }
   .about-update-entry :global(svg) { flex: none; color: var(--dim); }
   .conn-remark { cursor: help; }
