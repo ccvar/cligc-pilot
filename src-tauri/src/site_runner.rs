@@ -698,15 +698,22 @@ fn change_guidance(change: &str) -> &'static str {
     }
 }
 
-/// 无人值守任务用的模型：Claude 没选时用 `sonnet` 别名（跟随 CLI 的当前版本）；其它服务必须明确选择。
+/// 没选具体模型时用什么：Claude 用 `sonnet` 别名（跟随 CLI 的当前版本）；
+/// Codex 留空＝不传模型参数、用本机 codex 配置里的默认模型（和对话里「跟随 Codex 默认」一样）；其它服务必须明确选择。
+fn default_model(brain: &str) -> Option<String> {
+    match brain {
+        "claude" => Some("sonnet".into()),
+        "codex" => Some(String::new()),
+        _ => None,
+    }
+}
+
+/// 无人值守任务用的模型。
 pub fn ops_model(site: &Site) -> Result<String, String> {
     if !site.ops.model.trim().is_empty() {
         return Ok(site.ops.model.trim().to_string());
     }
-    if site.ops.brain == "claude" {
-        return Ok("sonnet".into());
-    }
-    Err("请在站点「运营」设置里为无人值守任务选择模型".into())
+    default_model(&site.ops.brain).ok_or_else(|| "请在站点「运营」设置里为无人值守任务选择模型".into())
 }
 
 /// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用所在托管方案里运营人员选的那一对。
@@ -716,10 +723,7 @@ pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Opt
             if !model.trim().is_empty() {
                 return Ok((b.to_string(), model.trim().to_string()));
             }
-            if b == "claude" {
-                return Ok((b.to_string(), "sonnet".into()));
-            }
-            Err("请在「托管运营 → 托管方案」里为这个方案的主模型 / 备用模型选择具体模型".into())
+            default_model(b).map(|m| (b.to_string(), m)).ok_or_else(|| "请在「托管运营 → 托管方案」里为这个方案的主模型 / 备用模型选择具体模型".into())
         };
         let primary = pick(&m.brain, &m.model)?;
         let fallback = if m.fallback_brain.is_empty() { None } else { Some(pick(&m.fallback_brain, &m.fallback_model)?) };
@@ -744,7 +748,7 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
                 site_id: site.id.clone(),
                 site_name: site.name.clone(),
                 kind: "fallback".into(),
-                title: format!("主模型失败，改用备用模型 {}", format!("{} · {}", fb.0, fb.1)),
+                title: format!("主模型失败，改用备用模型 {}", if fb.1.is_empty() { format!("{} · 默认模型", fb.0) } else { format!("{} · {}", fb.0, fb.1) }),
                 detail: e.lines().next().unwrap_or("").to_string(),
                 ..Default::default()
             });
@@ -2616,6 +2620,13 @@ mod tests {
         assert_eq!(change_text(2.0, 2.0), "持平");
         let md = digest_markdown(&d);
         assert!(md.contains("其余 1 个站点今天没有变化：c.com"));
+    }
+
+    #[test]
+    fn codex_without_a_model_uses_the_local_default() {
+        assert_eq!(default_model("codex"), Some(String::new()));
+        assert_eq!(default_model("claude"), Some("sonnet".into()));
+        assert_eq!(default_model("some-api"), None);
     }
 
     #[test]
