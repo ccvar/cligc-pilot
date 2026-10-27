@@ -162,6 +162,30 @@ pub fn schedule_of<'a>(site: &'a Site, task: &str, in_plan: bool) -> &'a str {
     }
 }
 
+/// 这个站点下一次自动运行什么、什么时候（和调度循环同一套规则：每项任务上次运行 + 周期，没跑过的从导入时间算；
+/// 没有数据源的只做体检和计划；上线后检查到期的优先）。托管暂停或站点停了就没有下一次。
+/// 时间是「到点」的时刻：调度每 10 分钟看一次、客户端要开着，实际会晚几分钟。
+pub fn next_run(site: &Site, site_dir: &Path, in_plan: bool) -> Option<(String, u64)> {
+    let state = load_state(site_dir);
+    let has_data = !site.data.gsc_site.is_empty() || !site.data.ga4_property.is_empty() || !site.data.bing_site.is_empty();
+    let mut best: Option<(String, u64)> = site_ops::load_queue(site_dir)
+        .iter()
+        .filter(|i| i.status == "deployed" && i.watch_due > 0 && (i.watched.is_empty() || i.watch_stage == 1))
+        .map(|i| ("watch".to_string(), i.watch_due))
+        .min_by_key(|x| x.1);
+    for task in TASKS {
+        if !matches!(*task, "health" | "plan") && !has_data {
+            continue;
+        }
+        let Some(p) = period(schedule_of(site, task, in_plan)) else { continue };
+        let at = state.last.get(*task).copied().unwrap_or(0).max(site.created_at) + p;
+        if best.as_ref().is_none_or(|b| at < b.1) {
+            best = Some((task.to_string(), at));
+        }
+    }
+    best
+}
+
 pub fn task_label(task: &str) -> &'static str {
     match task {
         "scan" => "机会扫描",

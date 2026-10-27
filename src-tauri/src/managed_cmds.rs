@@ -214,6 +214,9 @@ pub struct ManagedSite {
     pub plan_count: usize,
     pub budget: crate::site_runner::Budget,
     pub job: String,
+    /// 下一次自动运行的任务（scan / health / plan / report / review / watch）和到点时间；托管停着就是空 / 0。
+    pub next_task: String,
+    pub next_at: u64,
 }
 
 #[derive(Serialize)]
@@ -247,6 +250,8 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             let plan = crate::site_runner::latest_plan(&dir);
             let group = cfg.group_of(&s.id);
             let stg = crate::site_stage::stage_of(&s, &dir);
+            let running = !cfg.paused && group.is_some_and(|g| g.active_for(&s.id));
+            let (next_task, next_at) = if running { crate::site_runner::next_run(&s, &dir, true).unwrap_or_default() } else { Default::default() };
             ManagedSite {
                 stage: stg.stage.clone(),
                 stage_manual: !stg.manual.is_empty(),
@@ -263,6 +268,8 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 domain: s.domain,
                 shipped_week,
                 waiting,
+                next_task,
+                next_at,
             }
         })
         .collect();

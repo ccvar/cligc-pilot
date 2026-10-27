@@ -497,6 +497,8 @@ export interface ManagedGroup {
 export interface ManagedSite {
   id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number; queued: number;
   plan_date: string; plan_count: number; job: string;
+  /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
+  next_task: string; next_at: number;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
 }
 export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number }

@@ -179,10 +179,27 @@
     return [...m.values()];
   }
   function groupSummary(g: ManagedGroup) {
-    let shipped = 0, need = 0, failed = 0;
-    for (const id of g.sites) { const s = sitesById.get(id); if (!s) continue; shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed; }
-    return { shipped, need, failed };
+    let shipped = 0, need = 0, failed = 0, next = 0, nextSite = '';
+    for (const id of g.sites) {
+      const s = sitesById.get(id); if (!s) continue;
+      shipped += s.shipped_week; failed += s.failed; need += s.waiting - s.failed;
+      if (s.next_at && (!next || s.next_at < next)) { next = s.next_at; nextSite = s.name; }
+    }
+    return { shipped, need, failed, next, nextSite };
   }
+  // 下一次自动运行：到点时间写成「马上 / 今天 15:00 / 明天 14:36 / 周五 16:27 / 11月3日 09:00」
+  const NEXT_TASK: Record<string, string> = { scan: '扫描', health: '体检', plan: '制定计划', report: '周报', review: '复盘', watch: '上线后检查' };
+  function whenNext(ts: number) {
+    if (ts * 1000 <= Date.now() + 60_000) return '马上';
+    const d = new Date(ts * 1000), t = new Date(); t.setHours(0, 0, 0, 0);
+    const days = Math.floor((new Date(d).setHours(0, 0, 0, 0) - t.getTime()) / 86_400_000);
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (days === 0) return `今天 ${hm}`;
+    if (days === 1) return `明天 ${hm}`;
+    if (days < 7) return `${'周' + '日一二三四五六'[d.getDay()]} ${hm}`;
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  }
+  const NEXT_TIP = '按上次运行时间推算的到点时刻；客户端要开着（托盘也行），每 10 分钟检查一次，实际会晚几分钟';
   /** 没放在卡片上的那些规则（「还有 N 项」的悬停说明） */
   function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
@@ -309,7 +326,7 @@
         {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
-            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
+            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}{#if sum.next}{' · '}<span data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}>下次 {whenNext(sum.next)}</span>{/if}</span>
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
             <!-- 方案的操作收进一个菜单：编辑、暂停 / 恢复 -->
@@ -372,6 +389,7 @@
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
+                      {#if on && s.next_at}<span class="faint" data-tip={NEXT_TIP}>下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}
