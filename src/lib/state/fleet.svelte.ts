@@ -187,7 +187,9 @@ export function initFleet() {
   $effect(() => {
     const un1 = listen('site-queue', soon);
     const un2 = listen('site-job', soon);
-    return () => { void un1.then((f) => f()); void un2.then((f) => f()); };
+    // 每周的推广链接检查跑完（后台），列表上的「推广链接失效」跟着更新
+    const un3 = listen('links-checked', soon);
+    return () => { void un1.then((f) => f()); void un2.then((f) => f()); void un3.then((f) => f()); };
   });
 }
 
