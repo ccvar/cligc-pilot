@@ -46,7 +46,7 @@
               <span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>
               <span class="tt" class:gone={i.status === 'rolled_back'}>{i.opp.title}</span>
             </button>
-            {#if i.opp.page}<button class="url mono" onclick={() => openUrl(i.opp.page)} data-tip={`在浏览器打开：${i.opp.page}`}>{shortPath(i.opp.page)}<Icon name="external" size={10} /></button>{/if}
+            {#if i.opp.page}<button class="url mono" onclick={() => openUrl(i.opp.page)} data-tip={`在浏览器打开：${i.opp.page}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
             <span class="acts">
               {#if site && i.head_sha}<button class="ic-btn ic-sm" onclick={() => showDiff(site.id, i)} aria-label="看改动" data-tip="看改动"><Icon name="diff" size={13} /></button>{/if}
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
@@ -85,7 +85,10 @@
   .tt { min-width: 0; font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt.gone { color: var(--faint); text-decoration: line-through; }
   li.open .tt { white-space: normal; }
-  .url { flex: 0 1 auto; min-width: 0; max-width: 260px; display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; font-size: 11px; color: var(--faint); cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  /* 路径太长时只截路径文字，后面的 ↗ 图标一直露着 */
+  .url { flex: 0 1 auto; min-width: 0; max-width: 260px; display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; font-size: 11px; color: var(--faint); cursor: pointer; white-space: nowrap; }
+  .url .up { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .url :global(svg) { flex: none; }
   .url:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
   .acts { flex: none; display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
   .rows > li:hover .acts, .acts:focus-within { opacity: 1; }
