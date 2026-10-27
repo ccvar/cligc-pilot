@@ -5,11 +5,21 @@ import { say } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
 export type SiteFilter = 'all' | 'attention' | 'failed' | 'dataerr' | 'down' | 'proposed' | 'nodata';
-export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending';
+export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
 export function trafficDown(r: SiteRow): boolean {
   return r.has_data && r.summary.gsc_clicks_prev >= 20 && r.summary.gsc_clicks < r.summary.gsc_clicks_prev * 0.8;
+}
+/** 站点列表：Google + Bing 搜索点击率 */
+export function searchCtr(r: SiteRow): number {
+  const i = r.summary.search_impressions ?? 0;
+  return i > 0 ? (r.summary.search_clicks ?? 0) / i : 0;
+}
+/** 和前 28 天比的变化：null＝前后都没有，'new'＝之前没有、现在有 */
+export function change(cur: number, prev: number): number | 'new' | null {
+  if (!prev) return cur ? 'new' : null;
+  return (cur - prev) / prev;
 }
 export function clicksChange(r: SiteRow): number {
   const p = r.summary.gsc_clicks_prev;
@@ -76,9 +86,13 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
   const key = (r: SiteRow): number | string =>
     sort === 'name' ? r.name.toLowerCase()
       : sort === 'active' ? -r.active_at
-        : sort === 'clicks' ? -r.summary.gsc_clicks
+        : sort === 'clicks' ? -(r.summary.search_clicks ?? r.summary.gsc_clicks)
           : sort === 'change' ? clicksChange(r)
-            : -(r.proposed * 1000 + r.failed);
+            : sort === 'users' ? -(r.summary.users ?? 0)
+              : sort === 'impr' ? -(r.summary.search_impressions ?? 0)
+                : sort === 'ctr' ? -searchCtr(r)
+                  : sort === 'indexed' ? -(r.summary.google_pages ?? 0)
+                    : -(r.proposed * 1000 + r.failed);
   const out = [...rows].sort((a, b) => {
     const ka = key(a), kb = key(b);
     const c = typeof ka === 'string' ? ka.localeCompare(kb as string, 'zh') : (ka as number) - (kb as number);

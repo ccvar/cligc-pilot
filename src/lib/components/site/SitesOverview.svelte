@@ -4,12 +4,15 @@
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import CfMark from '$lib/components/icons/CfMark.svelte';
+  import GscMark from '$lib/components/icons/GscMark.svelte';
+  import BingMark from '$lib/components/icons/BingMark.svelte';
+  import GaMark from '$lib/components/icons/GaMark.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, applyFilter, sortRows, clicksChange, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
@@ -60,6 +63,24 @@
   function pickIssue(k: typeof fleet.filter) { fleet.filter = k; fleet.tab = 'sites'; issuesOpen = false; }
   const status = (r: SiteRow) => r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
 </script>
+
+{#snippet delta(cur: number, prev: number)}
+  {@const d = change(cur, prev)}
+  {#if d === 'new'}<span class="dl new">新增</span>{:else if d !== null && Math.abs(d) >= 0.005}<span class="dl" class:up={d > 0} class:down={d < 0}>{d > 0 ? '↑' : '↓'}{Math.abs(d * 100) >= 100 ? Math.round(Math.abs(d * 100)) : Math.abs(d * 100).toFixed(1)}%</span>{/if}
+{/snippet}
+
+{#snippet spark(vals: number[])}
+  {#if vals.length > 1 && vals.some((v) => v > 0)}
+    {@const W = 88}
+    {@const H = 24}
+    {@const top = Math.max(...vals)}
+    {@const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 2 - (v / top) * (H - 4)).toFixed(1)}`)}
+    <svg class="spark" width={W} height={H} viewBox="0 0 {W} {H}" aria-label="近 28 天会话趋势" data-tip={`近 28 天会话 ${num(vals.reduce((a, b) => a + b, 0))}，最多一天 ${num(top)}`}>
+      <polygon points="0,{H} {pts.join(' ')} {W},{H}" fill="var(--accent-soft)" />
+      <polyline points={pts.join(' ')} fill="none" stroke="var(--dim)" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" />
+    </svg>
+  {:else}<span class="nodata">—</span>{/if}
+{/snippet}
 
 <!-- 找站点走顶部的全局搜索（名称 / 域名 / 仓库 / #标签，直接跳转），这里只留筛选。 -->
 <div class="su page ov">
@@ -122,9 +143,12 @@
           <table class="tbl">
             <thead><tr>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
-              <th class="num"><button class="th" onclick={() => sortBy('clicks')}>Google 点击{arrow('clicks')}</button></th>
-              <th class="num"><button class="th" onclick={() => sortBy('change')}>变化{arrow('change')}</button></th>
-              <th class="num c-opp">机会</th>
+              <th class="num"><button class="th" onclick={() => sortBy('users')} data-tip="GA4 近 28 天用户（按天加总），下面是和前 28 天比"><GaMark size={11} />用户{arrow('users')}</button></th>
+              <th class="num"><button class="th" onclick={() => sortBy('clicks')} data-tip="Google + Bing 近 28 天搜索点击，下面是和前 28 天比"><GscMark size={11} /><BingMark size={11} />搜索点击{arrow('clicks')}</button></th>
+              <th class="num c-impr"><button class="th" onclick={() => sortBy('impr')} data-tip="Google + Bing 近 28 天展示"><GscMark size={11} /><BingMark size={11} />展示{arrow('impr')}</button></th>
+              <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 28 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
+              <th class="num c-idx"><button class="th" onclick={() => sortBy('indexed')} data-tip={'Google：近 28 天有展示的页面 / 站点地图提交的网址（Search Console 接口不再给收录数，用有展示的页面近似）\nBing：索引里的网址数'}><GscMark size={11} /><BingMark size={11} />已编入{arrow('indexed')}</button></th>
+              <th class="c-trend"><span class="th-l"><GaMark size={11} />会话趋势</span></th>
               <th><button class="th" onclick={() => sortBy('pending')}>状态{arrow('pending')}</button></th>
               <th class="c-lvl">托管</th>
               <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
@@ -132,25 +156,28 @@
             <tbody>
               {#each pageRows as r (r.id)}
                 {@const st = status(r)}
-                {@const ch = clicksChange(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
                     <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
-                    <td class="num">{r.summary.fetched_at ? n(r.summary.gsc_clicks) : '—'}</td>
-                    <td class="num"><span class:up={ch > 0.05} class:down={ch < -0.05}>{r.summary.gsc_clicks_prev ? `${ch > 0 ? '↑' : ch < 0 ? '↓' : ''}${Math.abs(Math.round(ch * 100))}%` : '—'}</span></td>
-                    <td class="num c-opp">{r.summary.opportunities || '—'}</td>
+                    {@const sm = r.summary}
+                    <td class="num">{#if sm.fetched_at}<span class="v">{n(sm.users ?? 0)}</span>{@render delta(sm.users ?? 0, sm.users_prev ?? 0)}{:else}—{/if}</td>
+                    <td class="num"><span class="v">{n(sm.search_clicks ?? sm.gsc_clicks)}</span>{@render delta(sm.search_clicks ?? sm.gsc_clicks, sm.search_clicks_prev ?? sm.gsc_clicks_prev)}</td>
+                    <td class="num c-impr"><span class="v">{n(sm.search_impressions ?? sm.gsc_impressions)}</span></td>
+                    <td class="num c-impr"><span class="v">{(sm.search_impressions ?? 0) > 0 ? `${(searchCtr(r) * 100).toFixed(1)}%` : '—'}</span></td>
+                    <td class="num c-idx"><span class="v">{sm.google_pages ?? 0}{#if sm.sitemap_urls}<span class="of">/{n(sm.sitemap_urls)}</span>{/if}</span>{#if sm.bing_indexed}<small class="bi"><BingMark size={10} />{n(sm.bing_indexed)}</small>{/if}</td>
+                    <td class="c-trend">{@render spark(sm.sessions_trend ?? [])}</td>
                   {:else}
-                    <td class="num nodata" colspan="2">未接数据</td><td class="c-opp"></td>
+                    <td class="num nodata" colspan="2">未接数据</td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
                   <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
                   <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" title={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
                   <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
                 </tr>
               {:else}
-                <tr><td colspan="8" class="faint">没有符合条件的站点</td></tr>
+                <tr><td colspan="10" class="faint">没有符合条件的站点</td></tr>
               {/each}
             </tbody>
           </table>
@@ -212,7 +239,7 @@
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
-  .th { border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; transition: color .12s; }
+  .th { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; transition: color .12s; }
   .th:hover { color: var(--text); }
   tr.clickable { cursor: pointer; }
   .site-cell b { display: block; font-size: 13px; font-weight: 600; }
@@ -230,6 +257,15 @@
   .dm :global(svg) { flex: none; }
   .dm :global(.ico) { color: var(--dim); }
   .nodata { color: var(--faint); font-size: 12px; }
+  .th :global(svg), .th-l :global(svg) { flex: none; margin-right: 2px; }
+  .th-l { display: inline-flex; align-items: center; gap: 2px; }
+  td.num .v { display: block; font-variant-numeric: tabular-nums; }
+  .dl { display: block; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .dl.new { color: var(--ok); font-weight: 500; }
+  .of { color: var(--faint); font-weight: 400; }
+  .bi { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--dim); }
+  .c-trend { width: 96px; }
+  .spark { display: block; }
   .am { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
   .am::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--border2); }
   .am-auto::before { background: var(--ok); }
@@ -253,7 +289,16 @@
   @container page (max-width: 760px) {
     .c-when { display: none; }
   }
+  @container page (max-width: 980px) {
+    .c-trend { display: none; }
+  }
+  @container page (max-width: 880px) {
+    .c-impr { display: none; }
+  }
+  @container page (max-width: 680px) {
+    .c-idx { display: none; }
+  }
   @container page (max-width: 560px) {
-    .c-opp, .c-lvl { display: none; }
+    .c-lvl { display: none; }
   }
 </style>

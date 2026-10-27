@@ -426,6 +426,12 @@ export interface SiteSummary {
   gsc_clicks: number; gsc_clicks_prev: number; gsc_impressions: number; gsc_position: number;
   ga4_views: number; ga4_views_prev: number; bing_clicks: number; opportunities: number;
   data_end: string; fetched_at: number; errors: string[];
+  /** 近 28 天 GA4 用户 / 前 28 天；近 28 天每天会话（旧的在前） */
+  users?: number; users_prev?: number; sessions_trend?: number[];
+  /** Google + Bing 近 28 天搜索点击 / 前 28 天 / 展示 */
+  search_clicks?: number; search_clicks_prev?: number; search_impressions?: number;
+  /** Google 近 28 天有展示的页面数、站点地图提交的网址数、Bing 索引里的网址数 */
+  google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
 }
 export interface SiteRow {
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];

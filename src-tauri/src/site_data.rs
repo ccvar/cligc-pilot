@@ -266,6 +266,9 @@ async fn fetch_bing(key: &str, site: &str, dir: &Path) -> Result<(String, String
     if let Ok(issues) = crate::bing::crawl_issues(key, site).await {
         write_json(dir, "bing_crawl.json", &issues)?;
     }
+    if let Ok(n) = crate::bing::index_count(key, site).await {
+        write_json(dir, "bing_index.json", &serde_json::json!({ "in_index": n }))?;
+    }
     Ok((from, latest))
 }
 
@@ -335,6 +338,53 @@ pub struct Summary {
     pub data_end: String,
     pub fetched_at: u64,
     pub errors: Vec<String>,
+    /// 摘要格式版本：旧版缓存（没有下面这些字段）读到时重算一次
+    #[serde(default)]
+    pub v: u32,
+    /// GA4 近 28 天用户（按天加总）和前 28 天
+    #[serde(default)]
+    pub users: f64,
+    #[serde(default)]
+    pub users_prev: f64,
+    /// 近 28 天每天的会话数（趋势小图用，旧的在前）
+    #[serde(default)]
+    pub sessions_trend: Vec<f64>,
+    /// 搜索：Google + Bing 近 28 天点击、前 28 天点击、展示
+    #[serde(default)]
+    pub search_clicks: f64,
+    #[serde(default)]
+    pub search_clicks_prev: f64,
+    #[serde(default)]
+    pub search_impressions: f64,
+    /// Google 近 28 天有展示的页面数（Search Console 的站点地图接口不再给收录数，用它近似「已编入」）
+    #[serde(default)]
+    pub google_pages: usize,
+    /// 站点地图里提交的网址数（不算站点地图索引文件本身）
+    #[serde(default)]
+    pub sitemap_urls: f64,
+    /// Bing 索引里的网址数（GetCrawlStats 最新一天的 InIndex）
+    #[serde(default)]
+    pub bing_indexed: f64,
+}
+
+pub const SUMMARY_V: u32 = 2;
+
+/// 按日期的行里，以最新一天为终点的近 days 天和再往前 days 天的合计
+fn windows<T>(rows: &[T], date: impl Fn(&T) -> &str, val: impl Fn(&T) -> f64, days: i64) -> (f64, f64, Vec<(String, f64)>) {
+    let Some(end) = rows.iter().map(|r| date(r)).max().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()) else { return (0.0, 0.0, Vec::new()) };
+    let (mut cur, mut prev, mut series) = (0.0, 0.0, Vec::new());
+    for r in rows {
+        let Ok(d) = chrono::NaiveDate::parse_from_str(date(r), "%Y-%m-%d") else { continue };
+        let ago = (end - d).num_days();
+        if (0..days).contains(&ago) {
+            cur += val(r);
+            series.push((date(r).to_string(), val(r)));
+        } else if (days..days * 2).contains(&ago) {
+            prev += val(r);
+        }
+    }
+    series.sort_by(|a, b| a.0.cmp(&b.0));
+    (cur, prev, series)
 }
 
 pub fn compute_summary(site_dir: &Path) -> Summary {
@@ -347,6 +397,17 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
     let bq: Vec<Row> = read_json(&dir, "bing_queries.json");
     let opps: Vec<crate::site_ops::Opportunity> = read_json(&dir, "opportunities.json");
     let t = totals(&gq);
+    let gad: Vec<GaRow> = read_json(&dir, "ga4_daily.json");
+    let gsd: Vec<Row> = read_json(&dir, "gsc_daily.json");
+    let bsd: Vec<Row> = read_json(&dir, "bing_daily.json");
+    let gp: Vec<Row> = read_json(&dir, "gsc_pages.json");
+    let sitemaps: Vec<serde_json::Value> = read_json(&dir, "gsc_sitemaps.json");
+    let users = windows(&gad, |r| &r.key, |r| r.users, 28);
+    let sessions = windows(&gad, |r| &r.key, |r| r.sessions, 28);
+    let g = windows(&gsd, |r| &r.key, |r| r.clicks, 28);
+    let b = windows(&bsd, |r| &r.key, |r| r.clicks, 28);
+    let gi = windows(&gsd, |r| &r.key, |r| r.impressions, 28);
+    let bi = windows(&bsd, |r| &r.key, |r| r.impressions, 28);
     let errors = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)]
         .iter()
         .filter(|(_, e)| !e.is_empty())
@@ -364,6 +425,21 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
         data_end: if meta.gsc.end.is_empty() { meta.ga4.end.clone() } else { meta.gsc.end.clone() },
         fetched_at: meta.gsc.fetched_at.max(meta.ga4.fetched_at).max(meta.bing.fetched_at),
         errors,
+        v: SUMMARY_V,
+        users: users.0,
+        users_prev: users.1,
+        sessions_trend: sessions.2.into_iter().map(|(_, v)| v).collect(),
+        search_clicks: g.0 + b.0,
+        search_clicks_prev: g.1 + b.1,
+        search_impressions: gi.0 + bi.0,
+        google_pages: gp.iter().filter(|r| r.impressions > 0.0).count(),
+        sitemap_urls: sitemaps
+            .iter()
+            .filter(|m| !m["isSitemapsIndex"].as_bool().unwrap_or(false))
+            .flat_map(|m| m["contents"].as_array().cloned().unwrap_or_default())
+            .map(|c| c["submitted"].as_str().and_then(|n| n.parse::<f64>().ok()).or_else(|| c["submitted"].as_f64()).unwrap_or(0.0))
+            .sum(),
+        bing_indexed: read_json::<serde_json::Value>(&dir, "bing_index.json")["in_index"].as_f64().unwrap_or(0.0),
     }
 }
 
@@ -371,7 +447,14 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
 pub fn summary(site_dir: &Path) -> Summary {
     let dir = cache_dir(site_dir);
     if dir.join("summary.json").exists() {
-        return read_json(&dir, "summary.json");
+        let s: Summary = read_json(&dir, "summary.json");
+        // 旧版摘要缺新字段：有数据就按缓存重算一份（不联网）
+        if s.v >= SUMMARY_V || !has_any_data(site_dir) {
+            return s;
+        }
+        let s = compute_summary(site_dir);
+        let _ = write_json(&dir, "summary.json", &s);
+        return s;
     }
     if !has_any_data(site_dir) {
         return Summary::default();
@@ -545,6 +628,15 @@ pub fn tool_prompt(data_dir: &Path, site_dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_split_last_28_days_from_the_28_before() {
+        let rows: Vec<(String, f64)> = (0..60).map(|i| ((chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap() + chrono::Duration::days(i)).format("%Y-%m-%d").to_string(), 1.0)).collect();
+        let (cur, prev, series) = windows(&rows, |r| &r.0, |r| r.1, 28);
+        assert_eq!((cur, prev, series.len()), (28.0, 28.0, 28));
+        assert_eq!(series.last().unwrap().0, "2026-10-30");
+        assert_eq!(windows(&Vec::<(String, f64)>::new(), |r| &r.0, |r| r.1, 28).0, 0.0);
+    }
+
     use super::*;
 
     #[test]

@@ -184,6 +184,14 @@ pub async fn crawl_issues(key: &str, site: &str) -> Result<Vec<CrawlIssue>, Stri
         .unwrap_or_default())
 }
 
+/// Bing 索引里有这个站点多少个网址（GetCrawlStats 每天一条，取最新一天的 InIndex）。
+pub async fn index_count(key: &str, site: &str) -> Result<f64, String> {
+    let d = call(key, "GetCrawlStats", &[("siteUrl", site)]).await?;
+    // Date 形如 "/Date(1729987200000)/"，按里面的毫秒数取最新一天
+    let ms = |r: &serde_json::Value| r["Date"].as_str().and_then(|s| s.trim_start_matches("/Date(").split(|c: char| !c.is_ascii_digit()).next()).and_then(|n| n.parse::<i64>().ok()).unwrap_or(0);
+    Ok(d.as_array().and_then(|a| a.iter().max_by_key(|r| ms(r))).and_then(|r| r["InIndex"].as_f64()).unwrap_or(0.0))
+}
+
 /// 向 IndexNow 提交网址（Bing、Yandex 等共享）。只提交本站域名下的网址，每批最多 10000 条。
 pub async fn indexnow_submit(domain: &str, key: &str, urls: &[String]) -> Result<String, String> {
     if !crate::sites::is_indexnow_key(key) {
