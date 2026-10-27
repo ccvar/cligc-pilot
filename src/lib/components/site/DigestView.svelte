@@ -121,8 +121,8 @@
   .meta { margin: 0; font-size: 12px; color: var(--faint); }
   .meta b { color: var(--text); font-weight: 600; }
   .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-  .tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
-  .tile b { font-size: 20px; line-height: 1.2; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
+  .tile { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border: 1px solid var(--border); border-radius: 9px; }
+  .tile b { font-size: 17px; line-height: 1.25; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums; }
   .tile span { font-size: 12px; color: var(--dim); }
   .tile.zero b, .tile.zero span { color: var(--faint); }
   .tile.ok b { color: var(--ok); }
@@ -163,7 +163,8 @@
   .tr th { text-align: left; font-weight: 500; font-size: 11.5px; color: var(--faint); padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   .tr td { padding: 7px 12px; border-top: 1px solid var(--border); white-space: nowrap; }
   .tr tbody tr:first-child td { border-top: 0; }
-  .num { text-align: right !important; font-variant-numeric: tabular-nums; }
+  /* 数字列只占内容宽度、贴在右边，站点名占剩下的宽度 */
+  .num { text-align: right !important; font-variant-numeric: tabular-nums; width: 1%; padding-left: 28px !important; }
   .up { color: var(--ok); }
   .down { color: var(--err); }
   .flat { color: var(--faint); }

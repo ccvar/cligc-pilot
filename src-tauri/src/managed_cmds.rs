@@ -338,6 +338,16 @@ pub fn managed_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Ve
             _ => {}
         }
     }
+    // 有日报的日子，红点跟日报走：日报里说没有回滚或失败，日历上也不标（旧日报只算了回滚）
+    for name in list_digests(state.clone()) {
+        if let Some(rep) = load_digest(&state, &name) {
+            if let Some(d) = map.get_mut(&name) {
+                d.broken = rep.broken;
+            } else if rep.broken > 0 {
+                map.insert(name.clone(), DayCount { date: name, broken: rep.broken, ..Default::default() });
+            }
+        }
+    }
     map.into_values().filter(|d| d.shipped + d.planned + d.proposed + d.broken > 0).collect()
 }
 
@@ -355,18 +365,22 @@ pub fn read_digest_data(state: tauri::State<'_, AppState>, name: String) -> Resu
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return Err("名称不合法".into());
     }
+    Ok(load_digest(&state, &name))
+}
+
+/// 读一份日报的结构化内容；改版前的日报只有 Markdown，读回来按新样子转，站点 id 按名字补。
+fn load_digest(state: &AppState, name: &str) -> Option<crate::site_runner::DigestData> {
     let dir = managed::digests_dir(&state.data_dir);
     if let Some(d) = std::fs::read(dir.join(format!("{name}.json"))).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
-        return Ok(Some(d));
+        return Some(d);
     }
-    // 改版前的日报只有 Markdown：读回来按新样子显示，站点 id 按名字补
-    let Some(mut d) = std::fs::read_to_string(dir.join(format!("{name}.md"))).ok().and_then(|md| crate::site_runner::parse_old_digest(&md)) else { return Ok(None) };
+    let mut d = std::fs::read_to_string(dir.join(format!("{name}.md"))).ok().and_then(|md| crate::site_runner::parse_old_digest(&md))?;
     let sites = state.sites.list();
     let id_of = |n: &str| sites.iter().find(|s| s.name == n).map(|s| s.id.clone()).unwrap_or_default();
     for s in &mut d.active { s.site_id = id_of(&s.site_name); }
     for n in &mut d.needs { n.site_id = id_of(&n.site_name); }
     for t in &mut d.traffic { t.site_id = id_of(&t.site_name); }
-    Ok(Some(d))
+    Some(d)
 }
 
 /// 立刻生成一份日报（不影响定时的那一份）。

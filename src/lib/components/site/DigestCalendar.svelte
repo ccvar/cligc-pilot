@@ -6,12 +6,12 @@
 
   let { digests, daily, selected, onpick }: { digests: string[]; daily: DayCount[]; selected: string | null; onpick: (name: string) => void } = $props();
 
-  // 格子至少 13px、间隔 3px；左边星期标签占 14px + 6px。窄的时候少放几周，宽到一年放得下就把格子放大（最大 18px）。
+  // 格子至少 13px、间隔 3px；左边星期标签占 14px + 6px。窄的时候少放几周，宽到一年放得下就把格子稍微放大（最大 14px）。
   const MIN = 13, GAP = 3, LABEL = 20;
   let width = $state(0);
   const room = $derived(width - LABEL + GAP);
   const WEEKS = $derived(width ? Math.max(13, Math.min(53, Math.floor(room / (MIN + GAP)))) : 26);
-  const CELL = $derived(WEEKS < 53 ? MIN : Math.min(18, Math.floor(room / 53) - GAP));
+  const CELL = $derived(WEEKS < 53 ? MIN : Math.min(14, Math.floor(room / 53) - GAP));
   const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const byDate = $derived(new Map(daily.map((d) => [d.date, d])));
   const hasReport = $derived(new Set(digests));
@@ -75,7 +75,7 @@
   .wd { display: grid; grid-template-rows: repeat(7, var(--c)); gap: var(--g); width: 14px; font-size: 9.5px; color: var(--faint); line-height: var(--c); }
   .grid { display: flex; gap: var(--g); }
   .col { display: grid; grid-template-rows: repeat(7, var(--c)); gap: var(--g); }
-  .cell { position: relative; width: var(--c); height: var(--c); padding: 0; border: 0; border-radius: 3px; background: #f0efeb; cursor: default; }
+  .cell { position: relative; width: var(--c); height: var(--c); padding: 0; border: 0; border-radius: 3px; background: #f5f4f1; cursor: default; }
   .cell.none { background: none; }
   .cell.lv1 { background: color-mix(in srgb, var(--ok) 28%, #fff); }
   .cell.lv2 { background: color-mix(in srgb, var(--ok) 50%, #fff); }
@@ -83,7 +83,11 @@
   .cell.lv4 { background: var(--ok); }
   .cell.rep { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); cursor: pointer; }
   button.cell.rep:hover { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 55%, transparent); }
-  .cell.on, .cell.on:hover { box-shadow: 0 0 0 1.5px var(--text); }
+  /* 深色格子上灰边看不见，改用白边 */
+  .cell.rep.lv3, .cell.rep.lv4 { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .8); }
+  button.cell.rep.lv3:hover, button.cell.rep.lv4:hover { box-shadow: inset 0 0 0 1.5px #fff, inset 0 0 0 3px color-mix(in srgb, var(--text) 35%, transparent); }
+  /* 正在看的那天：边框画在格子里面，格子大小不变、和别的格子对齐 */
+  .cell.on, button.cell.rep.on, button.cell.rep.on:hover { box-shadow: inset 0 0 0 2px var(--text); }
   .cell:disabled { cursor: default; }
   .bad { position: absolute; top: 1px; right: 1px; width: 4px; height: 4px; border-radius: 50%; background: var(--err); }
   .bad.static { position: static; display: inline-block; margin-right: 1px; }
