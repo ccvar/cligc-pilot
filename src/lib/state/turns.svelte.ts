@@ -8,7 +8,7 @@ import { brainUsable } from './models';
 import { panes, rememberSplit, finishSplitQueue, restoreSplitQueue } from './panes.svelte.js';
 import { scrollSoon, thread } from './thread.svelte.js';
 import { viewAfterConvGone } from './conversations';
-import { composer, queuedPayloadText } from './composer.svelte.js';
+import { composer, queuedPayloadText, launcherTargetKey } from './composer.svelte.js';
 import { launcher, STYLE_DIRECTIVES, workspaceFolderName } from './launcher.svelte.js';
 import { ATT_MARKER } from './messages.svelte.js';
 import { cf, checkCfReady } from './cloudflare.svelte.js';
@@ -225,15 +225,20 @@ export async function startChat(opts: { perm?: string } = {}) {
   // 全部站点 / 托管运营里开的新对话：先进入所选站点，再按站点会话开始
   if (app.isSitesHub) {
     const sid = launcher.lSite;
-    if (!sid || !sites.list.some((s) => s.id === sid) || !launcher.lDraft.trim()) return;
+    if (!sid || !sites.list.some((s) => s.id === sid) || (!launcher.lDraft.trim() && !composer.attachments.length)) return;
     await selectConn(SITE_PREFIX + sid);
     if (!app.isSiteConn) return;
   }
   const workspace = app.isWorkspaceChat;
   const site = app.isSiteConn ? sites.active : null;
   const targetReady = app.isSshConn || workspace || !!site || !!launcher.lSite.trim();
-  const textReady = !!launcher.lDraft.trim() || (app.isSshConn && composer.attachments.length > 0);
+  const textReady = !!launcher.lDraft.trim() || composer.attachments.length > 0;
   if (!app.activeConn || !targetReady || !textReady || !brainUsable(launcher.lBrain)) return;
+  // 启动页加的附件存在当时选的站点 / 文件夹里：发送前换了对象，这些文件 AI 读不到
+  if (composer.attachments.length && composer.launcherKey && composer.launcherKey !== launcherTargetKey()) {
+    say('添加文件以后换了站点或文件夹：请移除这些文件再重新添加', 'err');
+    return;
+  }
   const taskType: TaskType = site ? 'site' : app.isSshConn ? 'remote' : app.isCfConn ? 'sitebuild' : app.isGhConn ? 'repo' : 'workspace';
   launcher.prefs.brain = launcher.lBrain; launcher.prefs.model = launcher.lModel; launcher.prefs.perm = launcher.lPerm; launcher.prefs.effort = launcher.lEffort; savePrefs(launcher.prefs);
   const model = launcher.lModel;
@@ -244,7 +249,9 @@ export async function startChat(opts: { perm?: string } = {}) {
   if (composer.attachments.length) {
     text += (text ? '\n\n' : '') + ATT_MARKER + '\n' + composer.attachments.map((a) => `- ${a.path}`).join('\n');
   }
-  const id = crypto.randomUUID();
+  // 自由对话用预先定好的 id（启动页加的附件已经存进这条对话的工作目录）；用掉就换一个
+  const id = workspace ? launcher.pendingId : crypto.randomUUID();
+  if (workspace) launcher.pendingId = crypto.randomUUID();
   const now = Math.floor(Date.now() / 1000);
   // 远程连接没有项目：slug 留空，侧栏分组名用 user@host（那就是这台机器的身份）。
   const mSlug = site ? site.id : workspace || app.isSshConn ? '' : launcher.lSite;
@@ -260,7 +267,7 @@ export async function startChat(opts: { perm?: string } = {}) {
   app.convos = [optimistic, ...app.convos];
   delete turns.autoRetried[id];
   beginTurn(id, optimistic);
-  launcher.lDraft = ''; composer.attachments = [];
+  launcher.lDraft = ''; composer.attachments = []; composer.launcherKey = '';
   try {
     const conv = await invoke<Conversation>('start_conversation', {
       convId: id, connId: conversationConnId, siteSlug: mSlug, siteName: mName,

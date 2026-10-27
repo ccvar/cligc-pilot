@@ -276,6 +276,7 @@ fn attachment_runtime(
     state: &AppState,
     conn_id: &str,
     project: &str,
+    pending_workspace_dir: Option<&str>,
 ) -> Result<(conns::Connection, String), String> {
     // 新版 workspace 的 conn_id 是侧栏固定位置，不是运行连接；project 才是会话 id。
     // 先按 project 识别会话，可同时兼容旧版仍传 __workspace__ 的调用方。
@@ -294,6 +295,14 @@ fn attachment_runtime(
         return Ok((conn, project));
     }
     if conn_id == WORKSPACE_CONNECTION_ID {
+        // 启动页还没发出第一条：前端预先定好了会话 id，附件先放进这条对话将来的工作目录
+        if let Some(selected) = pending_workspace_dir {
+            if !is_pending_conv_id(project) {
+                return Err("自由对话 id 不对".into());
+            }
+            let dir = resolve_workspace_dir(&state.data_dir, project, selected)?;
+            return Ok((workspace_connection(&dir), String::new()));
+        }
         return Err("自由对话不存在".into());
     }
     Ok((state.conns.get(conn_id)?, project.to_string()))
@@ -948,18 +957,25 @@ async fn sftp_upload(
 
 /// 把粘贴/拖拽的文件存进当前会话的工作目录 uploads/ 下，返回相对路径（AI 可直接读取）。
 /// CF 会话＝项目目录；自由对话＝会话工作目录。
+/// 前端 crypto.randomUUID() 生成的会话 id（拿来拼目录，只认这个格式）
+fn is_pending_conv_id(id: &str) -> bool {
+    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// `workspace_dir`：启动页给还没建的自由对话加附件时传（空串＝没选文件夹）；其它情况为 None。
 #[tauri::command]
 async fn save_attachment(
     state: tauri::State<'_, AppState>,
     conn_id: String,
     project: String,
+    workspace_dir: Option<String>,
     filename: String,
     data: Vec<u8>,
 ) -> Result<String, String> {
     if data.len() > 25_000_000 {
         return Err("文件太大（上限 25MB）".into());
     }
-    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project)?;
+    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project, workspace_dir.as_deref())?;
     // 25MB 的写盘别占着主线程 / tokio 工作线程。
     tauri::async_runtime::spawn_blocking(move || write_attachment(&conn, &runtime_project, &filename, &data))
         .await
@@ -1620,7 +1636,7 @@ async fn read_workdir_image(
         "avif" => "image/avif",
         _ => return Err("不是图片文件".into()),
     };
-    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project)?;
+    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project, None)?;
     tauri::async_runtime::spawn_blocking(move || {
         let p = resolve_in_workdir(&conn, &runtime_project, &path)?;
         let meta = std::fs::metadata(&p).map_err(|e| format!("读取失败: {e}"))?;
@@ -1649,7 +1665,7 @@ async fn resolve_workdir_file(
     project: String,
     path: String,
 ) -> Result<String, String> {
-    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project)?;
+    let (conn, runtime_project) = attachment_runtime(&state, &conn_id, &project, None)?;
     tauri::async_runtime::spawn_blocking(move || {
         let p = resolve_in_workdir(&conn, &runtime_project, &path)?;
         if !p.is_file() {

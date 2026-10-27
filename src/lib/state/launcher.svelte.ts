@@ -19,6 +19,8 @@ class LauncherState {
   lFast = $state<boolean>(this.prefs.fast ?? false);
   workspaceDir = $state('');
   lStyle = $state('');
+  /** 下一条自由对话的会话 id：启动页先加附件时文件要存进这条对话的工作目录，发送时就用它建对话 */
+  pendingId = crypto.randomUUID();
 
   // 启动页「厂商+模型」合并为一个下拉：行带厂商图标，值编码为 "<brain>::<model>"。
   // 厂商未就绪时整组置灰（原厂商下拉的禁用语义保留）。

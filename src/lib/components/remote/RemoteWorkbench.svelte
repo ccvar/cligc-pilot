@@ -13,7 +13,11 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { workbench, reconnectTerm, toggleWbTerm, toggleWbChat, toggleWbFiles, missingSshCredential, repairActiveSshCredential, startWbResize } from '$lib/state/workbench.svelte.js';
-  import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey } from '$lib/state/composer.svelte.js';
+  import { composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, removeAttachment, autogrow, onComposerPaste, onComposerKey, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
+  import AttachButton from '$lib/components/common/AttachButton.svelte';
+  // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层，和对话输入框一样
+  let grown = $state(false);
+  const compact = $derived((!launcher.lDraft || !grown) && !launcher.lDraft.includes('\n') && !composer.attachments.length && !composer.attaching);
   import { launcher, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
   import { startChat } from '$lib/state/turns.svelte.js';
   import { distroOf, connectionDisplayName } from '$lib/state/connections.svelte.js';
@@ -81,7 +85,7 @@
                外层必须是 .composer-wrap —— 输入框的样式挂在 `.composer.big, .composer-wrap .composer` 上，
                裸 .composer 一条都套不上（就是那次「样式缺失」）。 -->
           <div class="wb-start composer-wrap">
-            <div class="composer" class:fileover={composer.composerFileOver} role="group" aria-label="远程消息输入"
+            <div class="composer" class:compact class:fileover={composer.composerFileOver} role="group" aria-label="远程消息输入"
               ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={onComposerDrop}>
               {#if composer.attachments.length || composer.attaching}
                 <div class="attach-row">
@@ -96,12 +100,14 @@
                 </div>
               {/if}
               <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="1" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
+                oninput={(e) => composerGrown(e.currentTarget, grown, (v) => (grown = v))}
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
                 onpaste={onComposerPaste}
                 onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
               <div class="composer-bar">
                 <div class="cb-left"><span class="ssh-target" title={app.activeConn?.ssh_os || '远端系统未知'}><DistroMark id={distroOf(app.activeConn)} size={13} /><span class="st-addr">{app.activeConn?.ssh_user}@{app.activeConn?.ssh_host}</span></span></div>
                 <div class="cb-right">
+                  <AttachButton onfiles={(fs) => attachFiles(fs)} />
                   <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, true)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, true)} />
                   <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
                   <button class="send" onclick={() => void startChat()} disabled={(!launcher.lDraft.trim() && !composer.attachments.length) || composer.attaching || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
@@ -272,6 +278,12 @@
   .cb-left { display: flex; align-items: center; gap: 1px; flex: 1; min-width: 0; }
   .cb-right { display: flex; align-items: center; gap: 3px; flex: none; }
   .composer-bar .send { position: static; width: 30px; height: 30px; margin-left: 3px; font-size: 15px; }
+  /* 一行模式：文字和右边的按钮并排，左边的机器地址先收起来（展开成两层时再出现） */
+  .composer-wrap .composer.compact { flex-direction: row; align-items: center; }
+  .composer-wrap .composer.compact textarea { flex: 1; min-width: 0; padding: 12px 8px 12px 16px; }
+  .composer-wrap .composer.compact textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .composer.compact .composer-bar { flex: none; padding: 0 8px 0 0; }
+  .composer.compact .cb-left { display: none; }
   /* ---- 线程 ---- */
   /* ★ 标题要和左上角那排工具图标在同一条水平线上。
      `.win-tools` 是 fixed / top:0 / height:30px + align-items:center → **图标中心恒在 15px**

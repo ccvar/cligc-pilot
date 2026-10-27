@@ -144,7 +144,7 @@ export function paneInput(node:HTMLTextAreaElement, id:string) {
   const resize=autogrow(node);
   return {destroy(){resize.destroy();if(id)paneInputs.delete(id);}};
 }
-export async function uploadPaneFiles(id:string,files:FileList|null) {
+export async function uploadPaneFiles(id:string,files:FileList|File[]|null) {
   const c=splitConversation(id);if(!c||!files)return;
   for(const file of Array.from(files))try{await splitUpload(c,file);}catch(e){panes.splitErrors[id]=String(e);}
 }

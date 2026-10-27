@@ -18,7 +18,8 @@
   import { permits, permitDesc, togglePermitCmd, respondPermit } from '$lib/state/permits.svelte.js';
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
   import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
-  import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage } from '$lib/state/composer.svelte.js';
+  import { legacyComposer, composer, onComposerDragOver, onComposerDragLeave, onComposerDrop, editQueued, clearQueued, removeAttachment, setLegacyDraft, onComposerPaste, onComposerKey, queueMessage, attachFiles, composerGrown } from '$lib/state/composer.svelte.js';
+  import AttachButton from '$lib/components/common/AttachButton.svelte';
   import { startPreview, cf, fillDeploy } from '$lib/state/cloudflare.svelte.js';
   import { openSaveTmpl } from '$lib/state/library.svelte.js';
   import { importCfProject } from '$lib/state/launch.svelte.js';
@@ -32,15 +33,7 @@
   let openUser = $state<Set<string>>(new Set());
   // 输入框空着时整块只有一行（文字和底栏按钮并排）；打字超过一行才展开成两层（按分屏的格子各记各的）
   let grown = $state<Record<string, boolean>>({});
-  function watchGrow(t: HTMLTextAreaElement, key: string) {
-    if (!t.value) { grown[key] = false; return; }
-    requestAnimationFrame(() => {
-      const lh = parseFloat(getComputedStyle(t).lineHeight) || 22;
-      if (t.scrollHeight > lh * 1.6 + 24) grown[key] = true;
-      // 删回一行以内（展开后的宽度下也只占一行）就收回去，不用等清空
-      else if (grown[key] && !t.value.includes('\n') && t.scrollHeight <= lh + 24) grown[key] = false;
-    });
-  }
+  function watchGrow(t: HTMLTextAreaElement, key: string) { composerGrown(t, !!grown[key], (v) => (grown[key] = v)); }
   // 消息列表的 key：按时间戳 + 角色（同一秒的重复消息再加序号），中间一条被隐藏时后面的 <details> 展开态、缩略图不会串到别的消息上
   function messageKeys(ms: Message[]): string[] {
     const seen = new Map<string, number>();
@@ -445,6 +438,7 @@
           {/if}
         </div>
         <div class="cb-right">
+          <AttachButton onfiles={(fs)=>{if(scoped)void uploadPaneFiles(id,fs);else attachFiles(fs);}} />
           <Dropdown compact value={context?.perm_mode||'full'} options={permOptsFor(activeConv?.brain ?? 'claude', activeConvIsSsh)} tone={permTone(context?.perm_mode||'full')} tip={permTipFor(activeConv?.brain ?? 'claude', context?.perm_mode||'full', activeConvIsSsh)} onchange={(v)=>scoped&&context?void splitSetting(context,'perm',v):persistThreadPerm(v)} />
           <!-- 模型下拉列全部厂商（图标区分）：同厂商下一轮生效；跨厂商确认后以历史摘要重建续跑 -->
           <ModelFx options={scoped&&context?splitModelOptions(context):thread.threadComboOpts} value={`${activeConv?.brain ?? 'claude'}::${context?.model??''}`} effort={context?.effort??''} fast={activeConv?.fast ?? false} fastOk={app.brains?.claude_fast_ok ?? false} lockModel={viewBusy} onpick={(v: string) => { if(scoped&&context)void splitSetting(context,'model',v);else void pickThreadCombo(v); }} oneffort={(v:string)=>scoped&&context?void splitSetting(context,'effort',v):persistThreadEffort(v)} onfast={(v: boolean) => { if(scoped&&context)void splitSetting(context,'fast',v);else void persistThreadFast(v); }} />

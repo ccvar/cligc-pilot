@@ -11,7 +11,8 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
   import { launcher, STYLE_OPTS, chooseWorkspaceFolder, workspaceFolderName, pickCombo, persistLauncherEffort, setFast } from '$lib/state/launcher.svelte.js';
-  import { autogrow, composer, onComposerKey } from '$lib/state/composer.svelte.js';
+  import { autogrow, composer, onComposerKey, onComposerPaste, onComposerDrop, onComposerDragOver, onComposerDragLeave, removeAttachment, attachFiles } from '$lib/state/composer.svelte.js';
+  import AttachButton from '$lib/components/common/AttachButton.svelte';
   import { startChat } from '$lib/state/turns.svelte.js';
   import { permOptsFor, permTone, permTipFor, brainUsable, brainSetupHint, CODEX_GITHUB_NOTE } from '$lib/state/models';
 
@@ -48,10 +49,25 @@
       <p class="sub">像聊天一样把需求说清楚；需要处理文件时，可以接入一个本地文件夹。</p>
     {/if}
 
-      <div class="composer big">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="composer big" class:fileover={composer.composerFileOver}
+        ondragover={onComposerDragOver} ondragleave={onComposerDragLeave} ondrop={(e) => onComposerDrop(e, true)}>
+          {#if composer.attachments.length || composer.attaching}
+            <div class="attach-row">
+              {#each composer.attachments as a, i (a.path)}
+                <div class="attach-chip">
+                  {#if a.preview}<img class="attach-img" src={a.preview} alt="" />{:else}<span class="attach-ic"><svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M9 1.8H4.5A1.3 1.3 0 0 0 3.2 3.1v9.8a1.3 1.3 0 0 0 1.3 1.3h7a1.3 1.3 0 0 0 1.3-1.3V5.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M9 1.8v3.7h3.8" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg></span>{/if}
+                  <span class="attach-name" title={a.name}>{a.name}</span>
+                  <button class="attach-x" aria-label="移除附件" onclick={() => removeAttachment(i)}>×</button>
+                </div>
+              {/each}
+              {#if composer.attaching}<span class="attach-loading">上传中…</span>{/if}
+            </div>
+          {/if}
           <textarea bind:value={launcher.lDraft} bind:this={launcher.lDraftEl} use:autogrow rows="3"
             placeholder={app.isSiteConn ? '例如：看看最近 28 天展现多但点击率低的查询词，给对应页面重写标题和描述' : app.isSshConn ? '例如：看看这台机器的配置和已装的东西，然后帮我装上 Docker' : app.isCfConn ? '例如：做个卖手冲咖啡的落地页，深色调，留个邮箱订阅表单存到 D1，先给我方案' : app.isGhConn ? '例如：修复登录页在 Safari 上的布局错位，补一个回归测试，然后提个 PR' : app.isWorkspaceChat ? '任意聊点什么；需要处理本地文件时，可在左下角添加一个文件夹' : '例如：分析这个站点最近的内容表现，并给出下一步运营计划'}
             oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
+            onpaste={(e) => onComposerPaste(e, '', true)}
             onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
         <div class="composer-bar">
           <div class="cb-left">
@@ -80,10 +96,11 @@
             {/if}
           </div>
           <div class="cb-right">
+            <AttachButton onfiles={(fs) => attachFiles(fs, true)} />
             <Dropdown compact bind:value={launcher.lPerm} options={permOptsFor(launcher.lBrain, app.isSshConn)} tone={permTone(launcher.lPerm)} tip={permTipFor(launcher.lBrain, launcher.lPerm, app.isSshConn)} />
             <ModelFx options={launcher.comboOpts} value={`${launcher.lBrain}::${launcher.lModel}`} effort={launcher.lEffort} fast={launcher.lFast} fastOk={app.brains?.claude_fast_ok ?? false} onpick={pickCombo} oneffort={persistLauncherEffort} onfast={setFast} />
             <UsageRing />
-            <button class="send" onclick={() => void startChat()} disabled={((app.isCfConn || app.isGhConn || app.isSitesHub) && !launcher.lSite.trim()) || !launcher.lDraft.trim() || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
+            <button class="send" onclick={() => void startChat()} disabled={((app.isCfConn || app.isGhConn || app.isSitesHub) && !launcher.lSite.trim()) || (!launcher.lDraft.trim() && !composer.attachments.length) || composer.attaching || !brainUsable(launcher.lBrain)} title="发送（Enter）">↑</button>
           </div>
         </div>
       </div>
@@ -128,6 +145,20 @@
   /* 输入框（仿 Claude Code：整块圆角边框，聚焦时高亮，发送按钮嵌在框内） */
   .composer.big { position: relative; background: #fff; border: 1px solid var(--border2); border-radius: 12px; box-shadow: none; transition: border-color .12s, box-shadow .12s; }
   .composer.big:focus-within { border-color: #b7b2a6; box-shadow: none; }
+  .composer.big.fileover { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+  .composer.big.fileover::after {
+    content: '松开即可添加文件'; position: absolute; inset: 4px; z-index: 8; display: flex; align-items: center; justify-content: center;
+    border: 1px dashed color-mix(in srgb, var(--accent) 58%, transparent); border-radius: 9px;
+    background: color-mix(in srgb, #fff 92%, var(--accent)); color: var(--accent); font-size: 13px; font-weight: 600; pointer-events: none;
+  }
+  .attach-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 2px; }
+  .attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; padding: 3px 4px 3px 6px; background: var(--panel); border: 1px solid var(--border2); border-radius: 8px; font-size: 12px; }
+  .attach-img { width: 24px; height: 24px; object-fit: cover; border-radius: 4px; flex: none; }
+  .attach-ic { color: var(--dim); flex: none; display: inline-flex; }
+  .attach-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .attach-x { flex: none; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .attach-x:hover { color: var(--err); }
+  .attach-loading { font-size: 11px; color: var(--dim); }
   .composer.big textarea { width: 100%; resize: none; border: none; background: none; box-shadow: none; padding: 14px 52px 14px 17px; font-size: 14px; line-height: 1.6; max-height: 200px; display: block; }
   .composer.big textarea:focus { outline: none; box-shadow: none; border: none; }
   .composer .send { position: absolute; right: 9px; bottom: 9px; width: 32px; height: 32px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background .12s, transform .08s; }
