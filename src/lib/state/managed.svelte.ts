@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -14,7 +14,8 @@ class ManagedState {
   activity = $state<ManagedActivity[]>([]);
   plans = $state<SitePlan[]>([]);
   digests = $state<string[]>([]);
-  digest = $state<{ name: string; text: string } | null>(null);
+  /** data：新版日报的结构化内容；旧日报只有 Markdown（text） */
+  digest = $state<{ name: string; text: string; data: DigestData | null } | null>(null);
   tab = $state<ManagedTab>('groups');
   draft = $state<ManagedConfig | null>(null);
   saving = $state(false);
@@ -240,7 +241,10 @@ export async function loadDigests() {
   try { const v = await invoke<string[]>('list_digests'); managed.digests = v; } catch (e) { say(String(e), 'err'); }
 }
 export async function openDigest(name: string) {
-  try { const text = await invoke<string>('read_digest', { name }); managed.digest = { name, text }; } catch (e) { say(String(e), 'err'); }
+  try {
+    const [text, data] = await Promise.all([invoke<string>('read_digest', { name }), invoke<DigestData | null>('read_digest_data', { name }).catch(() => null)]);
+    managed.digest = { name, text, data };
+  } catch (e) { say(String(e), 'err'); }
 }
 export async function digestNow() {
   try { const r = await invoke<string>('digest_now'); say(`已生成日报：${r}`); await loadDigests(); if (managed.digests[0]) void openDigest(managed.digests[0]); }

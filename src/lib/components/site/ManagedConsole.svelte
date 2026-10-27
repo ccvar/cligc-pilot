@@ -15,6 +15,7 @@
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { modelIcon } from '$lib/state/models';
   import { openSite } from '$lib/state/sites.svelte.js';
+  import DigestView from './DigestView.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, sourceOf, CHANGE_LABEL, STATUS_LABEL, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
@@ -262,7 +263,7 @@
         <h3><Icon name="news" />日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}><Icon name="news" size={11} />生成今日日报</button></h3>
         {#if !managed.digests.length}<p class="hint">还没有日报。每天{o?.config.digest_hour ?? 9} 点后自动生成一份，并发系统通知。</p>{/if}
         <div class="seg digs">{#each managed.digests as n (n)}<button class:on={managed.digest?.name === n} onclick={() => openDigest(n)}>{md(n)}</button>{/each}</div>
-        {#if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
+        {#if managed.digest?.data}<DigestView data={managed.digest.data} />{:else if managed.digest}<div class="md">{@html mdRender(managed.digest.text)}</div>{/if}
       </div>
       {#if d}
         <div class="card">

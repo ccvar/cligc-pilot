@@ -317,6 +317,16 @@ pub fn read_digest(state: tauri::State<'_, AppState>, name: String) -> Result<St
     std::fs::read_to_string(managed::digests_dir(&state.data_dir).join(format!("{name}.md"))).map_err(|_| "日报不存在".to_string())
 }
 
+/// 日报的结构化内容（新版日报才有；旧的只有 Markdown，返回 None）。
+#[tauri::command]
+pub fn read_digest_data(state: tauri::State<'_, AppState>, name: String) -> Result<Option<crate::site_runner::DigestData>, String> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("名称不合法".into());
+    }
+    let p = managed::digests_dir(&state.data_dir).join(format!("{name}.json"));
+    Ok(std::fs::read(p).ok().and_then(|b| serde_json::from_slice(&b).ok()))
+}
+
 /// 立刻生成一份日报（不影响定时的那一份）。
 #[tauri::command]
 pub fn digest_now(app: tauri::AppHandle) -> Result<String, String> {

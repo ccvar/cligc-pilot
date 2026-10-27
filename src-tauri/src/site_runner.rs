@@ -2029,49 +2029,204 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     Ok(out.join("；"))
 }
 
-/// 每日摘要：所有托管站点过去 24 小时做了什么、什么需要你。写一份报告并发系统通知。
+/// 日报里的一条「需要你」。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DigestNeed {
+    pub site_id: String,
+    pub site_name: String,
+    pub title: String,
+    /// 待你确认 | 失败了 | 上线后待核对
+    pub why: String,
+}
+
+/// 日报里有动静的一个站点，和它过去 24 小时的事。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DigestSite {
+    pub site_id: String,
+    pub site_name: String,
+    pub events: Vec<DigestEvent>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DigestEvent {
+    /// shipped | planned | proposed | rolled_back | failed | watch_failed | fallback | budget
+    pub kind: String,
+    pub label: String,
+    pub title: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// 一个站点近 28 天的流量（和前 28 天比）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DigestTraffic {
+    pub site_id: String,
+    pub site_name: String,
+    pub clicks: f64,
+    pub clicks_prev: f64,
+    pub views: f64,
+    pub views_prev: f64,
+}
+
+/// 一份日报的结构化内容（界面按它画；同时写一份 Markdown 备查）。
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DigestData {
+    pub date: String,
+    pub generated_at: u64,
+    pub sites_total: usize,
+    pub shipped: usize,
+    pub planned: usize,
+    /// 回滚 + 失败 + 上线后检查失败
+    pub broken: usize,
+    pub needs: Vec<DigestNeed>,
+    pub active: Vec<DigestSite>,
+    /// 过去 24 小时没有动静、也不需要你的站点
+    pub quiet: Vec<String>,
+    /// 有点击或浏览的站点，按变化大小排
+    pub traffic: Vec<DigestTraffic>,
+    /// 接了数据、但前后 28 天都没有点击和浏览的站点
+    pub no_traffic: Vec<String>,
+}
+
+/// 四舍五入成整数，并去掉「-0」。
+fn whole(x: f64) -> f64 {
+    let r = x.round();
+    if r == 0.0 { 0.0 } else { r }
+}
+
+fn event_label(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "shipped" => "已上线",
+        "planned" => "出计划",
+        "proposed" => "待你确认",
+        "rolled_back" => "已回滚",
+        "failed" => "失败",
+        "watch_failed" => "上线后检查失败",
+        "fallback" => "换用备用模型",
+        "budget" => "预算",
+        _ => return None,
+    })
+}
+
+fn need_why(i: &QueueItem) -> &'static str {
+    match i.status.as_str() {
+        "proposed" => "待你确认",
+        "failed" => "失败了",
+        _ => "上线后待核对",
+    }
+}
+
+/// 汇总过去 24 小时：数字、需要你的事、有动静的站点、没动静的站点、流量。
+pub fn build_digest(sites: &[(Site, PathBuf)], acts: &[crate::managed::Activity], date: &str) -> DigestData {
+    let count = |k: &[&str]| acts.iter().filter(|a| k.contains(&a.kind.as_str())).count();
+    let mut d = DigestData {
+        date: date.into(),
+        generated_at: now(),
+        sites_total: sites.len(),
+        shipped: count(&["shipped"]),
+        planned: count(&["planned"]),
+        broken: count(&["rolled_back", "failed", "watch_failed"]),
+        ..Default::default()
+    };
+    for (s, dir) in sites {
+        let waiting: Vec<DigestNeed> = site_ops::load_queue(dir)
+            .iter()
+            .filter(|i| site_ops::needs_you(i))
+            .map(|i| DigestNeed { site_id: s.id.clone(), site_name: s.name.clone(), title: i.opp.title.clone(), why: need_why(i).into() })
+            .collect();
+        let events: Vec<DigestEvent> = acts
+            .iter()
+            .filter(|a| a.site_id == s.id)
+            .filter_map(|a| event_label(&a.kind).map(|l| DigestEvent { kind: a.kind.clone(), label: l.into(), title: a.title.clone(), detail: a.detail.clone() }))
+            .collect();
+        if events.is_empty() && waiting.is_empty() {
+            d.quiet.push(s.name.clone());
+        } else if !events.is_empty() {
+            d.active.push(DigestSite { site_id: s.id.clone(), site_name: s.name.clone(), events });
+        }
+        d.needs.extend(waiting);
+        let sum = crate::site_data::summary(dir);
+        if sum.fetched_at > 0 {
+            let t = DigestTraffic {
+                site_id: s.id.clone(),
+                site_name: s.name.clone(),
+                clicks: whole(sum.gsc_clicks),
+                clicks_prev: whole(sum.gsc_clicks_prev),
+                views: whole(sum.ga4_views),
+                views_prev: whole(sum.ga4_views_prev),
+            };
+            if t.clicks > 0.0 || t.clicks_prev > 0.0 || t.views > 0.0 || t.views_prev > 0.0 {
+                d.traffic.push(t);
+            } else {
+                d.no_traffic.push(s.name.clone());
+            }
+        }
+    }
+    let swing = |t: &DigestTraffic| (t.clicks - t.clicks_prev).abs() + (t.views - t.views_prev).abs() / 10.0;
+    d.traffic.sort_by(|a, b| swing(b).partial_cmp(&swing(a)).unwrap_or(std::cmp::Ordering::Equal).then(b.clicks.partial_cmp(&a.clicks).unwrap_or(std::cmp::Ordering::Equal)));
+    d
+}
+
+fn change_text(now: f64, prev: f64) -> String {
+    let diff = now - prev;
+    if diff == 0.0 {
+        "持平".into()
+    } else if prev == 0.0 {
+        format!("+{diff:.0}（新增）")
+    } else {
+        format!("{}{diff:.0}（{:+.0}%）", if diff > 0.0 { "+" } else { "" }, diff / prev * 100.0)
+    }
+}
+
+/// 日报的 Markdown 版（存档备查；界面用结构化数据画）。
+pub fn digest_markdown(d: &DigestData) -> String {
+    let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；过去 24 小时自动上线 {} 项、出计划 {} 次、回滚或失败 {} 项，{} 项需要你。\n\n", d.date, d.sites_total, d.shipped, d.planned, d.broken, d.needs.len());
+    if !d.needs.is_empty() {
+        md.push_str("## 需要你\n\n");
+        for n in &d.needs {
+            md.push_str(&format!("- {} · {}：{}\n", n.site_name, n.why, n.title));
+        }
+        md.push('\n');
+    }
+    if !d.active.is_empty() {
+        md.push_str("## 今天有动静的站点\n\n");
+        for s in &d.active {
+            md.push_str(&format!("### {}\n\n", s.site_name));
+            for e in &s.events {
+                md.push_str(&format!("- [{}] {}{}\n", e.label, e.title, if e.detail.is_empty() { String::new() } else { format!("：{}", e.detail) }));
+            }
+            md.push('\n');
+        }
+    }
+    if !d.quiet.is_empty() {
+        md.push_str(&format!("其余 {} 个站点今天没有变化：{}\n\n", d.quiet.len(), d.quiet.join("、")));
+    }
+    if !d.traffic.is_empty() {
+        md.push_str("## 流量（近 28 天，和前 28 天比）\n\n| 站点 | Google 点击 | 变化 | 浏览量 | 变化 |\n|---|---|---|---|---|\n");
+        for t in &d.traffic {
+            md.push_str(&format!("| {} | {:.0} | {} | {:.0} | {} |\n", t.site_name, t.clicks, change_text(t.clicks, t.clicks_prev), t.views, change_text(t.views, t.views_prev)));
+        }
+        md.push('\n');
+    }
+    if !d.no_traffic.is_empty() {
+        md.push_str(&format!("这些站点还没有点击和浏览：{}\n", d.no_traffic.join("、")));
+    }
+    md
+}
+
+/// 每日摘要：所有托管站点过去 24 小时做了什么、什么需要你。写一份报告（结构化 + Markdown）并发系统通知。
 pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     let st = app.state::<crate::AppState>();
     let since = now().saturating_sub(DAY);
     let acts: Vec<crate::managed::Activity> = crate::managed::activity(&st.data_dir, 2000).into_iter().filter(|a| a.ts >= since).collect();
     let cfg = crate::managed::load(&st.data_dir);
-    let managed: Vec<Site> = st.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()).collect();
-    let count = |k: &str| acts.iter().filter(|a| a.kind == k).count();
-    let mut needs = 0usize;
-    let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；过去 24 小时 AI 自动上线 {} 项、出计划 {} 次、回滚 {} 项。\n\n", today(), managed.len(), count("shipped"), count("planned"), count("rolled_back"));
-    for s in &managed {
-        let dir = st.sites.data_dir(&s.id);
-        let q = site_ops::load_queue(&dir);
-        let waiting: Vec<&QueueItem> = q.iter().filter(|i| site_ops::needs_you(i)).collect();
-        needs += waiting.len();
-        let sum = crate::site_data::summary(&dir);
-        md.push_str(&format!("## {}\n\n", s.name));
-        if sum.fetched_at > 0 {
-            md.push_str(&format!("- 近 28 天 Google 点击 {:.0}（前 28 天 {:.0}）\n", sum.gsc_clicks, sum.gsc_clicks_prev));
-        }
-        for a in acts.iter().filter(|a| a.site_id == s.id) {
-            let k = match a.kind.as_str() {
-                "shipped" => "已上线",
-                "planned" => "计划",
-                "proposed" => "待你确认",
-                "rolled_back" => "已回滚",
-                "failed" => "失败",
-                "watch_failed" => "上线后检查失败",
-                "fallback" => "换用备用模型",
-                "budget" => "预算",
-                _ => continue,
-            };
-            md.push_str(&format!("- [{k}] {}{}\n", a.title, if a.detail.is_empty() { String::new() } else { format!("：{}", a.detail.chars().take(120).collect::<String>()) }));
-        }
-        if !waiting.is_empty() {
-            md.push_str(&format!("- 需要你：{} 项（{}）\n", waiting.len(), waiting.iter().take(3).map(|i| i.opp.title.clone()).collect::<Vec<_>>().join("；")));
-        }
-        md.push('\n');
-    }
+    let managed: Vec<(Site, PathBuf)> = st.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()).map(|s| { let d = st.sites.data_dir(&s.id); (s, d) }).collect();
+    let data = build_digest(&managed, &acts, &today());
     let d = crate::managed::digests_dir(&st.data_dir);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    std::fs::write(d.join(format!("{}.md", today())), &md).map_err(|e| e.to_string())?;
-    let body = format!("{} 个站点 · AI 上线 {} 项 · {} 项需要你", managed.len(), count("shipped"), needs);
+    std::fs::write(d.join(format!("{}.md", data.date)), digest_markdown(&data)).map_err(|e| e.to_string())?;
+    std::fs::write(d.join(format!("{}.json", data.date)), serde_json::to_vec_pretty(&data).unwrap_or_default()).map_err(|e| e.to_string())?;
+    let body = format!("{} 个站点 · AI 上线 {} 项 · {} 项需要你", data.sites_total, data.shipped, data.needs.len());
     use tauri_plugin_notification::NotificationExt;
     let _ = app.notification().builder().title("托管日报").body(&body).show();
     crate::managed::log(&st.data_dir, crate::managed::Activity { ts: now(), kind: "digest".into(), title: "托管日报".into(), detail: body.clone(), ..Default::default() });
@@ -2360,5 +2515,31 @@ mod tests {
         assert!(f("/zh/fees/#top"));
         assert!(f("/about"));
         assert!(!f("/nope/"));
+    }
+
+    #[test]
+    fn digest_lists_only_sites_with_news_and_never_prints_minus_zero() {
+        let t = tempfile::tempdir().unwrap();
+        let mk = |id: &str, name: &str| -> (Site, PathBuf) {
+            let s: Site = serde_json::from_value(serde_json::json!({"id": id, "name": name, "source": "local", "created_at": 0, "updated_at": 0})).unwrap();
+            let d = t.path().join(id);
+            std::fs::create_dir_all(&d).unwrap();
+            (s, d)
+        };
+        let sites = vec![mk("a", "a.com"), mk("b", "b.com"), mk("c", "c.com")];
+        let act = |site: &str, kind: &str| crate::managed::Activity { ts: now(), site_id: site.into(), site_name: site.into(), kind: kind.into(), title: "t".into(), ..Default::default() };
+        let acts = vec![act("a", "shipped"), act("a", "watch_ok"), act("b", "rolled_back"), act("b", "planned")];
+        let d = build_digest(&sites, &acts, "2026-10-27");
+        assert_eq!((d.sites_total, d.shipped, d.planned, d.broken), (3, 1, 1, 1));
+        assert_eq!(d.active.iter().map(|s| s.site_name.as_str()).collect::<Vec<_>>(), vec!["a.com", "b.com"]);
+        assert_eq!(d.active[0].events.len(), 1, "复查正常这类不进日报");
+        assert_eq!(d.quiet, vec!["c.com".to_string()]);
+        assert_eq!(whole(-0.2), 0.0);
+        assert!(!format!("{:.0}", whole(-0.2)).contains('-'));
+        assert_eq!(change_text(5.0, 0.0), "+5（新增）");
+        assert_eq!(change_text(3.0, 4.0), "-1（-25%）");
+        assert_eq!(change_text(2.0, 2.0), "持平");
+        let md = digest_markdown(&d);
+        assert!(md.contains("其余 1 个站点今天没有变化：c.com"));
     }
 }
