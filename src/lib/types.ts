@@ -419,6 +419,9 @@ export interface OpsItem {
   watched?: string;
   /** 复盘看的是哪个指标 */
   review_metric?: string;
+  /** 上线前 / 复盘时这个页面近 28 天的 Google 数据 */
+  before?: GscRow | null;
+  after?: GscRow | null;
 }
 
 // ---- 多站点 ----
@@ -433,6 +436,10 @@ export interface SiteSummary {
   /** Google 近 28 天有展示的页面数、站点地图提交的网址数、Bing 索引里的网址数 */
   google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
 }
+/** Search Console 一行（页面或查询词）近 28 天的合计 */
+export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
+/** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
+export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string }
 /** 全部站点列表上的一个分发渠道 */
 export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
 export interface SiteRow {

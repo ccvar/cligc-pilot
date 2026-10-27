@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, PendingItem } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -18,8 +18,8 @@ class ManagedState {
   daily = $state<DayCount[]>([]);
   /** 方案卡片小柱子：每个托管站点最近 14 天的计数 */
   siteDaily = $state<Record<string, DayCount[]>>({});
-  /** 托管页「最近上线」：近 14 天上线的改动 */
-  ships = $state<PendingItem[]>([]);
+  /** 托管页「最近上线」：近 30 天上线的改动（带页面现在的数据，看效果） */
+  ships = $state<ShipItem[]>([]);
   /** data：新版日报的结构化内容；旧日报只有 Markdown（text） */
   digest = $state<{ name: string; text: string; data: DigestData | null } | null>(null);
   tab = $state<ManagedTab>('groups');
@@ -249,7 +249,7 @@ export async function loadDigests() {
       invoke<string[]>('list_digests'),
       invoke<DayCount[]>('managed_daily', { days: 372 }).catch(() => [] as DayCount[]),
       invoke<{ site_id: string; days: DayCount[] }[]>('managed_site_daily', { days: 14 }).catch(() => []),
-      invoke<PendingItem[]>('recent_ships', { days: 14 }).catch(() => [] as PendingItem[]),
+      invoke<ShipItem[]>('recent_ships', { days: 30 }).catch(() => [] as ShipItem[]),
     ]);
     managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days])); managed.ships = sh;
   } catch (e) { say(String(e), 'err'); }

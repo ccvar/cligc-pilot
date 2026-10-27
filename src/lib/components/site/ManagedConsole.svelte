@@ -455,7 +455,7 @@
             </div>
             {#if histTab === 'log' && logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<button class="x" aria-label="看全部" data-tip="看全部" onclick={() => (logDay = '')}>×</button></span>{/if}
             <span class="grow"></span>
-            <span class="sub">{histTab === 'ships' ? '近 14 天，所有托管站点' : managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
+            <span class="sub">{histTab === 'ships' ? '近 30 天，所有托管站点' : managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
           </div>
           {#if histTab === 'ships'}
             <RecentShips items={managed.ships} />

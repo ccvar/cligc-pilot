@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 14 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
+  // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 30 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
   import Icon from './Icon.svelte';
@@ -9,9 +9,9 @@
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { showDiff, rollbackItem, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
   import { ago, full } from './fmt';
-  import type { PendingItem, OpsItem } from '$lib/types';
+  import type { ShipItem, OpsItem, GscRow } from '$lib/types';
 
-  let { items }: { items: PendingItem[] } = $props();
+  let { items }: { items: ShipItem[] } = $props();
   const LIMIT = 5;
   let all = $state(false);
   let open = $state<Set<string>>(new Set());
@@ -27,12 +27,44 @@
     if (i.checks?.length && !bad) return { l: '验收通过', c: 'ok' };
     return { l: '已上线', c: 'ok' };
   }
+  // 效果：复盘出结论（上线满 31 天）前，拿上线前 28 天和现在近 28 天的点击比，标明还是早期数据
+  const DAY = 86_400;
+  type Effect = { t: string; c: string; tip: string };
+  function effect(x: ShipItem): Effect {
+    const i = x.item;
+    const days = Math.floor((Date.now() / 1000 - i.deployed_at) / DAY);
+    if (i.review) {
+      const l = i.review === 'positive' ? '有效' : i.review === 'negative' ? '负面' : '持平';
+      return { t: l, c: i.review === 'positive' ? 'ok' : i.review === 'negative' ? 'err' : 'line', tip: `上线满 4 周的复盘：${i.review_note}` };
+    }
+    if (i.status === 'rolled_back') return { t: '', c: '', tip: '' };
+    const now = x.page_now, b = i.before;
+    const wait = Math.max(0, 31 - days);
+    const tail = `\n上线 ${days} 天${wait ? `，再过 ${wait} 天出复盘结论（搜索数据有 2–3 天延迟，前几周的数字只是苗头）` : '，复盘结论稍后出'}`;
+    if (!b) {
+      if (!now) return { t: days < 4 ? '等数据' : '还没展示', c: 'line', tip: `新页面，Google 还没有展示记录${tail}` };
+      return { t: `展示 ${now.impressions}`, c: '', tip: `新页面近 28 天：展示 ${now.impressions}、点击 ${now.clicks}${now.position ? `、平均排名 ${now.position.toFixed(1)}` : ''}${tail}` };
+    }
+    if (days < 4) return { t: '等数据', c: 'line', tip: `上线前 28 天：${rowText(b)}${tail}` };
+    const after = now ?? { clicks: 0, impressions: 0, ctr: 0, position: 0, key: '' };
+    // 前后都没点击（很多站还在起步）就看展示的变化
+    const byClicks = b.clicks > 0 || after.clicks > 0;
+    const d = byClicks ? after.clicks - b.clicks : after.impressions - b.impressions;
+    const what = byClicks ? '点击' : '展示';
+    return {
+      t: d === 0 ? `${what}持平` : `${what} ${d > 0 ? '+' : ''}${d}`,
+      c: d > 0 ? 'up' : d < 0 ? 'down' : '',
+      tip: `上线前 28 天：${rowText(b)}\n现在近 28 天：${rowText(after)}${x.data_end ? `（数据到 ${x.data_end}）` : ''}${tail}`,
+    };
+  }
+  const rowText = (r: GscRow) => `点击 ${r.clicks} · 展示 ${r.impressions}${r.position ? ` · 排名 ${r.position.toFixed(1)}` : ''}`;
+
   /** 页面链接显示成短路径：https://iosur.com/zh/posts/x/ → /zh/posts/x/ */
   const shortPath = (u: string) => { try { const x = new URL(u); return x.pathname + x.search || '/'; } catch { return u; } };
 </script>
 
 <div class="rs">
-  {#if !items.length}<p class="hint">最近 14 天托管站点没有上线改动。</p>{/if}
+  {#if !items.length}<p class="hint">最近 30 天托管站点没有上线改动。</p>{/if}
   {#if items.length}
     <ol class="rows">
       {#each shown as x (x.item.id)}
@@ -40,6 +72,7 @@
         {@const st = shipState(i)}
         {@const site = siteOf(x.site_id)}
         {@const isOpen = open.has(i.id)}
+        {@const ef = effect(x)}
         <li class:open={isOpen}>
           <div class="row">
             <button class="main" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
@@ -52,6 +85,7 @@
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
               <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', 'live')} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
             </span>
+            <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
             <span class="how faint" data-tip={i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{i.auto ? '自动上线' : '人工确认'}</span>
             <span class="pill {st.c}">{st.l}</span>
             <span class="t faint" data-tip={full(i.deployed_at)}>{ago(i.deployed_at)}</span>
@@ -60,6 +94,7 @@
             <div class="more">
               {#if CHANGE_LABEL[i.opp.change]}<span class="tag">{CHANGE_LABEL[i.opp.change]}</span>{/if}
               {#if i.attention}<p class="warn-text">要你核对：{i.attention}</p>{/if}
+              {#if ef.tip}<p class="eff-d">{ef.tip}</p>{/if}
               {#if i.ai_summary}<p>{i.ai_summary}</p>{/if}
               {#if i.checks?.length}
                 {@const bad = i.checks.filter((c) => !c.ok)}
@@ -94,6 +129,12 @@
   .rows > li:hover .acts, .acts:focus-within { opacity: 1; }
   .acts .ic-btn { margin: 0; }
   /* 「自动上线 / 人工确认」和状态胶囊各占固定宽度，几行上下对齐 */
+  /* 效果：复盘前是点击变化（涨绿跌红）或「等数据」，复盘后是 有效 / 持平 / 负面 */
+  .eff { flex: none; width: 76px; text-align: right; font-size: 11.5px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .eff.line { color: var(--faint); }
+  .eff.up { color: var(--ok); }
+  .eff.down { color: var(--err); }
+  .eff-d { white-space: pre-line; }
   .how { flex: none; width: 52px; text-align: right; font-size: 11px; white-space: nowrap; }
   .row > .pill { flex: none; min-width: 74px; justify-content: center; }
   .t { flex: none; width: 64px; text-align: right; font-size: 11.5px; white-space: nowrap; }

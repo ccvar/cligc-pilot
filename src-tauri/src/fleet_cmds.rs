@@ -111,17 +111,37 @@ pub fn pending_across_sites(state: tauri::State<'_, AppState>) -> Vec<PendingIte
     out
 }
 
+/// 「最近上线」的一条：改动本身，加上这个页面现在近 28 天的搜索数据（和上线前那 28 天对比看效果）。
+#[derive(Serialize)]
+pub struct ShipItem {
+    pub site_id: String,
+    pub site_name: String,
+    pub item: QueueItem,
+    /// 这个页面现在（最近一次拉数据）的近 28 天 Google 数据；没有展示就是 None
+    pub page_now: Option<crate::site_data::Row>,
+    /// 现在这份数据截止到哪天（GSC 有 2–3 天延迟）
+    pub data_end: String,
+}
+
 /// 托管站点最近 days 天上线过的改动（含之后被回滚的），新的在前：托管页「最近上线」用。
 #[tauri::command]
-pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<PendingItem> {
-    let since = crate::now_secs().saturating_sub(days.unwrap_or(14).min(90) * 86_400);
+pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<ShipItem> {
+    let since = crate::now_secs().saturating_sub(days.unwrap_or(30).min(90) * 86_400);
     let cfg = crate::managed::load(&state.data_dir);
-    let mut out: Vec<PendingItem> = Vec::new();
+    let mut out: Vec<ShipItem> = Vec::new();
     for s in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
-        for item in crate::site_ops::load_queue(&state.sites.data_dir(&s.id)) {
-            if item.deployed_at >= since && matches!(item.status.as_str(), "deployed" | "rolled_back" | "done") {
-                out.push(PendingItem { site_id: s.id.clone(), site_name: s.name.clone(), item });
-            }
+        let dir = state.sites.data_dir(&s.id);
+        let items: Vec<QueueItem> = crate::site_ops::load_queue(&dir).into_iter().filter(|i| i.deployed_at >= since && matches!(i.status.as_str(), "deployed" | "rolled_back" | "done")).collect();
+        if items.is_empty() {
+            continue;
+        }
+        let cache = crate::site_data::cache_dir(&dir);
+        let pages: Vec<crate::site_data::Row> = crate::site_data::read_json(&cache, "gsc_pages.json");
+        let data_end = crate::site_data::summary(&dir).data_end;
+        for item in items {
+            let page = if item.opp.page.starts_with("https://") { item.opp.page.clone() } else { item.new_pages.first().cloned().unwrap_or_default() };
+            let page_now = pages.iter().find(|r| r.key == page).cloned();
+            out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone() });
         }
     }
     out.sort_by(|a, b| b.item.deployed_at.cmp(&a.item.deployed_at));
