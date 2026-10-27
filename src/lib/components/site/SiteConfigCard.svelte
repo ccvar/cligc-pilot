@@ -151,11 +151,12 @@
                   {:else if v.declared}<span class="flag no">未填</span><button class="link-btn fill" onclick={() => { editing = v.key; val = ''; }}>填写</button>{/if}
                   {#if v.differ}<span class="flag warn" data-tip="上次从线上读取时，线上的值和 Pilot 里的不一样；保留了 Pilot 的，同步一次就会写上去">和线上不同</span>
                   {:else if v.pending && cs.target}<span class="flag warn" data-tip={`这个值还没写到${dest}`}>未同步</span>{/if}
-                </div>
-                <div class="acts">
+                  <!-- 操作图标平时不显示，鼠标停在这一行或键盘焦点进来时出现在值后面（一直占着位置，出现时不挤动） -->
+                  <span class="acts" class:busy={syncingKey === v.key}>
                   {#if canSyncOne(v)}<button class="ic-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing} aria-label={`只同步 ${v.key}`} data-tip={`只把它同步到${dest}（会先确认）`}>{#if syncingKey === v.key}<span class="spin"></span>{:else}<Icon name="upload" size={13} />{/if}</button>{/if}
                   {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => { editing = v.key; val = ''; }} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
                   {#if v.set}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : ck === 'reset' ? `${v.key} 改回自动` : `清除 ${v.key} 的值`} data-tip={ck === 'delete' ? '删除这个变量' : ck === 'reset' ? '改回自动' : '清除值（变量保留，变成未填）'}><Icon name={ck === 'delete' ? 'trash' : ck === 'reset' ? 'undo' : 'eraser'} size={13} /></button>{/if}
+                  </span>
                 </div>
               {/if}
               <!-- 说明写的是「该填什么」：放在值下面，和值从同一个位置开始；最多两行，长的悬停看全文 -->
@@ -194,11 +195,10 @@
   .vars > li { padding: 7px 8px 7px 12px; border-top: 1px solid var(--border); }
   .vars > li:first-child { border-top: none; }
   /* 一行：名字 ｜ 值 ｜ 操作。名字列等宽，值从同一个位置开始 */
-  .line { display: grid; grid-template-columns: minmax(120px, 230px) minmax(0, 1fr) auto; align-items: center; column-gap: 12px; row-gap: 2px; min-height: 26px; }
+  .line { display: grid; grid-template-columns: minmax(120px, 230px) minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 2px; min-height: 26px; }
   .kcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   .k { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
-  .vcol.edit { grid-column: 2 / -1; }
   .vcol.edit .tin { flex: 1; min-width: 0; }
   .val { min-width: 0; max-width: 100%; padding: 1px 6px; border-radius: 5px; background: var(--rail); color: var(--text); font-size: 11.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .val.masked { color: var(--faint); letter-spacing: 1px; }
@@ -209,10 +209,11 @@
   .flag.no { color: var(--su-warn-ink, #8a5a08); }
   .flag.warn { padding: 0 6px; line-height: 16px; border-radius: 999px; font-size: 10px; background: var(--su-warn-soft, #fbf3dc); color: var(--su-warn-ink, #8a5a08); }
   .fill { font-size: 12px; }
-  .acts { display: flex; align-items: center; gap: 0; }
+  .acts { flex: none; display: inline-flex; align-items: center; margin-left: 2px; opacity: 0; transition: opacity .12s; }
+  .vars > li:hover .acts, .vars > li:focus-within .acts, .acts.busy { opacity: 1; }
   .acts .ic-btn, .eye { width: 24px; height: 24px; }
   .acts .del:hover:not(:disabled) { color: var(--err); }
-  .desc { grid-column: 2 / -1; font-size: 11.5px; line-height: 1.5; color: var(--faint); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+  .desc { grid-column: 2; font-size: 11.5px; line-height: 1.5; color: var(--faint); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
   .hint { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
   .grow { flex: 1; }
   .add { display: flex; align-items: center; gap: 6px; }
