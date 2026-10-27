@@ -5,6 +5,8 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { app, confirmDialog } from '$lib/state/app.svelte.js';
+  import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
+  import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
   import { sites, loadSiteStatus } from '$lib/state/sites.svelte.js';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import { mdRender } from '$lib/state/messages.svelte.js';
@@ -61,6 +63,7 @@
     for (const id of ids) if (!sites.jobs[id]) void loadSiteStatus(id);
   });
   let logOpen = $state(false);
+  $effect(() => { void loadJev(); });
   // 日志按「时间 + 站点 + 条目 + 类型」作 key；同一秒批量暂停 / 退出多个站点时会撞，重复的加序号（撞 key 会让整个列表渲染失败）
   const activityKeys = $derived.by(() => {
     const seen = new Map<string, number>();
@@ -279,6 +282,8 @@
             <span><Icon name="file" size={12} />新页面{g.new_content === 'auto' ? '自动发布' : '人审人发'}{g.min_page_chars ? ` · ≥ ${g.min_page_chars} 字` : ''}</span>
             {#if g.autonomy === 'auto'}<span><Icon name="code" size={12} />{CODE_LABEL[g.code_changes ?? 'all']}</span>{/if}
             <span><Icon name="rocket" size={12} />每站每天 ≤ {g.daily_changes} 条</span>
+            {#if jev.configured && g.autonomy === 'auto' && g.jev_gate !== false}<span data-tip="自动上线前让判断模型（Jev）检查新页面和大改的页面，不过就留给你确认"><TypeSafeMark size={12} />上线前质检</span>{/if}
+            {#if jev.configured && g.skip_offtopic !== false}<span data-tip="判断模型（Jev）认为和站点定位基本无关的搜索词不交给 AI 处理"><TypeSafeMark size={12} />跳过无关搜索词</span>{/if}
             <span><Icon name="gauge" size={12} />每站每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限 token'}</span>
           </div>
           {#if g.sites.length}

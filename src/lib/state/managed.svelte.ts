@@ -124,7 +124,7 @@ function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false, autonomy: 'auto',
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
     new_content: 'auto', code_changes: 'all', daily_changes: c?.daily_changes ?? 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
-    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, created_at: 0,
+    goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, jev_gate: true, skip_offtopic: true, created_at: 0,
   };
 }
 

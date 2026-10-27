@@ -10,6 +10,9 @@
   import { sites } from '$lib/state/sites.svelte.js';
   import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
+  import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
+  import { openConnectionSetup } from '$lib/state/settings.svelte.js';
+  import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
@@ -56,6 +59,7 @@
   // 三步：选站点 → 运营方式 → 发布与模型；新建时只有最后一步才能「开始托管」，编辑时可以随便切
   let step = $state<1 | 2 | 3>(1);
   const STEPS = ['选择站点', '运营方式', '发布与模型'];
+  $effect(() => { void loadJev(); });
   function toggleAction(k: string) {
     if (!g) return;
     g.actions = g.actions.includes(k) ? g.actions.filter((x) => x !== k) : [...g.actions, k];
@@ -223,8 +227,17 @@
         <div class="field"><label for="ge-tok">每站每周模型用量上限（token）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} />
           <small>用完就暂停这个站点到下周并通知你。0＝不限。</small></div>
       </div>
+      <div class="field"><span class="lbl"><TypeSafeMark size={13} />上线前内容质检（判断模型）</span>
+        <div class="seg"><button class:on={g.jev_gate !== false} onclick={() => g && (g.jev_gate = true)} disabled={!jev.configured}>做质检</button><button class:on={g.jev_gate === false} onclick={() => g && (g.jev_gate = false)} disabled={!jev.configured}>不做</button></div>
+        <small>{#if jev.configured}规则都过了、马上要自动上线时，再让判断模型看一眼新页面和大改的页面：要讲清楚目标搜索问题、信息够具体、和站点定位相关、没有没来源的数字和遗留的说明文字，有一项不过就留给你确认，分数记在待处理条目上。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认开着。{/if}</small>
+      </div>
 
       {/if}
+      <div class="sec"><Icon name="bulb" size={13} />运营机会</div>
+      <div class="field"><span class="lbl"><TypeSafeMark size={13} />和站点定位无关的搜索词（判断模型）</span>
+        <div class="seg"><button class:on={g.skip_offtopic !== false} onclick={() => g && (g.skip_offtopic = true)} disabled={!jev.configured}>跳过，不交给 AI</button><button class:on={g.skip_offtopic === false} onclick={() => g && (g.skip_offtopic = false)} disabled={!jev.configured}>照常处理</button></div>
+        <small>{#if jev.configured}判断模型按站点定位给每条机会的搜索词打相关度，基本无关的（比如同名词误撞、别的领域）扫描时不入队，省下改动额度；看板里照样列出来、标着「相关度低」。站点要先写好定位。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认跳过。{/if}</small>
+      </div>
       <div class="sec"><Icon name="cpu" size={13} />模型</div>
       <div class="grid2">
         <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
@@ -332,4 +345,5 @@
   .act b { font-size: 12.5px; font-weight: 600; }
   .act small { font-size: 11px; color: var(--faint); line-height: 1.45; }
   .chosen + .sec { border-top: none; padding-top: 4px; }
+  .lbl :global(img) { display: inline-block; vertical-align: -2px; margin-right: 5px; }
 </style>

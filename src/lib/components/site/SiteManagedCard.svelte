@@ -10,6 +10,7 @@
   import { STAGE_LABEL, STAGE_FOCUS } from '$lib/state/ops.svelte.js';
   import { managed, loadManaged, openManaged, editGroup, newGroup, setManagedSites, setSiteActive, AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { clock } from './fmt';
+  import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { if (!managed.overview) void loadManaged(); });
@@ -20,6 +21,7 @@
   // 阶段与定位（只有托管的站点用得上）
   let sv = $state<SiteStageView | null>(null);
   let posDraft = $state('');
+  $effect(() => { void loadJev(); });
   let saving = $state(false);
   let editingPos = $state(false);
   async function loadStage(id: string) {
@@ -99,6 +101,7 @@
           <div class="row-end"><button class="btn small ghost" onclick={() => (editingPos = false)}>取消</button><button class="btn small primary" onclick={() => savePositioning(posDraft)} disabled={saving || !posDraft.trim()}>保存定位</button></div>
         {:else}
           <p class="pos">{sv?.positioning.text || '还没有。AI 下次制定计划时会先读站点归纳出来；选题不确定时，AI 从这里推导增量内容。'}</p>
+          {#if jev.configured}<small class="faint">{sv?.positioning.text ? '运营机会按这段定位排相关度（判断模型），和它无关的搜索词排到后面。' : '写好定位以后，运营机会会按相关度排序（判断模型），和站点无关的搜索词排到后面。'}</small>{/if}
         {/if}
       </div>
     </div>

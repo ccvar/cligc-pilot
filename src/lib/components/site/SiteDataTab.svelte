@@ -28,7 +28,11 @@
   const path = (u: string) => { try { const x = new URL(u); return x.pathname + x.search; } catch { return u; } };
   const events = $derived((d?.ga4_events ?? []).filter((e) => !['page_view', 'session_start', 'first_visit', 'user_engagement', 'scroll'].includes(e.event)));
   const evNames = $derived([...new Set(events.filter((e) => !e.dim).map((e) => e.event))]);
-  const opps = $derived<Opportunity[]>(d?.opportunities ?? []);
+  const allOpps = $derived<Opportunity[]>(d?.opportunities ?? []);
+  // 判断模型标了「相关度低」的（和站点定位关系不大）可以先藏起来；没打相关度的照常显示
+  const lowCount = $derived(allOpps.filter((o) => o.relevance != null && o.relevance < 1.5).length);
+  let hideLow = $state(false);
+  const opps = $derived(hideLow ? allOpps.filter((o) => o.relevance == null || o.relevance >= 1.5) : allOpps);
   const prevOf = (r: object) => (r as { prev_clicks?: number }).prev_clicks;
 </script>
 
@@ -109,7 +113,8 @@
       {/if}
 
       <div class="card">
-        <h3><Icon name="bulb" />运营机会 <span class="sub">按固定规则从数据里算出，可复现</span></h3>
+        <h3><Icon name="bulb" />运营机会 <span class="sub">{allOpps.some((o) => o.relevance != null) ? '按规则算出，再按和站点定位的相关度排序' : '按固定规则从数据里算出，可复现'}</span>
+          {#if lowCount}<span class="grow"></span><label class="low-filter" data-tip="判断模型（Jev）认为这些机会的搜索词和站点定位关系不大"><input type="checkbox" bind:checked={hideLow} />隐藏相关度低的（{lowCount}）</label>{/if}</h3>
         {#if opps.length}
           <div class="list">{#each opps.slice(0, 12) as o (o.key)}<OpportunityRow {site} opp={o} />{/each}</div>
         {:else}
@@ -223,4 +228,6 @@
   .ev-dim { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 4px 0 0 2px; }
   .ev-dim small { color: var(--dim); font-size: 11.5px; }
   .soft-note { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12.5px; color: #6b4a10; }
+  .low-filter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 400; color: var(--dim); cursor: pointer; }
+  .low-filter input { margin: 0; accent-color: var(--accent); }
 </style>

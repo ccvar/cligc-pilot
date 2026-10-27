@@ -119,6 +119,12 @@ pub struct ManagedGroup {
     /// 依赖、构建 / 部署配置、Worker / 服务端、读环境变量或调外部服务的代码，任何一档都不自动上线。
     #[serde(default = "default_code")]
     pub code_changes: String,
+    /// 自动上线前用判断模型（Jev）做内容质检；接上 TypeSafe 才生效，见 jev_checks
+    #[serde(default = "yes")]
+    pub jev_gate: bool,
+    /// 判断模型认为和站点定位基本无关的搜索词，扫描时不交给 AI 处理（看板里照样列出）
+    #[serde(default = "yes")]
+    pub skip_offtopic: bool,
     #[serde(default)]
     pub created_at: u64,
 }
@@ -198,6 +204,8 @@ impl ManagedGroup {
             metric: default_metric(),
             min_page_chars: default_min_page(),
             code_changes: default_code(),
+            jev_gate: true,
+            skip_offtopic: true,
             created_at: 0,
         }
     }

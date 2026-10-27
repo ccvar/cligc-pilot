@@ -17,7 +17,7 @@
       <svg class="chev" width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
       <span>{opp.title}</span>
     </button>
-    {#if opp.relevance != null && opp.relevance < 1.5}<span class="rel" data-tip="判断模型（Jev）认为这组搜索词和站点定位关系不大（相关度 {opp.relevance.toFixed(1)}/3），排到了后面；相关度低于 0.75 的不会自动交给 AI 处理">相关度低</span>{/if}
+    {#if opp.relevance != null && opp.relevance < 1.5}<span class="rel" data-tip="判断模型（Jev）认为这组搜索词和站点定位关系不大（相关度 {opp.relevance.toFixed(1)}/3），排到了后面；托管方案开着「跳过无关搜索词」时，相关度低于 0.75 的不会交给 AI 处理">相关度低</span>{/if}
     <span class="chg">{CHANGE_LABEL[opp.change] ?? opp.change}</span>
     {#if queued}
       <span class="pill {queued.status === 'dismissed' ? '' : 'line'}">{queued.status === 'dismissed' ? '已驳回' : '已在待处理'}</span>

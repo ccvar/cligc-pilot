@@ -362,8 +362,9 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     refresh_data(ctx, site, job).await;
     job.step("scan", "running", "");
     let opps = crate::site_data::ranked_opportunities(site, &site_dir).await;
-    // 判断模型认为和站点定位基本无关的搜索词不交给 AI 处理（看板里照样列出来、标明相关度低），省下改动额度
-    let (wanted, offtopic): (Vec<_>, Vec<_>) = opps.iter().cloned().partition(|o| o.relevance.is_none_or(|r| r >= OFFTOPIC_BELOW));
+    // 托管方案开了「跳过无关搜索词」：判断模型认为和站点定位基本无关的不交给 AI（看板里照样列出来、标明相关度低），省下改动额度
+    let skip = crate::managed::load(&ctx.state().data_dir).group_of(&site.id).is_some_and(|g| g.skip_offtopic);
+    let (wanted, offtopic): (Vec<_>, Vec<_>) = opps.iter().cloned().partition(|o| !skip || o.relevance.is_none_or(|r| r >= OFFTOPIC_BELOW));
     let added = site_ops::enqueue(&site_dir, &wanted, now(), COOLDOWN)?;
     job.line(&format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     if !offtopic.is_empty() {
@@ -1003,10 +1004,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if level >= 5 && verdict == "auto" && shipped_today(&site_dir) >= managed.daily_changes as usize {
         verdict = format!("今天已自动上线 {} 条（上限），这一条留给你确认或明天再上", managed.daily_changes);
     }
-    // 判断模型（Jev）内容质检：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
-    // 没配、关着或调用失败都不影响原来的判定（只会加严，不会放宽）
-    if level >= 5 && verdict == "auto" {
-        if let Some(jev) = crate::typesafe::for_feature(crate::typesafe::Feature::Gate) {
+    // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
+    // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）
+    if level >= 5 && verdict == "auto" && managed.jev_gate {
+        if let Some(jev) = crate::typesafe::client() {
             let files = crate::managed::content_page_files(&diff);
             if !files.is_empty() {
                 job.line("判断模型（Jev）内容质检…");

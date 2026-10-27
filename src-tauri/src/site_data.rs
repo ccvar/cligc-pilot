@@ -311,10 +311,11 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     meta
 }
 
-/// 按规则算出机会，配了判断模型（Jev）就再按「和站点定位的相关度」调整排序（打过的有缓存，不重复问）。
+/// 按规则算出机会，接上了判断模型（Jev）就再按「和站点定位的相关度」调整排序（打过的有缓存，不重复问）。
+/// 只调顺序、标出相关度，不改变交不交给 AI——那是托管方案的规则（skip_offtopic），见 site_runner::scan。
 pub async fn ranked_opportunities(site: &Site, site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
     let mut opps = crate::site_ops::opportunities(site, site_dir);
-    if let Some(jev) = crate::typesafe::for_feature(crate::typesafe::Feature::Rank) {
+    if let Some(jev) = crate::typesafe::client() {
         crate::jev_checks::rank_opportunities(&jev, site, site_dir, &mut opps).await;
     }
     opps

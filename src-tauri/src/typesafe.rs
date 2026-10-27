@@ -20,12 +20,6 @@ const USD_PER_MTOK: f64 = 0.042;
 pub struct Config {
     #[serde(default = "default_model")]
     pub model: String,
-    /// 托管运营自动上线前，用 Jev 给新页面 / 改写的页面做内容质检
-    #[serde(default = "yes")]
-    pub use_gate: bool,
-    /// 运营机会按「和站点定位的相关度」重新排序
-    #[serde(default = "yes")]
-    pub use_rank: bool,
     #[serde(default)]
     pub verified_at: u64,
     /// 用量按月累计（YYYY-MM），换月清零
@@ -37,12 +31,9 @@ pub struct Config {
 fn default_model() -> String {
     DEFAULT_MODEL.into()
 }
-fn yes() -> bool {
-    true
-}
 impl Default for Config {
     fn default() -> Self {
-        Self { model: default_model(), use_gate: true, use_rank: true, verified_at: 0, month: String::new(), month_tokens: 0 }
+        Self { model: default_model(), verified_at: 0, month: String::new(), month_tokens: 0 }
     }
 }
 
@@ -69,13 +60,6 @@ fn month_now() -> String {
     chrono::Local::now().format("%Y-%m").to_string()
 }
 
-/// 要用 Jev 的功能
-#[derive(Clone, Copy)]
-pub enum Feature {
-    Gate,
-    Rank,
-}
-
 /// 一个能用的 Jev 客户端（有 Key、对应功能开着）。
 pub struct Jev {
     key: String,
@@ -88,17 +72,10 @@ fn app_data_dir() -> Option<PathBuf> {
     crate::APP.get().map(|a| a.state::<crate::AppState>().data_dir.clone())
 }
 
-/// 这项功能现在能不能用 Jev：没配 Key / 功能关着 / 不在应用里（单元测试）都返回 None。
-pub fn for_feature(feature: Feature) -> Option<Jev> {
+/// 能用的 Jev 客户端：没配 Key、不在应用里（单元测试）都返回 None。用不用、用在哪由调用方按托管方案的规则决定。
+pub fn client() -> Option<Jev> {
     let data_dir = app_data_dir()?;
     let c = load(&data_dir);
-    let on = match feature {
-        Feature::Gate => c.use_gate,
-        Feature::Rank => c.use_rank,
-    };
-    if !on {
-        return None;
-    }
     let key = crate::keychain::get_named_secret(KEY_ACCOUNT).ok().filter(|k| !k.trim().is_empty())?;
     Some(Jev { key, model: c.model, data_dir })
 }
@@ -190,8 +167,6 @@ pub struct Status {
     configured: bool,
     key_prefix: String,
     model: String,
-    use_gate: bool,
-    use_rank: bool,
     verified_at: u64,
     month_tokens: u64,
     month_cost_usd: f64,
@@ -205,8 +180,6 @@ fn status_of(data_dir: &Path) -> Status {
         configured: key.is_some(),
         key_prefix: key.as_deref().map(crate::keychain::key_prefix).unwrap_or_default(),
         model: c.model,
-        use_gate: c.use_gate,
-        use_rank: c.use_rank,
         verified_at: c.verified_at,
         month_tokens: tokens,
         month_cost_usd: tokens as f64 / 1_000_000.0 * USD_PER_MTOK,
@@ -220,7 +193,7 @@ pub fn typesafe_status(state: tauri::State<'_, crate::AppState>) -> Status {
 
 /// 保存设置。`key` 非空时先用它读一次模型列表确认有效，再存进钥匙串；留空＝沿用已存的 Key。
 #[tauri::command]
-pub async fn typesafe_save(state: tauri::State<'_, crate::AppState>, key: String, model: String, use_gate: bool, use_rank: bool) -> Result<Status, String> {
+pub async fn typesafe_save(state: tauri::State<'_, crate::AppState>, key: String, model: String) -> Result<Status, String> {
     let key = key.trim().to_string();
     let mut verified = 0;
     if !key.is_empty() {
@@ -233,8 +206,6 @@ pub async fn typesafe_save(state: tauri::State<'_, crate::AppState>, key: String
     let model = if model.trim().is_empty() { DEFAULT_MODEL.to_string() } else { model.trim().to_string() };
     update(&state.data_dir, |c| {
         c.model = model;
-        c.use_gate = use_gate;
-        c.use_rank = use_rank;
         if verified > 0 {
             c.verified_at = verified;
         }
@@ -284,9 +255,11 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_turn_both_features_on() {
+    fn config_defaults_and_old_files_still_load() {
         let c: Config = serde_json::from_str("{}").unwrap();
-        assert!(c.use_gate && c.use_rank);
         assert_eq!(c.model, DEFAULT_MODEL);
+        // 早期版本里的全局开关字段直接忽略（用不用改由托管方案决定）
+        let old: Config = serde_json::from_str("{\"model\":\"jev-1.14.0\",\"use_gate\":false,\"use_rank\":true}").unwrap();
+        assert_eq!(old.model, "jev-1.14.0");
     }
 }

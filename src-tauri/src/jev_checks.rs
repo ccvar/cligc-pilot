@@ -308,6 +308,15 @@ mod tests {
     }
 
     #[test]
+    fn existing_plans_get_both_jev_rules_on_by_default() {
+        // 老方案文件里没有这两个字段：读出来都是开（接上 TypeSafe 才真正生效），用户不用逐个去改
+        let g: crate::managed::ManagedGroup = serde_json::from_str(r#"{"id":"g1","name":"方案"}"#).unwrap();
+        assert!(g.jev_gate && g.skip_offtopic);
+        let off: crate::managed::ManagedGroup = serde_json::from_str(r#"{"id":"g1","name":"方案","jev_gate":false,"skip_offtopic":false}"#).unwrap();
+        assert!(!off.jev_gate && !off.skip_offtopic);
+    }
+
+    #[test]
     fn page_without_a_target_query_skips_the_answer_question() {
         assert!(quality_questions(false).get("answers").is_none());
         assert!(quality_questions(true).get("answers").is_some());

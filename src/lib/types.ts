@@ -488,6 +488,10 @@ export interface ManagedGroup {
   metric: string;
   /** 新页面正文下限（字），低于它不自动上线；0＝不检查 */
   min_page_chars: number;
+  /** 自动上线前用判断模型（Jev）做内容质检（接上 TypeSafe 才生效）；老数据没有＝开 */
+  jev_gate?: boolean;
+  /** 判断模型认为和站点定位基本无关的搜索词不交给 AI 处理；老数据没有＝开 */
+  skip_offtopic?: boolean;
   created_at: number;
 }
 export interface ManagedSite {
@@ -518,8 +522,6 @@ export interface TypeSafeStatus {
   configured: boolean;
   key_prefix: string;
   model: string;
-  use_gate: boolean;
-  use_rank: boolean;
   verified_at: number;
   month_tokens: number;
   month_cost_usd: number;

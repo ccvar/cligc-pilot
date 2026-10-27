@@ -1,6 +1,7 @@
 <script lang="ts">
-  // 设置里的「判断模型」：TypeSafe 的 Jev。它不聊天、不写文字，只对内容做打分 / 是否判断，
-  // Pilot 用它给托管自动上线的页面做内容质检、给运营机会按站点定位排序。没配就按原来的规则走。
+  // 设置里的「判断模型」：TypeSafe 的 Jev。它不聊天、不写文字，只对内容做打分 / 是否判断。
+  // 这里只管连接（Key、模型、测试、用量）；用在哪是托管方案里的规则（上线前质检、跳过无关搜索词），
+  // 运营机会排序接上就生效。没配就按原来的规则走。
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
@@ -9,6 +10,7 @@
   import { onMount } from 'svelte';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
   import type { TypeSafeStatus } from '$lib/types';
+  import { setJevConfigured } from '$lib/state/typesafe.svelte.js';
 
   const MODELS = [
     { value: 'jev-latest', label: 'jev-latest', sub: '跟着最新版走（推荐）' },
@@ -19,25 +21,24 @@
   let editing = $state(false);
   let key = $state('');
   let model = $state('jev-latest');
-  let useGate = $state(true);
-  let useRank = $state(true);
   let busy = $state('');
   let note = $state<{ ok: boolean; text: string } | null>(null);
 
   async function load() {
-    try { st = await invoke<TypeSafeStatus>('typesafe_status'); } catch (e) { note = { ok: false, text: String(e) }; }
+    try { st = await invoke<TypeSafeStatus>('typesafe_status'); setJevConfigured(st.configured); } catch (e) { note = { ok: false, text: String(e) }; }
   }
   onMount(() => { void load(); });
 
   function edit() {
     if (!st) return;
-    key = ''; model = st.model || 'jev-latest'; useGate = st.use_gate; useRank = st.use_rank; note = null; editing = true;
+    key = ''; model = st.model || 'jev-latest'; note = null; editing = true;
   }
   async function save() {
     if (busy) return;
     busy = 'save'; note = null;
     try {
-      st = await invoke<TypeSafeStatus>('typesafe_save', { key: key.trim(), model, useGate, useRank });
+      st = await invoke<TypeSafeStatus>('typesafe_save', { key: key.trim(), model });
+      setJevConfigured(st.configured);
       editing = false; key = '';
       note = { ok: true, text: '已保存，Key 验证通过' };
     } catch (e) { note = { ok: false, text: String(e) }; }
@@ -52,28 +53,27 @@
   }
   async function remove() {
     if (busy) return;
-    if (!(await confirmDialog('删除 TypeSafe 的 API Key？之后内容质检和机会排序都停用，按原来的规则判断。', { title: '删除判断模型', kind: 'danger', confirmText: '删除' }))) return;
+    if (!(await confirmDialog('删除 TypeSafe 的 API Key？之后托管方案里的内容质检、跳过无关搜索词和运营机会排序都停用，按原来的规则判断。', { title: '删除判断模型', kind: 'danger', confirmText: '删除' }))) return;
     busy = 'remove';
-    try { st = await invoke<TypeSafeStatus>('typesafe_remove'); editing = false; note = null; say('已删除 TypeSafe 的 API Key'); }
+    try { st = await invoke<TypeSafeStatus>('typesafe_remove'); setJevConfigured(false); editing = false; note = null; say('已删除 TypeSafe 的 API Key'); }
     catch (e) { note = { ok: false, text: String(e) }; }
     finally { busy = ''; }
   }
 
   const stateLabel = $derived(!st ? '' : !st.configured ? '未配置' : st.verified_at ? '已验证' : '已配置 · 未测试');
-  const uses = $derived(!st ? '' : [st.use_gate && '自动上线质检', st.use_rank && '机会排序'].filter(Boolean).join('、') || '两项功能都关着');
   const cost = $derived(!st || !st.month_tokens ? '' : `本月 ${(st.month_tokens / 10000).toFixed(1)} 万 token ≈ $${st.month_cost_usd < 0.01 ? '<0.01' : st.month_cost_usd.toFixed(2)}`);
 </script>
 
 <section class="ts" aria-label="判断模型">
   <div class="section-head">
-    <span class="section-title">判断模型<InfoTip text={'TypeSafe 的 Jev：不聊天、不写文字，只给内容打分、判断是非，便宜又快（每百万 token 约 $0.042）。\nPilot 用它做两件事：托管运营自动上线前给新页面做内容质检（没过就留给你确认），以及运营机会按站点定位排序（无关的搜索词不交给 AI 处理）。\n页面正文和搜索词会发给 TypeSafe 判断；不配就按原来的规则走。Key 只存系统凭据库。'} label="判断模型说明" /></span>
+    <span class="section-title">判断模型<InfoTip text={'TypeSafe 的 Jev：不聊天、不写文字，只给内容打分、判断是非，便宜又快（每百万 token 约 $0.042）。\n接上以后运营机会按站点定位排序；托管方案里可以开「上线前内容质检」（没过就留给你确认）和「跳过无关搜索词」（不交给 AI 处理）。\n页面正文和搜索词会发给 TypeSafe 判断；不配就按原来的规则走。Key 只存系统凭据库。'} label="判断模型说明" /></span>
     {#if st && !st.configured && !editing}<button type="button" class="add" onclick={edit}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button>{/if}
   </div>
   {#if st}
     {#if st.configured || editing}
       <div class="row">
         <span class="icon" aria-hidden="true"><TypeSafeMark size={20} /></span>
-        <div class="copy"><b>TypeSafe Jev</b><small title={`api.typesafe.ai · ${st.model}`}>api.typesafe.ai · {st.model}{st.configured ? ` · ${uses}` : ''}</small></div>
+        <div class="copy"><b>TypeSafe Jev</b><small title={`api.typesafe.ai · ${st.model}`}>api.typesafe.ai · {st.model}</small></div>
         {#if st.configured}<span class="state" class:verified={!!st.verified_at}><i aria-hidden="true"></i><span>{stateLabel}</span></span>{/if}
         {#if st.configured && !editing}
           <button type="button" class="ic" onclick={test} disabled={!!busy} aria-label="测试连接" data-tip="测试连接（只读模型列表，不计费）">{#if busy === 'test'}<span class="spin"></span>{:else}<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /><path d="M13.6 2.6v2.8h-2.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}</button>
@@ -93,8 +93,7 @@
           <input type="password" bind:value={key} autocomplete="off" spellcheck="false" placeholder={st.configured ? '不换就留空' : '粘贴 TypeSafe 的 API Key'} /></label>
         <div class="field"><span>模型</span>
           <Dropdown bind:value={model} options={MODELS} ariaLabel="判断模型的版本" /></div>
-        <label class="check"><input type="checkbox" bind:checked={useGate} /><span>托管自动上线前做内容质检<small>新页面、大改的页面要讲清楚目标问题、信息够具体、和站点相关、没有编造数据和遗留说明，否则留给你确认</small></span></label>
-        <label class="check"><input type="checkbox" bind:checked={useRank} /><span>运营机会按站点定位排序<small>和站点基本无关的搜索词排到后面、不交给 AI 处理（站点要先写好定位）</small></span></label>
+        <p class="where">接上以后：运营机会按站点定位排序；托管方案里可以开「上线前内容质检」和「跳过无关搜索词」（默认都开）。</p>
         <div class="foot">
           {#if st.configured}<button type="button" class="button danger" onclick={remove} disabled={!!busy}>删除</button>{/if}
           <span class="grow"></span>
@@ -140,9 +139,7 @@
   .field > span { color:var(--dim); font-size:11px; }
   input:not([type="checkbox"]) { box-sizing:border-box; width:100%; height:30px; padding:0 9px; border:1px solid var(--border2,#e1dfd8); border-radius:8px; color:var(--text); background:var(--bg,#fff); font:inherit; font-size:12px; outline:none; }
   input:focus { border-color:var(--accent); }
-  .check { display:flex; align-items:flex-start; gap:8px; font-size:12px; color:var(--text); cursor:pointer; }
-  .check input { margin:2px 0 0; accent-color:var(--accent); flex:none; }
-  .check small { display:block; color:var(--faint); font-size:10.5px; line-height:1.45; margin-top:1px; }
+  .where { margin:0; color:var(--faint); font-size:10.5px; line-height:1.5; }
   .foot { display:flex; align-items:center; gap:6px; }
   .grow { flex:1; }
   .button { height:27px; border:1px solid var(--border2); border-radius:7px; background:transparent; padding:0 10px; color:var(--text); font:inherit; font-size:11.5px; cursor:pointer; }
