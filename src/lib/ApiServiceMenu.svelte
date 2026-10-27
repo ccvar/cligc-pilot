@@ -76,7 +76,9 @@
 </div>
 
 <style>
-  .trigger { background:none; border:none; cursor:pointer; padding:6px; border-radius:8px; color:var(--dim); display:inline-flex; align-items:center; justify-content:center; }
+  /* 平时淡一点，鼠标进到这一行（.service）显出来，停在按钮上最深 */
+  .trigger { background:none; border:none; cursor:pointer; padding:6px; border-radius:8px; color:var(--faint); display:inline-flex; align-items:center; justify-content:center; transition:color .12s, background-color .12s; }
+  :global(.service:hover) .trigger, .trigger:focus-visible { color:var(--dim); }
   .trigger:hover { background:#f1efe9; color:var(--text); }
   .trigger.active { background:#ebe8e1; color:var(--text); }
   .trigger:disabled { opacity:.45; cursor:default; }

@@ -121,7 +121,8 @@
   .state { display:inline-flex; align-items:center; gap:5px; color:var(--faint); font-size:10.5px; white-space:nowrap; }
   .state i { display:block; width:6px; height:6px; border-radius:50%; background:currentColor; }
   .state.verified { color:var(--ok,#24965c); }
-  .ic { flex:none; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:var(--dim); cursor:pointer; }
+  .ic { flex:none; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:var(--faint); cursor:pointer; transition:color .12s, background-color .12s; }
+  .ts:hover .ic, .ic:focus-visible { color:var(--dim); }
   .ic:hover:not(:disabled) { background:var(--rail); color:var(--text); }
   .ic:disabled { opacity:.45; cursor:default; }
   .spin { width:12px; height:12px; border:1.5px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .8s linear infinite; }

@@ -162,7 +162,7 @@
         <PhoneSection />
       </div>
 
-      <div class="sec-head mt"><span class="sec-title">模型服务 · 本地客户端<InfoTip text={`自定义模型 ID 会作为该厂商模型下拉里的附加档位（可加多个）。\n仅限本人订阅账户驱动本地官方 CLI，密钥存 ${keystoreName}。`} /></span><button class="icon-btn" onclick={refreshBrainsManual} title="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
+      <div class="sec-head mt"><span class="sec-title">模型服务 · 本地客户端<InfoTip text={`自定义模型 ID 会作为该厂商模型下拉里的附加档位（可加多个）。\n仅限本人订阅账户驱动本地官方 CLI，密钥存 ${keystoreName}。`} /></span><button class="icon-btn quiet" onclick={refreshBrainsManual} title="刷新本地客户端" aria-label="刷新本地客户端"><RefreshIcon spinning={settings.brainsBusy} /></button></div>
       {#if app.brains}
         <div class="brains-list">
         {#each [{ b: 'claude' as Brain, st: app.brains.claude, name: 'Claude Code', cmd: CLAUDE_INSTALL_CMD }, { b: 'codex' as Brain, st: app.brains.codex, name: 'Codex', cmd: 'npm i -g @openai/codex' }, { b: 'grok' as Brain, st: app.brains.grok, name: 'Grok', cmd: GROK_INSTALL_CMD }] as r (r.b)}
@@ -379,6 +379,9 @@
   .icon-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 8px; color: var(--dim); display: inline-flex; align-items: center; justify-content: center; }
   .icon-btn:hover { background: #f1efe9; color: var(--text); }
   .icon-btn:disabled { opacity: .55; cursor: default; }
+  /* 标题旁的辅助图标（刷新）：平时淡一点，停在上面才深 */
+  .icon-btn.quiet { color: var(--faint); }
+  .icon-btn.quiet:hover, .icon-btn.quiet:focus-visible { color: var(--text); }
   @keyframes rspin { to { transform: rotate(360deg); } }
   @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
   .x { background: none; border: none; color: var(--faint); font-size: 20px; cursor: pointer; line-height: 1; }

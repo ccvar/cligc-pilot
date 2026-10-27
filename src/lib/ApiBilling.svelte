@@ -152,7 +152,7 @@
   @keyframes noteIn { from { opacity:0; } }
   .warning { color:var(--dim); }
   .credential-row { margin-top:7px; gap:6px; color:var(--dim); font-size:10.5px; }
-  .credential-row .icon-button { padding:3px; }
+  .credential-row .icon-button { padding:3px; color:var(--faint); }
   .credential-row .icon-button:hover { color:var(--err); background:var(--err-soft); }
   .key-form { margin-top:6px; }
   .key-form label { display:block; color:var(--dim); margin-bottom:4px; }
