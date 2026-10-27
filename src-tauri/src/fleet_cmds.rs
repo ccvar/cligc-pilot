@@ -31,6 +31,8 @@ pub struct SiteRow {
     pub job: String,
     pub last_deploy_ts: u64,
     pub last_deploy_ok: Option<bool>,
+    /// 上次推广链接检查里失效的个数
+    pub links_broken: usize,
     /// 分发渠道（站点列表上显示图标）
     pub channels: Vec<crate::syndicate::ChannelBrief>,
     /// 最近活动：会话、上线、站点设置里最晚的那个。
@@ -73,6 +75,7 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 last_deploy_ts: last_ts,
                 last_deploy_ok: last.map(|d| d.ok),
                 channels: crate::syndicate::channel_briefs(&dir),
+                links_broken: crate::link_check::load(&dir).broken(),
                 id: s.id,
                 name: s.name,
                 domain: s.domain,
@@ -146,6 +149,21 @@ pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec
     }
     out.sort_by(|a, b| b.item.deployed_at.cmp(&a.item.deployed_at));
     out
+}
+
+/// 这个站点上次推广链接检查的结果（没查过是空的）。
+#[tauri::command]
+pub fn site_links(state: tauri::State<'_, AppState>, id: String) -> Result<crate::link_check::LinkReport, String> {
+    state.sites.get(&id)?;
+    Ok(crate::link_check::load(&state.sites.data_dir(&id)))
+}
+
+/// 现在就检查这个站点的推广链接。
+#[tauri::command]
+pub async fn check_site_links(state: tauri::State<'_, AppState>, id: String) -> Result<crate::link_check::LinkReport, String> {
+    let site = state.sites.get(&id)?;
+    let out = crate::syndicate::built_out(&state, &site).ok();
+    crate::link_check::check_site(&site, &state.sites.data_dir(&id), out).await
 }
 
 #[tauri::command]

@@ -247,7 +247,7 @@ fn now() -> u64 {
 }
 
 /// 站点最近一次构建的产物（GitHub 来源在 `<站点数据>/deploy` 里构建；本地来源在代码目录里）。
-fn built_out(state: &AppState, site: &crate::sites::Site) -> Result<PathBuf, String> {
+pub(crate) fn built_out(state: &AppState, site: &crate::sites::Site) -> Result<PathBuf, String> {
     let deploy = state.sites.data_dir(&site.id).join("deploy");
     let from_deploy = crate::site_make::out_dir(&site.app_dir(&deploy), &site.build.out_dir);
     if from_deploy.join("index.html").is_file() {

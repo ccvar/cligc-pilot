@@ -442,8 +442,13 @@ export interface GscRow { key: string; key2?: string; clicks: number; impression
 export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string }
 /** 全部站点列表上的一个分发渠道 */
 export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
+/** 推广链接检查（每周一次，见 link_check） */
+export interface LinkResult { href: string; url: string; pages: number; sample_page: string; status: number; final_url: string; hops: number; verdict: 'ok' | 'unverified' | 'broken'; note: string }
+export interface LinkReport { checked_at: number; source: string; links: LinkResult[] }
 export interface SiteRow {
   channels?: ChannelBrief[];
+  /** 上次推广链接检查里失效的个数 */
+  links_broken?: number;
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
   level: number;
   /** 所在托管方案名（没托管为空） */

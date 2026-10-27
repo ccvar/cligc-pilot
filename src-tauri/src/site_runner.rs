@@ -2433,6 +2433,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             }
             // 内容分发：新上线的文章写摘要、按渠道的发布方式发出去（见 syndicate）
             crate::syndicate::schedule(&app);
+            // 推广链接：每个站点每周查一遍（见 link_check）
+            crate::link_check::schedule(&app);
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;

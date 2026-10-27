@@ -621,6 +621,11 @@ fn own_hosts(pages: &[(PathBuf, String)]) -> Vec<String> {
     hosts
 }
 
+/// 正经页面的（网址路径, HTML）：推广链接检查用。
+pub fn page_htmls(out: &Path) -> Vec<(String, String)> {
+    real_pages(out).into_iter().map(|(f, html)| (page_url(out, &f), html)).collect()
+}
+
 /// 正经页面（跳过跳转页和 404）：(文件, HTML)。
 fn real_pages(out: &Path) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();

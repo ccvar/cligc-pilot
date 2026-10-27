@@ -4,7 +4,7 @@ import type { SiteRow, PendingItem, Site } from '$lib/types';
 import { say } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
-export type SiteFilter = 'all' | 'attention' | 'failed' | 'dataerr' | 'down' | 'proposed' | 'nodata';
+export type SiteFilter = 'all' | 'attention' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
@@ -27,7 +27,7 @@ export function clicksChange(r: SiteRow): number {
 }
 /** 需要你关注：有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
-  return r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || trafficDown(r) || r.summary.errors.length > 0;
+  return r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || r.summary.errors.length > 0;
 }
 
 class FleetState {
@@ -65,6 +65,7 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
     && (f === 'all'
       || (f === 'attention' && needsAttention(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
+      || (f === 'links' && (r.links_broken ?? 0) > 0)
       || (f === 'dataerr' && r.summary.errors.length > 0)
       || (f === 'down' && trafficDown(r))
       || (f === 'proposed' && r.proposed > 0)
@@ -73,6 +74,7 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
 /** 右上角提醒里的问题分组（按要紧程度排）；soft＝不算问题，只是提示。 */
 export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
   { k: 'failed', l: '上线或运营任务失败' },
+  { k: 'links', l: '推广链接失效' },
   { k: 'dataerr', l: '数据源出错' },
   { k: 'down', l: '流量明显下滑' },
   { k: 'proposed', l: '有改动等你确认' },
@@ -82,6 +84,7 @@ export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
 const IGNORE_KEY = 'pilot.fleet.ignoredIssues';
 function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${r.failed}`;
+  if (k === 'links') return String(r.links_broken ?? 0);
   if (k === 'dataerr') return r.summary.errors.join('|');
   if (k === 'down') return r.summary.data_end;
   if (k === 'proposed') return String(r.proposed);
