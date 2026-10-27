@@ -174,7 +174,7 @@
     <div class="card danger-zone wide">
       <h3 class="dz-head"><Icon name="info" />危险操作</h3>
       <div class="dz">
-        <div class="dz-t"><b><Icon name="trash" size={13} />下线并删除</b><p class="hint">把网站从网上撤下来{site.deploy.project && (site.deploy.mode === 'direct' || site.deploy.mode === 'pages_git') ? `（删除 Cloudflare Pages 项目 ${site.deploy.project}，解除域名指向）` : ''}{site.origin === 'migrated' ? '，迁移的域名恢复成上线前的样子' : ''}，再从 Pilot 移除；可以选择把代码文件夹移到废纸篓。不能撤销。</p></div>
+        <div class="dz-t"><b><Icon name="trash" size={13} />下线并删除</b><p class="hint">把网站从网上撤下来{site.deploy.project && (site.deploy.mode === 'direct' || site.deploy.mode === 'pages_git') ? `（删除 Cloudflare Pages 项目 ${site.deploy.project}，解除域名指向）` : ''}{site.origin === 'migrated' ? '，改版切换过的域名恢复成上线前的样子' : ''}，再从 Pilot 移除；可以选择把代码文件夹移到废纸篓。不能撤销。</p></div>
         <button class="btn small danger solid" onclick={() => takedownSite(site)}>下线并删除</button>
       </div>
       <div class="dz">

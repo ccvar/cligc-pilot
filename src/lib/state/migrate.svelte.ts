@@ -98,7 +98,7 @@ export function openMigrate(multi = false) {
 export function closeMigrate() { if (!migrate.dialog.busy) migrate.dialog.open = false; }
 
 export async function pickMigrateParent() {
-  const picked = await open({ title: '迁移来的站点放在哪个文件夹下', directory: true, multiple: false, defaultPath: migrate.dialog.parent || undefined });
+  const picked = await open({ title: '改版的站点放在哪个文件夹下', directory: true, multiple: false, defaultPath: migrate.dialog.parent || undefined });
   if (typeof picked === 'string' && picked.trim()) migrate.dialog.parent = picked;
 }
 
@@ -131,7 +131,7 @@ export async function createMigrations() {
     await refreshSites();
     for (const r of d.results) if (r.site_id) void loadMigrate(r.site_id);
     const ok = d.results.filter((r) => r.site_id).length;
-    say(`建好 ${ok} 个迁移站点，正在排队盘点${d.results.length > ok ? `；${d.results.length - ok} 个没建成` : ''}`, ok ? 'ok' : 'err');
+    say(`建好 ${ok} 个改版站点，正在排队盘点${d.results.length > ok ? `；${d.results.length - ok} 个没建成` : ''}`, ok ? 'ok' : 'err');
     if (ok && d.results.every((r) => r.site_id)) { d.open = false; openMaking(); }
   } catch (e) { d.err = String(e); }
   finally { d.busy = false; }
@@ -210,7 +210,7 @@ export async function startRebuild(site: Site) {
 /** 交给重做那条对话（在后台跑）：有就接着说，没有才开新的；没有可用模型时才去启动页选。 */
 async function sendMaking(site: Site, text: string, startMsg: string, continueMsg: string, pickModelMsg: string) {
   const conv = makingConv(site.id);
-  const reuse = !!conv && /^(请迁移重做|继续迁移重做)/.test(conv.title) && conv.status !== 'running' && !app.running[conv.id];
+  const reuse = !!conv && /^(请(迁移|改版)重做|继续(迁移|改版)重做)/.test(conv.title) && conv.status !== 'running' && !app.running[conv.id];
   if (!reuse && !brainUsable(launcher.lBrain)) {
     await startSiteChat(site.id, text, pickModelMsg, MAKING_PERM);
     return;
@@ -446,7 +446,7 @@ export function migrateNext(site: Site): MNext {
     case 'track':
       return { text: '已正式上线，观察中', tone: 'ok' };
     default:
-      return { text: '迁移完成', tone: 'ok' };
+      return { text: '改版完成', tone: 'ok' };
   }
 }
 
@@ -455,7 +455,7 @@ export function migrateNext(site: Site): MNext {
 /** 自动推进：抓取 → AI 画设计方向（等你挑）→ AI 重做 → 核对 → 没通过让 AI 修（最多 2 轮）
  *  → 建 Cloudflare 预览项目（只有一个连接时）→ 配动态功能 → 部署到预览 → 实测。
  *  不会替你：确认方案、挑设计方向、配置服务器、正式上线。
- *  batch.auto：批量迁移的总开关；单个站点看方案里的 auto。 */
+ *  batch.auto：批量改版的总开关；单个站点看方案里的 auto。 */
 export const batch = $state({
   auto: false,
   aiMax: 1,

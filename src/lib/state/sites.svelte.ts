@@ -436,7 +436,7 @@ export async function setSiteEnv(id: string, set: [string, string][], remove: st
 export async function takedownSite(s: Site) {
   const live = s.domain || (s.deploy.project ? `${s.deploy.project}.pages.dev` : '');
   const what: string[] = [];
-  if (s.origin === 'migrated' || s.origin === 'migrating') what.push('迁移这边：旧域名的跳转取消、测试域名删掉，正式域名恢复成上线前的样子（旧站不受影响）');
+  if (s.origin === 'migrated' || s.origin === 'migrating') what.push('改版这边：旧域名的跳转取消、测试域名删掉，正式域名恢复成上线前的样子（旧站不受影响）');
   if ((s.deploy.mode === 'direct' || s.deploy.mode === 'pages_git') && s.deploy.project) what.push(`Cloudflare：解除自定义域名、删掉指向它的 DNS 记录，删除 Pages 项目 ${s.deploy.project}`);
   else if (s.deploy.mode === 'workers' || s.deploy.mode === 'vps') what.push(`${s.deploy.mode === 'vps' ? '服务器' : 'Cloudflare Workers'} 上的网站 Pilot 还不能替你删，完成后会告诉你去哪删`);
   what.push('Pilot 里的站点记录、数据缓存、运营记录和站点会话一起删除');

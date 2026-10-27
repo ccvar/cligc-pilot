@@ -629,7 +629,7 @@ fn survey_slots() -> &'static tokio::sync::Semaphore {
 async fn create_one(app: tauri::AppHandle, state: &AppState, req: CreateMigration) -> Result<Site, String> {
     let domain = sm::clean_domain(&req.domain);
     if !domain.contains('.') {
-        return Err("请填写要迁移的网站域名，如 example.com".into());
+        return Err("请填写要改版的网站域名，如 example.com".into());
     }
     let apex = domain.trim_start_matches("www.");
     if let Some(s) = state.sites.list().into_iter().find(|s| [&s.domain, &s.migrate_from].iter().any(|d| d.trim_start_matches("www.").eq_ignore_ascii_case(apex))) {
@@ -651,7 +651,7 @@ async fn create_one(app: tauri::AppHandle, state: &AppState, req: CreateMigratio
         Err(_) => fetch_follow(&c, &format!("http://{domain}/")).await.map_err(|e| format!("打不开 {domain}：{e}"))?,
     };
     if home.status >= 400 {
-        return Err(format!("{domain} 首页返回 {}，没法迁移", home.status));
+        return Err(format!("{domain} 首页返回 {}，没法改版", home.status));
     }
     let final_host = url.host_str().unwrap_or(&domain).to_string();
     if !sm::same_site(&final_host, &domain) {
@@ -721,7 +721,7 @@ pub async fn migrate_survey(app: tauri::AppHandle, state: tauri::State<'_, AppSt
 fn start_survey(app: tauri::AppHandle, state: &AppState, id: &str) -> Result<String, String> {
     let site = state.sites.get(id)?;
     if site.migrate_from.is_empty() {
-        return Err("这个站点不在迁移中".into());
+        return Err("这个站点不在改版中".into());
     }
     let meta = load_meta(&mdir(state, id));
     if meta.cutover.at > 0 || !meta.staging.host.is_empty() || meta.old_redirect.at > 0 {
@@ -1285,7 +1285,7 @@ pub async fn migrate_save_plan(state: tauri::State<'_, AppState>, id: String, pl
     // 登录 / 购物车这类保留下来的话只能放服务器；其它的按用户选（大陆访客多时建议服务器）
     let deploy = if hosting.target == "vps" || plan.deploy == "vps" { "vps" } else { "direct" };
     if deploy == "vps" && features.iter().any(|(k, v)| matches!(k.as_str(), "login" | "cart") && v != "drop") {
-        return Err("登录、购物车这类功能 Pilot 还不能在服务器上重做：在方案里选「去掉」，或者迁移后另外接入".into());
+        return Err("登录、购物车这类功能 Pilot 还不能在服务器上重做：在方案里选「去掉」，或者改版后另外接入".into());
     }
     let plan = Plan {
         features,
@@ -1547,7 +1547,7 @@ async fn run_extract(site: Site, inv: Inventory, plan: Plan, dir: PathBuf, job: 
 
     job.step("commit", "running", "");
     let _ = crate::site_git::git_ok(&code, &["add", "-A"], "").await;
-    let msg = format!("迁移：导入旧站内容（{} 篇、{} 个图片和附件）", stats.pages, stats.assets);
+    let msg = format!("改版：导入旧站内容（{} 篇、{} 个图片和附件）", stats.pages, stats.assets);
     let _ = crate::site_git::git_commit_ok(&code, &["commit", "-qm", &msg]).await;
     job.step("commit", "ok", "");
     save_meta(&dir, |m| {
@@ -1674,7 +1674,7 @@ fn directions_message(inv: &Inventory, plan: &Plan, feedback: Option<&str>) -> S
     let style = if plan.style.is_empty() { String::new() } else { format!("\n补充要求：{}", plan.style) };
     let head = match feedback {
         Some(f) => format!("上一轮的 3 个设计方向我都不太满意：{f}\n按这个意见重新出 3 个，覆盖原来的文件，其余要求不变："),
-        None => format!("请迁移重做旧站 {} 之前，先出 3 个设计方向给我挑。这一轮只做设计小样，不改站点代码：", inv.domain),
+        None => format!("请改版重做旧站 {} 之前，先出 3 个设计方向给我挑。这一轮只做设计小样，不改站点代码：", inv.domain),
     };
     format!(
         "{head}\n\n\
@@ -1796,9 +1796,9 @@ fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, a
         _ => "旧站地址有的以 / 结尾、有的不以 / 结尾：`build.format: 'preserve'`，按 urls.json 里每个地址原样生成（以 / 结尾的生成 a/index.html，不以 / 结尾的生成 a.html）。",
     };
     let head = if again {
-        format!("继续迁移重做 {}（Astro）。先看现状（`git log`、`.pilot/site.md`），已经做好的不要推倒重写，把下面没做到的补齐。", inv.domain)
+        format!("继续改版重做 {}（Astro）。先看现状（`git log`、`.pilot/site.md`），已经做好的不要推倒重写，把下面没做到的补齐。", inv.domain)
     } else {
-        format!("请迁移重做旧站 {}：用 Astro 重做全站，保留原来的每个 URL 和正文，把视觉升级。", inv.domain)
+        format!("请改版重做旧站 {}：用 Astro 重做全站，保留原来的每个 URL 和正文，把视觉升级。", inv.domain)
     };
     let issues = if meta.parity.iter().any(|c| c.level != "ok") || !meta.live.bad.is_empty() {
         let mut s = String::from("\n\n【上次核对没通过的】这一轮一起处理：\n");
@@ -1826,9 +1826,9 @@ fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, a
 - `src/content/<集合>/…md`：每篇旧内容一份 Markdown。开头元数据：title（正文标题）、seoTitle（旧页面的 <title>，原样用作页面标题）、description、path（旧地址，页面就生成在这个路径）、date、updated、author、tags、image、lang、schema（旧页面有的结构化数据类型）、type。\n\
 - `public/`：旧站的图片和附件，已经放在原路径上（外站图片在 `/assets/ext/` 下），正文里引用的就是这些路径。\n\
 - `.pilot/migrate/screens/`：旧站首页和几类页面的截图。\n\n\
-【迁移的硬约束】\n\
+【改版的硬约束】\n\
 1. URL 一个都不能变：路由用每篇内容的 `path` 字段生成（`getStaticPaths` 按 path 出页面），不要按文件名推；列表页、首页、分类页按 urls.json 里的地址生成。{slash}\n\
-2. 迁移来的正文一字不改写：只换外观和结构；旧页面上的版块（卡片、表格、折叠问答、按钮、步骤）照 `.pilot/migrate/screens/` 和旧站页面做成对应的组件，不能压平成一串纯文字（Pilot 核对时会数表格、折叠问答和图片）；页面 <title> 用 seoTitle 原样，description 原样；`schema` 里列的结构化数据类型都要输出（可以多，不能少）。\n\
+2. 旧站的正文一字不改写：只换外观和结构；旧页面上的版块（卡片、表格、折叠问答、按钮、步骤）照 `.pilot/migrate/screens/` 和旧站页面做成对应的组件，不能压平成一串纯文字（Pilot 核对时会数表格、折叠问答和图片）；页面 <title> 用 seoTitle 原样，description 原样；`schema` 里列的结构化数据类型都要输出（可以多，不能少）。\n\
 3. canonical 指向正式域名 https://{origin_host} 上的原地址（站点地址走配置变量，默认就是它）。\n\
 4. 旧站在跳转的地址（urls.json 里 action=redirect）写进 `public/_redirects`：`旧路径 新路径 301`，每行一条。\n\
 5. RSS / Atom 地址不变（survey.md 里列着）：用 @astrojs/rss 生成；地址不以 .xml 结尾的（比如 /feed/），生成到 feed.xml 再在 `_redirects` 里写 `/feed/ /feed.xml 200` 改写。\n\
@@ -1840,8 +1840,8 @@ fn rebuild_message(site_name: &str, inv: &Inventory, plan: &Plan, meta: &Meta, a
 - 写站点约定 `.pilot/site.md`（技术栈、内容目录和元数据字段、新增一页要改哪里、构建和预览命令、设计方向），以后托管运营按它加内容；\n\
 - 安装依赖、构建通过；本地预览，在 375、768、1280 宽度截图首页、一篇内容页、一个列表页，按视觉标准逐项评估、改完复查；\n\
 - 自己抽查：urls.json 里随便挑 20 个 keep 地址，确认构建产物里都有对应文件（结尾斜杠也对）；\n\
-- 需要我处理的事写进 `.pilot/todo.json`，`git add -A && git commit -m \"迁移重做\"`，简要汇报。{issues}\n\n\
-【迁移里已经定好的，不用问我】\n\
+- 需要我处理的事写进 `.pilot/todo.json`，`git add -A && git commit -m \"改版重做\"`，简要汇报。{issues}\n\n\
+【改版里已经定好的，不用问我】\n\
 - 正式域名就是 {origin_host}：切换那一步由 Pilot 把域名指过来，不要把正式域名写进待办（没有 `domain` 这一条）。\n\
 - {ga}\n\
 - 旧站页面上已经有的运营信息（邀请链接 / 邀请码、联系邮箱、社交账号……）照旧沿用：作为配置变量的默认值，并写进 `.env.example` 的示例。只有旧站上没有、或者明显已经失效的，才写进待办。\n\n\
@@ -3050,7 +3050,7 @@ pub async fn migrate_track(app: tauri::AppHandle, state: tauri::State<'_, AppSta
     if meta.cutover.at == 0 || site.domain.is_empty() {
         return Err("还没正式上线".into());
     }
-    let job = state.site_jobs.start(Some(app), &id, "migrate:track", "迁移跟踪", TRACK_STEPS)?;
+    let job = state.site_jobs.start(Some(app), &id, "migrate:track", "改版跟踪", TRACK_STEPS)?;
     let job_id = job.id.clone();
     let conns = state.conns.clone();
     tauri::async_runtime::spawn(async move {
@@ -3154,7 +3154,7 @@ mod tests {
     fn directions_message_and_chosen_direction() {
         let inv = Inventory { domain: "old.example".into(), ..Default::default() };
         let m = directions_message(&inv, &Plan { visual: "fresh".into(), ..Default::default() }, None);
-        assert!(m.starts_with("请迁移重做旧站 old.example 之前") && m.contains("d1.html") && m.contains("directions.json") && m.contains("不要开始重做"));
+        assert!(m.starts_with("请改版重做旧站 old.example 之前") && m.contains("d1.html") && m.contains("directions.json") && m.contains("不要开始重做"));
         let m = directions_message(&inv, &Plan::default(), Some("太花了"));
         assert!(m.contains("太花了") && m.contains("保留旧站的 logo"));
         let r = rebuild_message("旧站", &inv, &Plan { direction: "d2".into(), ..Default::default() }, &Meta::default(), false);

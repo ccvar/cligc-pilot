@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 迁移进度卡：盘点 → 确认方案 → 抓取 → 重做 → 核对 → 切换 → 跟踪。
+  // 改版进度卡：盘点 → 确认方案 → 抓取 → 重做 → 核对 → 切换 → 跟踪。
   // 一步一个面板：步骤条可以点，默认停在当前这一步；每个面板固定是「这一步是什么 → 现在的状态 → 一个主操作 + 次要操作 → 细节」。
   // 这一步的后台任务（盘点、抓取、核对、配置服务器、上线……）的进度直接显示在面板里，不再另起任务卡片。
   // 迁移期间站点的 domain 是空的：预览部署只建 Pages 项目、不绑域名，切换时才把域名指过来。
@@ -222,9 +222,9 @@
 
 <div class="card mg">
   <h3>
-    <Icon name="route" />迁移进度<span class="sub">{launched && v ? `从 ${v.domain} 迁到 ${v.meta.cutover.host}` : `迁移自 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
+    <Icon name="route" />改版进度<span class="sub">{launched && v ? `原站 ${v.domain} → 新站 ${v.meta.cutover.host}` : `原站 ${v?.domain ?? site.migrate_from ?? ''}`}</span>
     <span class="grow"></span>
-    <button class="ic-btn ic-sm" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新迁移状态"><RefreshIcon spinning={loading} /></button>
+    <button class="ic-btn ic-sm" onclick={() => loadMigrate(site.id)} disabled={loading} aria-label="刷新" data-tip="刷新改版进度"><RefreshIcon spinning={loading} /></button>
   </h3>
 
   <ol class="stages" role="tablist">
@@ -634,7 +634,7 @@
         {@const liveHost = v.meta.cutover.host}
         {@const movedLive = liveHost.replace(/^www\./, '') !== oldHost.replace(/^www\./, '')}
         {@const rd = v.meta.old_redirect}
-        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 4 周了，迁移完成。' : `${ago(v.meta.cutover.at) === '刚刚' ? '新站刚上线' : `新站已经上线 ${ago(v.meta.cutover.at).replace(/前$/, '')}`}。Pilot 会盯 4 周：旧地址在新站上能不能打开、搜索流量有没有掉；打开站点时超过 12 小时没查过会自动查一次。`}{#if t.at}<small class="faint"> 上次检查 <span data-tip={full(t.at)}>{ago(t.at)}</span></small>{/if}</span>
+        <div class="act"><span class="grow">{v.stage === 'done' ? '观察满 4 周了，改版完成。' : `${ago(v.meta.cutover.at) === '刚刚' ? '新站刚上线' : `新站已经上线 ${ago(v.meta.cutover.at).replace(/前$/, '')}`}。Pilot 会盯 4 周：旧地址在新站上能不能打开、搜索流量有没有掉；打开站点时超过 12 小时没查过会自动查一次。`}{#if t.at}<small class="faint"> 上次检查 <span data-tip={full(t.at)}>{ago(t.at)}</span></small>{/if}</span>
           <button class="btn small" onclick={() => track(site.id)} disabled={jobRunning || !!busy} data-tip="马上把旧地址在新站上打开一遍，再看一下搜索流量"><Icon name="play" size={12} />{runHere && job.kind === 'migrate:track' ? '检查中…' : '现在查一次'}</button>
         </div>
         {#if movedLive && oldOwned}

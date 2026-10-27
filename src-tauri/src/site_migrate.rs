@@ -949,7 +949,7 @@ pub fn summarize_features(pages: &[Page]) -> Vec<Feature> {
         ("search", "站内搜索", "改成静态搜索索引（Pagefind），构建时生成，不需要服务器", true),
         ("form", "表单（留言 / 联系 / 订阅）", "用 Cloudflare Pages Functions + D1 接收，Pilot 自动建好；提交在 Pilot 里看", false),
         ("comments", "评论", "旧评论抓下来静态保留；新评论存 D1、在 Pilot 里审核后显示", false),
-        ("login", "登录 / 会员", "静态站做不了，需要服务端：建议部署到 VPS（后续支持），或者迁移时去掉", false),
+        ("login", "登录 / 会员", "静态站做不了，需要服务端：建议部署到 VPS（后续支持），或者改版时去掉", false),
         ("cart", "购物车 / 下单", "静态站做不了，需要服务端：建议部署到 VPS（后续支持），或者改用第三方商店", false),
     ];
     DEFS.iter()

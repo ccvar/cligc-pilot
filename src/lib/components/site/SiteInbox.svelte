@@ -68,7 +68,7 @@
       </ul>
       {#if subs.length > shown}<button class="link-btn more" onclick={() => (shown += 20)}>再看 {Math.min(20, subs.length - shown)} 条</button>{/if}
     {:else}
-      {#if !coms.length}<p class="empty">还没有新评论（迁移来的旧评论在页面里静态显示，不在这里）。</p>{/if}
+      {#if !coms.length}<p class="empty">还没有新评论（旧站带过来的评论在页面里静态显示，不在这里）。</p>{/if}
       <ul class="items">
         {#each coms.slice(0, shown) as x (x.id)}
           <li class:pending={x.status === 'pending'}>

@@ -988,7 +988,7 @@ pub fn parity(out: &Path, map: &UrlMap, inv: &Inventory, refs: &Path, assets: &[
         check("titles", "标题不变", titles, false, "页面标题和旧站一致", |n| format!("{n} 个页面的标题和旧站不一样")),
         check("descriptions", "搜索结果里的描述不变", descs, false, "搜索结果里显示的描述和旧站一致", |n| format!("{n} 个页面搜索结果里的描述和旧站不一样")),
         check("canonical", "告诉搜索引擎的正式地址", canon, false, "每页都指向正式域名上的原地址", |n| format!("{n} 个页面告诉搜索引擎的正式地址（canonical）不对")),
-        check("text", "正文没被改写", text, false, "抽查的正文都和旧站一致（首页、列表页按内容重新生成，不比）", |n| format!("{n} 个页面的正文和旧站差别较大（迁移时不改写正文）")),
+        check("text", "正文没被改写", text, false, "抽查的正文都和旧站一致（首页、列表页按内容重新生成，不比）", |n| format!("{n} 个页面的正文和旧站差别较大（改版时不改写正文）")),
         check("layout", "版块没丢", layout, false, "表格、折叠问答、图片这些版块都还在", |n| format!("{n} 个页面少了旧页面上的版块（表格、折叠问答、图片），像是版式被压平了：照旧页面的样子做成对应的组件")),
         check("schema", "搜索结果里的附加信息", schema, false, "旧站给搜索引擎的附加信息（结构化数据）都保留了", |n| format!("{n} 个页面少了旧站有的附加信息（结构化数据，比如文章、问答）")),
         check("assets", "图片和附件", assets_missing, false, "抓下来的图片和附件都在新站里", |n| format!("{n} 个图片 / 附件不在新站里")),

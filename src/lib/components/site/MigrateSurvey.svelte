@@ -150,7 +150,7 @@
       <tbody>
         {#each s.groups as g (g.key)}
           <tr class:off={dropped.has(g.key)}>
-            {#if editable}<td class="ck"><input type="checkbox" checked={!dropped.has(g.key)} onchange={() => toggle(g.key)} aria-label="迁移 {g.key}" /></td>{/if}
+            {#if editable}<td class="ck"><input type="checkbox" checked={!dropped.has(g.key)} onchange={() => toggle(g.key)} aria-label="保留 {g.key}" /></td>{/if}
             <td class="mono gk">{groupLabel(g.key)}</td>
             <td class="num">{g.count}</td>
             <td>{PTYPE[g.ptype] ?? g.ptype}</td>
@@ -227,7 +227,7 @@
       <tbody>
         {#each s.groups as g (g.key)}
           <tr class:off={dropped.has(g.key)}>
-            {#if editable}<td class="ck"><input type="checkbox" checked={!dropped.has(g.key)} onchange={() => toggle(g.key)} aria-label="迁移 {g.key}" /></td>{/if}
+            {#if editable}<td class="ck"><input type="checkbox" checked={!dropped.has(g.key)} onchange={() => toggle(g.key)} aria-label="保留 {g.key}" /></td>{/if}
             <td class="mono gk">{groupLabel(g.key)}</td>
             <td class="num">{g.count}</td>
             <td>{PTYPE[g.ptype] ?? g.ptype}</td>

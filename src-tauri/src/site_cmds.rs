@@ -619,7 +619,7 @@ pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, 
     next.origin = current.origin.clone();
     next.migrate_from = current.migrate_from.clone();
     if current.origin == "migrating" && !next.domain.trim().is_empty() {
-        return Err("这个站点还在迁移：正式域名会在「切换到新站」时自动填上，现在先留空".into());
+        return Err("这个站点还在改版：正式域名会在「切换到新站」时自动填上，现在先留空".into());
     }
     validate(&mut next, &state)?;
     state.sites.update(&current.id, now(), move |s| {

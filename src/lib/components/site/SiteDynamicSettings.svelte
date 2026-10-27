@@ -27,7 +27,7 @@
 <div class="card dyn" class:editing>
   <h3><Icon name="inbox" />表单和评论<span class="grow"></span>{#if !editing && site.origin !== 'migrating' && (isPagesDirect(site) || vps)}<button class="ic-btn ic-sm" onclick={() => (editing = true)} aria-label={conf?.setup_at ? '修改表单和评论' : '开启表单和评论'} data-tip={conf?.setup_at ? '修改表单和评论' : '开启表单和评论'}><Icon name="pencil" size={14} /></button>{/if}</h3>
   {#if site.origin === 'migrating'}
-    <p class="hint">迁移中的站点在概览的「迁移进度」里配置（按迁移方案自动带上旧站的表单和评论）。</p>
+    <p class="hint">改版中的站点在概览的「改版进度」里配置（按改版方案自动带上旧站的表单和评论）。</p>
   {:else if !isPagesDirect(site) && !vps}
     <p class="hint">表单和评论要部署在 Cloudflare Pages（Pilot 构建后上传），或者 Pilot 托管的服务器上（VPS，发布命令留空）。</p>
   {:else if !editing}

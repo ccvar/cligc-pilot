@@ -62,7 +62,7 @@
   const migIdx = (id: string) => { const st = migrate.view[id]?.stage; return st ? Math.max(0, STAGES.findIndex((x) => x.key === st)) : 0; };
 
   function status(s: Site): { text: string; tone: '' | 'live' | 'warn' | 'ok' } {
-    if (s.origin === 'migrating') { const n = migrateNext(s); return { text: `迁移：${n.text}`, tone: n.tone }; }
+    if (s.origin === 'migrating') { const n = migrateNext(s); return { text: `改版：${n.text}`, tone: n.tone }; }
     if (app.convos.some((c) => c.conn_id === `site:${s.id}` && c.status === 'running')) return { text: 'AI 正在制作…', tone: 'live' };
     const ms = siteMake.state[s.id];
     if (!ms) return { text: '读取中…', tone: '' };
@@ -88,7 +88,7 @@
       <p class="hint">{list.length ? `${list.length} 个制作中` : '从零做一个新站点'}</p>
     </div>
     <div class="row">
-      <button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />迁移已有站点</button>
+      <button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />改版已有站点</button>
       <button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button>
     </div>
   </header>
@@ -101,23 +101,23 @@
         {@const planN = ms.filter((x) => migrate.view[x.id]?.stage === 'plan').length}
         <div class="card batch">
           <div class="bh">
-            <b><Icon name="route" size={14} />迁移中 {ms.length} 个</b>
+            <b><Icon name="route" size={14} />改版中 {ms.length} 个</b>
             <span class="chips">{#each byStage as st (st.key)}<span class="pill">{st.label} {st.n}</span>{/each}</span>
             <span class="grow"></span>
-            <button class="btn tiny" onclick={() => openMigrate(true)}><Icon name="plus" size={11} />批量迁移</button>
+            <button class="btn tiny" onclick={() => openMigrate(true)}><Icon name="plus" size={11} />批量改版</button>
             {#if planN}<button class="btn tiny" onclick={confirmAllDefault}>按默认方案确认 {planN} 个</button>{/if}
             <label class="auto" data-tip={'打开后 Pilot 自动做：抓取内容、在后台让 AI 重做（一次一个）、核对、发布到预览地址（部署已配好的）。\n不会自动确认方案、配置服务器或 Cloudflare 项目，也不会正式上线。'}><input type="checkbox" checked={batch.auto} onchange={(e) => setBatchAuto((e.currentTarget as HTMLInputElement).checked)} />自动推进</label>
           </div>
           {#if batch.auto && batch.note}<p class="bn">{batch.note}</p>{/if}
         </div>
       {/if}
-      <p class="hint lead">说清楚要做什么站，AI 从空仓库做出第一版：规划栏目、写首批内容页、配好 SEO、按获奖级的视觉标准自检。做好并配置上线后，站点会移到「全部站点」。已经有线上站点的，可以「迁移已有站点」：保留原来的 URL 和内容，用新的视觉重做。</p>
+      <p class="hint lead">说清楚要做什么站，AI 从空仓库做出第一版：规划栏目、写首批内容页、配好 SEO、按获奖级的视觉标准自检。做好并配置上线后，站点会移到「全部站点」。已经有线上站点的，可以「改版已有站点」：保留原来的 URL 和内容，用新的视觉重做，确认后再切换上线。</p>
       {#if !list.length}
         <div class="card empty">
           <Icon name="sparkles" size={20} />
           <b>还没有制作中的站点</b>
           <small>填一段定位、选好技术栈，剩下的交给 AI。</small>
-          <div class="row"><button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />迁移已有站点</button><button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button></div>
+          <div class="row"><button class="btn small" onclick={() => openMigrate()}><Icon name="route" size={13} />改版已有站点</button><button class="btn small primary" onclick={() => openSiteCreate()}><Icon name="wand" size={13} />制作站点</button></div>
         </div>
       {:else}
         <div class="grid">
@@ -131,7 +131,7 @@
               <div class="top-row">
                 <button class="top" onclick={() => openSite(s.id, 'overview')}>
                   <SiteIcon id={s.id} size={18} />
-                  <span class="nm"><b>{s.name}</b><small>{s.origin === 'migrating' ? `迁移自 ${s.migrate_from}` : s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
+                  <span class="nm"><b>{s.name}</b><small>{s.origin === 'migrating' ? `原站 ${s.migrate_from}` : s.domain || '还没填域名'} · {stackName(s.framework)}</small></span>
                 </button>
                 <div class="more">
                   <button class="more-btn" class:on={menu === s.id} aria-label="更多操作" aria-haspopup="menu" aria-expanded={menu === s.id} onclick={() => (menu = menu === s.id ? '' : s.id)}>
@@ -181,7 +181,7 @@
             <li>
               <button class="row-btn" onclick={() => openSite(s.id, 'overview')}>
                 <SiteIcon id={s.id} size={16} />
-                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'}{s.origin === 'migrated' ? ` · 迁移自 ${s.migrate_from}` : ''} · {stackName(s.framework)}</small></span>
+                <span class="nm"><b>{s.name}</b><small>{s.domain || '还没填域名'}{s.origin === 'migrated' ? ` · 由 ${s.migrate_from} 改版` : ''} · {stackName(s.framework)}</small></span>
                 <span class="state {liveState(s).tone}"><Icon name={liveState(s).icon} size={11} />{liveState(s).text}</span>
                 <span class="when" data-tip={full(s.updated_at)}>{ago(s.updated_at)}</span>
                 <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>

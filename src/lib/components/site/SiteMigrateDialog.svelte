@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 迁移已有站点：填域名和存放位置。建好后自动盘点旧站，进度和后面几步都在站点概览的「迁移进度」卡片里。
+  // 改版已有站点：填域名和存放位置。建好后自动盘点旧站，进度和后面几步都在站点概览的「改版进度」卡片里。
   import './site.css';
   import Icon from './Icon.svelte';
   import { migrate, closeMigrate, createMigration, createMigrations, pickMigrateParent } from '$lib/state/migrate.svelte.js';
@@ -15,13 +15,13 @@
 <svelte:window onkeydown={(e) => { if (d.open && e.key === 'Escape') closeMigrate(); }} />
 {#if d.open}
   <div class="su-mask" role="presentation" onclick={closeMigrate}></div>
-  <div class="su modal mgd" role="dialog" aria-modal="true" aria-label="迁移已有站点">
+  <div class="su modal mgd" role="dialog" aria-modal="true" aria-label="改版已有站点">
     <header class="sheet-head">
-      <b><Icon name="route" size={15} /> 迁移已有站点</b>
+      <b><Icon name="route" size={15} /> 改版已有站点</b>
       <button class="x" aria-label="关闭" data-tip="关闭" onclick={closeMigrate} disabled={d.busy}>×</button>
     </header>
     <div class="sheet-body">
-      <p class="hint">把线上的站点搬进 Pilot 重做：原来的 URL 和正文都保留，换成新的视觉，部署到 Cloudflare 或你自己的服务器。搬完以后由托管运营接着更新内容。</p>
+      <p class="hint">给线上的站点改版：原来的 URL 和正文都保留，换成新的视觉，部署到 Cloudflare 或你自己的服务器，确认后再让域名切到新站。上线以后由托管运营接着更新内容。</p>
       <ol class="flow">
         <li><b>盘点</b>找全旧站的页面，判断适合放在哪</li>
         <li><b>确认方案</b>选放在哪、新站的样子</li>
@@ -34,7 +34,7 @@
       <p class="hint">确认方案以后，抓取、重做、核对都会自动接着做，只在需要你挑设计方向和正式上线时停下来。</p>
       <div class="seg" role="tablist">
         <button class:on={!d.multi} onclick={() => (d.multi = false)} disabled={d.busy}>一个站点</button>
-        <button class:on={d.multi} onclick={() => (d.multi = true)} disabled={d.busy}>批量迁移</button>
+        <button class:on={d.multi} onclick={() => (d.multi = true)} disabled={d.busy}>批量改版</button>
       </div>
       {#if !d.multi}
         <div class="field"><label for="mg-domain">旧站域名</label>

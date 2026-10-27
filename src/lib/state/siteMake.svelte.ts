@@ -46,7 +46,7 @@ export async function loadMake(id: string, full = true) {
 /** 制作对话：最近一条「从零搭建 / 继续制作 / 迁移重做」的对话；都没有就用这个站点最早的那条。 */
 export function makingConv(siteId: string): Conversation | undefined {
   const all = app.convos.filter((c) => c.conn_id === SITE_PREFIX + siteId).sort((a, b) => a.created_at - b.created_at);
-  const mk = all.filter((c) => /^(请从零搭建|继续制作|请迁移重做|继续迁移重做)/.test(c.title));
+  const mk = all.filter((c) => /^(请从零搭建|继续制作|请(迁移|改版)重做|继续(迁移|改版)重做)/.test(c.title));
   return mk[mk.length - 1] ?? all[0];
 }
 

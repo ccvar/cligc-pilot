@@ -83,7 +83,7 @@
         <div class="cs-div"></div>
         <!-- 和站点页的按钮同一套图标：制作 = 魔法棒，导入 = 上传箭头（原来两个都是地球，分不出来） -->
         <button class="cs-act" role="menuitem" onclick={() => openSiteCreate()}><Icon name="wand" size={15} />制作站点</button>
-        <button class="cs-act" role="menuitem" onclick={() => openMigrate()}><Icon name="route" size={15} />迁移已有站点</button>
+        <button class="cs-act" role="menuitem" onclick={() => openMigrate()}><Icon name="route" size={15} />改版已有站点</button>
         <button class="cs-act" role="menuitem" onclick={() => openSiteImport()}><Icon name="upload" size={15} />导入站点</button>
         <button class="cs-act" role="menuitem" onclick={openCfConnect}><CfMark size={15} />连接 Cloudflare</button>
         <button class="cs-act" role="menuitem" onclick={openGhConnect}><GhMark size={15} />连接 GitHub</button>
