@@ -50,14 +50,16 @@
     finally { syncing = false; }
   }
   const tag = (v: ConfigVar) => (v.secret ? '密钥' : '公开');
+  // 同步到哪儿：说人话（不说「部署目标」）——Pages / Workers 是 Cloudflare，VPS 是你的服务器
+  const dest = $derived(cs?.target === 'vps' ? '服务器' : 'Cloudflare');
 </script>
 
 <div class="card cfg">
   <h3><Icon name="key" />配置变量<span class="grow"></span>
-    {#if cs?.target && cs.vars.length}<button class="btn tiny" onclick={sync} disabled={syncing} data-tip="写到 {cs.target_label}">{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="refresh" size={11} />同步到部署目标{/if}</button>{/if}
+    {#if cs?.target && cs.vars.length}<button class="btn tiny" class:primary={cs.needs_sync} onclick={sync} disabled={syncing} data-tip={`写到 ${cs.target_label}；下次上线时也会自动同步`}>{#if syncing}<span class="spin"></span>同步中…{:else}<Icon name="upload" size={11} />同步到{dest}{/if}</button>{/if}
   </h3>
-  <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? '部署目标'}。值不会显示，也不会进仓库。</p>
-  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到部署目标：下次上线时会自动同步，也可以现在点「同步到部署目标」。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
+  <p class="hint">邀请链接、统计 ID、联系邮箱、接口密钥这类配置不写死在代码里：值存在 Pilot 的钥匙串，Pilot 构建时注入，上线时同步到 {cs?.target_label ?? (dest === '服务器' ? '服务器' : 'Cloudflare')}。值不会显示，也不会进仓库。</p>
+  {#if cs?.needs_sync}<p class="sync-note"><Icon name="info" size={12} />改动还没同步到{dest}：下次上线时会自动同步，也可以现在点「同步到{dest}」。</p>{:else if cs?.synced_at}<p class="sync-ok"><span data-tip={full(cs.synced_at)}>上次同步：{ago(cs.synced_at)}</span></p>{/if}
 
   {#if cs && cs.vars.length}
     <ul class="vars">
