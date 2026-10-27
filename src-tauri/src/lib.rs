@@ -4744,8 +4744,8 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// macOS 菜单栏（替换 Tauri 默认的英文菜单）：应用菜单里有「关于」（带应用图标）、「检查更新…」、「设置…」、「后台运行与备份…」；
-/// 另有编辑、视图、窗口三组。自定义项发 `app-menu` 事件给主窗口（update / settings / background），由前端打开对应界面。
+/// macOS 菜单栏（替换 Tauri 默认的英文菜单）：应用菜单里有「关于」（带应用图标）、「检查更新…」、「设置…」；
+/// 另有编辑、视图、窗口三组。自定义项发 `app-menu` 事件给主窗口（update / settings），由前端打开对应界面。
 #[cfg(target_os = "macos")]
 fn setup_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{AboutMetadata, PredefinedMenuItem, Submenu};
@@ -4758,7 +4758,6 @@ fn setup_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     let sep = || PredefinedMenuItem::separator(app);
     let update = MenuItem::with_id(app, "app-menu:update", "检查更新…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "app-menu:settings", "设置…", true, Some("CmdOrCtrl+,"))?;
-    let background = MenuItem::with_id(app, "app-menu:background", "后台运行与备份…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "app-menu:quit", format!("退出 {name}"), true, Some("CmdOrCtrl+Q"))?;
     let app_menu = Submenu::with_items(
         app,
@@ -4769,7 +4768,6 @@ fn setup_app_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
             &update,
             &sep()?,
             &settings,
-            &background,
             &sep()?,
             &PredefinedMenuItem::hide(app, Some(&format!("隐藏 {name}")))?,
             &PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?,

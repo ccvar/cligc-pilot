@@ -159,7 +159,7 @@ fn stage(data_dir: &Path, mirror: &Path) -> Result<Manifest, String> {
         mirror.join("README.md"),
         "# Cligc Pilot 数据备份\n\n由 Cligc Pilot 每周自动推送：站点设置、托管方案、计划、任务队列、运营记录、复盘和 AI 用量。\n\
 不含任何密钥和 Token（它们只在电脑的钥匙串里）、对话记录和数据缓存。\n\n\
-恢复：在 Pilot 的「托管运营 → 后台运行与备份」里点「从备份恢复」。请保持这个仓库为私有。\n",
+恢复：在 Pilot 的「设置 → 后台运行与备份」里点「恢复…」。请保持这个仓库为私有。\n",
     )
     .map_err(|e| e.to_string())?;
     Ok(m)
@@ -192,7 +192,7 @@ fn github_conn(conns: &crate::conns::ConnStore, id: &str) -> Result<(crate::conn
     if conn.kind != "github" {
         return Err("备份要用 GitHub 连接".into());
     }
-    let token = crate::keychain::get_key(&conn.id).map_err(|_| "这个 GitHub 连接的 Token 不在钥匙串里，先在「连接与模型」里重新填一下".to_string())?;
+    let token = crate::keychain::get_key(&conn.id).map_err(|_| "这个 GitHub 连接的 Token 不在钥匙串里，先在「设置」里重新填一下".to_string())?;
     Ok((conn, token))
 }
 

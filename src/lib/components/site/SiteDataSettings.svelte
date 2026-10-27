@@ -93,7 +93,7 @@
       </div>
     {/if}
   {:else}
-  <p class="hint">Google / Bing 账号在「管理连接与模型」里统一管理，这里只选这个站点用哪个资源（按域名自动匹配）。模型只能通过只读工具查询本地缓存，拿不到凭据。</p>
+  <p class="hint">Google / Bing 账号在「设置」里统一管理，这里只选这个站点用哪个资源（按域名自动匹配）。模型只能通过只读工具查询本地缓存，拿不到凭据。</p>
 
   <div class="ds-block">
     <div class="ds-title"><GoogleMark size={15} /> Google（GA4 + Search Console，可以分属两个账号）</div>

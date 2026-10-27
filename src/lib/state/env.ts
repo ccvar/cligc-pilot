@@ -22,7 +22,7 @@ function currentPilotWindowLabel(): string {
 export const pilotWindowLabel = currentPilotWindowLabel();
 
 export const SHEET_WIDTH = {
-  setup: { id: 'connection-settings', defaultWidth: 400, minWidth: 360, maxWidth: 720, label: '调整连接与模型面板宽度' },
+  setup: { id: 'connection-settings', defaultWidth: 400, minWidth: 360, maxWidth: 720, label: '调整设置面板宽度' },
   updateCenter: { id: 'update-center', defaultWidth: 540, minWidth: 440, maxWidth: 900, label: '调整更新中心面板宽度' },
 } satisfies Record<string, SheetWidthOptions>;
 

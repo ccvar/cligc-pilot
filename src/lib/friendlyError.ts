@@ -35,7 +35,7 @@ function authText(p: string): string {
   if (p === 'Google') return `Google 的授权失效了。${WHERE_TOKEN}重新授权一次就好。`;
   if (p === 'Bing') return `Bing 不认这个 API 密钥。到 Bing Webmaster 后台重新生成一个，再${WHERE_TOKEN}换上。`;
   if (p === 'WordPress.com') return `WordPress.com 的授权失效了。${WHERE_TOKEN}重新授权一次就好。`;
-  if (p === '模型服务') return `模型服务不认这个 API 密钥（填错、过期或没余额）。到「连接与模型」里检查这个服务的密钥。`;
+  if (p === '模型服务') return `模型服务不认这个 API 密钥（填错、过期或没余额）。到「设置」里检查这个服务的密钥。`;
   return `对方不认这个凭据（没权限或已过期）。${WHERE_TOKEN}重新填一下。`;
 }
 
@@ -135,9 +135,9 @@ const TURN_HINTS: { test: RegExp; text: string }[] = [
   { test: /credit balance is too low|insufficient[_ ](quota|balance|funds)|余额不足|账户余额|payment required|billing|\b402\b/i,
     text: '模型服务的余额不够了：到服务商后台充值后点「重试」，或者在下面换个模型。' },
   { test: /not logged in|please run \/login|claude login|未登录/i,
-    text: '本机的客户端还没登录：到「连接与模型」里登录后点「重试」，或者在下面换个模型。' },
+    text: '本机的客户端还没登录：到「设置」里登录后点「重试」，或者在下面换个模型。' },
   { test: /invalid[ _-]?(x-)?api[ _-]?key|incorrect api key|authentication[_ ]error|unauthorized|\b401\b|密钥(无效|错误)/i,
-    text: '模型服务不认这个 API 密钥（填错或过期了）：到「连接与模型」里检查这个服务的密钥，改好后点「重试」。' },
+    text: '模型服务不认这个 API 密钥（填错或过期了）：到「设置」里检查这个服务的密钥，改好后点「重试」。' },
   { test: /model.{0,40}(not found|does not exist|not available|unsupported)|unknown model|模型不存在/i,
     text: '这个模型用不了（名字不对，或者账号没开通）：在下面换个模型再试。' },
   { test: /rate[ _-]?limit|too many requests|\b429\b|usage limit|quota (exceeded|reached)|limit reached|额度(用完|不足)/i,

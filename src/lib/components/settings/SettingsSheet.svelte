@@ -6,6 +6,7 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import ApiServices from '$lib/ApiServices.svelte';
   import TypeSafeSection from './TypeSafeSection.svelte';
+  import BackgroundSection from './BackgroundSection.svelte';
   import type { ApiProfile } from '$lib/apiProfiles';
   import AppIcon from '$lib/AppIcon.svelte';
   import PlusIcon from '$lib/components/icons/PlusIcon.svelte';
@@ -71,8 +72,8 @@
 <!-- 设置弹窗 -->
 {#if settings.setupOpen}
   <div class="mask" role="presentation" onclick={() => { settings.setupAddOpen = false; settings.setupOpen = false; }}></div>
-  <div class="sheet" use:sheetWidth={SHEET_WIDTH.setup} use:escClose={() => { settings.setupAddOpen = false; settings.setupOpen = false; }} role="dialog" aria-modal="true" aria-label="连接与模型">
-    <header class="sheet-head"><b>连接与模型</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => { settings.setupAddOpen = false; settings.setupOpen = false; }}>×</button></header>
+  <div class="sheet" use:sheetWidth={SHEET_WIDTH.setup} use:escClose={() => { settings.setupAddOpen = false; settings.setupOpen = false; }} role="dialog" aria-modal="true" aria-label="设置">
+    <header class="sheet-head"><b>设置</b><button class="x" aria-label="关闭" data-tip="关闭" onclick={() => { settings.setupAddOpen = false; settings.setupOpen = false; }}>×</button></header>
     <div class="sheet-body">
       <div class="sec-head">
         <span>连接</span>
@@ -311,6 +312,8 @@
       {/if}
       <ApiServices profiles={app.apiProfiles} onchange={(profiles: ApiProfile[]) => { app.apiProfiles = profiles; }} />
       <TypeSafeSection />
+
+      <BackgroundSection />
 
       <div class="sec-head mt"><span>关于</span></div>
       <div class="brain-row">

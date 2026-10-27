@@ -37,7 +37,6 @@
   import ManagedConsole from '$lib/components/site/ManagedConsole.svelte';
   import { initManaged } from '$lib/state/managed.svelte.js';
   import { initBackground, initAppMenu } from '$lib/state/background.svelte.js';
-  import BackgroundDialog from '$lib/components/site/BackgroundDialog.svelte';
   import { phone, initPhone } from '$lib/state/phone.svelte.js';
   import { initSuggest } from '$lib/state/suggest.svelte.js';
   import AndroidMark from '$lib/components/icons/AndroidMark.svelte';
@@ -293,7 +292,6 @@
 <TemplateSaveDialog />
 <TemplateUseDialog />
 <PromptEditDialog />
-<BackgroundDialog />
 
 {#if app.confirmState}
   <ConfirmDialog
