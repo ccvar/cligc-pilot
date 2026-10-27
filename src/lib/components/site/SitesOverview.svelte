@@ -149,7 +149,6 @@
               <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 28 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
               <th class="num c-idx"><button class="th" onclick={() => sortBy('indexed')} data-tip={'Google：近 28 天有展示的页面 / 站点地图提交的网址（Search Console 接口不再给收录数，用有展示的页面近似）\nBing：索引里的网址数'}><GscMark size={11} /><BingMark size={11} />已编入{arrow('indexed')}</button></th>
               <th class="c-trend"><span class="th-l"><GaMark size={11} />会话趋势</span></th>
-              <th><button class="th" onclick={() => sortBy('pending')}>状态{arrow('pending')}</button></th>
               <th class="c-lvl">托管</th>
               <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
             </tr></thead>
@@ -158,7 +157,7 @@
                 {@const st = status(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={r.summary.errors.length && st.t === '数据源出错' ? r.summary.errors.join('\n') : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
                     <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
@@ -172,12 +171,11 @@
                   {:else}
                     <td class="num nodata" colspan="2">未接数据</td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
-                  <td><span class="pill {st.c}">{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span></td>
                   <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" title={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
                   <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
                 </tr>
               {:else}
-                <tr><td colspan="10" class="faint">没有符合条件的站点</td></tr>
+                <tr><td colspan="9" class="faint">没有符合条件的站点</td></tr>
               {/each}
             </tbody>
           </table>
@@ -257,6 +255,8 @@
   .dm :global(svg) { flex: none; }
   .dm :global(.ico) { color: var(--dim); }
   .nodata { color: var(--faint); font-size: 12px; }
+  /* 状态不单占一列：正常的不显示，有事的（进行中、待确认、上线失败、失败、数据源出错）跟在站点名后面 */
+  .pill.st { flex: none; margin-left: 4px; font-weight: 500; }
   .th :global(svg), .th-l :global(svg) { flex: none; margin-right: 2px; }
   .th-l { display: inline-flex; align-items: center; gap: 2px; }
   td.num .v { display: block; font-variant-numeric: tabular-nums; }
