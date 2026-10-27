@@ -329,9 +329,9 @@
      发行版图标是纯圆/纯环，没有基线可言，只能按视觉中线手动补这 1px。 */
   :global(svg.distro) { flex: none; transform: translateY(-1px); }
   :global(:root) {
-    /* 对齐 Claude 客户端：主区是很淡的灰白（不是纯白，白色的卡片 / 输入框在上面自然浮起来），
-       侧栏再深一点点的米灰；两栏之间只靠一条发丝线（见 Sidebar 的 .rail）。 */
-    --bg: #fcfcfb; --rail: #f9f9f7; --card: #ffffff;
+    /* 主区纯白；侧栏是一点点米灰，两栏之间只靠一条发丝线（见 Sidebar 的 .rail）。
+       卡片 / 输入框和主区同为白色，靠边框分开。 */
+    --bg: #ffffff; --rail: #f9f9f7; --card: #ffffff;
     /* 浮层实底（更新吐司/附件 chip 等用）：此前未定义导致 var(--panel) 落空、浮层透明。 */
     --panel: #ffffff;
     --border: #ecebe6; --border2: #e1dfd8;
