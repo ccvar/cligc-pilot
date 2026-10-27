@@ -92,17 +92,17 @@
 </div>
 
 <style>
-  .bgs { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; border-radius: 12px; transition: box-shadow .4s; }
+  .bgs { display: flex; flex-direction: column; gap: 24px; margin-top: 17px; border-radius: 12px; transition: box-shadow .4s; }
   /* 从「后台停了」提醒跳过来时闪一下，长长的设置里一眼找到 */
   .bgs.flash { box-shadow: 0 0 0 6px color-mix(in srgb, var(--warn) 22%, transparent); }
   section { display: flex; flex-direction: column; gap: 8px; }
   /* 和设置里其它分组标题（.sec-head）同一个样子 */
-  h4 { margin: 0 0 1px; display: flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; letter-spacing: .03em; color: var(--faint); }
+  h4 { min-height: 24px; margin: 0; display: flex; align-items: center; gap: 2px; font-size: 11px; font-weight: 600; letter-spacing: .03em; color: var(--faint); }
   .h-sub { margin-left: auto; font-weight: 400; letter-spacing: 0; font-size: 11.5px; }
   .hint { margin: 0; }
   /* 一组设置一张卡片，每项一行，行之间细线 */
-  .rows { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #fff; }
-  .opt { min-height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 7px 14px; }
+  .rows { border: 1px solid var(--border); border-radius: 11px; overflow: hidden; background: #fff; }
+  .opt { min-height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; justify-content: space-between; padding: 7px 12px; }
   .opt + .opt { border-top: 1px solid var(--border); }
   .opt.dim { opacity: .55; }
   .ot { min-width: 0; display: flex; flex-direction: column; gap: 1px; }

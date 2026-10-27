@@ -316,7 +316,7 @@
       <BackgroundSection />
 
       <div class="sec-head mt"><span>关于</span></div>
-      <div class="brain-row">
+      <div class="brain-row about-card">
         <span class="brain-ic"><AppIcon size={20} /></span>
         <span class="brain-main"><b>Cligc Pilot</b><small>{updater.appVersion ? `v${updater.appVersion}` : ''}{updater.updMsg ? ` · ${updater.updMsg}` : ''}</small></span>
         <button class="btn small ghost bare about-update-entry" onclick={openUpdateCenter} disabled={!isMainWindow}>
@@ -401,10 +401,12 @@
   .about-update-entry { display: inline-flex; align-items: center; gap: 5px; }
   .about-update-entry :global(svg) { flex: none; color: var(--dim); }
   .conn-remark { cursor: help; }
-  .sec-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 1px; }
-  .sec-head.mt { margin-top: 12px; }
+  /* 设置里每一组的标题：和 API 服务、判断模型、后台运行与备份同一个样子。
+     组与组之间 24px（17 + 正文 gap 7），标题到内容 8px（1 + 7）；内容统一放在白底细边框的卡片里 */
+  .sec-head { min-height: 24px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; color: var(--faint); font-weight: 600; margin-bottom: 1px; }
+  .sec-head.mt { margin-top: 17px; }
   .sec-title { display: inline-flex; align-items: center; }
-  .conn-groups { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+  .conn-groups { display: flex; flex-direction: column; gap: 6px; }
   .cr-os { flex: none; display: inline-flex; width: 14px; margin-left: -22px; } /* 放进左侧缩进里，机器名和其他组的名字对齐 */
   .conn-row :global(.sm) { border-radius: 6px; }
   .cr-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
@@ -448,7 +450,10 @@
   .brain-main small { display: block; color: var(--dim); font-size: 11px; line-height: 1.1; }
   /* 自定义模型：折叠管理器（对齐大脑名，缩进 33px = 图标 22 + gap 11） */
   /* 大脑列表：整列作为一个 sheet-body 子项，块间距自控（不吃 sheet-body 的 7px gap）。 */
-  .brains-list { display: flex; flex-direction: column; gap: 14px; }
+  .brains-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
+  .brains-list > .brain-block { padding: 10px 12px; }
+  .brains-list > .brain-block + .brain-block { border-top: 1px solid var(--border); }
+  .about-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: #fff; }
   /* 每个大脑（行 + 自定义模型）成一块，块内贴紧。 */
   .brain-block { display: flex; flex-direction: column; gap: 0; }
   /* 未安装行：一键安装挪到状态文字下方（缩进对齐 brain-main），复制小图标同行在旁 */

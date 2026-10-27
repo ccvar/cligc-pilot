@@ -70,6 +70,7 @@
     {#if st && !st.configured && !editing}<button type="button" class="add" onclick={edit}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button>{/if}
   </div>
   {#if st}
+   <div class="box">
     {#if st.configured || editing}
       <div class="row">
         <span class="icon" aria-hidden="true"><TypeSafeMark size={20} /></span>
@@ -80,7 +81,7 @@
           <button type="button" class="ic" onclick={edit} disabled={!!busy} aria-label="修改" data-tip="修改 Key 和用途"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M11.5 2.5l2 2L6 12l-2.5.5L4 10l7.5-7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" /></svg></button>
         {/if}
       </div>
-      <p class="msg slot" class:on={!!note || !!cost} class:error={note && !note.ok} role="status">{note?.text ?? cost}</p>
+      {#if note || cost}<p class="msg" class:error={note && !note.ok} role="status">{note?.text ?? cost}</p>{/if}
     {:else}
       <div class="empty-row">
         <span class="icon" aria-hidden="true"><TypeSafeMark size={20} /></span>
@@ -102,12 +103,15 @@
         </div>
       </form>
     {/if}
+   </div>
   {/if}
 </section>
 
 <style>
-  .ts { margin-top:20px; min-width:0; }
-  .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--faint); font-size:11px; font-weight:600; margin-bottom:10px; }
+  /* 和设置里其它组同样的间距、标题和卡片（见 SettingsSheet 的 .sec-head） */
+  .ts { margin-top:17px; min-width:0; }
+  .section-head { min-height:24px; display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--faint); font-size:11px; font-weight:600; letter-spacing:.03em; margin-bottom:8px; }
+  .box { padding:10px 12px; border:1px solid var(--border); border-radius:11px; background:#fff; }
   .add,.link { display:inline-flex; align-items:center; gap:5px; background:none; border:0; font:inherit; cursor:pointer; color:var(--dim); }
   .add { padding:3px 5px; border-radius:6px; font-size:11.5px; font-weight:400; }
   .add svg { display:block; width:13px; height:13px; }
@@ -133,8 +137,6 @@
   .empty b { color:var(--dim); font-weight:600; }
   .msg { margin:5px 0 0 33px; color:var(--dim); font-size:10.5px; line-height:1.4; overflow-wrap:anywhere; }
   .msg.error { color:var(--err); }
-  .slot:not(.on) { visibility:hidden; }
-  .slot:not(.on)::before { content:'\200b'; }
   .editor { padding:8px 0 0 33px; display:flex; flex-direction:column; gap:9px; min-width:0; }
   .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
   .field > span { color:var(--dim); font-size:11px; }

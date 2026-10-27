@@ -185,7 +185,7 @@
 
 <section class="api-services" aria-label="API 服务">
   <div class="section-head"><span class="section-title">API 服务<InfoTip text={'API 独立计费；密钥只存入系统凭据库，不随配置导出。测试连接只读取模型列表，不会调用模型生成内容。\n能做：文本对话、本地文件、SSH、看图（Claude / OpenAI Responses 接口），GitHub 推送和开 PR、站点上线（都先请你确认）。\nPDF 识别和 Cloudflare 授权操作请暂用本地客户端。'} label="API 服务说明" /></span><button type="button" class="add" disabled={!!busy} onclick={() => edit()}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>添加</button></div>
-  <p class="message error slot" class:on={!!error} role="alert">{error}</p>
+  {#if error}<p class="message error top" role="alert">{error}</p>{/if}
   {#if !profiles.length && editorId === null}<p class="empty">使用自己的 API Key 接入 OpenAI、Claude 或兼容服务。</p>{/if}
   <div class="service-list">
     {#each profiles as profile (profile.id)}
@@ -244,14 +244,18 @@
 {/if}
 
 <style>
-  .api-services { margin-top:20px; min-width:0; }
-  .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--faint); font-size:11px; font-weight:600; margin-bottom:10px; }
+  /* 和设置里其它组同样的间距、标题和卡片（见 SettingsSheet 的 .sec-head） */
+  .api-services { margin-top:17px; min-width:0; }
+  .section-head { min-height:24px; display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--faint); font-size:11px; font-weight:600; letter-spacing:.03em; margin-bottom:8px; }
   .add,.link,.advanced-toggle { display:inline-flex; align-items:center; gap:5px; background:none; border:0; font:inherit; cursor:pointer; color:var(--dim); }
   .add { padding:3px 5px; border-radius:6px; font-size:11.5px; font-weight:400; }
   .add:hover,.link:hover { color:var(--text); background:var(--rail); }
   .add svg { display:block; width:13px; height:13px; }
   button:disabled { opacity:.45; cursor:default; }
-  .service-list { display:flex; flex-direction:column; gap:14px; }
+  .service-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:11px; background:#fff; overflow:hidden; }
+  .service-list:empty { display:none; }
+  .service { padding:10px 12px; }
+  .service + .service { border-top:1px solid var(--border); }
   .service-row { display:flex; align-items:center; gap:11px; min-width:0; }
   .service-icon { width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; color:var(--dim); }
   .service-icon :global(svg) { display:block; }
@@ -294,6 +298,7 @@
   .model-options small { font-size:11px; color:var(--faint); padding:5px; display:block; }
   .message { margin:8px 0 0; color:var(--dim); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
   .error { color:var(--err); }
+  .message.top { margin:0 0 8px; }
   /* 提示位始终占一行：出现时只是淡入，不把下面的内容往下推 */
   .slot:not(.on) { visibility:hidden; }
   .slot:not(.on)::before { content:'\200b'; }
