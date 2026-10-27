@@ -43,9 +43,15 @@
     editing = ''; val = '';
     await load();
   }
-  async function clear(k: string) {
-    // 值从不显示，清了就找不回来
-    if (!(await confirmDialog(`清除 ${k} 的值？清掉以后找不回来，需要时得重新填。`, { title: '清除配置', kind: 'danger', confirmText: '清除' }))) return;
+  // 清掉以后会变成什么：声明过的变成「未填」，有自动值的改回自动，手动加的整行没了
+  const clearKind = (v: ConfigVar) => (!v.declared ? 'delete' : v.auto ? 'reset' : 'clear');
+  async function clear(v: ConfigVar) {
+    const k = v.key;
+    const kind = clearKind(v);
+    const msg = kind === 'delete' ? `删除变量 ${k}？它是在 Pilot 里手动加的，删掉后值找不回来。已经同步过的话，下次整体同步会把那边的也删掉。`
+      : kind === 'reset' ? `清除 ${k} 填的值，改回自动（${v.auto}）？原来填的值找不回来。`
+      : `清除 ${k} 的值？变量保留、变成未填；原来的值找不回来，需要时得重新填。`;
+    if (!(await confirmDialog(msg, { title: kind === 'delete' ? '删除变量' : kind === 'reset' ? '改回自动' : '清除值', kind: 'danger', confirmText: kind === 'delete' ? '删除' : kind === 'reset' ? '改回自动' : '清除' }))) return;
     await setSiteEnv(site.id, [], [k]);
     await load();
   }
@@ -149,7 +155,7 @@
                 <div class="acts">
                   {#if canSyncOne(v)}<button class="ic-btn" onclick={() => syncOne(v)} disabled={!!syncingKey || syncing} aria-label={`只同步 ${v.key}`} data-tip={`只把它同步到${dest}（会先确认）`}>{#if syncingKey === v.key}<span class="spin"></span>{:else}<Icon name="upload" size={13} />{/if}</button>{/if}
                   {#if v.set || v.auto || v.remote}<button class="ic-btn" onclick={() => { editing = v.key; val = ''; }} aria-label={`修改 ${v.key}`} data-tip={v.set ? '修改值' : v.auto ? '改成别的值' : '填新值'}><Icon name="pencil" size={13} /></button>{/if}
-                  {#if v.set}<button class="ic-btn del" onclick={() => clear(v.key)} aria-label={`清除 ${v.key}`} data-tip={v.auto ? '清除（改回自动）' : '清除值'}><Icon name="trash" size={13} /></button>{/if}
+                  {#if v.set}{@const ck = clearKind(v)}<button class="ic-btn del" onclick={() => clear(v)} aria-label={ck === 'delete' ? `删除 ${v.key}` : ck === 'reset' ? `${v.key} 改回自动` : `清除 ${v.key} 的值`} data-tip={ck === 'delete' ? '删除这个变量' : ck === 'reset' ? '改回自动' : '清除值（变量保留，变成未填）'}><Icon name={ck === 'delete' ? 'trash' : ck === 'reset' ? 'undo' : 'eraser'} size={13} /></button>{/if}
                 </div>
               {/if}
             </div>
