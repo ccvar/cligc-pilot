@@ -378,7 +378,7 @@
           {#if g.sites.length > 5}
             <!-- 站点多了不好找：在这个方案里按站点名 / 域名筛 -->
             <div class="gq-bar">
-              <label class="gq"><Icon name="search" size={13} /><input type="search" bind:value={siteQ[g.id]} placeholder="在这个方案里搜索站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') siteQ[g.id] = ''; }} /></label>
+              <label class="gq"><Icon name="search" size={13} /><input type="search" bind:value={siteQ[g.id]} placeholder="搜索这个方案的站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') siteQ[g.id] = ''; }} /></label>
               {#if gq}<span class="faint gq-n">{ordered.length ? `找到 ${ordered.length} 个` : '没有匹配的站点'}</span>{/if}
             </div>
           {/if}
@@ -564,7 +564,7 @@
   .grp.shut > h3 { margin-bottom: 0; }
   /* 方案标题整行（名称、标签、概况、空白处）都能点开收起，箭头在右边 */
   .gq-bar { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
-  .gq { position: relative; display: flex; align-items: center; width: min(360px, 100%); color: var(--faint); }
+  .gq { position: relative; display: flex; align-items: center; width: min(220px, 100%); color: var(--faint); }
   .gq :global(svg) { position: absolute; left: 9px; pointer-events: none; }
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
   .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
