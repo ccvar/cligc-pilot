@@ -95,7 +95,7 @@
                   {#if composer.attaching}<span class="attach-loading">上传中…</span>{/if}
                 </div>
               {/if}
-              <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="2" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
+              <textarea bind:this={workbench.wbStartEl} bind:value={launcher.lDraft} use:autogrow rows="1" placeholder="让 AI 在这台机器上做点什么…例如：看看装了什么，帮我装上 Docker"
                 oncompositionstart={() => (composer.composing = true)} oncompositionend={() => (composer.composing = false)}
                 onpaste={onComposerPaste}
                 onkeydown={(e) => onComposerKey(e, () => void startChat())}></textarea>
