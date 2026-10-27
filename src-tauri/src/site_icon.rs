@@ -83,13 +83,55 @@ fn cache_file(site_dir: &Path) -> PathBuf {
     site_dir.join("icon.json")
 }
 
+/// 首页 <head> 里声明的图标地址（`<link rel="icon" href="…">`，其次 apple-touch-icon），按页面最终网址补成完整网址。
+/// 很多站点的图标不叫 favicon、也不放在根目录（比如 /static/brand/xxx-mark.png），只能从这里找到。
+fn declared_icons(html: &str, base: &reqwest::Url) -> Vec<String> {
+    let low = html.to_ascii_lowercase();
+    let mut found: Vec<(u8, String)> = Vec::new();
+    let mut from = 0;
+    while let Some(i) = low[from..].find("<link") {
+        let a = from + i;
+        let Some(j) = low[a..].find('>') else { break };
+        let tag = &html[a..a + j];
+        let ltag = &low[a..a + j];
+        from = a + j;
+        let attr = |name: &str| -> Option<String> {
+            let k = ltag.find(&format!("{name}="))? + name.len() + 1;
+            let q = ltag[k..].chars().next()?;
+            if q == '"' || q == '\'' {
+                let rest = &tag[k + 1..];
+                rest.find(q).map(|e| rest[..e].to_string())
+            } else {
+                Some(tag[k..].split(|c: char| c.is_whitespace() || c == '>').next().unwrap_or("").to_string())
+            }
+        };
+        let Some(rel) = attr("rel").map(|r| r.to_ascii_lowercase()) else { continue };
+        let rank = if rel.split_whitespace().any(|w| w == "icon") { 0 } else if rel.contains("apple-touch-icon") { 1 } else { continue };
+        if let Some(u) = attr("href").and_then(|h| base.join(&h.replace("&amp;", "&")).ok()) {
+            found.push((rank, u.to_string()));
+        }
+    }
+    found.sort_by_key(|f| f.0);
+    found.into_iter().map(|f| f.1).collect()
+}
+
 async fn fetch_remote(domain: &str) -> String {
     let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(6)).build() {
         Ok(c) => c,
         Err(_) => return String::new(),
     };
-    for path in ["/favicon.ico", "/favicon.svg", "/favicon.png", "/apple-touch-icon.png"] {
-        let Ok(r) = client.get(format!("https://{domain}{path}")).send().await else { continue };
+    // 先看首页声明了哪个图标，再试常见的固定路径
+    let mut urls: Vec<String> = Vec::new();
+    if let Ok(r) = client.get(format!("https://{domain}/")).send().await {
+        let base = r.url().clone();
+        if let Ok(html) = r.text().await {
+            urls.extend(declared_icons(&html, &base));
+        }
+    }
+    urls.extend(["/favicon.ico", "/favicon.svg", "/favicon.png", "/apple-touch-icon.png"].iter().map(|p| format!("https://{domain}{p}")));
+    for url in urls {
+        let path = url.split(['?', '#']).next().unwrap_or("").to_string();
+        let Ok(r) = client.get(&url).send().await else { continue };
         if !r.status().is_success() {
             continue;
         }
@@ -98,7 +140,7 @@ async fn fetch_remote(domain: &str) -> String {
         if ct.starts_with("text/") {
             continue;
         }
-        let mime = if ct.starts_with("image/") { ct } else { mime_of(Path::new(path)).unwrap_or_default().to_string() };
+        let mime = if ct.starts_with("image/") { ct } else { mime_of(Path::new(&path)).unwrap_or_default().to_string() };
         if !mime.starts_with("image/") {
             continue;
         }
@@ -123,7 +165,9 @@ pub async fn icon_for(site: &Site, site_dir: &Path, code_dir: Option<PathBuf>) -
     }
     let file = cache_file(site_dir);
     if let Some(c) = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice::<RemoteCache>(&b).ok()) {
-        if crate::now_secs().saturating_sub(c.checked) < REMOTE_TTL {
+        // 找到了的缓存 7 天；没找到的 6 小时后再试（站点可能刚加上图标，或者上次只是网络不好）
+        let ttl = if c.url.is_empty() { 6 * 3600 } else { REMOTE_TTL };
+        if crate::now_secs().saturating_sub(c.checked) < ttl {
             return c.url;
         }
     }
@@ -149,6 +193,14 @@ mod tests {
         std::fs::create_dir_all(d.join("public")).unwrap();
         std::fs::write(d.join("public/favicon.svg"), "<svg/>").unwrap();
         assert_eq!(find_local(d).unwrap(), d.join("public/favicon.svg"));
+    }
+
+    #[test]
+    fn reads_icons_declared_in_the_page_head() {
+        let base = reqwest::Url::parse("https://dexgc.com/zh/").unwrap();
+        let html = r#"<head><link rel="stylesheet" href="/a.css"><link rel="apple-touch-icon" href="/t.png"><link rel="icon" href="/static/brand/dexgc-mark.png?v=5dc8" type="image/png"></head>"#;
+        assert_eq!(declared_icons(html, &base), vec!["https://dexgc.com/static/brand/dexgc-mark.png?v=5dc8", "https://dexgc.com/t.png"]);
+        assert_eq!(declared_icons(r#"<link rel='shortcut icon' href=img/f.ico>"#, &base), vec!["https://dexgc.com/zh/img/f.ico"]);
     }
 
     #[test]
