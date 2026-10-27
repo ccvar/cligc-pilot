@@ -7,6 +7,9 @@
   import { app } from '$lib/state/app.svelte.js';
   import { bg, setBackground, setBackup, backupNow, restoreBackup, span, gapWhy, gapTime } from '$lib/state/background.svelte.js';
   import { ago, full } from './fmt';
+  import Dropdown from '$lib/Dropdown.svelte';
+  // 下拉选项前的 GitHub 小图标（Dropdown 的 svg 选项要整段内联 SVG）
+  const GH_SVG = '<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
 
   const st = $derived(bg.status);
   const bk = $derived(bg.backup);
@@ -61,12 +64,10 @@
           <p class="hint warn-text">先在「连接与模型」里连上 GitHub，才能备份。</p>
         {:else if bk}
           {#if ghConns.length > 1}
-            <label class="opt">
+            <div class="opt">
               <span class="ot"><b>用哪个 GitHub 账号</b></span>
-              <select class="tin" value={connId} onchange={(e) => setBackup(bk.settings.enabled, (e.currentTarget as HTMLSelectElement).value)}>
-                {#each ghConns as c (c.id)}<option value={c.id}>{c.login || c.name}</option>{/each}
-              </select>
-            </label>
+              <div class="acct"><Dropdown compact menuCompact value={connId} options={ghConns.map((c) => ({ value: c.id, label: c.login || c.name, svg: GH_SVG }))} ariaLabel="备份用的 GitHub 账号" onchange={(v: string) => setBackup(bk.settings.enabled, v)} /></div>
+            </div>
           {/if}
           <div class="opt">
             <span class="ot"><b>每周自动备份</b><small>备份到 <span class="mono">{repoLabel}</span>{bk.settings.repo ? '' : '（第一次备份时自动建，私有）'}</small></span>
@@ -103,7 +104,7 @@
   .ot { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .ot b { font-size: 12.5px; font-weight: 550; }
   .ot small { font-size: 11.5px; line-height: 1.55; color: var(--faint); }
-  .opt select { width: 200px; flex: none; }
+  .acct { flex: none; display: flex; justify-content: flex-end; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
   .switch.on { background: var(--ok); }

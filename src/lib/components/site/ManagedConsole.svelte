@@ -22,7 +22,6 @@
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import BackgroundNotice from './BackgroundNotice.svelte';
-  import { openBackground } from '$lib/state/background.svelte.js';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
@@ -266,7 +265,6 @@
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={13} />新增方案</button>
-      <button class="btn small" onclick={openBackground} data-tip="开机自动启动、不让电脑睡眠、把 Pilot 的数据每周备份到 GitHub"><Icon name="clock" size={13} />后台运行与备份</button>
       <!-- 不常用的整体操作收进一个菜单：生成今日日报、暂停 / 恢复全部 -->
       {#if o?.sites.length}
       <div class="more-wrap">
