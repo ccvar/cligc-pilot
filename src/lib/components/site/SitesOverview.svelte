@@ -7,6 +7,7 @@
   import GscMark from '$lib/components/icons/GscMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import GaMark from '$lib/components/icons/GaMark.svelte';
+  import GhMark from '$lib/components/icons/GhMark.svelte';
   import Dropdown from '$lib/Dropdown.svelte';
   import type { SiteRow } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
@@ -76,7 +77,7 @@
     {@const top = Math.max(...vals)}
     {@const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 2 - (v / top) * (H - 4)).toFixed(1)}`)}
     <svg class="spark" width={W} height={H} viewBox="0 0 {W} {H}" aria-label="近 28 天会话趋势" data-tip={`近 28 天会话 ${num(vals.reduce((a, b) => a + b, 0))}，最多一天 ${num(top)}`}>
-      <polygon points="0,{H} {pts.join(' ')} {W},{H}" fill="var(--accent-soft)" />
+      <polygon points="0,{H} {pts.join(' ')} {W},{H}" fill="rgba(60, 54, 44, .05)" />
       <polyline points={pts.join(' ')} fill="none" stroke="var(--dim)" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" />
     </svg>
   {:else}<span class="nodata">—</span>{/if}
@@ -158,7 +159,7 @@
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
                     <b><SiteIcon id={r.id} size={15} /><span class="nm">{r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={r.summary.errors.length && st.t === '数据源出错' ? r.summary.errors.join('\n') : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
-                    <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github'}<span>{r.repo}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
+                    <small>{#if r.domain && r.domain !== r.name}<span>{r.domain}</span>{/if}<span class="dm">{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode !== 'none'}<CfMark size={12} />{/if}{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.source === 'github' && r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   {#if r.has_data}
                     {@const sm = r.summary}
@@ -266,6 +267,8 @@
   .bi { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--dim); }
   .c-trend { width: 96px; }
   .spark { display: block; }
+  .gh { display: inline-flex; align-items: center; border: 0; background: none; padding: 0; color: var(--faint); cursor: pointer; }
+  .gh:hover { color: var(--text); }
   .am { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
   .am::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--border2); }
   .am-auto::before { background: var(--ok); }
