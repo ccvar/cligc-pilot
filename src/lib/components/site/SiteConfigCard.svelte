@@ -156,7 +156,7 @@
               {#if editing === v.key}
                 <div class="vcol edit">
                   <span class="field">
-                    <input class="ein mono" use:focusSelect type={v.secret && !editShow ? 'password' : 'text'} bind:value={val} placeholder={v.auto ? `留空就用自动值 ${v.auto}` : '填写值'} aria-label={`${v.key} 的值`} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void saveEdit(v.key); if (e.key === 'Escape') editing = ''; }} />
+                    <input class="ein mono" style:width={`${Math.max(val.length, 18) + 2}ch`} use:focusSelect type={v.secret && !editShow ? 'password' : 'text'} bind:value={val} placeholder={v.auto ? `留空就用自动值 ${v.auto}` : '填写值'} aria-label={`${v.key} 的值`} autocomplete="off" spellcheck="false" onkeydown={(e) => { if (e.key === 'Enter') void saveEdit(v.key); if (e.key === 'Escape') editing = ''; }} />
                     {#if v.secret}<button class="ic-btn in-eye" class:on={editShow} onclick={() => (editShow = !editShow)} aria-label={editShow ? '隐藏输入的值' : '显示输入的值'} data-tip={editShow ? '隐藏' : '显示'}><Icon name={editShow ? 'eye-off' : 'eye'} size={12} /></button>{/if}
                   </span>
                   <button class="btn tiny primary ebtn" onclick={() => saveEdit(v.key)} disabled={!val.trim()}>保存</button>
@@ -222,10 +222,11 @@
   .vcol { display: flex; align-items: center; gap: 6px; min-width: 0; }
   /* 行内编辑框：细边框、和按钮一样高，聚焦时边框加深加一圈淡光；不用全局输入框那种 1.5px 粗框 */
   /* 边框画在外面这个框上（固定 26px，和旁边的按钮一样高），里面的输入框没有边框、没有阴影 */
-  .field { flex: 1; min-width: 0; max-width: 520px; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
+  /* 宽度跟着内容走（等宽字体，按字符数算），最少 18 个字符宽，最多到这一列的宽度 */
+  .field { flex: 0 1 auto; min-width: 0; max-width: 100%; height: 26px; box-sizing: border-box; display: flex; align-items: center; border: 1px solid var(--border2); border-radius: 6px; background: var(--card, #fff); transition: border-color .12s; }
   .field:hover { border-color: color-mix(in srgb, var(--border2) 60%, var(--dim)); }
   .field:focus-within { border-color: color-mix(in srgb, var(--border2) 25%, var(--dim)); }
-  .ein { flex: 1; min-width: 0; height: 100%; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12px; outline: none; -webkit-appearance: none; appearance: none; }
+  .ein { flex: 0 1 auto; min-width: 0; max-width: 100%; text-align: left; height: 100%; box-sizing: border-box; margin: 0; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; box-shadow: none; color: var(--text); font-size: 12px; outline: none; -webkit-appearance: none; appearance: none; }
   .ein::placeholder { color: var(--faint); }
   .in-eye { flex: none; width: 22px; height: 22px; margin-right: 1px; }
   .vcol.edit .btn.ebtn { height: 26px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; }
