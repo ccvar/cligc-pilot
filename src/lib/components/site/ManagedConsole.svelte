@@ -208,7 +208,7 @@
   const KIND: Record<string, { l: string; c: string; i: string }> = {
     shipped: { l: '已上线', c: 'ok', i: 'rocket' }, planned: { l: '计划', c: 'run', i: 'checks' }, proposed: { l: '待你确认', c: 'warn', i: 'bell' }, rolled_back: { l: '已回滚', c: 'err', i: 'undo' },
     failed: { l: '失败', c: 'err', i: 'x' }, watch_ok: { l: '验收通过', c: '', i: 'check' }, watch_failed: { l: '验收没通过', c: 'err', i: 'x' }, attention: { l: '待核对', c: 'warn', i: 'search' }, downgraded: { l: '降档', c: 'warn', i: 'sliders' }, fallback: { l: '备用模型', c: 'warn', i: 'cpu' },
-    budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' },
+    budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' }, plan_cleared: { l: '清除计划', c: '', i: 'x' },
   };
   const when = ago;
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);

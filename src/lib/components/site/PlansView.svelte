@@ -8,6 +8,12 @@
   import { openConv } from '$lib/state/conversations';
   import { openSite, sites as siteState } from '$lib/state/sites.svelte.js';
   import SiteJobPanel from './SiteJobPanel.svelte';
+  import BrainIcon from '$lib/BrainIcon.svelte';
+  import { modelIcon } from '$lib/state/models';
+  import { launcher } from '$lib/state/launcher.svelte.js';
+  import { invoke } from '@tauri-apps/api/core';
+  import { confirmDialog, say } from '$lib/state/app.svelte.js';
+  import { loadPlans } from '$lib/state/managed.svelte.js';
   import type { ManagedSite, SitePlan } from '$lib/types';
 
   let { sites, plans }: { sites: ManagedSite[]; plans: SitePlan[] } = $props();
@@ -48,6 +54,38 @@
   }
   const showJob = $derived(!!job && (running || (!!cur && watched.has(cur.id) && job.kind.startsWith('ops:'))));
 
+  // 谁出的计划（主模型失败换了备用模型的，记的是实际出计划的那个）
+  const modelLabel = (b: string, m: string) => launcher.comboOpts.find((x) => x.value === `${b}::${m}`)?.label ?? (m || (b === 'codex' ? 'Codex 默认模型' : b));
+
+  // 清除整份计划：还没开始的任务拿掉，已经在处理 / 上线的留着
+  async function clearPlan() {
+    if (!cur || !p || running) return;
+    const st = p.task_status ?? [];
+    const removable = st.filter((x) => x === 'open').length;
+    const kept = st.filter((x) => x && x !== 'open').length;
+    const msg = `清除 ${cur.name} ${md(p.plan.date)}的计划？\n· ${removable} 条还没开始的任务会从任务队列里拿掉${kept ? `\n· ${kept} 条已经在处理、等你确认或已上线的保留，已经做的改动不撤回` : ''}\n\n站点的托管还开着的话，下次自动运行会重新制定一份；不想要可以先暂停这个站点。`;
+    if (!(await confirmDialog(msg, { title: '清除计划', kind: 'danger', confirmText: '清除计划' }))) return;
+    try { const r = await invoke<{ removed: number; kept: number }>('plan_clear', { id: cur.id }); say(`已清除计划，拿掉 ${r.removed} 条任务${r.kept ? `，保留 ${r.kept} 条` : ''}`); await loadPlans(); }
+    catch (e) { say(String(e), 'err'); }
+  }
+  // 单条：移出计划（不拦着以后再提）/ 驳回（以后不再提）
+  async function removeTask(i: number) {
+    if (!cur || !p) return;
+    const t = p.plan.tasks[i];
+    if (!(await confirmDialog(`把「${t.title}」移出计划？${p.task_status?.[i] === 'open' ? '任务队列里排着的这条也一起拿掉。' : ''}以后 AI 还可能再提类似的。`, { title: '移出计划', kind: 'warning', confirmText: '移出计划' }))) return;
+    try { await invoke('plan_remove_task', { id: cur.id, index: i }); openTask = new Set(); await loadPlans(); }
+    catch (e) { say(String(e), 'err'); }
+  }
+  async function rejectTask(i: number) {
+    if (!cur || !p) return;
+    const t = p.plan.tasks[i];
+    const item = p.task_item?.[i];
+    if (!item) return;
+    if (!(await confirmDialog(`驳回「${t.title}」？之后不会再提这个机会。`, { title: '驳回', kind: 'warning', confirmText: '驳回' }))) return;
+    try { await invoke('queue_dismiss', { id: cur.id, itemId: item }); await loadPlans(); }
+    catch (e) { say(String(e), 'err'); }
+  }
+
   let openTask = $state<Set<number>>(new Set());
   let noteOpen = $state(false);
   let posOpen = $state(false);
@@ -84,8 +122,10 @@
         <b class="title">{cur.name}</b>
         <span class="stg {cur.stage}">{STAGE_LABEL[cur.stage] ?? cur.stage}</span>
         <span class="sub">{p ? `${md(p.plan.date)}制定 · ${prog.done}/${prog.total} 已上线` : '还没有计划'}</span>
+        {#if p?.plan.brain}<span class="by" data-tip="出这份计划的模型"><BrainIcon brain={modelIcon(p.plan.brain)} size={12} />{modelLabel(p.plan.brain, p.plan.model ?? '')}</span>{/if}
         <span class="grow"></span>
         {#if p?.plan.conv_id}<button class="btn tiny" onclick={() => openConv(p.plan.conv_id)}><Icon name="sparkles" size={11} />看 AI 的分析</button>{/if}
+        {#if p && !running}<button class="btn tiny quiet danger-q" onclick={clearPlan} data-tip="拿掉还没开始的任务，计划回到「还没有计划」"><Icon name="x" size={11} />清除计划</button>{/if}
         <button class="btn tiny" onclick={makePlan} disabled={running} data-tip={running ? '这个站点正在跑任务，跑完才能再制定' : null}>{#if running}<span class="spin"></span>{job?.title || cur.job}中…{:else}<Icon name="refresh" size={11} />{p ? '重新制定' : '现在制定'}{/if}</button>
       </header>
       {#if showJob && job}<div class="job"><SiteJobPanel {job} logOpen={running} /></div>{/if}
@@ -128,6 +168,8 @@
                     {#if t.page}<span class="mono url">{t.page}</span>{/if}
                     <span class="grow"></span>
                     {#if p.task_item?.[i]}<button class="link-btn" onclick={() => openSite(cur.id, 'queue')}>在任务队列里看</button>{/if}
+                    {#if ['', 'open', 'dismissed'].includes(p.task_status?.[i] ?? '')}<button class="btn tiny quiet" onclick={() => removeTask(i)} data-tip="从计划里删掉；以后 AI 还可能再提类似的">移出计划</button>{/if}
+                    {#if p.task_item?.[i] && ['open', 'proposed', 'failed'].includes(p.task_status?.[i] ?? '')}<button class="btn tiny quiet" onclick={() => rejectTask(i)} data-tip="以后不再提这个机会"><Icon name="x" size={11} />驳回</button>{/if}
                   </div>
                 </div>
               {/if}
@@ -163,6 +205,8 @@
   .hd { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
   .hd .title { font-size: 14px; font-weight: 600; }
   .hd .sub { font-size: 12px; color: var(--faint); }
+  .by { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .danger-q:hover:not(:disabled) { color: var(--err); }
   .grow { flex: 1; }
   .stg { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600; background: var(--su-warn-soft); color: var(--su-warn-ink); }
   .stg.growing { background: var(--su-run-soft); color: var(--su-run); }

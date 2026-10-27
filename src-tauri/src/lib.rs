@@ -5091,6 +5091,8 @@ pub fn run() {
             managed_cmds::list_digests,
             managed_cmds::managed_daily,
             managed_cmds::managed_site_daily,
+            managed_cmds::plan_clear,
+            managed_cmds::plan_remove_task,
             managed_cmds::read_digest,
             managed_cmds::read_digest_data,
             managed_cmds::digest_now,

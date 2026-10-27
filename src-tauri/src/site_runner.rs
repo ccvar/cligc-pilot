@@ -1970,11 +1970,16 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let added = site_ops::enqueue(&site_dir, &opps, now(), COOLDOWN)?;
     let pdir = site_dir.join("plans");
     let _ = std::fs::create_dir_all(&pdir);
-    let _ = std::fs::write(pdir.join(format!("{}.json", today())), serde_json::to_vec_pretty(&serde_json::json!({ "date": today(), "conv_id": conv_id, "stage": stage.stage, "notes": notes, "tasks": tasks })).unwrap_or_default());
+    let _ = std::fs::write(pdir.join(format!("{}.json", today())), serde_json::to_vec_pretty(&serde_json::json!({ "date": today(), "conv_id": conv_id, "brain": conv.brain, "model": conv.model, "stage": stage.stage, "notes": notes, "tasks": tasks })).unwrap_or_default());
     log(ctx, site, "planned", &format!("本周计划 {} 项", tasks.len()), &tasks.iter().take(5).map(|t| t.title.clone()).collect::<Vec<_>>().join("；"), "");
     job.step("plan", "ok", &format!("{} 项，新入队 {}", tasks.len(), added.len()));
     ctx.emit_queue(&site.id);
     Ok(format!("本周计划 {} 项", tasks.len()))
+}
+
+/// 计划文件所在目录：plans/<日期>.json；清除的计划挪到 plans/cleared/ 留底（不再算作最近一次计划）。
+pub fn plans_dir(site_dir: &Path) -> PathBuf {
+    site_dir.join("plans")
 }
 
 /// 最近一次计划（托管控制台「计划」页）。

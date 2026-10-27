@@ -426,6 +426,15 @@ pub fn drop_open_with_prefix(site_dir: &Path, prefix: &str) -> Result<usize, Str
     })
 }
 
+/// 把这几条还没开始处理（open）的条目从队列里拿掉（不是驳回：以后还可以再提）。返回拿掉了几条。
+pub fn drop_open_items(site_dir: &Path, ids: &[String]) -> Result<usize, String> {
+    with_queue(site_dir, |q| {
+        let before = q.len();
+        q.retain(|i| !(i.status == "open" && ids.contains(&i.id)));
+        before - q.len()
+    })
+}
+
 pub fn update_item(site_dir: &Path, id: &str, now: u64, f: impl FnOnce(&mut QueueItem)) -> Result<Option<QueueItem>, String> {
     with_queue(site_dir, |q| {
         q.iter_mut().find(|i| i.id == id).map(|i| {

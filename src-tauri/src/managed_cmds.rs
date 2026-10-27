@@ -322,11 +322,81 @@ pub fn managed_plans(state: tauri::State<'_, AppState>) -> Vec<SitePlan> {
         .filter(|s| cfg.group_of(&s.id).is_some())
         .filter_map(|s| {
             let dir = state.sites.data_dir(&s.id);
-            let p = crate::site_runner::latest_plan(&dir)?;
+            let mut p = crate::site_runner::latest_plan(&dir)?;
+            // 谁出的计划：新计划里记着；旧计划按它的会话补上
+            if p.get("brain").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+                if let Some(c) = p["conv_id"].as_str().and_then(|id| state.convos.get(id)) {
+                    p["brain"] = c.brain.into();
+                    p["model"] = c.model.into();
+                }
+            }
             let (task_status, task_item) = plan_progress(&p, &dir);
             Some(SitePlan { positioning: crate::site_stage::load_positioning(&dir), stage: crate::site_stage::stage_of(&s, &dir), site_id: s.id, site_name: s.name, plan: p, task_status, task_item })
         })
         .collect()
+}
+
+/// 清除计划的结果：拿掉了几条还没开始的任务，留下了几条（处理中 / 待确认 / 已上线…）。
+#[derive(Serialize)]
+pub struct PlanCleared {
+    pub removed: usize,
+    pub kept: usize,
+}
+
+fn site_busy(state: &AppState, id: &str) -> bool {
+    state.site_jobs.snapshot(id).is_some_and(|j| j.status == "running")
+}
+
+/// 清除这个站点最近一次计划：还没开始的任务从队列里拿掉，计划文件挪到 plans/cleared/ 留底；已经在处理或上线的不动。
+#[tauri::command]
+pub fn plan_clear(state: tauri::State<'_, AppState>, id: String) -> Result<PlanCleared, String> {
+    let site = state.sites.get(&id)?;
+    if site_busy(&state, &id) {
+        return Err("这个站点正在跑任务，等它结束再清除".into());
+    }
+    let dir = state.sites.data_dir(&id);
+    let p = crate::site_runner::latest_plan(&dir).ok_or("这个站点还没有计划")?;
+    let (status, items) = plan_progress(&p, &dir);
+    let open: Vec<String> = status.iter().zip(&items).filter(|(st, _)| st.as_str() == "open").map(|(_, i)| i.clone()).collect();
+    let removed = crate::site_ops::drop_open_items(&dir, &open)?;
+    let kept = status.iter().filter(|st| !st.is_empty() && st.as_str() != "open").count();
+    let pdir = crate::site_runner::plans_dir(&dir);
+    let date = p["date"].as_str().unwrap_or("").to_string();
+    let _ = std::fs::create_dir_all(pdir.join("cleared"));
+    std::fs::rename(pdir.join(format!("{date}.json")), pdir.join("cleared").join(format!("{date}-{}.json", chrono::Local::now().format("%H%M%S")))).map_err(|e| format!("清除计划失败：{e}"))?;
+    managed::log(&state.data_dir, managed::Activity {
+        ts: chrono::Local::now().timestamp().max(0) as u64,
+        site_id: site.id.clone(),
+        site_name: site.name.clone(),
+        kind: "plan_cleared".into(),
+        title: format!("清除了 {date} 的计划"),
+        detail: format!("拿掉 {removed} 条还没开始的任务{}", if kept > 0 { format!("，{kept} 条已经在处理或上线的保留") } else { String::new() }),
+        ..Default::default()
+    });
+    Ok(PlanCleared { removed, kept })
+}
+
+/// 把计划里的第 index 项移出计划：从计划里删掉，队列里还没开始的那条一起拿掉（不是驳回，以后还可以再提）。
+#[tauri::command]
+pub fn plan_remove_task(state: tauri::State<'_, AppState>, id: String, index: usize) -> Result<(), String> {
+    state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let mut p = crate::site_runner::latest_plan(&dir).ok_or("这个站点还没有计划")?;
+    let (status, items) = plan_progress(&p, &dir);
+    match status.get(index).map(String::as_str) {
+        None => return Err("计划里没有这一项（可能刚重新制定过），刷新后再试".into()),
+        Some("" | "open" | "dismissed") => {}
+        Some(_) => return Err("这一项已经在处理或上线了，不能移出计划".into()),
+    }
+    if status[index] == "open" {
+        crate::site_ops::drop_open_items(&dir, &[items[index].clone()])?;
+    }
+    if let Some(ts) = p["tasks"].as_array_mut() {
+        ts.remove(index);
+    }
+    let date = p["date"].as_str().unwrap_or("").to_string();
+    let raw = serde_json::to_vec_pretty(&p).map_err(|e| e.to_string())?;
+    crate::sites::write_atomic(&crate::site_runner::plans_dir(&dir).join(format!("{date}.json")), &raw)
 }
 
 #[tauri::command]
