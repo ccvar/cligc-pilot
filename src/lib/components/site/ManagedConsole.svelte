@@ -134,7 +134,9 @@
     const full = budgetFull(x.budget);
     const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点的托管暂停着' : full ? full : '';
     const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : '';
-    return { id: x.id, name: x.name, queued: x.queued, why, fix };
+    // 能就地处理的：站点自己的开关关着 → 打开托管；额度满了 → 编辑方案。有计划的都可以清除计划
+    const kind = o?.config.paused || g?.paused ? 'paused' : g?.stopped.includes(x.id) ? 'site' : full ? 'budget' : '';
+    return { id: x.id, name: x.name, queued: x.queued, why, fix, kind, group: g?.id ?? '', hasPlan: x.plan_count > 0 };
   }).filter((x) => x.why));
   // 暂停只看站点自己的开关：所有站点都关着＝全部已暂停
   const allOff = $derived(groups.some((g) => g.sites.length) && groups.every((g) => g.sites.every((x) => g.stopped.includes(x))));
@@ -250,7 +252,7 @@
     </div>
   </header>
   <nav class="tabs">
-    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}><Icon name={t.i} size={13} />{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{:else if t.k === 'needs' && stuck.length}<span class="cnt warn" data-tip="{stuck.reduce((n, x) => n + x.queued, 0)} 条任务排着没动（{stuck[0].why}）">{stuck.reduce((n, x) => n + x.queued, 0)}</span>{/if}</button>{/each}
+    {#each TABS as t (t.k)}<button class:on={managed.tab === t.k} onclick={() => (managed.tab = t.k)}><Icon name={t.i} size={13} />{t.l}{#if t.k === 'needs' && o?.waiting}<span class="cnt">{o.waiting}</span>{:else if t.k === 'needs' && stuck.length}<i class="stuck-dot" data-tip="{stuck.reduce((n, x) => n + x.queued, 0)} 条任务因为{stuck[0].why}排着没动，不用你确认"></i>{/if}</button>{/each}
   </nav>
 
   <div class="page-body">
@@ -273,7 +275,7 @@
     {:else if managed.tab === 'plans'}
       <PlansView sites={o?.sites ?? []} plans={managed.plans} />
     {:else if managed.tab === 'needs'}
-      <NeedsView {needs} {stuck} />
+      <NeedsView {needs} {stuck} onturnon={(id) => setSiteActive(id, true)} onbudget={(gid) => { const g = groups.find((x) => x.id === gid); if (g) editGroup(g); }} />
     {:else if managed.tab === 'digests'}
       <div class="card">
         <h3><Icon name="news" />日报 <span class="grow"></span><button class="btn tiny" onclick={digestNow}><Icon name="news" size={11} />生成今日日报</button></h3>
@@ -531,6 +533,7 @@
   .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
   .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
   .gq-n { font-size: 12px; }
+  .stuck-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-left: 2px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
   .grp-tg .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }

@@ -9,10 +9,20 @@
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { ops, acceptItem, dismissItem, workItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
+  import { invoke } from '@tauri-apps/api/core';
+  import { confirmDialog, say } from '$lib/state/app.svelte.js';
+  import { loadManaged } from '$lib/state/managed.svelte.js';
   import type { PendingItem, OpsItem } from '$lib/types';
 
-  type Stuck = { id: string; name: string; queued: number; why: string; fix: string };
-  let { needs, stuck }: { needs: PendingItem[]; stuck: Stuck[] } = $props();
+  type Stuck = { id: string; name: string; queued: number; why: string; fix: string; kind: string; group: string; hasPlan: boolean };
+  let { needs, stuck, onturnon, onbudget }: { needs: PendingItem[]; stuck: Stuck[]; onturnon: (id: string) => void; onbudget: (groupId: string) => void } = $props();
+
+  /** 排着没动的任务：直接清掉这个站点计划里还没开始的那些 */
+  async function clearStuck(x: Stuck) {
+    if (!(await confirmDialog(`清除 ${x.name} 的计划？还没开始的任务会从任务队列里拿掉，已经在处理或上线的保留。\n\n站点的托管打开后，下次自动运行会重新制定一份。`, { title: '清除计划', kind: 'danger', confirmText: '清除计划' }))) return;
+    try { const r = await invoke<{ removed: number; kept: number }>('plan_clear', { id: x.id }); say(`已清除计划，拿掉 ${r.removed} 条任务`); await loadManaged(); }
+    catch (e) { say(String(e), 'err'); }
+  }
 
   const kindOf = (i: OpsItem) => (i.status === 'proposed' ? 'proposed' : i.status === 'failed' ? 'failed' : 'attention');
   const GROUPS = [
@@ -44,14 +54,19 @@
 {#if stuck.length}
   <div class="stucks">
     {#each stuck as x (x.id)}
-      <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><button class="link-btn" onclick={() => openSite(x.id, 'queue', 'open')}>去看看</button></div>
+      <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><span class="sacts">
+        {#if x.kind === 'site'}<button class="btn tiny" onclick={() => onturnon(x.id)} data-tip="只打开这个站点的托管，排着的任务会接着做"><Icon name="play" size={10} />打开托管</button>{/if}
+        {#if x.kind === 'budget' && x.group}<button class="btn tiny" onclick={() => onbudget(x.group)}><Icon name="gauge" size={11} />调整额度</button>{/if}
+        {#if x.hasPlan}<button class="btn tiny quiet" onclick={() => clearStuck(x)} data-tip="拿掉这些还没开始的任务"><Icon name="x" size={11} />清除计划</button>{/if}
+        <button class="link-btn" onclick={() => openSite(x.id, 'queue', 'open')}>去看看</button>
+      </span></div>
     {/each}
   </div>
 {/if}
 
 <div class="card nvc">
   {#if !needs.length}
-    <div class="empty"><Icon name="check" size={14} />没有需要你处理的事。<InfoTip text={'这里只放要你动手的：判定不能自动上线的改动、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。'} label="需要你说明" /></div>
+    <div class="empty"><Icon name="check" size={14} />{stuck.length ? '没有要你确认的改动。' : '没有需要你处理的事。'}<InfoTip text={'这里只放要你动手的：判定不能自动上线的改动、失败的任务，以及上线后线上验收有问题要你核对的。排着等 AI 处理的不在这里。'} label="需要你说明" /></div>
   {:else}
     <div class="nv">
       <nav class="slist" aria-label="站点"><div class="sl-in">
@@ -130,6 +145,7 @@
   .stucks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .stuck { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.55; }
   .stuck > span { flex: 1; min-width: 0; }
+  .sacts { flex: none; display: inline-flex; align-items: center; gap: 8px; }
   .stuck .link-btn { flex: none; color: inherit; }
 
   .nvc { padding: 0; overflow: clip; container-type: inline-size; }
