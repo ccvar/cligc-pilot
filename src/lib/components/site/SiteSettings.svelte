@@ -101,6 +101,10 @@
       {/if}
     </div>
 
+    <!-- 第一行「站点是什么」：基本信息 ｜ 数据源 -->
+    <SiteDataSettings draft={d} {site} editing={editing === 'data'} locked={!!editing && editing !== 'data'} onedit={() => startEdit('data')} oncancel={cancelEdit} onsave={saveEdit} saving={sites.saving} {dirty} />
+
+    <!-- 第二行「怎么上线」：构建 ｜ 部署，下面接服务器（VPS）和配置变量 -->
     <div class="card" class:editing={editing === 'build'}>
       {@render head('hammer', '构建', 'build')}
       {#if editing === 'build'}
@@ -165,11 +169,10 @@
       <div class="wide"><SiteVpsCard {site} /></div>
     {/if}
 
-    <SiteDataSettings draft={d} {site} editing={editing === 'data'} locked={!!editing && editing !== 'data'} onedit={() => startEdit('data')} oncancel={cancelEdit} onsave={saveEdit} saving={sites.saving} {dirty} />
-
-    <SiteDynamicSettings {site} />
-
     <div class="wide"><SiteConfigCard {site} /></div>
+
+    <!-- 第三行「功能」：表单和评论，平时一行 -->
+    <div class="wide"><SiteDynamicSettings {site} /></div>
 
     <div class="card danger-zone wide">
       <h3 class="dz-head"><Icon name="info" />危险操作</h3>
@@ -186,9 +189,12 @@
 {/if}
 
 <style>
-  /* 两列排：短的卡片（基本信息、构建、部署、数据源、表单和评论）两张一行；
-     配置变量、服务器、危险操作和正在改的卡片占满一行 */
-  .st { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; align-items: start; }
+  /* 按意思分组：「站点是什么」基本信息 ｜ 数据源，「怎么上线」构建 ｜ 部署 + 服务器 + 配置变量，「功能」表单和评论，最后危险操作。
+     同一行的两张卡拉成一样高（stretch），配置变量、服务器、表单和评论、危险操作和正在改的卡片占满一行 */
+  .st { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; align-items: stretch; }
+  /* 所有卡片的标签列一样宽：同一列里各张卡的值从同一个位置开始 */
+  .st :global(.kv) { grid-template-columns: 120px minmax(0, 1fr); }
+  .st :global(.kv > dt) { overflow: hidden; text-overflow: ellipsis; }
   .st > .wide, .st > :global(.card.editing) { grid-column: 1 / -1; }
   .st > .wide > :global(.card) { margin: 0; }
   .st :global(.kv > dt) { white-space: nowrap; }

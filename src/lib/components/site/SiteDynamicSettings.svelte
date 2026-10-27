@@ -31,12 +31,13 @@
   {:else if !isPagesDirect(site) && !vps}
     <p class="hint">表单和评论要部署在 Cloudflare Pages（Pilot 构建后上传），或者 Pilot 托管的服务器上（VPS，发布命令留空）。</p>
   {:else if !editing}
-    <dl class="kv">
-      <dt>表单</dt><dd>{on.includes('form') ? '已开' : '没开'}</dd>
-      <dt>评论</dt><dd>{on.includes('comments') ? '已开' : '没开'}</dd>
-      {#if conf?.setup_at}<dt>配置于</dt><dd><span data-tip={full(conf.setup_at)}>{ago(conf.setup_at)}</span>{vps ? ' · 在你的服务器上' : ' · Cloudflare Pages'}</dd>{/if}
-    </dl>
-    {#if conf?.setup_at && on.length}<div class="row" style="margin-top:10px"><button class="btn small" onclick={() => wireWithAi(site)}><Icon name="wand" size={12} />让 AI 接到页面上</button></div>{/if}
+    <!-- 平时一行：开了哪些、什么时候配的 -->
+    <div class="dyn-sum">
+      <span>表单 <b class:on={on.includes('form')}>{on.includes('form') ? '已开' : '没开'}</b></span>
+      <span>评论 <b class:on={on.includes('comments')}>{on.includes('comments') ? '已开' : '没开'}</b></span>
+      {#if conf?.setup_at}<span class="faint">配置于 <span data-tip={full(conf.setup_at)}>{ago(conf.setup_at)}</span>{vps ? ' · 在你的服务器上' : ' · Cloudflare Pages'}</span>{/if}
+      {#if conf?.setup_at && on.length}<span class="grow"></span><button class="btn tiny" onclick={() => wireWithAi(site)}><Icon name="wand" size={11} />让 AI 接到页面上</button>{/if}
+    </div>
   {:else}
     <p class="hint">{vps ? '留言、联系、订阅表单和文章评论，跑在你的服务器上（Go 写的小服务，数据存 SQLite），Pilot 配置服务器时一起装好。' : '留言、联系、订阅表单和文章评论，跑在这个站点的 Cloudflare Pages 上（Functions + D1 数据库 + Turnstile 人机验证），Pilot 自动建好。'}提交和评论在概览里看、审。</p>
     <div class="row wrap opts">
@@ -59,6 +60,9 @@
 
 <style>
   .opts { gap: 16px; margin: 8px 0 10px; }
+  .dyn-sum { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; font-size: 12.5px; color: var(--dim); }
+  .dyn-sum b { font-weight: 500; color: var(--text); }
+  .dyn-sum b.on { color: var(--ok); }
   .card.editing { border-color: var(--border2); box-shadow: 0 0 0 3px var(--su-hover, #f3f1ec); }
   .grow { flex: 1; }
   .status { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12px; color: var(--ok); }

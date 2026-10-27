@@ -83,8 +83,8 @@
       <dt><span class="dt-ic"><GaMark size={13} />GA4</span></dt><dd>{site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未接入'}</dd>
       <dt><span class="dt-ic"><GscMark size={13} />Search Console</span></dt><dd>{site.data.gsc_site || '未接入'}</dd>
       <dt><span class="dt-ic"><BingMark size={13} />Bing</span></dt><dd>{site.data.bing_site || (site.data.bing_auth ? '已加到 Bing，正在验证' : '未接入')}</dd>
-      <dt>IndexNow</dt><dd>{site.data.indexnow_key ? '已配置：上线后自动提交有变化的页面' : '未配置'}{#if !site.data.indexnow_key && site.domain}<button class="link-btn ix" onclick={setupIndexNow} disabled={ixBusy}>{ixBusy ? '处理中…' : '生成密钥并写入验证文件'}</button>{/if}</dd>
-      <dt>运营机会</dt><dd>近 28 天展现低于 {site.ops.min_impressions} 的页面和查询词不算</dd>
+      <dt><span class="dt-ic"><Icon name="zap" size={13} />IndexNow</span></dt><dd>{site.data.indexnow_key ? '已配置：上线后自动提交有变化的页面' : '未配置'}{#if !site.data.indexnow_key && site.domain}<button class="link-btn ix" onclick={setupIndexNow} disabled={ixBusy}>{ixBusy ? '处理中…' : '生成密钥并写入验证文件'}</button>{/if}</dd>
+      <dt><span class="dt-ic"><Icon name="bulb" size={13} />运营机会</span></dt><dd>近 28 天展现低于 {site.ops.min_impressions} 的页面和查询词不算</dd>
     </dl>
     {#if !site.data.bing_site && site.data.bing_auth}
       <div class="bing-pending">
