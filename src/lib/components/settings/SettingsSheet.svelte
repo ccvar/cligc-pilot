@@ -453,7 +453,8 @@
   .brains-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 11px; background: #fff; overflow: hidden; }
   .brains-list > .brain-block { padding: 10px 12px; }
   .brains-list > .brain-block + .brain-block { border-top: 1px solid var(--border); }
-  .about-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: #fff; }
+  /* 关于只有一行，不套卡片；左右各缩 13px（卡片的 12px 内边距 + 1px 边框），和上面卡片里的图标、按钮对齐 */
+  .about-card { padding: 4px 13px; }
   /* 每个大脑（行 + 自定义模型）成一块，块内贴紧。 */
   .brain-block { display: flex; flex-direction: column; gap: 0; }
   /* 未安装行：一键安装挪到状态文字下方（缩进对齐 brain-main），复制小图标同行在旁 */
