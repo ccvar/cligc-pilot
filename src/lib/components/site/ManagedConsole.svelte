@@ -154,6 +154,9 @@
   let showAll = $state<Set<string>>(new Set());
   function toggleShowAll(id: string) { const n = new Set(showAll); if (n.has(id)) n.delete(id); else n.add(id); showAll = n; }
   let siteMenu = $state('');
+  let siteQ = $state('');
+  const matchSite = (id: string) => { const k = siteQ.trim().toLowerCase(); const s = sitesById.get(id); return !k || siteName(id).toLowerCase().includes(k) || !!s?.domain?.toLowerCase().includes(k); };
+  const matchCount = $derived(siteQ.trim() ? groups.reduce((n, g) => n + g.sites.filter(matchSite).length, 0) : 0);
   function orderSites(g: ManagedGroup) {
     const rank = (id: string) => {
       const s = sitesById.get(id);
@@ -295,12 +298,20 @@
       {/if}
     {:else}
       {#if groups.length}<RunChart daily={managed.daily} digests={managed.digests} onpick={pickDay} />{/if}
+      {#if o && o.sites.length > 6}
+        <!-- 站点多了不好找：按站点名 / 域名在所有方案里筛，滚动时固定在顶上 -->
+        <div class="gq-bar">
+          <label class="gq"><Icon name="search" size={13} /><input type="search" bind:value={siteQ} placeholder="在所有方案里搜索站点" spellcheck="false" autocomplete="off" onkeydown={(e) => { if (e.key === 'Escape') siteQ = ''; }} /></label>
+          {#if siteQ.trim()}<span class="faint gq-n">{matchCount ? `找到 ${matchCount} 个站点` : '没有匹配的站点'}</span>{/if}
+        </div>
+      {/if}
       {#each groups as g (g.id)}
+      {#if !siteQ.trim() || g.sites.some(matchSite)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
-        {@const gOpen = grpOpen[g.id] ?? !gOff}
+        {@const gOpen = siteQ.trim() ? true : (grpOpen[g.id] ?? !gOff)}
         {@const sum = groupSummary(g)}
-        {@const ordered = orderSites(g)}
-        {@const visible = showAll.has(g.id) ? ordered : ordered.slice(0, SITE_LIMIT)}
+        {@const ordered = siteQ.trim() ? orderSites(g).filter(matchSite) : orderSites(g)}
+        {@const visible = showAll.has(g.id) || siteQ.trim() ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>
@@ -397,13 +408,14 @@
                   </div>
                 {/if}
               {/each}
-              {#if ordered.length > SITE_LIMIT}
+              {#if ordered.length > SITE_LIMIT && !siteQ.trim()}
                 <button class="li gs-all" onclick={() => toggleShowAll(g.id)}>{showAll.has(g.id) ? '收起' : `显示全部 ${ordered.length} 个站点`}</button>
               {/if}
             </div>
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
           {/if}
         </div>
+      {/if}
       {/each}
 
       <div class="card oplog" class:open={logOpen} bind:this={logEl}>
@@ -514,6 +526,12 @@
   .gs-all:hover { color: var(--text); background: #fcfbf9; }
   .grp.shut > h3 { margin-bottom: 0; }
   /* 方案标题整行（名称、标签、概况、空白处）都能点开收起，箭头在右边 */
+  .gq-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 12px; margin: -10px 0 10px; padding: 10px 0 8px; background: var(--bg); }
+  .gq { position: relative; display: flex; align-items: center; width: min(360px, 100%); color: var(--faint); }
+  .gq :global(svg) { position: absolute; left: 9px; pointer-events: none; }
+  .gq input { width: 100%; height: 30px; padding: 0 10px 0 28px; border: 1px solid var(--border2); border-radius: 8px; background: var(--card); font: inherit; font-size: 12.5px; color: var(--text); outline: none; }
+  .gq input:focus { border-color: color-mix(in srgb, var(--text) 35%, var(--border2)); }
+  .gq-n { font-size: 12px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
   .grp-tg .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
