@@ -8,7 +8,7 @@ import { read, asScript } from './testing/appSource.mjs';
 const code = ts.transpileModule(asScript(read("lib/friendlyError.ts")).replace(/^export interface[\s\S]*?^}\n/m, ""), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const ctx = {};
 vm.createContext(ctx); vm.runInContext(code, ctx);
-const { explainError, friendly } = ctx;
+const { explainError, friendly, turnErrorHint, needsFreshSession } = ctx;
 
 test('Cloudflare 401/403 → 令牌权限的提示，原文保留', () => {
   const x = explainError('Cloudflare 403: Authentication error');
@@ -54,4 +54,23 @@ test('认不出的原样返回；Error 对象取 message；空值不炸', () => 
   assert.equal(friendly(undefined), '');
   // 后端自己已经写清楚的 wrangler 提示不改写
   assert.equal(explainError('没有找到 wrangler，也没有 Node.js。请先安装 Node.js（nodejs.org），再执行 npm i -g wrangler。').known, false);
+});
+
+test('对话失败的下一步提示：余额 / 密钥 / 模型 / 限流 / 过载各说各的，认不出的不加', () => {
+  assert.match(turnErrorHint('API HTTP 400：Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'), /余额不够/);
+  assert.match(turnErrorHint('API HTTP 401: invalid x-api-key'), /API 密钥/);
+  assert.match(turnErrorHint('Invalid API key · Please run /login'), /还没登录/);
+  assert.match(turnErrorHint('API HTTP 404: model: claude-foo not found'), /模型用不了/);
+  assert.match(turnErrorHint('API HTTP 429: rate_limit_error'), /太频繁/);
+  assert.match(turnErrorHint('API HTTP 529: Overloaded'), /暂时出了问题/);
+  assert.match(turnErrorHint('prompt is too long: 230000 tokens > 200000 maximum'), /对话太长/);
+  assert.equal(turnErrorHint('agent exited with code 1'), '');
+});
+
+test('需要换新会话续跑的错误：上下文超长、会话找不到 / 损坏；余额这类不需要', () => {
+  assert.ok(needsFreshSession('prompt is too long: 230000 tokens > 200000 maximum'));
+  assert.ok(needsFreshSession('No conversation found with session ID: 1234'));
+  assert.ok(needsFreshSession('messages.3: `tool_use` ids were found without `tool_result` blocks immediately after'));
+  assert.ok(!needsFreshSession('Your credit balance is too low to access the Anthropic API.'));
+  assert.ok(!needsFreshSession('API HTTP 529: Overloaded'));
 });

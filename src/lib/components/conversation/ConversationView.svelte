@@ -14,7 +14,8 @@
   import { splitAttachments, isImgPath, media, thumbKey, fmtClock, fmtRemain, splitGenImages, mdClick, mdRender, revealWorkdir, segs, compactToolRows, humanTool, toolSummary, interleave, mentionedImages, mdRenderCached, mdRenderLive, opsTask, splitPlanJson, convTitle, executionProgress, activityLabel, activityDetail, activityFailureReason, activityStatusLabel, elapsedLabel, hostOf, faviconGuess } from '$lib/state/messages.svelte.js';
   import { ui, startDrag } from '$lib/state/ui.svelte.js';
   import { brainTitle, brainLabel, modelIcon, permOptsFor, permTone, permTipFor, ctxLimitAdaptive, CODEX_GITHUB_NOTE } from '$lib/state/models';
-  import { turns, disarmLimitAuto, armLimitAuto, retry, rebuildSession, send, stop } from '$lib/state/turns.svelte.js';
+  import { turns, disarmLimitAuto, armLimitAuto, retry, retryTurn, send, stop } from '$lib/state/turns.svelte.js';
+  import { turnErrorHint } from '$lib/friendlyError';
   import { permits, permitDesc, togglePermitCmd, respondPermit } from '$lib/state/permits.svelte.js';
   import { thread, onThreadScroll, persistThreadPerm, pickThreadCombo, persistThreadEffort, persistThreadFast } from '$lib/state/thread.svelte.js';
   import { conversationPresentation, panes, startConversationPointerDrag, endConversationDrag, closeSplit, splitConversation, paneScroll, panePrefill, uploadPaneFiles, uploadPanePaths, restoreSplitQueue, setPaneText, paneInput, splitSubmit, splitSetting, splitModelOptions, splitStop } from '$lib/state/panes.svelte.js';
@@ -145,7 +146,7 @@
             {/if}
           </div>
         {:else if m.error}
-          <div class="text is-err">{@render richText(m.text)}{#if isLast && !bubbleBusy}{#if bubbleConv?.session_ref && !turns.retryExhausted[bubbleId]}<button class="retry-btn" onclick={() => retry(bubbleId, true)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>重试</button>{/if}<button class="retry-btn" title="换一个全新会话原地续跑（自动带上历史摘要）——用于会话状态损坏、重试无效时" onclick={() => rebuildSession(bubbleId)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></svg>重建继续</button>{/if}</div>
+          <div class="text is-err">{@render richText(m.text)}{#if isLast && !bubbleBusy}<button class="retry-btn" title="再跑一次；原来的会话接不下去时会自动换新会话接着做" onclick={() => retryTurn(bubbleId, m.text)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>重试</button>{@const hint = turnErrorHint(m.text)}{#if hint}<span class="err-hint">{hint}</span>{/if}{/if}</div>
         {:else}
           {@const ga = splitGenImages(m.text)}
           {@const pj = context?.origin === 'ops' ? splitPlanJson(ga.body) : { body: ga.body, plan: null }}
@@ -638,6 +639,8 @@
   /* 重试：无边框，内联跟在红色错误文字后面 */
   .retry-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; padding: 0; background: none; border: none; color: var(--accent); font: inherit; font-size: 12.5px; cursor: pointer; vertical-align: baseline; }
   .retry-btn:hover { text-decoration: underline; }
+  /* 错误卡下面那句「下一步怎么做」：重试解决不了的错误（余额、密钥、模型名）才有 */
+  .err-hint { display: block; margin-top: 6px; color: var(--dim); font-size: 12.5px; line-height: 1.55; }
   .retry-btn svg { flex: none; }
   /* 额度耗尽卡：明确状态 + 倒计时 + 到点自动续跑 */
   .limit-card { border: 1px solid var(--border2, #e2dfd7); border-left: 3px solid #c98d70; border-radius: 10px; padding: 10px 13px; background: #fbf9f5; max-width: 520px; }

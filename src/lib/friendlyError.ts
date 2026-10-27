@@ -127,6 +127,33 @@ export function explainError(e: unknown): Explained {
   return { text: prefix ? `${prefix}：${explained}` : explained, raw, known: true };
 }
 
+/** 对话里这一轮失败的报错：点「重试」解决不了、要用户先做点什么的，给一句下一步；其它返回空串。
+ *  只补一行提示，不替换原文（原文还在错误卡上，方便对照服务商的说明）。 */
+const TURN_HINTS: { test: RegExp; text: string }[] = [
+  { test: /prompt is too long|context(_length)?[ _-]?(window|length).*(exceed|too)|maximum context length|too many (input )?tokens|上下文超(限|长)/i,
+    text: '对话太长，超出了模型一次能记住的范围。点「重试」会换成新会话接着做（带上之前的摘要）。' },
+  { test: /credit balance is too low|insufficient[_ ](quota|balance|funds)|余额不足|账户余额|payment required|billing|\b402\b/i,
+    text: '模型服务的余额不够了：到服务商后台充值后点「重试」，或者在下面换个模型。' },
+  { test: /not logged in|please run \/login|claude login|未登录/i,
+    text: '本机的客户端还没登录：到「连接与模型」里登录后点「重试」，或者在下面换个模型。' },
+  { test: /invalid[ _-]?(x-)?api[ _-]?key|incorrect api key|authentication[_ ]error|unauthorized|\b401\b|密钥(无效|错误)/i,
+    text: '模型服务不认这个 API 密钥（填错或过期了）：到「连接与模型」里检查这个服务的密钥，改好后点「重试」。' },
+  { test: /model.{0,40}(not found|does not exist|not available|unsupported)|unknown model|模型不存在/i,
+    text: '这个模型用不了（名字不对，或者账号没开通）：在下面换个模型再试。' },
+  { test: /rate[ _-]?limit|too many requests|\b429\b|usage limit|quota (exceeded|reached)|limit reached|额度(用完|不足)/i,
+    text: '请求太频繁或额度用完了：等一会儿再点「重试」，或者在下面换个模型。' },
+  { test: /overloaded|\b529\b|\b50[0234]\b|internal server error|bad gateway|service unavailable/i,
+    text: '服务商那边暂时出了问题：稍等片刻再点「重试」。' },
+];
+export function turnErrorHint(text: string): string {
+  return TURN_HINTS.find((h) => h.test.test(text))?.text ?? '';
+}
+
+/** 原来的底层会话已经接不下去了（上下文超长、会话记录找不到 / 损坏）：重试要换新会话（带历史摘要），原地 resume 只会再报一样的错 */
+export function needsFreshSession(text: string): boolean {
+  return /prompt is too long|maximum context length|context(_length)?[ _-]?(window|length).*(exceed|too)|too many (input )?tokens|上下文超(限|长)|no conversation found|session.{0,30}(not found|corrupt|invalid|expired)|会话.{0,10}(找不到|损坏|不存在)|tool_use.{0,60}tool_result|unexpected `?tool_use_id/i.test(text);
+}
+
 /** 常见的报错翻译成「怎么回事 + 下一步怎么做」，附一行原文；认不出的照原样 */
 export function friendly(e: unknown): string {
   const x = explainError(e);

@@ -3,6 +3,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { TurnEvent, Message, Conversation, TaskType } from '$lib/types';
 import { savePrefs } from '$lib/defaults';
+import { needsFreshSession } from '$lib/friendlyError';
 import { app, say, refreshConvos } from './app.svelte.js';
 import { brainUsable } from './models';
 import { panes, rememberSplit, finishSplitQueue, restoreSplitQueue } from './panes.svelte.js';
@@ -19,7 +20,7 @@ import { selectConn } from './connections.svelte.js';
 class TurnsState {
   autoRetried = $state<Record<string, boolean>>({}); // convId → 本轮已自动重试过（每个用户轮只自动重试一次）
   retryTimers: Record<string, ReturnType<typeof setTimeout>> = {}; // 待触发的自动重连定时器（新一轮开始时取消，防陈旧触发）
-  // 智能升级：手动重试后若以同样的错误再次失败，说明 resume 救不了 → 之后只显示「重建继续」。
+  // 手动重试后若以同样的错误再次失败，说明 resume 救不了 → 下一次「重试」改成换新会话续跑。
   retryExhausted = $state<Record<string, boolean>>({});
   // 重试上一轮：去掉失败的助手消息、用最后一条用户消息 resume 再跑（不新增用户气泡）。manual=用户手点（重置自动预算）。
   // ---------- 额度耗尽卡：倒计时 + 到点自动续跑 ----------
@@ -201,7 +202,7 @@ export function endTurn(conv: Conversation | null, convId: string) {
   }
   // 不在接近上限时自动 rebuild：rebuild 会创建全新的底层 Claude session，只能靠摘要
   // 衔接，等同于主动丢弃原生会话上下文。Claude Code 会自行管理长会话；若底层真的返回
-  // 上下文超限，保留完整界面历史并让用户从错误卡明确选择「重建继续」。
+  // 上下文超限，保留完整界面历史，用户点错误卡的「重试」时再换新会话续跑（见 retryTurn）。
 }
 export async function failTurn(e: unknown, convId: string) {
   if(panes.splitSnapshots[convId]) {panes.splitErrors[convId]=String(e);restoreSplitQueue(convId);}
@@ -405,11 +406,21 @@ export async function retry(convId: string, manual = false) {
     await refreshConvos();
     const failed = app.lives[convId]?.failed ?? false; const errText = app.lives[convId]?.error ?? '';
     endTurn(conv, convId);
-    // 手动重试后同错再败 → resume 无效，收起「重试」只留「重建继续」；成功则解除。
+    // 手动重试后同错再败 → resume 无效，下次「重试」改成换新会话续跑；成功则解除。
     if (manual && failed && prevErr && errText.trim() === prevErr) turns.retryExhausted[convId] = true;
     if (!failed) delete turns.retryExhausted[convId];
     maybeAutoRetry(convId, failed, errText);
   } catch (e) { await failTurn(e, convId); }
+}
+/** 错误卡上唯一的「重试」：用户分不清「接着原会话重试」和「换新会话续跑」，由这里判断——
+ *  原会话还能用就原地重试；首轮就没建起来、上下文超长 / 会话损坏、或者上次重试报了一模一样的错，就换新会话（带历史摘要）接着做。 */
+export async function retryTurn(convId: string, errText: string) {
+  const base = app.activeConvId === convId ? app.activeConv : app.convos.find((c) => c.id === convId);
+  if (!base || app.running[convId]) return;
+  const hadSession = !!base.session_ref?.trim();
+  if (hadSession && !turns.retryExhausted[convId] && !needsFreshSession(errText)) { await retry(convId, true); return; }
+  if (hadSession && app.activeConvId === convId) say('原来的会话接不下去了，已换成新会话接着做（带上了之前的摘要）');
+  await rebuildSession(convId);
 }
 // 重建会话续跑：底层会话状态损坏、重试无效时——换全新会话（带历史摘要）原地继续这条对话。
 export async function rebuildSession(convId: string) {
