@@ -559,7 +559,7 @@ async function advance(s: Site, slots: { ai: number }): Promise<string> {
         if (sites.status[s.id]?.last_deploy?.ok && batch.deployed[s.id] && Date.now() - batch.deployed[s.id] > 180000) { await liveCheck(s.id); return ''; }
         // 文件夹里有未提交的改动时 deploySite 会弹确认框；定时器里不弹，停下来等你手动部署
         if (sites.status[s.id]?.dirty) return '有未提交的改动，等你确认';
-        if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id); }
+        if (!batch.deployed[s.id]) { batch.deployed[s.id] = Date.now(); await deploySite(s.id, true); }
         return '';
       }
       return '';

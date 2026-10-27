@@ -172,10 +172,19 @@ export async function loadPagesDeploys(id: string) {
   } catch (e) { sites.pagesErr = { ...sites.pagesErr, [id]: String(e) }; }
 }
 
-export async function deploySite(id: string) {
+/** `background`：批量改版自动推进时调用，不弹任何框（文件夹有未提交改动的那边已经先停下等你）。 */
+export async function deploySite(id: string, background = false) {
   const st = sites.status[id];
-  if (st?.dirty) {
-    const ok = await confirmDialog('站点文件夹里有未提交的改动，上线的将是文件夹当前的样子（包括这些改动）。继续？', { title: '构建并上线', kind: 'warning', confirmText: '继续上线' });
+  const s = sites.list.find((x) => x.id === id);
+  // 会换掉正式线上版本的（不是改版中的预览部署）：不管从哪里点，都先说清楚要上到哪儿、确认一次，防误点；
+  // 有未提交的改动一并提醒。改版中的站点只部署到预览地址，正式域名还没指过来，只在有未提交改动时提醒
+  const live = !!s && s.origin !== 'migrating';
+  if (!background && (live || st?.dirty)) {
+    const where = !s ? '' : s.deploy.mode === 'vps' ? '你的服务器' : s.deploy.mode === 'workers' ? `Cloudflare Workers「${s.deploy.project}」` : `Cloudflare Pages「${s.deploy.project}」`;
+    const target = s?.domain ? `${s.domain}（${where}）` : where || '线上';
+    const dirty = st?.dirty ? `${live ? '\n\n注意：' : ''}站点文件夹里有未提交的改动，上线的将是文件夹当前的样子（包括这些改动）。` : '';
+    const msg = live ? `构建「${s?.name ?? id}」并上线到 ${target}？检查都通过后，线上马上换成新版本。${dirty}` : `${dirty}继续？`;
+    const ok = await confirmDialog(msg, { title: '构建并上线', kind: st?.dirty ? 'warning' : 'info', confirmText: live ? '上线' : '继续上线' });
     if (!ok) return;
   }
   try {

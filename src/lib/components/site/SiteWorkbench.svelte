@@ -14,7 +14,7 @@
   import SiteDistributeTab from './SiteDistributeTab.svelte';
   import { synd, loadSyndPending, listenSyndication } from '$lib/state/syndication.svelte.js';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { sites, loadSiteStatus, deploySite, pilotDeploys, type SiteTab } from '$lib/state/sites.svelte.js';
+  import { sites, loadSiteStatus, type SiteTab } from '$lib/state/sites.svelte.js';
   import { ops, loadQueue } from '$lib/state/ops.svelte.js';
   import { managed, loadManaged } from '$lib/state/managed.svelte.js';
   import { newChat } from '$lib/state/conversations';
@@ -71,8 +71,10 @@
       </div>
       <div class="row">
         <button class="btn small" onclick={newChat}><Icon name="chat" size={13} />新对话</button>
-        {#if pilotDeploys(site.deploy.mode)}
-          <button class="btn small primary" onclick={() => deploySite(site.id)} disabled={job?.status === 'running'}>{#if job?.status === 'running'}<span class="spin"></span>{job.title}中{:else}<Icon name="rocket" size={13} />构建并上线{/if}</button>
+        <!-- 「构建并上线」不放页头（点一下就动线上，容易误点）：在概览的部署卡片和「部署」页签里；
+             页头只在有任务跑着时显示进度，点了跳到概览看详情 -->
+        {#if job?.status === 'running'}
+          <button class="btn small quiet" onclick={() => (sites.tab = 'overview')} data-tip="正在进行，点一下看进度"><span class="spin"></span>{job.title}中</button>
         {/if}
       </div>
     </header>
