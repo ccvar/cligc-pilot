@@ -69,7 +69,7 @@
         <span class="t">{folder.label}</span>
       </button>
     {/if}
-    <p class="foot">也可以把文件拖进输入框，或者直接粘贴截图</p>
+    <p class="foot">也可以直接拖进来，或粘贴截图</p>
   </div>
 {/if}
 
@@ -83,5 +83,5 @@
   .attach-pop button svg { flex: none; color: var(--dim); }
   .attach-pop .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .attach-pop kbd { flex: none; font-family: inherit; font-size: 12px; color: var(--faint); }
-  .attach-pop .foot { margin: 4px 10px 4px; padding-top: 7px; border-top: 1px solid var(--border); color: var(--faint); font-size: 11.5px; line-height: 1.5; }
+  .attach-pop .foot { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 4px 10px 4px; padding-top: 7px; border-top: 1px solid var(--border); color: var(--faint); font-size: 11.5px; line-height: 1.5; }
 </style>
