@@ -54,12 +54,18 @@
 {#if stuck.length}
   <div class="stucks">
     {#each stuck as x (x.id)}
-      <div class="stuck"><Icon name="pause" size={12} /><span><b>{x.name}</b> 有 {x.queued} 条任务排着等 AI 处理，{x.why}，所以一直没动。{x.fix}</span><span class="sacts">
+      <!-- 一行：站点（点开看任务队列）· 几条排着 · 为什么（悬停看怎么恢复），右边一个主要动作 + 清除计划 -->
+      <div class="stuck">
+        <Icon name="pause" size={12} />
+        <span class="st-t">
+          <button class="st-site" onclick={() => openSite(x.id, 'queue', 'open')} data-tip="打开任务队列看这些任务"><SiteIcon id={x.id} size={13} />{x.name}</button>
+          <span>{x.queued} 条任务排着没动</span>
+          <span class="st-why" data-tip={x.fix}>{x.why}</span>
+        </span>
         {#if x.kind === 'site'}<button class="btn tiny" onclick={() => onturnon(x.id)} data-tip="只打开这个站点的托管，排着的任务会接着做"><Icon name="play" size={10} />打开托管</button>{/if}
         {#if x.kind === 'budget' && x.group}<button class="btn tiny" onclick={() => onbudget(x.group)}><Icon name="gauge" size={11} />调整额度</button>{/if}
-        {#if x.hasPlan}<button class="btn tiny quiet" onclick={() => clearStuck(x)} data-tip="拿掉这些还没开始的任务"><Icon name="x" size={11} />清除计划</button>{/if}
-        <button class="link-btn" onclick={() => openSite(x.id, 'queue', 'open')}>去看看</button>
-      </span></div>
+        {#if x.hasPlan}<button class="ic-btn ic-sm st-x" onclick={() => clearStuck(x)} aria-label="清除计划" data-tip="清除计划：拿掉这些还没开始的任务"><Icon name="x" size={13} /></button>{/if}
+      </div>
     {/each}
   </div>
 {/if}
@@ -143,10 +149,15 @@
 
 <style>
   .stucks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-  .stuck { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; line-height: 1.55; }
-  .stuck > span { flex: 1; min-width: 0; }
-  .sacts { flex: none; display: inline-flex; align-items: center; gap: 8px; }
-  .stuck .link-btn { flex: none; color: inherit; }
+  .stuck { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 8px 6px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; }
+  .stuck > :global(svg) { flex: none; }
+  .st-t { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; }
+  .st-site { flex: none; display: inline-flex; align-items: center; gap: 5px; border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: inherit; cursor: pointer; }
+  .st-site:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .st-why { min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: .75; }
+  .st-why::before { content: '·'; margin-right: 8px; }
+  .stuck .st-x { color: var(--su-warn-ink); opacity: .6; margin: 0; }
+  .stuck .st-x:hover { opacity: 1; background: rgba(0, 0, 0, .05); }
 
   .nvc { padding: 0; overflow: clip; container-type: inline-size; }
   .empty { display: flex; align-items: center; gap: 8px; padding: 16px 18px; font-size: 13px; color: var(--dim); }
