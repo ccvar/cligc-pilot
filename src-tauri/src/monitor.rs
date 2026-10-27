@@ -170,10 +170,15 @@ fn not_after(der: &[u8]) -> Option<u64> {
 /// 用 RDAP（公开的域名注册信息查询）查域名到期日。查的是注册的主域名（www.x.com → x.com）。
 async fn domain_expiry(domain: &str) -> Result<u64, String> {
     let root = registrable(domain);
-    let c = reqwest::Client::builder().timeout(Duration::from_secs(20)).build().unwrap_or_default();
+    // rdap.org 不带 User-Agent 的请求一律回 403
+    let c = reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent("CligcPilot/1.0 (domain expiry check)").build().unwrap_or_default();
     let r = c.get(format!("https://rdap.org/domain/{root}")).header("accept", "application/rdap+json").send().await.map_err(|e| format!("查不到：{e}"))?;
     if !r.status().is_success() {
-        return Err(format!("这个域名后缀查不到注册信息（{}）", r.status().as_u16()));
+        return Err(match r.status().as_u16() {
+            404 => "这个域名后缀查不到公开的注册信息".to_string(),
+            429 => "查询太频繁，稍后再查".to_string(),
+            s => format!("注册信息查询失败（{s}），稍后再查"),
+        });
     }
     let v: serde_json::Value = r.json().await.map_err(|e| e.to_string())?;
     let date = v["events"].as_array().and_then(|a| a.iter().find(|e| e["eventAction"] == "expiration")).and_then(|e| e["eventDate"].as_str()).ok_or("注册信息里没有到期日")?;
@@ -224,8 +229,14 @@ pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, force: bool)
             alerts.push((format!("{domain} 的 HTTPS 证书要处理"), if m.cert_err.is_empty() { format!("{} 天后过期", m.cert_days(now).unwrap_or(0)) } else { m.cert_err.clone() }));
         }
     }
-    if force || now.saturating_sub(m.domain_checked) >= 7 * DAY {
+    // 查到了每周查一次；没查到（网络、限流）6 小时后再试
+    let domain_every = if m.domain_err.is_empty() && m.domain_expires > 0 { 7 * DAY } else { 6 * HOUR };
+    if force || now.saturating_sub(m.domain_checked) >= domain_every {
         m.domain_checked = now;
+        if !force {
+            // 后台挨个站点查时放慢一点，别一下子把公开的 RDAP 服务打到限流
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+        }
         match domain_expiry(&domain).await {
             Ok(t) => { m.domain_expires = t; m.domain_err.clear(); }
             Err(e) => m.domain_err = e,
