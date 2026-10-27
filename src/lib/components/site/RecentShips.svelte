@@ -1,6 +1,6 @@
 <script lang="ts">
   // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 14 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
-  // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动还是你确认的；
+  // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
@@ -52,7 +52,7 @@
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
               <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', 'live')} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
             </span>
-            <span class="how faint" data-tip={i.auto ? '检查都通过后自动上线' : '你确认后上线'}>{i.auto ? '自动' : '你确认的'}</span>
+            <span class="how faint" data-tip={i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{i.auto ? '自动上线' : '人工确认'}</span>
             <span class="pill {st.c}">{st.l}</span>
             <span class="t faint" data-tip={full(i.deployed_at)}>{ago(i.deployed_at)}</span>
           </div>
@@ -93,7 +93,9 @@
   .acts { flex: none; display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
   .rows > li:hover .acts, .acts:focus-within { opacity: 1; }
   .acts .ic-btn { margin: 0; }
-  .how { flex: none; font-size: 11px; white-space: nowrap; }
+  /* 「自动上线 / 人工确认」和状态胶囊各占固定宽度，几行上下对齐 */
+  .how { flex: none; width: 52px; text-align: right; font-size: 11px; white-space: nowrap; }
+  .row > .pill { flex: none; min-width: 74px; justify-content: center; }
   .t { flex: none; width: 64px; text-align: right; font-size: 11.5px; white-space: nowrap; }
   .more { padding: 0 18px 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
   .more p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--dim); }
