@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { turnErrorHint } from '$lib/friendlyError';
   import './site.css';
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
@@ -244,6 +245,12 @@
     budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' }, plan_cleared: { l: '清除计划', c: '', i: 'x' },
   };
   const when = ago;
+  // 「失败 N」的悬停说明：最近几条的标题和原因；余额不够、没登录这类要你先处理的，补一句下一步
+  function failTip(s: { failed: number; failed_why?: [string, string][] }): string {
+    const rows = (s.failed_why ?? []).map(([t, why]) => `· ${t}\n  ${why || '没有记下原因'}${turnErrorHint(why) ? `\n  → ${turnErrorHint(why)}` : ''}`);
+    const more = s.failed > rows.length ? `\n还有 ${s.failed - rows.length} 条` : '';
+    return `${rows.join('\n')}${more}\n\n点开去处理（重新检查、再交给 AI 或驳回）`;
+  }
   const ratio = (a: number, b: number) => (b > 0 ? Math.min(1, a / b) : 0);
 </script>
 
@@ -403,7 +410,7 @@
                     <span class="gs-meta">
                       {#if s.shipped_week}<button class="ship-l" onclick={() => openSite(id, 'queue', 'live')} data-tip="看这个站点的上线记录（任务队列 · 已上线）">本周上线 {s.shipped_week}</button>{/if}
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
-                      {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
+                      {#if s.failed}<button class="ship-l err-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip={failTip(s)}>失败 {s.failed}</button>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
                       {#if s.money?.tracked}<span class="faint cost" data-tip={`本月收益（AdSense + 手动记的）；上月 ${usd(s.money.last_month)}`}>收益 {usd(s.money.month)}</span>{/if}
                       {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>{s.money?.tracked ? 'AI' : '本月'} {costText(s.cost)}</span>{/if}
@@ -585,6 +592,7 @@
   .next-t :global(svg) { color: var(--ok); }
   .ship-l { border: 0; background: none; padding: 0; font: inherit; color: var(--faint); cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
   .ship-l:hover { color: var(--text); text-decoration-color: currentColor; }
+  .ship-l.err-text, .ship-l.err-text:hover { color: var(--err); }
   .stuck-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-left: 2px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }

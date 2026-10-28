@@ -537,6 +537,8 @@ export interface ManagedGroup {
 }
 export interface ManagedSite {
   id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number; queued: number;
+  /** 失败的几条（最新的在前，最多 3 条）：[标题, 原因第一行] */
+  failed_why: [string, string][];
   plan_date: string; plan_count: number; job: string;
   /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
   next_task: string; next_at: number;

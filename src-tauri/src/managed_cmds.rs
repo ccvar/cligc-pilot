@@ -208,6 +208,8 @@ pub struct ManagedSite {
     /// 需要你处理的条数：待确认、失败、上线了但待核对（和「需要你」列表同一口径）。
     pub waiting: usize,
     pub failed: usize,
+    /// 失败的几条（最新的在前，最多 3 条）：标题和原因的第一行，鼠标移上去看
+    pub failed_why: Vec<(String, String)>,
     /// 排着等 AI 处理的条数（托管暂停、额度满了时会一直排着）。
     pub queued: usize,
     pub plan_date: String,
@@ -294,6 +296,11 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
                 active: group.is_some_and(|g| g.active_for(&s.id)),
                 failed: q.iter().filter(|i| i.status == "failed").count(),
+                failed_why: {
+                    let mut f: Vec<&crate::site_ops::QueueItem> = q.iter().filter(|i| i.status == "failed").collect();
+                    f.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    f.iter().take(3).map(|i| (i.opp.title.clone(), i.note.lines().next().unwrap_or("").to_string())).collect()
+                },
                 queued: q.iter().filter(|i| i.status == "open").count(),
                 plan_date: plan.as_ref().and_then(|p| p["date"].as_str().map(str::to_string)).unwrap_or_default(),
                 plan_count: plan.as_ref().and_then(|p| p["tasks"].as_array().map(|a| a.len())).unwrap_or(0),
