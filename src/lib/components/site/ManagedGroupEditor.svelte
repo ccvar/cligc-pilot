@@ -298,7 +298,11 @@
 <style>
   .cad { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .cad .pr { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
-  .cad .pr .tin { width: 60px; }
+  /* 这一行的输入框和天 / 周切换一样高（30px），读起来是一句话 */
+  .cad .pr .tin { width: 60px; height: 30px; padding-top: 0; padding-bottom: 0; }
+  .cad .seg { align-self: center; height: 30px; box-sizing: border-box; }
+  .cad .seg button { padding-top: 0; padding-bottom: 0; }
+  .cad :global(.dd-trigger.compact) { height: 30px; border-color: var(--border2); background: #fff; }
   .cad + .cad { margin-top: 8px; }
   .cad .rl { width: 32px; flex: none; font-size: 12.5px; color: var(--faint); }
   .ge { width: min(640px, calc(100vw - 32px)); }
