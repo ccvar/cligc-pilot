@@ -252,7 +252,8 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
         };
         let step = job.as_ref().and_then(|j| j.steps.iter().find(|x| x.status == "running").map(|x| x.label.clone())).unwrap_or_default();
         for item in q {
-            let mine = item.status == "working" || (item.status != "open" && item.worked_at >= since);
+            // 你驳回的不算 AI 处理过的
+            let mine = item.status == "working" || (!matches!(item.status.as_str(), "open" | "dismissed") && item.worked_at >= since);
             if item.status != "open" && !mine {
                 continue;
             }

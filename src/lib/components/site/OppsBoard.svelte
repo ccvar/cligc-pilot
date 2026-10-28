@@ -31,7 +31,11 @@
   // 处理进度：处理中 → 排队 → 没成功 → 等你确认 → 已处理
   const stage = (i: OppItem) => (isQueued(i) && i.item.status === 'open' ? 'queued' : i.item.status === 'working' ? 'working' : i.item.status === 'failed' ? 'failed' : i.item.status === 'proposed' ? 'proposed' : 'done');
   const ORDER = { working: 0, queued: 1, failed: 2, proposed: 3, done: 4 } as const;
-  const progress = $derived([...(o?.items ?? []).filter(isQueued), ...(o?.recent ?? [])].sort((a, b) => ORDER[stage(a)] - ORDER[stage(b)]));
+  const allRecent = $derived([...(o?.items ?? []).filter(isQueued), ...(o?.recent ?? [])].sort((a, b) => ORDER[stage(a)] - ORDER[stage(b)]));
+  // 还有排队 / 处理中的：整批都列出来看进度；都跑完了就只留没成功的（要你重试），等你确认的在上面「等你确认」里，已处理的收起来
+  const active = $derived(allRecent.some((i) => ['queued', 'working'].includes(stage(i))));
+  const progress = $derived(active ? allRecent : allRecent.filter((i) => stage(i) === 'failed'));
+  const doneToday = $derived(allRecent.filter((i) => stage(i) === 'done').length);
   const counts = $derived(progress.reduce((m, i) => ({ ...m, [stage(i)]: (m[stage(i)] ?? 0) + 1 }), {} as Record<string, number>));
   const finished = $derived((counts.done ?? 0) + (counts.proposed ?? 0) + (counts.failed ?? 0));
   let progOpen = $state(false);
@@ -124,18 +128,18 @@
 {:else}
   <div class="top">
   <p class="sum faint">
-    {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
+    {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}{#if !active && doneToday} · <span class="okt">今天 AI 处理完 {doneToday} 个</span>{/if}
   </p>
   </div>
   {#if progress.length}
     <div class="card tbl-card grp">
       <div class="gh">
-        <Icon name="wand" size={13} /><b>AI 处理进度</b><span class="faint n">{finished}/{progress.length}</span>
+        <Icon name="wand" size={13} /><b>{active ? 'AI 处理进度' : 'AI 没处理成功的'}</b><span class="faint n">{active ? `${finished}/${progress.length}` : progress.length}</span>
         <small class="faint d">{#each Object.entries(STAGE) as [k, l] (k)}{#if counts[k]}<span class="cnt {k}">{l} {counts[k]}</span>{/if}{/each}</small>
         <span class="grow"></span>
         {#if counts.queued}<button class="btn tiny ghost" onclick={stopAcross} data-tip="还没开始的都不做了（回到列表），正在跑的不受影响">停止排队</button>{/if}
       </div>
-      <div class="bar"><i style="width:{(finished / progress.length) * 100}%"></i></div>
+      {#if active}<div class="bar"><i style="width:{(finished / progress.length) * 100}%"></i></div>{/if}
       <ul class="rows">{#each progOpen ? progress : progress.slice(0, SHOW) as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>
       {#if progress.length > SHOW}<button class="more link-btn" onclick={() => (progOpen = !progOpen)}>{progOpen ? '收起' : `展开其余 ${progress.length - SHOW} 条`}</button>{/if}
     </div>
@@ -186,6 +190,7 @@
   .grp { padding: 0; overflow: hidden; }
   .sum { margin: 0 2px; font-size: 12.5px; }
   .sum .run { color: var(--su-run, var(--warn)); }
+  .sum .okt { color: var(--ok); }
   .gh { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
   .gh b { font-weight: 600; }
   .gh .n { font-size: 12px; font-variant-numeric: tabular-nums; }
