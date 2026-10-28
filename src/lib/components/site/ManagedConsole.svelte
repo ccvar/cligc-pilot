@@ -409,7 +409,7 @@
                   {#if s}
                     <span class="gs-meta">
                       {#if s.shipped_week}<button class="ship-l" onclick={() => openSite(id, 'queue', 'live')} data-tip="看这个站点的上线记录（任务队列 · 已上线）">本周上线 {s.shipped_week}</button>{/if}
-                      {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
+                      {#if need > 0}<button class="ship-l warn-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip="打开这个站点的「需要你处理」：确认上线、驳回或重新检查">待你处理 {need}</button>{/if}
                       {#if s.failed}<button class="ship-l err-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip={failTip(s)}>失败 {s.failed}</button>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
                       {#if s.money?.tracked}<span class="faint cost" data-tip={`本月收益（AdSense + 手动记的）；上月 ${usd(s.money.last_month)}`}>收益 {usd(s.money.month)}</span>{/if}
@@ -593,6 +593,7 @@
   .ship-l { border: 0; background: none; padding: 0; font: inherit; color: var(--faint); cursor: pointer; text-decoration: underline dotted var(--border2); text-underline-offset: 3px; }
   .ship-l:hover { color: var(--text); text-decoration-color: currentColor; }
   .ship-l.err-text, .ship-l.err-text:hover { color: var(--err); }
+  .ship-l.warn-text, .ship-l.warn-text:hover { color: var(--warn); }
   .stuck-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-left: 2px; }
   .grp-tg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .grp-tg > :global(.ico) { color: var(--dim); margin-right: -1px; flex: none; }
