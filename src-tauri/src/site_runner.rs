@@ -295,7 +295,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
 /// 一个运营作业最多跑多久：到点就停掉里面的命令和 AI 回合，按失败收尾，不让站点被一个卡死的作业占着。
 const MAX_JOB_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
 /// 调度同时最多起这么多个运营作业（手动点的不算在内、也不受它限制）
-const MAX_PARALLEL_JOBS: usize = 3;
+pub(crate) const MAX_PARALLEL_JOBS: usize = 3;
 
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {

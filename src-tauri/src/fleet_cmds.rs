@@ -135,6 +135,115 @@ pub fn pending_across_sites(state: tauri::State<'_, AppState>) -> Vec<PendingIte
     out
 }
 
+/// 运营机会的优先级：urgent 正在伤害站点的问题、value 收益大的、easy 顺手做的小改动。
+pub fn tier_of(o: &crate::site_ops::Opportunity) -> &'static str {
+    match o.kind.as_str() {
+        "crawl_issue" | "sitemap_error" | "slow" => "urgent",
+        // 点击掉了四成以上
+        "declining" if o.prev_clicks > 0.0 && o.clicks < o.prev_clicks * 0.6 => "urgent",
+        "img_audit" if o.title.contains("不存在") => "urgent",
+        "stale_year" | "stale" | "schema" | "img_audit" => "easy",
+        _ if matches!(o.change.as_str(), "internal_links" | "meta_description" | "title") => "easy",
+        _ => "value",
+    }
+}
+
+/// score 是「每月大约能多拿到的点击」的那几类机会
+fn gain_of(o: &crate::site_ops::Opportunity) -> f64 {
+    if matches!(o.kind.as_str(), "low_ctr" | "striking" | "declining" | "content_gap" | "cannibal" | "serp_gap") {
+        o.score
+    } else {
+        0.0
+    }
+}
+
+#[derive(Serialize)]
+pub struct OppItem {
+    pub site_id: String,
+    pub site_name: String,
+    pub domain: String,
+    pub item: QueueItem,
+    pub tier: &'static str,
+    /// 每月大约能多拿到的点击（算不出为 0）
+    pub gain: f64,
+}
+
+#[derive(Serialize)]
+pub struct OppOverview {
+    pub items: Vec<OppItem>,
+    /// 托管站点里排着的机会（AI 会自动处理，不列出来）
+    pub managed_open: usize,
+    /// 正在跑作业的站点
+    pub running: Vec<String>,
+    /// 跨站点批量里还排着、没开始的站点数
+    pub waiting: usize,
+}
+
+/// 自己运营的站点里还没人处理的运营机会，按优先级、预计收益排。托管站点的由 AI 自动处理，只给个数。
+#[tauri::command]
+pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverview {
+    let cfg = crate::managed::load(&state.data_dir);
+    let mut items = Vec::new();
+    let mut managed_open = 0;
+    let mut running = Vec::new();
+    for s in state.sites.list() {
+        if state.site_jobs.running(&s.id) {
+            running.push(s.id.clone());
+        }
+        let open: Vec<QueueItem> = crate::site_ops::load_queue(&state.sites.data_dir(&s.id)).into_iter().filter(|i| i.status == "open").collect();
+        if cfg.group_of(&s.id).is_some() {
+            managed_open += open.len();
+            continue;
+        }
+        for item in open {
+            items.push(OppItem { site_id: s.id.clone(), site_name: s.name.clone(), domain: s.domain.clone(), tier: tier_of(&item.opp), gain: gain_of(&item.opp), item });
+        }
+    }
+    let rank = |t: &str| match t { "urgent" => 0, "value" => 1, _ => 2 };
+    items.sort_by(|a, b| rank(a.tier).cmp(&rank(b.tier)).then(b.item.opp.score.total_cmp(&a.item.opp.score)));
+    OppOverview { items, managed_open, running, waiting: ACROSS.load(std::sync::atomic::Ordering::SeqCst) }
+}
+
+static ACROSS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// 跨站点批量让 AI 改：每个站点一个作业（里面按顺序一条一条做），同时最多跑 3 个作业，其余排着等。
+/// 立即返回；作业开始、结束会照常发 site-job / site-queue 事件。
+#[tauri::command]
+pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>) -> Result<usize, String> {
+    use tauri::Manager;
+    let batches: Vec<(String, Vec<String>)> = batches.into_iter().filter(|(_, ids)| !ids.is_empty()).collect();
+    if batches.iter().any(|(_, ids)| ids.iter().any(|x| x.contains(','))) {
+        return Err("条目 id 不合法".into());
+    }
+    let n = batches.len();
+    ACROSS.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        let st = app.state::<AppState>();
+        let deadline = crate::now_secs() + 6 * 3600;
+        let mut left = batches;
+        // 每 10 秒看一圈：有空位、站点自己没在跑作业的就开始（某个站点忙着不耽误后面的）
+        while !left.is_empty() {
+            left.retain(|(site_id, ids)| {
+                let gone = st.sites.get(site_id).is_err();
+                let started = !gone && st.site_jobs.running_count() < crate::site_runner::MAX_PARALLEL_JOBS && !st.site_jobs.running(site_id) && {
+                    let ctx = crate::site_runner::Ctx { app: app.clone() };
+                    let r = if ids.len() == 1 { crate::site_runner::start(ctx, site_id, "work", "manual", Some(ids[0].clone())) } else { crate::site_runner::start(ctx, site_id, "batch", "manual", Some(ids.join(","))) };
+                    r.is_ok()
+                };
+                let done = gone || started || crate::now_secs() > deadline;
+                if done {
+                    ACROSS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                !done
+            });
+            if !left.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        }
+    });
+    Ok(n)
+}
+
 /// 「最近上线」的一条：改动本身，加上这个页面现在近 28 天的搜索数据（和上线前那 28 天对比看效果）。
 #[derive(Serialize)]
 pub struct ShipItem {
@@ -428,4 +537,28 @@ pub async fn bind_conn(state: &AppState, conn_id: &str, overwrite: bool, fresh: 
         _ => return Err("这个连接不是数据源".into()),
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tier_of;
+    use crate::site_ops::Opportunity;
+
+    fn opp(kind: &str, change: &str) -> Opportunity {
+        Opportunity { kind: kind.into(), change: change.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn tiers_put_site_harm_first_and_small_edits_last() {
+        assert_eq!(tier_of(&opp("crawl_issue", "technical")), "urgent");
+        assert_eq!(tier_of(&opp("slow", "technical")), "urgent");
+        assert_eq!(tier_of(&Opportunity { clicks: 50.0, prev_clicks: 100.0, ..opp("declining", "content") }), "urgent");
+        assert_eq!(tier_of(&Opportunity { clicks: 80.0, prev_clicks: 100.0, ..opp("declining", "content") }), "value");
+        assert_eq!(tier_of(&opp("low_ctr", "meta")), "value");
+        assert_eq!(tier_of(&opp("serp_gap", "content")), "value");
+        assert_eq!(tier_of(&opp("stale_year", "meta")), "easy");
+        assert_eq!(tier_of(&Opportunity { title: "图片问题：1张不存在".into(), ..opp("img_audit", "technical") }), "urgent");
+        assert_eq!(tier_of(&opp("img_audit", "technical")), "easy");
+        assert_eq!(tier_of(&opp("plan", "internal_links")), "easy");
+    }
 }

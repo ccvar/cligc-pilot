@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { SiteRow, PendingItem, Site } from '$lib/types';
-import { say } from './app.svelte.js';
+import type { SiteRow, PendingItem, Site, OppItem, OppOverview } from '$lib/types';
+import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
 export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
@@ -38,6 +38,11 @@ class FleetState {
   rows = $state<SiteRow[]>([]);
   loaded = $state(false);
   pending = $state<PendingItem[]>([]);
+  /** 「待处理」里的运营机会（自己运营的站点）；切到哪一块：confirm 等你确认 / opps 运营机会 */
+  opps = $state<OppOverview | null>(null);
+  pendView = $state<'confirm' | 'opps'>('confirm');
+  /** 刚交给 AI、还没开始的条目（列表上先标出来，作业开始后由队列状态接手） */
+  handed = $state<string[]>([]);
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -52,6 +57,8 @@ class FleetState {
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
   pendingCount = $derived(this.rows.reduce((n, r) => n + r.proposed, 0));
+  /** 自己运营的站点里还没处理的运营机会（托管站点的由 AI 自动处理，不算） */
+  oppCount = $derived(this.rows.filter((r) => !r.plan).reduce((n, r) => n + r.open, 0));
 }
 
 export const fleet = new FleetState();
@@ -173,6 +180,39 @@ export async function loadPending() {
   catch (e) { say(String(e), 'err'); }
 }
 
+export async function loadOpps() {
+  try { fleet.opps = await invoke<OppOverview>('opportunities_across_sites'); }
+  catch (e) { say(String(e), 'err'); }
+}
+const siteCount = (items: OppItem[]) => new Set(items.map((i) => i.site_id)).size;
+/** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
+export async function workOpps(items: OppItem[], ask = true) {
+  if (!items.length) return;
+  const n = siteCount(items);
+  if (ask && items.length > 1 && !(await confirmDialog(`让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。`, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
+  const by = new Map<string, string[]>();
+  for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);
+  try {
+    await invoke('work_across_sites', { batches: [...by.entries()] });
+    fleet.handed = [...new Set([...fleet.handed, ...items.map((i) => i.item.id)])];
+    say(n > 3 ? `已交给 AI：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 AI：${items.length} 条`);
+    void loadOpps();
+  } catch (e) { say(String(e), 'err'); }
+}
+/** 驳回（只问一次）：之后不会再提这些机会，驳回的在站点「待处理」里能恢复 */
+export async function dismissOpps(items: OppItem[]) {
+  if (!items.length) return;
+  const one = items.length === 1;
+  if (!(await confirmDialog(one ? `驳回「${items[0].item.opp.title}」？之后不会再提这个机会。` : `驳回这 ${items.length} 条机会？之后不会再提这些机会。`, { title: one ? '驳回' : '批量驳回', kind: 'warning', confirmText: one ? '驳回' : `驳回 ${items.length} 条` }))) return;
+  let failed = 0;
+  for (const i of items) {
+    try { await invoke('queue_dismiss', { id: i.site_id, itemId: i.item.id }); } catch { failed++; }
+  }
+  if (!one || failed) say(failed ? `驳回了 ${items.length - failed} 条，${failed} 条没成功` : `已驳回 ${items.length} 条`, failed ? 'err' : undefined);
+  void loadOpps();
+  void loadFleet();
+}
+
 export async function setTags(id: string, tags: string[]) {
   try {
     const s = await invoke<Site>('set_site_flags', { id, tags });
@@ -187,7 +227,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 /** 作业 / 队列事件很密：合并成一次刷新。 */
 function soon() {
   if (timer) return;
-  timer = setTimeout(() => { timer = null; void loadFleet(); if (fleet.tab === 'pending') void loadPending(); }, 800);
+  timer = setTimeout(() => { timer = null; void loadFleet(); if (fleet.tab === 'pending') { void loadPending(); void loadOpps(); } }, 800);
 }
 
 export function initFleet() {

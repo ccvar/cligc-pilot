@@ -5208,6 +5208,8 @@ pub fn run() {
             backup::backup_preview,
             backup::backup_restore,
             fleet_cmds::set_site_flags,
+            fleet_cmds::opportunities_across_sites,
+            fleet_cmds::work_across_sites,
             fleet_cmds::data_sources_overview,
             fleet_cmds::auto_bind_sites,
             managed_cmds::managed_config,

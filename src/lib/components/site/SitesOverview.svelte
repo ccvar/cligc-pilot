@@ -19,6 +19,7 @@
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
   import BackgroundNotice from './BackgroundNotice.svelte';
+  import OppsBoard from './OppsBoard.svelte';
   import { usd } from '$lib/state/growth.svelte.js';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
@@ -152,7 +153,7 @@
     {#if fleet.tab === 'sites' && modeOpts.length > 2}
       <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} triggerIcon={false} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
     {/if}
-    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待确认{#if totals.proposed}<span class="cnt">{totals.proposed}</span>{/if}</button>
+    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if totals.proposed}<span class="cnt" data-tip="{totals.proposed} 条改动等你确认">{totals.proposed}</span>{/if}{#if fleet.oppCount}<span class="cnt soft" data-tip="自己运营的站点有 {fleet.oppCount} 个运营机会没处理">{fleet.oppCount}</span>{/if}</button>
   </div>
 
   <div class="page-body">
@@ -220,8 +221,16 @@
         {/if}
       {/if}
     {:else}
-      {#if !fleet.pending.length}
-        <div class="card"><p class="hint">所有站点都没有需要你确认的改动。</p></div>
+      <div class="pv">
+        <span class="seg">
+          <button class:on={fleet.pendView === 'confirm'} onclick={() => (fleet.pendView = 'confirm')}>等你确认{#if fleet.pending.length}<span class="sc">{fleet.pending.length}</span>{/if}</button>
+          <button class:on={fleet.pendView === 'opps'} onclick={() => (fleet.pendView = 'opps')}>运营机会{#if fleet.oppCount}<span class="sc">{fleet.oppCount}</span>{/if}</button>
+        </span>
+      </div>
+      {#if fleet.pendView === 'opps'}
+        <OppsBoard />
+      {:else if !fleet.pending.length}
+        <div class="card"><p class="hint">所有站点都没有需要你确认的改动。{#if fleet.oppCount}<button class="link-btn" onclick={() => (fleet.pendView = 'opps')}>看看 {fleet.oppCount} 个运营机会</button>{/if}</p></div>
       {:else}
         <div class="card tbl-card">
           <table class="tbl">
@@ -322,6 +331,9 @@
   .am-none { color: var(--dim); }
   .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
+  .pv { display: flex; margin-bottom: 12px; }
+  .pv .sc { margin-left: 6px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .pv .on .sc { color: var(--dim); }
   .c-rev .ai { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
