@@ -11,6 +11,7 @@
   import { showDiff, rollbackItem, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
   import { ago, full } from './fmt';
   import { modelName } from '$lib/state/fleet.svelte.js';
+  import { kTok } from '$lib/state/managed.svelte.js';
   import type { ShipItem, OpsItem, GscRow } from '$lib/types';
 
   let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。' }: { items: ShipItem[]; limit?: number; empty?: string } = $props();
@@ -106,7 +107,7 @@
               {#if ef.tip}<p class="eff-d">{ef.tip}</p>{/if}
               {#if i.status === 'failed' && i.note}<p class="err-t">没成功：{i.note}</p>{/if}
               {#if i.ai_summary}<p>{i.ai_summary_zh || i.ai_summary}</p>{/if}
-              {#if i.model_used}<p class="faint">模型：{modelName(i.model_used) || i.model_used}</p>{/if}
+              {#if i.model_used || x.cost?.turns}<p class="faint">{#if i.model_used}模型：{modelName(i.model_used) || i.model_used}{/if}{#if x.cost?.turns}{i.model_used ? ' · ' : ''}这一条用了 {kTok(x.cost.tokens)} token{#if x.cost.usd >= 0.01}，API 约 ${x.cost.usd.toFixed(2)}{/if}{#if x.cost.sub_tokens} · 订阅额度内 {kTok(x.cost.sub_tokens)}{/if}{/if}</p>{/if}
               {#if i.checks?.length}
                 {@const bad = i.checks.filter((c) => !c.ok)}
                 <p class="faint">线上验收：{i.checks.length - bad.length} 项通过{#if bad.length}，<span class="warn-text">{bad.length} 项没过（{bad.map((c) => c.label).join('、')}）</span>{/if}</p>

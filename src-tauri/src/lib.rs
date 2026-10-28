@@ -5176,6 +5176,7 @@ pub fn run() {
             fleet_cmds::pending_across_sites,
             fleet_cmds::recent_ships,
             fleet_cmds::history_across_sites,
+            fleet_cmds::ai_usage_daily,
             fleet_cmds::site_links,
             fleet_cmds::check_site_links,
             fleet_cmds::site_monitor,

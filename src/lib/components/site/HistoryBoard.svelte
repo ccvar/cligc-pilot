@@ -4,15 +4,24 @@
   import RecentShips from './RecentShips.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
-  import type { ShipItem } from '$lib/types';
+  import { kTok } from '$lib/state/managed.svelte.js';
+  import type { ShipItem, DayUsage, AiCost } from '$lib/types';
 
   let days = $state(7);
   let kind = $state<'all' | 'live' | 'bad' | 'dismissed'>('all');
   let items = $state<ShipItem[] | null>(null);
+  let usage = $state<DayUsage[]>([]);
   $effect(() => {
     const d = days;
     invoke<ShipItem[]>('history_across_sites', { days: d }).then((v) => (items = v)).catch((e) => { items = []; say(String(e), 'err'); });
+    invoke<DayUsage[]>('ai_usage_daily', { days: d }).then((v) => (usage = v)).catch(() => (usage = []));
   });
+  // 每天的 AI 用量（扫描、计划、改动都算）：方块下面单独一行，自己的刻度，不和条数混在一张图上
+  const useOf = (key: string) => usage.find((u) => u.date === key)?.cost;
+  const usePeak = $derived(Math.max(1, ...usage.map((u) => u.cost.tokens)));
+  const UH = 22;
+  const total = $derived(usage.reduce((c, u) => ({ tokens: c.tokens + u.cost.tokens, usd: c.usd + u.cost.usd, sub: c.sub + u.cost.sub_tokens }), { tokens: 0, usd: 0, sub: 0 }));
+  const useText = (c?: AiCost) => !c || !c.turns ? 'AI 没用' : `AI 用了 ${kTok(c.tokens)} token${c.usd >= 0.01 ? `，其中 API 约 $${c.usd.toFixed(2)}` : ''}${c.sub_tokens ? `，订阅额度内 ${kTok(c.sub_tokens)}` : ''}`;
   const KINDS = [
     { k: 'all', l: '全部' },
     { k: 'live', l: '已上线' },
@@ -81,18 +90,26 @@
   </div>
   {#if items && items.length}
     <div class="card chart">
-      <div class="lg"><span><i class="live"></i>上线</span><span><i class="done"></i>已处理</span><span><i class="bad"></i>没成功 / 回滚</span></div>
+      <div class="lg"><span><i class="live"></i>上线</span><span><i class="done"></i>已处理</span><span><i class="bad"></i>没成功 / 回滚</span>{#if total.tokens}<span><i class="use"></i>AI 用量</span>{/if}</div>
       <div class="cols" role="group" aria-label="最近 {days} 天每天处理完的条数">
         {#each bars as b (b.key)}
           {@const total = b.live + b.done + b.bad}
           {@const cs = cells(b)}
-          <button class="col" style="height:{rows * 12 + (total > CAP ? 14 : 0)}px" disabled={!total} onclick={() => jump(b.key)} data-tip={`${b.label}：${total ? `上线 ${b.live} · 已处理 ${b.done} · 没成功 / 回滚 ${b.bad}` : '没有'}`} aria-label={`${b.label}：上线 ${b.live}，已处理 ${b.done}，没成功或回滚 ${b.bad}`}>
+          <button class="col" style="height:{rows * 12 + (total > CAP ? 14 : 0)}px" disabled={!total} onclick={() => jump(b.key)} data-tip={`${b.label}：${total ? `上线 ${b.live} · 已处理 ${b.done} · 没成功 / 回滚 ${b.bad}` : '没有处理完的'}\n${useText(useOf(b.key))}（扫描、计划、改动都算）`} aria-label={`${b.label}：上线 ${b.live}，已处理 ${b.done}，没成功或回滚 ${b.bad}`}>
             {#each cs as c, n (n)}<i class="sq {c}"></i>{:else}<i class="sq empty"></i>{/each}
             {#if total > CAP}<span class="more">+{total - CAP}</span>{/if}
           </button>
         {/each}
       </div>
-      <div class="ax"><span>{bars[0]?.label.split(' ')[0]}</span><span>今天</span></div>
+      {#if total.tokens}
+        <div class="urow" style="height:{UH}px" aria-label="每天的 AI 用量">
+          {#each bars as b (b.key)}
+            {@const c = useOf(b.key)}
+            <span class="ucol" data-tip={`${b.label}：${useText(c)}（扫描、计划、改动都算）`}>{#if c?.tokens}<i style="height:{Math.max(2, Math.round((c.tokens / usePeak) * UH))}px"></i>{/if}</span>
+          {/each}
+        </div>
+      {/if}
+      <div class="ax"><span>{bars[0]?.label.split(' ')[0]}</span>{#if total.tokens}<span class="ut" data-tip="所有站点 AI 运营的用量：扫描、制定计划、写改动都算，所以和上面的条数不是一一对应。金额只算 API 连接按官方价估的部分，订阅额度内的不收钱">AI 用量 {kTok(total.tokens)} token{#if total.usd >= 0.01} · API 约 ${total.usd.toFixed(2)}{/if}{#if total.sub} · 订阅额度内 {kTok(total.sub)}{/if}</span>{/if}<span>今天</span></div>
     </div>
   {/if}
   {#if !items}
@@ -131,7 +148,14 @@
   .live { background: var(--ok); }
   .done { background: #9a958a; }
   .bad { background: var(--err); }
+  .lg .use { background: color-mix(in srgb, var(--text) 30%, transparent); }
   .more { font-size: 10px; line-height: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  /* 用量那一行：一种颜色，和上面的方块按天对齐（同样的列宽和间距），中间一条细线隔开 */
+  .urow { display: flex; align-items: flex-end; gap: 4px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); box-sizing: content-box; }
+  .ucol { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
+  .ucol i { display: block; width: 10px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--text) 30%, transparent); }
+  .ucol:hover i { background: color-mix(in srgb, var(--text) 55%, transparent); }
+  .ut { color: var(--dim); }
   .ax { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--faint); }
   /* 卡片只留左右 18px（列表行自己会顶到两边），上下不留空，第一行上面不画分隔线 */
   .list { padding: 0 18px; overflow: hidden; }

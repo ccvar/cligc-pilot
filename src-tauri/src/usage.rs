@@ -170,26 +170,45 @@ impl Cost {
     }
 }
 
-/// 某个站点从 since 起的 AI 用量
-pub fn site_cost(site_dir: &Path, since: i64) -> Cost {
-    let mut c = Cost::default();
-    let Ok(raw) = std::fs::read_to_string(site_log(site_dir)) else { return c };
-    for l in raw.lines() {
-        let Ok(e) = serde_json::from_str::<UsageEntry>(l) else { continue };
-        if e.ts < since {
-            continue;
-        }
-        let t = billed(&e);
-        c.tokens += t;
-        c.turns += 1;
-        c.rough |= e.rough;
-        match usd(&e) {
-            Some(v) => c.usd += v,
-            None if e.brain.starts_with("api:") => c.unpriced_tokens += t,
-            None => c.sub_tokens += t,
+impl Cost {
+    fn add_entry(&mut self, e: &UsageEntry) {
+        let t = billed(e);
+        self.tokens += t;
+        self.turns += 1;
+        self.rough |= e.rough;
+        match usd(e) {
+            Some(v) => self.usd += v,
+            None if e.brain.starts_with("api:") => self.unpriced_tokens += t,
+            None => self.sub_tokens += t,
         }
     }
+}
+
+fn site_entries(site_dir: &Path) -> Vec<UsageEntry> {
+    std::fs::read_to_string(site_log(site_dir)).unwrap_or_default().lines().filter_map(|l| serde_json::from_str::<UsageEntry>(l).ok()).collect()
+}
+
+/// 某个站点从 since 起的 AI 用量
+pub fn site_cost(site_dir: &Path, since: i64) -> Cost {
+    site_cost_between(site_dir, since, i64::MAX)
+}
+
+/// 某个站点在 [from, to] 之间的 AI 用量（一个站点同时只跑一个作业，用来算某一条改动花了多少）
+pub fn site_cost_between(site_dir: &Path, from: i64, to: i64) -> Cost {
+    let mut c = Cost::default();
+    for e in site_entries(site_dir).iter().filter(|e| e.ts >= from && e.ts <= to) {
+        c.add_entry(e);
+    }
     c
+}
+
+/// 某个站点从 since 起每天（本地日期「2026-10-28」不补零：「2026-10-8」）的 AI 用量，累加进 out
+pub fn site_daily(site_dir: &Path, since: i64, out: &mut HashMap<String, Cost>) {
+    use chrono::{Datelike, TimeZone};
+    for e in site_entries(site_dir).iter().filter(|e| e.ts >= since) {
+        let Some(d) = chrono::Local.timestamp_opt(e.ts, 0).single() else { continue };
+        out.entry(format!("{}-{}-{}", d.year(), d.month(), d.day())).or_default().add_entry(e);
+    }
 }
 
 /// 两个起点各算一份「按 brain 汇总的处理量」（input+cache_read+cache_create+output，

@@ -375,6 +375,8 @@ pub struct ShipItem {
     pub page_now: Option<crate::site_data::Row>,
     /// 现在这份数据截止到哪天（GSC 有 2–3 天延迟）
     pub data_end: String,
+    /// 这一条 AI 处理时的用量（从交给 AI 到那轮会话结束，含换备用模型重跑）；没交给过 AI 是 None
+    pub cost: Option<crate::usage::Cost>,
 }
 
 /// 托管站点最近 days 天上线过的改动（含之后被回滚的），新的在前：托管页「最近上线」用。
@@ -414,11 +416,43 @@ fn ships(state: &AppState, site_ok: impl Fn(&crate::sites::Site) -> bool, keep: 
         for item in items {
             let page = if item.opp.page.starts_with("https://") { item.opp.page.clone() } else { item.new_pages.first().cloned().unwrap_or_default() };
             let page_now = pages.iter().find(|r| r.key == page).cloned();
-            out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone() });
+            let cost = (item.worked_at > 0).then(|| {
+                let end = state.convos.get(&item.conv_id).map(|c| c.updated_at).unwrap_or(item.updated_at).clamp(item.worked_at, item.worked_at + 6 * 3600);
+                crate::usage::site_cost_between(&dir, item.worked_at as i64, end as i64)
+            });
+            out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone(), cost });
         }
     }
     out.sort_by(|a, b| finished_at(&b.item).cmp(&finished_at(&a.item)));
     out
+}
+
+#[derive(Serialize)]
+pub struct DayUsage {
+    /// 本地日期「2026-10-28」（不补零，和前端按天分组的写法一样）
+    pub date: String,
+    pub cost: crate::usage::Cost,
+}
+
+/// 「处理记录」图表下面那一行：所有站点最近 days 天每天的 AI 运营用量（扫描、计划、改动都算），从早到晚，没用的日子也列出来。
+#[tauri::command]
+pub fn ai_usage_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<DayUsage> {
+    use chrono::Datelike;
+    let days = days.unwrap_or(7).clamp(1, 90) as i64;
+    let today = chrono::Local::now().date_naive();
+    let start = today - chrono::Duration::days(days - 1);
+    let since = start.and_hms_opt(0, 0, 0).and_then(|d| d.and_local_timezone(chrono::Local).earliest()).map(|d| d.timestamp()).unwrap_or(0);
+    let mut by_day = std::collections::HashMap::new();
+    for s in state.sites.list() {
+        crate::usage::site_daily(&state.sites.data_dir(&s.id), since, &mut by_day);
+    }
+    (0..days)
+        .map(|n| {
+            let d = start + chrono::Duration::days(n);
+            let date = format!("{}-{}-{}", d.year(), d.month(), d.day());
+            DayUsage { cost: by_day.remove(&date).unwrap_or_default(), date }
+        })
+        .collect()
 }
 
 /// 这个站点上次推广链接检查的结果（没查过是空的）。

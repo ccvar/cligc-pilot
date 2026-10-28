@@ -449,7 +449,9 @@ export interface SiteSummary {
 /** Search Console 一行（页面或查询词）近 28 天的合计 */
 export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
 /** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
-export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string }
+export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string; /** 这一条 AI 处理时的用量 */ cost?: AiCost | null }
+/** 「处理记录」图表下那一行：某一天所有站点的 AI 运营用量 */
+export interface DayUsage { date: string; cost: AiCost }
 /** 全部站点列表上的一个分发渠道 */
 export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
 /** 在线监测（首页每小时、证书每天、域名每周） */
