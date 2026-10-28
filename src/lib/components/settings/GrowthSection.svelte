@@ -16,9 +16,17 @@
   const p = $derived(growth.push);
   const r = $derived(growth.revenue);
   const k = $derived(growth.keys);
-  let token = $state('');
-  let psKey = $state('');
-  let serperKey = $state('');
+  // 填 Token / Key 的输入框默认不出现：点「连接」「填写」后才在这一行展开，一次只开一个
+  let editing = $state<'' | 'tg' | 'pagespeed' | 'serper'>('');
+  let draft = $state('');
+  function edit(which: typeof editing) { editing = which; draft = ''; }
+  async function saveDraft() {
+    const v = draft.trim();
+    if (!v) return;
+    const ok = editing === 'tg' ? await setPushToken(v) : editing ? await setApiKey(editing, v) : false;
+    if (ok) { editing = ''; draft = ''; }
+  }
+  const focus = (el: HTMLInputElement) => { el.focus(); };
   $effect(() => { void loadGrowth(); });
   // 配对中：每 3 秒看一眼绑上了没有（机器人收到配对码后 Rust 端也会发 push-changed）
   $effect(() => {
@@ -46,12 +54,10 @@
     {#if p}
       <div class="rows">
         {#if !p.has_token}
-          <div class="opt">
+          <div class="opt" class:editing={editing === 'tg'}>
             <span class="ot"><b>机器人 Token<InfoTip label="怎么拿 Token" text={'在 Telegram 里搜 @BotFather，发 /newbot，按提示起个名字，\n它会给一串 123456789:AA… 的 Token，复制过来。'} /></b><small>还没连接</small></span>
-            <span class="acts">
-              <input class="tin mono" type="password" placeholder="123456789:AA…" bind:value={token} aria-label="机器人 Token" />
-              <button class="btn tiny" disabled={!token.trim() || !!growth.busy} onclick={async () => { if (await setPushToken(token)) token = ''; }}>{#if growth.busy === 'tg-token'}<span class="spin"></span>验证中…{:else}连接{/if}</button>
-            </span>
+            {#if editing === 'tg'}{@render form('123456789:AA…', '机器人 Token', 'tg-token')}
+            {:else}<button class="btn tiny" disabled={!!growth.busy} onclick={() => edit('tg')}>连接机器人</button>{/if}
           </div>
         {:else if !p.bound}
           <div class="opt">
@@ -118,22 +124,23 @@
 </div>
 
 {#snippet keyRow(name: 'pagespeed' | 'serper', label: string, tip: string, has: boolean, empty: string)}
-  <div class="opt">
+  <div class="opt" class:editing={editing === name}>
     <span class="ot"><b>{label}<InfoTip {label} text={tip} /></b><small>{has ? '已填（存在钥匙串里）' : empty}</small></span>
     {#if has}
       <button class="btn tiny ghost" disabled={!!growth.busy} onclick={() => offKey(name)}>删除</button>
-    {:else}
-      <span class="acts">
-        {#if name === 'pagespeed'}
-          <input class="tin mono" type="password" placeholder="AIza…" bind:value={psKey} aria-label={label} />
-          <button class="btn tiny" disabled={!psKey.trim() || !!growth.busy} onclick={async () => { if (await setApiKey(name, psKey)) psKey = ''; }}>{#if growth.busy === `key-${name}`}<span class="spin"></span>验证中…{:else}保存{/if}</button>
-        {:else}
-          <input class="tin mono" type="password" placeholder="粘贴 API Key" bind:value={serperKey} aria-label={label} />
-          <button class="btn tiny" disabled={!serperKey.trim() || !!growth.busy} onclick={async () => { if (await setApiKey(name, serperKey)) serperKey = ''; }}>{#if growth.busy === `key-${name}`}<span class="spin"></span>验证中…{:else}保存{/if}</button>
-        {/if}
-      </span>
-    {/if}
+    {:else if editing === name}{@render form(name === 'pagespeed' ? 'AIza…' : '粘贴 API Key', label, `key-${name}`)}
+    {:else}<button class="btn tiny ghost" disabled={!!growth.busy} onclick={() => edit(name)}>填写</button>{/if}
   </div>
+{/snippet}
+
+{#snippet form(placeholder: string, label: string, busyTag: string)}
+  <!-- 回车保存、Esc 收起 -->
+  <span class="acts">
+    <input class="tin mono" type="password" {placeholder} bind:value={draft} aria-label={label} use:focus
+      onkeydown={(e) => { if (e.key === 'Enter') void saveDraft(); else if (e.key === 'Escape') editing = ''; }} />
+    <button class="btn tiny ghost" onclick={() => (editing = '')} disabled={growth.busy === busyTag}>取消</button>
+    <button class="btn tiny" disabled={!draft.trim() || !!growth.busy} onclick={saveDraft}>{#if growth.busy === busyTag}<span class="spin"></span>验证中…{:else}保存{/if}</button>
+  </span>
 {/snippet}
 
 <style>
@@ -154,7 +161,10 @@
   .acts { flex: none; display: inline-flex; align-items: center; gap: 6px; }
   /* 填 Key 的输入框和旁边的小按钮同高（26px）、同圆角；窄的时候输入框先收窄，标题不被挤 */
   .acts:has(.tin) { flex: 0 1 auto; min-width: 0; }
-  .acts .tin { flex: 0 1 150px; width: 150px; min-width: 96px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 12px; }
+  .acts .tin { flex: 1 1 auto; width: auto; min-width: 0; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 12px; }
+  /* 点了「填写」：输入框换到标题下面单独一行，占满宽度，不和标题挤 */
+  .opt.editing { flex-wrap: wrap; row-gap: 8px; padding-bottom: 10px; }
+  .opt.editing .acts { flex: 1 1 100%; }
   /* 这一节的小按钮统一 26px 高，和输入框齐 */
   .opt .btn.tiny { height: 26px; padding: 0 10px; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
