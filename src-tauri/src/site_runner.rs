@@ -299,9 +299,31 @@ pub(crate) const MAX_PARALLEL_JOBS: usize = 3;
 
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {
+    start_with_model(ctx, site_id, task, trigger, item_id, None)
+}
+
+/// 临时换模型的作业：（brain, model），只在这个作业里用、不改站点和方案设置，作业结束就恢复。
+static MODEL_OVERRIDE: std::sync::Mutex<Vec<(String, (String, String))>> = std::sync::Mutex::new(Vec::new());
+
+fn model_override(site_id: &str) -> Option<(String, String)> {
+    MODEL_OVERRIDE.lock().unwrap().iter().find(|(s, _)| s == site_id).map(|(_, m)| m.clone())
+}
+
+fn set_model_override(site_id: &str, m: Option<(String, String)>) {
+    let mut v = MODEL_OVERRIDE.lock().unwrap();
+    v.retain(|(s, _)| s != site_id);
+    if let Some(m) = m {
+        v.push((site_id.to_string(), m));
+    }
+}
+
+/// 同 start，可以给这个作业临时指定模型（「待处理」里每批交给 AI 时选的）。
+pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>, model: Option<(String, String)>) -> Result<String, String> {
     let st = ctx.state();
     let site = st.sites.get(site_id)?;
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
+    // 一个站点同时只有一个作业，按站点记就够；没指定的作业也要清掉，免得用上一次的
+    set_model_override(site_id, model);
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
     tauri::async_runtime::spawn(async move {
@@ -343,6 +365,7 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
             }
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
+        set_model_override(&site.id, None);
         job.finish(&res);
         if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
             record_run(
@@ -812,6 +835,10 @@ pub fn ops_model(site: &Site) -> Result<String, String> {
 
 /// 这个站点无人值守任务用的（主模型，备用模型）。全托管站点用所在托管方案里运营人员选的那一对。
 pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Option<(String, String)>), String> {
+    // 这个作业临时选了模型：只用它，不换备用
+    if let Some(m) = model_override(&site.id) {
+        return Ok((m, None));
+    }
     if let Some(m) = crate::managed::load(data_dir).group_of(&site.id).cloned() {
         let pick = |b: &str, model: &str| -> Result<(String, String), String> {
             if !model.trim().is_empty() {

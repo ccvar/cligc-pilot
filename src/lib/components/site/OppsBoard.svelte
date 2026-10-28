@@ -7,6 +7,8 @@
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
   import { fleet, loadOpps, workOpps, dismissOpps, stopAcross, oppModel } from '$lib/state/fleet.svelte.js';
+  import { launcher } from '$lib/state/launcher.svelte.js';
+  import Dropdown from '$lib/Dropdown.svelte';
   import { confirmDialog } from '$lib/state/app.svelte.js';
   import { KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { openSite, cancelSiteJob } from '$lib/state/sites.svelte.js';
@@ -33,8 +35,9 @@
   const finished = $derived((counts.done ?? 0) + (counts.proposed ?? 0) + (counts.failed ?? 0));
   let progOpen = $state(false);
   const STAGE: Record<string, string> = { queued: '排队中', working: 'AI 处理中', failed: '没成功', proposed: '等你确认', done: '已处理' };
-  // 这块里用到的模型（一种就直接写，几种写「等 N 种」）
-  const readyModels = $derived([...new Set(ready.map(oppModel))]);
+  // 交给 AI 时用的模型：默认按站点设置（列出现在会用到的几种），也可以这批临时换一个
+  const siteModels = $derived([...new Set(open_.map(oppModel))]);
+  const modelOpts = $derived([{ value: '', label: '按站点设置', sub: siteModels.length ? `${siteModels[0]}${siteModels.length > 1 ? ` 等 ${siteModels.length} 种` : ''}` : '' }, ...launcher.comboOpts]);
   async function stopJob(i: OppItem) {
     if (await confirmDialog(`停止 ${i.domain || i.site_name} 正在跑的作业？\n正在改的这一条会标记为没成功（改了一半的不会上线），可以再交给 AI；这个站点后面没开始的几条留在列表里。`, { title: '停止作业', kind: 'warning', confirmText: '停止' })) void cancelSiteJob(i.site_id);
   }
@@ -89,9 +92,14 @@
 {#if !o}
   <div class="card"><p class="hint">正在读取…</p></div>
 {:else}
+  <div class="top">
   <p class="sum faint">
     {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
   </p>
+  {#if o.items.length}
+    <span class="mpick" data-tip={'这一页交给 AI 时用哪个模型\n按站点设置：托管方案里的站点用方案选的，其它用站点「运营」设置里的' + (siteModels.length ? '\n现在会用到：' + siteModels.join('、') : '') + '\n选了别的只在这批临时用，不改任何设置'}>交给 AI 时用<Dropdown compact menuCompact value={fleet.batchModel} options={modelOpts} menuMin={240} searchable ariaLabel="交给 AI 时用的模型" onchange={(v: string) => (fleet.batchModel = v)} /></span>
+  {/if}
+  </div>
   {#if progress.length}
     <div class="card tbl-card grp">
       <div class="gh">
@@ -116,7 +124,6 @@
       <div class="kinds">
         {#each readyKinds as [k, n] (k)}<span>{READY_LABEL[k] ?? KIND_LABEL[k] ?? k}<b>{n}</b></span>{/each}
         <span class="grow"></span>
-        <span class="faint mdl" data-tip={'托管方案里的站点用方案选的模型，其它站点用站点「运营」设置里的\n' + readyModels.join('\n')}>模型：{readyModels[0]}{readyModels.length > 1 ? ` 等 ${readyModels.length} 种` : ''}</span>
         <button class="link-btn" onclick={() => (readyOpen = !readyOpen)}>{readyOpen ? '收起' : '看看是哪些'}</button>
       </div>
       {#if readyOpen}<ul class="rows sep">{#each ready as i (i.item.id)}{@render row(i)}{/each}</ul>{/if}
@@ -165,7 +172,9 @@
   .kinds b { margin-left: 5px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   .kinds .link-btn { font-size: 12px; }
   .rows.sep { border-top: 1px solid var(--border); }
-  .mdl { font-size: 12px; }
+  .top { display: flex; align-items: center; gap: 12px; min-height: 28px; }
+  .top .sum { flex: 1; min-width: 0; }
+  .mpick { flex: none; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
   .cnt { margin-right: 10px; }
   .cnt.working, .cnt.queued { color: var(--su-run, var(--warn)); }
   .cnt.proposed { color: var(--warn); }

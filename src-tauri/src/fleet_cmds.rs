@@ -273,18 +273,20 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
     items.sort_by(|a, b| rank(a.tier).cmp(&rank(b.tier)).then(b.item.opp.score.total_cmp(&a.item.opp.score)));
     recent.sort_by(|a, b| b.item.worked_at.cmp(&a.item.worked_at));
     let across = ACROSS.lock().unwrap();
-    let queued = across.iter().flat_map(|(_, ids)| ids.iter().cloned()).collect();
+    let queued = across.iter().flat_map(|(_, ids, _)| ids.iter().cloned()).collect();
     OppOverview { items, managed_open, running, waiting: across.len(), queued, recent }
 }
 
-/// 跨站点批量里还排着、没开始的（站点, 条目 id）
-static ACROSS: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
+/// 跨站点批量里还排着、没开始的（站点, 条目 id, 这批临时选的模型）
+type Model = Option<(String, String)>;
+static ACROSS: std::sync::Mutex<Vec<(String, Vec<String>, Model)>> = std::sync::Mutex::new(Vec::new());
 static ACROSS_LOOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 跨站点批量让 AI 改：每个站点一个作业（里面按顺序一条一条做），同时最多跑 3 个作业，其余排着等。
 /// 立即返回；作业开始、结束会照常发 site-job / site-queue 事件。已经排着的条目不会重复排。
+/// `model`＝这批临时用的（brain, model），不传就按站点设置（托管方案里的用方案选的）。
 #[tauri::command]
-pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>) -> Result<usize, String> {
+pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>, model: Option<(String, String)>) -> Result<usize, String> {
     use std::sync::atomic::Ordering;
     use tauri::Manager;
     if batches.iter().any(|(_, ids)| ids.iter().any(|x| x.contains(','))) {
@@ -294,14 +296,15 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
         let mut q = ACROSS.lock().unwrap();
         let mut n = 0;
         for (site, ids) in batches {
-            let ids: Vec<String> = ids.into_iter().filter(|id| !q.iter().any(|(_, x)| x.contains(id))).collect();
+            let ids: Vec<String> = ids.into_iter().filter(|id| !q.iter().any(|(_, x, _)| x.contains(id))).collect();
             if ids.is_empty() {
                 continue;
             }
             n += 1;
-            match q.iter_mut().find(|(s, _)| *s == site) {
-                Some((_, x)) => x.extend(ids),
-                None => q.push((site, ids)),
+            // 同一个站点、同一个模型的并到一起；模型不同的分开排（一个作业只用一个模型）
+            match q.iter_mut().find(|(s, _, m)| *s == site && *m == model) {
+                Some((_, x, _)) => x.extend(ids),
+                None => q.push((site, ids, model.clone())),
             }
         }
         n
@@ -317,7 +320,7 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
             let started = {
                 let mut q = ACROSS.lock().unwrap();
                 let before = q.len();
-                q.retain(|(site_id, ids)| {
+                q.retain(|(site_id, ids, model)| {
                     if st.sites.get(site_id).is_err() {
                         return false;
                     }
@@ -326,7 +329,8 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
                         return true;
                     }
                     let ctx = crate::site_runner::Ctx { app: app.clone() };
-                    let r = if ids.len() == 1 { crate::site_runner::start(ctx, site_id, "work", "manual", Some(ids[0].clone())) } else { crate::site_runner::start(ctx, site_id, "batch", "manual", Some(ids.join(","))) };
+                    let (task, arg) = if ids.len() == 1 { ("work", ids[0].clone()) } else { ("batch", ids.join(",")) };
+                    let r = crate::site_runner::start_with_model(ctx, site_id, task, "manual", Some(arg), model.clone());
                     r.is_err()
                 });
                 if q.is_empty() {
@@ -349,7 +353,7 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
 pub fn stop_across_sites(app: tauri::AppHandle) -> usize {
     let n = {
         let mut q = ACROSS.lock().unwrap();
-        let n = q.iter().map(|(_, ids)| ids.len()).sum();
+        let n = q.iter().map(|(_, ids, _)| ids.len()).sum();
         q.clear();
         n
     };

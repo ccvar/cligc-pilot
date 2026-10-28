@@ -4,6 +4,7 @@ import type { SiteRow, PendingItem, Site, OppItem, OppOverview } from '$lib/type
 import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 import { brainLabel } from './models.js';
+import { launcher } from './launcher.svelte.js';
 
 export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
@@ -41,8 +42,8 @@ class FleetState {
   pending = $state<PendingItem[]>([]);
   /** 「待处理」里的运营机会（自己运营的站点）；切到哪一块：confirm 等你确认 / opps 运营机会 */
   opps = $state<OppOverview | null>(null);
-
-  /** 刚交给 AI、还没开始的条目（列表上先标出来，作业开始后由队列状态接手） */
+  /** 「待处理」里交给 AI 时这批临时用的模型（"<brain>::<model>"）；空＝按站点设置 */
+  batchModel = $state('');
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -197,18 +198,27 @@ function modelSummary(items: OppItem[]): string {
   for (const i of items) by.set(oppModel(i), (by.get(oppModel(i)) ?? new Set()).add(i.site_id));
   return [...by.entries()].map(([m, s]) => `${m} ${s.size} 个站点`).join('；');
 }
+/** 这批临时选的模型的名字，如「Codex · GPT-5.5」 */
+export function batchModelLabel(v = fleet.batchModel): string {
+  if (!v) return '';
+  const b = v.split('::')[0];
+  return `${brainLabel(b)} · ${launcher.comboOpts.find((o) => o.value === v)?.label ?? (v.slice(b.length + 2) || '默认模型')}`;
+}
 /** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
 export async function workOpps(items: OppItem[], ask = true) {
   if (!items.length) return;
   const n = siteCount(items);
-  const none = items.filter((i) => !i.brain);
+  const pick = fleet.batchModel;
+  const none = pick ? [] : items.filter((i) => !i.brain);
+  const models = pick ? `${batchModelLabel(pick)}（这批临时用，不改站点和托管方案的设置）。` : `${modelSummary(items)}。托管方案里的站点用方案选的模型，其它站点用站点「运营」设置里的；要临时换，在列表上方「交给 AI 时用」里选。`;
   const sitemap = items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : '';
-  const msg = `让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n用的模型：${modelSummary(items)}。托管方案里的站点用方案选的模型，其它站点用站点「运营」设置里的。${none.length ? `\n有 ${siteCount(none)} 个站点还没选模型，这些会失败，先去设置里选好。` : ''}`;
+  const msg = `让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n用的模型：${models}${none.length ? `\n有 ${siteCount(none)} 个站点还没选模型，这些会失败，先去设置里选好。` : ''}`;
   if (ask && items.length > 1 && !(await confirmDialog(msg, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
   const by = new Map<string, string[]>();
   for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);
   try {
-    await invoke('work_across_sites', { batches: [...by.entries()] });
+    const [b, ...m] = pick.split('::');
+    await invoke('work_across_sites', { batches: [...by.entries()], model: pick ? [b, m.join('::')] : null });
     say(n > 3 ? `已交给 AI：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 AI：${items.length} 条`);
     void loadOpps();
   } catch (e) { say(String(e), 'err'); }
