@@ -58,6 +58,14 @@
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
+  // 机会的说明常常是「数据依据 + 做法」写成一大段：按「做法 / 改法 / 怎么改」拆成两行，各自默认最多两行，点「展开全文」看完整的
+  function splitEvidence(t: string): { k: string; v: string }[] {
+    const m = t.match(/^(.*?)[。；;\s]*(?:做法|改法|怎么改|建议做法)[:：]\s*(.+)$/s);
+    if (!m || !m[1].trim()) return [{ k: '依据', v: t.trim() }];
+    return [{ k: '依据', v: m[1].trim().replace(/[。；;]?$/, '。') }, { k: '做法', v: m[2].trim() }];
+  }
+  let openEv = $state<Set<string>>(new Set());
+  const flipEv = (id: string) => { const n = new Set(openEv); if (n.has(id)) n.delete(id); else n.add(id); openEv = n; };
   // 标题后面的目标页面：改已有页面就是那个页面，新写的页面用 AI 报上来的新网址；都没有就不显示
   const targetOf = (i: OpsItem) => (i.opp.page?.startsWith('http') ? i.opp.page : (i.new_pages ?? [])[0] ?? '');
   const shortPath = (u: string) => { try { const x = new URL(u); return x.pathname + x.search || '/'; } catch { return u; } };
@@ -150,7 +158,10 @@
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
             </div>
             <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>
-            <p class="it-ev">{i.opp.evidence}</p>
+            <dl class="it-ev" class:open={openEv.has(i.id)}>
+              {#each splitEvidence(i.opp.evidence) as part, n (n)}<dt>{part.k}</dt><dd>{part.v}</dd>{/each}
+            </dl>
+            {#if i.opp.evidence.length > 90}<button class="link-btn ev-more" onclick={() => flipEv(i.id)}>{openEv.has(i.id) ? '收起' : '展开全文'}</button>{/if}
             {#if i.opp.expect_note}<p class="it-expect"><Icon name="target" size={11} />预期：{i.opp.expect_note}<span class="faint">（上线 4 周后按数据对比）</span></p>{/if}
             {#if i.ai_summary || i.files?.length}
               <button class="how-t" class:open={openWhy.has(i.id)} onclick={() => toggleWhy(i.id)} aria-expanded={openWhy.has(i.id)}>
@@ -282,7 +293,12 @@
   .how p { margin: 0 0 6px; line-height: 1.65; white-space: pre-wrap; }
   .files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--faint); }
   .it-expect { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--dim); }
-  .it-ev { margin: 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; max-width: 80ch; }
+  /* 依据 / 做法两行：左边小标签，右边正文默认最多两行，展开看全文 */
+  .it-ev { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12.5px; line-height: 1.65; max-width: 86ch; }
+  .it-ev dt { padding-top: 1px; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+  .it-ev dd { margin: 0; color: var(--dim); display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .it-ev.open dd { display: block; }
+  .ev-more { align-self: flex-start; margin: -2px 0 0; font-size: 12px; }
   .meta { gap: 8px; }
   .br { font-size: 11.5px; }
   .verdict { margin: 0; font-size: 12px; line-height: 1.55; color: var(--su-warn-ink); background: var(--su-warn-soft); border-radius: 7px; padding: 5px 9px; align-self: flex-start; max-width: 100%; overflow-wrap: anywhere; }
