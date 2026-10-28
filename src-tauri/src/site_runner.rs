@@ -136,36 +136,55 @@ pub fn period(schedule: &str) -> Option<u64> {
     }
 }
 
+/// 某个任务下一次到点的时刻：daily / weekly 是上次 + 周期；「weekly:N」是每周第 N 天（1＝周一）——
+/// 上次之后至少隔 6 天、落在那一天（从那天 0 点起算）。off 等没有周期的为 None。
+pub fn next_due(schedule: &str, last: u64) -> Option<u64> {
+    if let Some(day) = schedule.strip_prefix("weekly:").and_then(|d| d.parse::<u32>().ok()) {
+        use chrono::{Datelike, TimeZone};
+        let t0 = last + 6 * DAY;
+        let mut d = chrono::Local.timestamp_opt(t0 as i64, 0).single()?.date_naive();
+        for _ in 0..7 {
+            if d.weekday().number_from_monday() == day {
+                break;
+            }
+            d = d.succ_opt()?;
+        }
+        let midnight = chrono::Local.from_local_datetime(&d.and_hms_opt(0, 0, 0)?).earliest()?.timestamp() as u64;
+        return Some(midnight.max(t0));
+    }
+    period(schedule).map(|p| last + p)
+}
+
 /// 某个任务现在该不该跑（错过的任务在下次启动时补跑一次）。
 pub fn due(schedule: &str, last: u64, now: u64) -> bool {
-    period(schedule).is_some_and(|p| now.saturating_sub(last) >= p)
+    next_due(schedule, last).is_some_and(|t| now >= t)
 }
 
 pub const TASKS: &[&str] = &["scan", "health", "report", "review", "plan"];
 
-/// 任务周期。在托管方案里的站点：扫描和体检每天，计划、周报、复盘每周；
-/// 没托管的站点（你自己运营）：不做计划，其它按站点自己的周期（默认每周）。
-pub fn schedule_of<'a>(site: &'a Site, task: &str, in_plan: bool) -> &'a str {
-    if in_plan {
+/// 任务周期。在托管方案里的站点：扫描（一轮：挑几条交给 AI 改、上线）按方案的运营节奏（每天，或每周某一天），
+/// 体检每天，计划、周报、复盘每周；没托管的站点（你自己运营）：不做计划，其它按站点自己的周期（默认每周）。
+pub fn schedule_of(site: &Site, task: &str, plan: Option<&crate::managed::ManagedGroup>) -> String {
+    if let Some(g) = plan {
         return match task {
-            "scan" | "health" => "daily",
-            _ => "weekly",
+            "scan" if g.cadence == "weekly" => format!("weekly:{}", g.cadence_day),
+            "scan" | "health" => "daily".into(),
+            _ => "weekly".into(),
         };
     }
     match task {
-        "plan" => "off",
-        "scan" => &site.ops.scan,
-        "health" => &site.ops.health,
-        "report" => &site.ops.report,
-        "review" => &site.ops.review,
-        _ => "off",
+        "scan" => site.ops.scan.clone(),
+        "health" => site.ops.health.clone(),
+        "report" => site.ops.report.clone(),
+        "review" => site.ops.review.clone(),
+        _ => "off".into(),
     }
 }
 
 /// 这个站点下一次自动运行什么、什么时候（和调度循环同一套规则：每项任务上次运行 + 周期，没跑过的从导入时间算；
 /// 没有数据源的只做体检和计划；上线后检查到期的优先）。托管暂停或站点停了就没有下一次。
 /// 时间是「到点」的时刻：调度每 10 分钟看一次、客户端要开着，实际会晚几分钟。
-pub fn next_run(site: &Site, site_dir: &Path, in_plan: bool) -> Option<(String, u64)> {
+pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::ManagedGroup>) -> Option<(String, u64)> {
     let state = load_state(site_dir);
     let has_data = !site.data.gsc_site.is_empty() || !site.data.ga4_property.is_empty() || !site.data.bing_site.is_empty();
     let mut best: Option<(String, u64)> = site_ops::load_queue(site_dir)
@@ -177,8 +196,7 @@ pub fn next_run(site: &Site, site_dir: &Path, in_plan: bool) -> Option<(String, 
         if !matches!(*task, "health" | "plan") && !has_data {
             continue;
         }
-        let Some(p) = period(schedule_of(site, task, in_plan)) else { continue };
-        let at = state.last.get(*task).copied().unwrap_or(0).max(site.created_at) + p;
+        let Some(at) = next_due(&schedule_of(site, task, plan), state.last.get(*task).copied().unwrap_or(0).max(site.created_at)) else { continue };
         if best.as_ref().is_none_or(|b| at < b.1) {
             best = Some((task.to_string(), at));
         }
@@ -255,7 +273,8 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
     // 托管站点用所在方案的上限；站点数据目录是 <数据目录>/sites/<id>
     let group = site_dir.parent().and_then(Path::parent).and_then(|root| crate::managed::load(root).group_of(&site.id).cloned());
     let tokens_limit = group.as_ref().map(|g| g.tokens_per_week).unwrap_or(site.ops.budget.tokens_per_week);
-    let changes_limit = group.as_ref().map(|g| g.changes_per_week).unwrap_or(site.ops.budget.changes_per_week);
+    // 托管站点不再按条数封顶（节奏 × 每轮条数已经管住了 AI 做多少），只看 token；自己运营的站点沿用站点设置
+    let changes_limit = if group.is_some() { 0 } else { site.ops.budget.changes_per_week };
     Budget { changes_used: changes, changes_limit, tokens_used: tokens, tokens_limit }
 }
 
@@ -462,7 +481,8 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     let rules = group_rules(ctx, site);
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
-    picked.truncate(site.ops.budget.items_per_run.max(1) as usize);
+    // 每轮最多改几条：托管站点用方案的「每轮最多改」，自己运营的用站点设置
+    picked.truncate(rules.as_ref().map(|g| g.per_round).unwrap_or(site.ops.budget.items_per_run).max(1) as usize);
     let mut done = 0;
     let mut notes = Vec::new();
     let mut stopped = None;
@@ -546,7 +566,7 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
 
 const OPS_MAX_REQUESTS: usize = 120;
 
-const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周改动上限」或「每站每周 token」，或等最近 7 天滚过去。";
+const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周 token」，或等用量滚出最近 7 天。";
 
 /// 手动对某一条机会立即按站点档位处理。
 async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
@@ -700,12 +720,6 @@ pub fn source_of(o: &Opportunity) -> &str {
         "content_gap" => "gap",
         _ => "data",
     }
-}
-
-/// 今天（本地时间）已经自动上线了几条。
-fn shipped_today(site_dir: &Path) -> usize {
-    let start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|d| d.and_local_timezone(chrono::Local).single()).map(|d| d.timestamp() as u64).unwrap_or(0);
-    site_ops::load_queue(site_dir).iter().filter(|i| i.auto && i.deployed_at >= start).count()
 }
 
 async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
@@ -1144,9 +1158,6 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     };
     if level >= 5 && verdict == "auto" && !managed.allows(&item.opp.change) {
         verdict = format!("托管方案「{}」不允许「{}」这类改动，留给你确认", managed.name, crate::managed::action_label(&item.opp.change));
-    }
-    if level >= 5 && verdict == "auto" && shipped_today(&site_dir) >= managed.daily_changes as usize {
-        verdict = format!("今天已自动上线 {} 条（上限），这一条留给你确认或明天再上", managed.daily_changes);
     }
     // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
     // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）
@@ -2068,8 +2079,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         .take(20)
         .map(|i| format!("- [{}] {}{}", i.status, i.opp.title, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
         .collect();
-    let n = site.ops.budget.items_per_run.clamp(1, 8) * 2;
     let rules = group_rules(ctx, site);
+    let n = rules.as_ref().map(|g| g.per_round).unwrap_or(site.ops.budget.items_per_run).clamp(1, 8) * 2;
     let plan_brief = rules.as_ref().map(|g| g.brief()).unwrap_or_default();
     let kinds: Vec<&str> = crate::managed::ACTIONS.iter().copied().filter(|a| rules.as_ref().is_none_or(|g| g.allows(a))).collect();
     let stage = crate::site_stage::stage_of(site, &site_dir);
@@ -2603,7 +2614,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     if needs_data && !has_data {
                         continue;
                     }
-                    if due(schedule_of(&site, task, in_plan), last, now()) {
+                    if due(&schedule_of(&site, task, mcfg.group_of(&site.id)), last, now()) {
                         if start(ctx.clone(), &site.id, task, "schedule", None).is_ok() {
                             busy += 1;
                         }
@@ -2627,6 +2638,23 @@ mod tests {
         assert!(!due("daily", 100, DAY));
         assert!(due("weekly", 0, 7 * DAY));
         assert!(!due("off", 0, 99 * DAY));
+    }
+
+    #[test]
+    fn weekly_rounds_land_on_the_chosen_weekday() {
+        use chrono::{Datelike, TimeZone};
+        // 上次在某个周三 15:00 跑过 → 下一次是至少 6 天后的周一（从那天 0 点起）
+        let last = chrono::Local.with_ymd_and_hms(2026, 10, 28, 15, 0, 0).single().unwrap().timestamp() as u64;
+        let next = next_due("weekly:1", last).unwrap();
+        let d = chrono::Local.timestamp_opt(next as i64, 0).single().unwrap();
+        assert_eq!(d.weekday().number_from_monday(), 1);
+        assert!(next >= last + 6 * DAY && next < last + 13 * DAY);
+        assert!(!due("weekly:1", last, next - 60));
+        assert!(due("weekly:1", last, next));
+        // 上次就是周一 → 下一次是下周一，不会当周再跑
+        let mon = chrono::Local.with_ymd_and_hms(2026, 11, 2, 9, 0, 0).single().unwrap().timestamp() as u64;
+        let n2 = next_due("weekly:1", mon).unwrap();
+        assert!(n2 >= mon + 6 * DAY && n2 <= mon + 7 * DAY);
     }
 
     #[test]

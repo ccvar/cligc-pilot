@@ -124,7 +124,7 @@
     const name = siteName(id);
     const full = budgetFull(sitesById.get(id)?.budget);
     if (full) {
-      if (g && (await confirmDialog(`${name} ${full}，这一轮开始不了，计划里的任务会一直排在「待处理」。调高方案里的「每站每周改动上限」或「每站每周 token」后再执行，或等最近 7 天滚过去。`, { title: '本周额度已满', kind: 'warning', confirmText: '调整方案' }))) editGroup(g);
+      if (g && (await confirmDialog(`${name} ${full}，这一轮开始不了，计划里的任务会一直排在「待处理」。调高方案里的「每站每周 token」后再执行，或等用量滚出最近 7 天。`, { title: '本周额度已满', kind: 'warning', confirmText: '调整方案' }))) editGroup(g);
       return;
     }
     const what = g?.autonomy === 'auto'
@@ -143,7 +143,7 @@
     const g = groups.find((y) => y.sites.includes(x.id));
     const full = budgetFull(x.budget);
     const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点的托管暂停着' : full ? full : '';
-    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周改动上限」或「每站每周 token」，或等最近 7 天滚过去。' : '';
+    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : '';
     // 能就地处理的：站点自己的开关关着 → 打开托管；额度满了 → 编辑方案。有计划的都可以清除计划
     const kind = o?.config.paused || g?.paused ? 'paused' : g?.stopped.includes(x.id) ? 'site' : full ? 'budget' : '';
     return { id: x.id, name: x.name, queued: x.queued, why, fix, kind, group: g?.id ?? '', hasPlan: x.plan_count > 0 };
@@ -245,6 +245,7 @@
     budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' }, plan_cleared: { l: '清除计划', c: '', i: 'x' },
   };
   const when = ago;
+  const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   // 「失败 N」的悬停说明：最近几条的标题和原因；余额不够、没登录这类要你先处理的，补一句下一步
   function failTip(s: { failed: number; failed_why?: [string, string][] }): string {
     const rows = (s.failed_why ?? []).map(([t, why]) => `· ${t}\n  ${why || '没有记下原因'}${turnErrorHint(why) ? `\n  → ${turnErrorHint(why)}` : ''}`);
@@ -381,8 +382,7 @@
           <div class="rules">
             <span class="model" data-tip={g.fallback_brain ? `备用：${modelLabel(g.fallback_brain, g.fallback_model)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
             {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '人审上线', small: '小改自动上线', all: '自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
-            <span data-tip="每个站点每天最多自动上线这么多条，超出的留给你确认"><Icon name="rocket" size={12} />每天 ≤{g.daily_changes} 条</span>
-            <span data-tip="每个站点每周最多改这么多条（失败的不算，手动交给 AI 的不受限），到了等下周"><Icon name="checks" size={12} />每周 {g.changes_per_week ? `≤${g.changes_per_week} 条` : '改动不限'}</span>
+            <span data-tip={`运营节奏：${g.cadence === 'weekly' ? `每${WEEK[(g.cadence_day ?? 1) - 1]}跑一轮` : '每天跑一轮'}，每轮最多交给 AI 改 ${g.per_round} 条；该自动上线的改好就上线`}><Icon name="rocket" size={12} />{g.cadence === 'weekly' ? `每${WEEK[(g.cadence_day ?? 1) - 1]}` : '每天'}一轮 · ≤{g.per_round} 条</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
             {#if jev.configured}
               <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->
@@ -415,7 +415,7 @@
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
                       {#if s.money?.tracked}<span class="faint cost" data-tip={`本月收益（AdSense + 手动记的）；上月 ${usd(s.money.last_month)}`}>收益 {usd(s.money.month)}</span>{/if}
                       {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>{s.money?.tracked ? 'AI' : '本月'} {costText(s.cost)}</span>{/if}
-                      {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了托管不再自动处理这个站点的任务（你手动交给 AI 的不受条数限制），调高方案里的「每站每周改动上限」或「每站每周 token」，或等最近 7 天滚过去">额度已满</span>{/if}
+                      {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}
                   {#if s?.job || sites.jobs[id]?.status === 'running'}

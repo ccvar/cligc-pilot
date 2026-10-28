@@ -57,9 +57,14 @@ fn default_review() -> String {
 fn default_daily() -> u32 {
     3
 }
-fn default_weekly() -> u32 {
-    10
+fn default_cadence() -> String {
+    "daily".into()
 }
+fn default_cadence_day() -> u32 {
+    1
+}
+/// 老方案换算：每轮条数取原来「每天自动上线上限」和原来每轮 3 条里较小的（0 也按 1 算）
+pub const DEFAULT_PER_ROUND: u32 = 3;
 fn default_tokens() -> u64 {
     2_000_000
 }
@@ -96,12 +101,18 @@ pub struct ManagedGroup {
     pub fallback_model: String,
     #[serde(default = "default_review")]
     pub new_content: String,
+    /// 老版本的「每站每天自动上线上限」：已经不用了，只在老方案第一次读进来时换算成「每轮最多改几条」。
     #[serde(default = "default_daily")]
     pub daily_changes: u32,
-    /// 每站每周改动上限（条）：托管自己跑时，最近 7 天改出东西的条数（等你确认、已上线、已处理、已回滚、处理中）到了就不再处理；
-    /// 失败的、你停掉的不算，你手动交给 AI 的不受它限制。0＝不限。
-    #[serde(default = "default_weekly")]
-    pub changes_per_week: u32,
+    /// 运营节奏：多久跑一轮（daily 每天 | weekly 每周，在 cadence_day 那天；1＝周一 … 7＝周日）。
+    /// 一轮＝拉数据 → 挑最值得做的几条 → 交给 AI 改 → 检查通过的按规则上线。体检不花 AI 的钱，照样每天做。
+    #[serde(default = "default_cadence")]
+    pub cadence: String,
+    #[serde(default = "default_cadence_day")]
+    pub cadence_day: u32,
+    /// 每轮最多改几条（只管托管自己跑；你手动交给 AI 的不受它限制）。0＝老方案还没换算过，读进来时补上。
+    #[serde(default)]
+    pub per_round: u32,
     #[serde(default = "default_tokens")]
     pub tokens_per_week: u64,
     /// 运营目标：一两句话，写进每次计划和改动的指令里。
@@ -206,7 +217,9 @@ impl ManagedGroup {
             fallback_model: c.fallback_model.clone(),
             new_content: c.new_content.clone(),
             daily_changes: c.daily_changes,
-            changes_per_week: default_weekly(),
+            cadence: default_cadence(),
+            cadence_day: default_cadence_day(),
+            per_round: c.daily_changes.clamp(1, DEFAULT_PER_ROUND),
             tokens_per_week: c.tokens_per_week,
             goal: String::new(),
             actions: all_actions(),
@@ -285,7 +298,14 @@ fn dir(data_dir: &Path) -> PathBuf {
 }
 
 pub fn load(data_dir: &Path) -> ManagedConfig {
-    crate::store_file::read_or_quarantine(&dir(data_dir).join("config.json"))
+    let mut c: ManagedConfig = crate::store_file::read_or_quarantine(&dir(data_dir).join("config.json"));
+    // 老方案没有「每轮最多改几条」：按原来的每天上线上限换算（和原来每轮 3 条取小）
+    for g in &mut c.groups {
+        if g.per_round == 0 {
+            g.per_round = g.daily_changes.clamp(1, DEFAULT_PER_ROUND);
+        }
+    }
+    c
 }
 
 pub fn save(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {
@@ -369,8 +389,11 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     if g.daily_changes > 50 {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
     }
-    if g.changes_per_week > 500 {
-        return Err("每周改动上限超出范围（0–500）".into());
+    if !matches!(g.cadence.as_str(), "daily" | "weekly") || !(1..=7).contains(&g.cadence_day) {
+        return Err("运营节奏只能是每天，或每周选一天".into());
+    }
+    if !(1..=20).contains(&g.per_round) {
+        return Err("每轮最多改的条数超出范围（1–20）".into());
     }
     if !METRICS.contains(&g.metric.as_str()) {
         return Err(format!("未知的衡量标准：{}", g.metric));

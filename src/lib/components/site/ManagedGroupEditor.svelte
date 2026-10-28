@@ -108,6 +108,7 @@
     }
   });
   const siteName = (id: string) => sites.list.find((x) => x.id === id)?.name ?? id;
+  const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((l, n) => ({ value: String(n + 1), label: l }));
 </script>
 
 {#if g}
@@ -232,11 +233,15 @@
         <small>{g.code_changes === 'review' ? '改到模板、组件、样式或站点脚本的，都放进「需要你」等你看过再上线。' : (g.code_changes ?? 'all') === 'all' ? '改模板、组件、样式和站点脚本，构建、检查和上线后验收都通过就自动上线；单次改动超过 400 行的除外。' : '改模板、组件、样式和站点脚本，代码部分合计不超过 80 行、5 个文件（文章正文这类数据不算），构建、检查和上线后验收都通过就自动上线；更大的留给你确认。'}
           不管选哪一档，依赖、构建 / 部署配置、Worker 和服务端代码、读环境变量或调外部服务、引入新的外部包、推荐 / 邀请相关内容，都不会自动上线；上线后验收没过会自动回滚。</small>
       </div>
+      <div class="field"><span class="lbl">运营节奏</span>
+        <div class="cad">
+          <div class="seg"><button class:on={(g.cadence ?? 'daily') === 'daily'} onclick={() => g && (g.cadence = 'daily')}>每天一轮</button><button class:on={g.cadence === 'weekly'} onclick={() => g && (g.cadence = 'weekly')}>每周一轮</button></div>
+          {#if g.cadence === 'weekly'}<Dropdown compact menuCompact value={String(g.cadence_day ?? 1)} options={WEEKDAYS} ariaLabel="每周哪天跑" onchange={(v: string) => g && (g.cadence_day = Number(v))} />{/if}
+          <label class="pr" for="ge-round">每轮最多改<input id="ge-round" class="tin" type="number" min="1" max="20" bind:value={g.per_round} />条</label>
+        </div>
+        <small>每一轮：拉数据 → 挑最值得做的几条交给 AI 改 → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。{#if g.per_round}相当于每周最多改 {(g.cadence === 'weekly' ? 1 : 7) * g.per_round} 条。{/if}体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受条数限制。</small>
+      </div>
       <div class="grid2">
-        <div class="field"><label for="ge-daily">每站每天自动上线上限（条）</label><input id="ge-daily" class="tin" type="number" min="0" max="50" bind:value={g.daily_changes} />
-          <small>超出的改动转进「需要你」等你决定；0＝全部人审人发。</small></div>
-        <div class="field"><label for="ge-weekly">每站每周改动上限（条）</label><input id="ge-weekly" class="tin" type="number" min="0" max="500" bind:value={g.changes_per_week} />
-          <small>最近 7 天 AI 改出东西的条数到了就先停，下周再接着做；失败的不算，你手动交给 AI 的不受限。0＝不限。</small></div>
         <div class="field"><label for="ge-minp">新页面正文下限（字）</label><input id="ge-minp" class="tin" type="number" min="0" max="10000" step="100" bind:value={g.min_page_chars} />
           <small>低于它的新页面不自动上线，转进「需要你」由你判断（术语解释这类短页可以直接放行）。0＝不检查。</small></div>
         <div class="field"><label for="ge-tok">每站每周模型用量上限（token）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} />
@@ -292,6 +297,9 @@
 {/if}
 
 <style>
+  .cad { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .cad .pr { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
+  .cad .pr .tin { width: 64px; }
   .ge { width: min(640px, calc(100vw - 32px)); }
   .cnt { font-weight: 400; font-size: 11.5px; margin-left: 4px; }
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
