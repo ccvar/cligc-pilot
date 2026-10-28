@@ -48,7 +48,7 @@ class FleetState {
   pending = $state<PendingItem[]>([]);
   /** 「待处理」里的运营机会（自己运营的站点）；切到哪一块：confirm 等你确认 / opps 运营机会 */
   opps = $state<OppOverview | null>(null);
-  /** 「待处理」里交给 AI 时你选的模型（"<brain>::<model>"，记在本机）；空＝还没选过，用 batchPick 的默认 */
+  /** 「待处理」交给 AI 的默认模型（"<brain>::<model>"，记在本机，设置里改）；空＝还没设过，用 batchPick 的推断 */
   batchModel = $state(readBatchModel());
   // 总览
   query = $state('');
@@ -207,7 +207,7 @@ function shortName(brain: string, model: string): string {
 export function batchOptions() {
   return launcher.comboOpts.map((o) => { const [b, ...m] = o.value.split('::'); return { ...o, short: shortName(b, m.join('::')) }; });
 }
-/** 这一页交给 AI 用哪个模型：你选过的（记在本机）；没选过就用列表里这些站点用得最多的那个，再不行用第一个能用的 */
+/** 交给 AI 的默认模型：设过的（记在本机）；没设过就用列表里这些站点用得最多的那个，再不行用第一个能用的 */
 export function batchPick(): string {
   const ok = (v: string) => launcher.comboOpts.some((o) => o.value === v && !o.disabled);
   if (fleet.batchModel && ok(fleet.batchModel)) return fleet.batchModel;
@@ -225,15 +225,21 @@ export function modelTarget(pick: string): { icon: string; name: string } {
   const [b, ...m] = pick.split('::');
   return { icon: b ? modelIcon(b) : '', name: b ? shortName(b, m.join('::')) : 'AI' };
 }
-/** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着。用这一页选的模型（不改站点和托管方案的设置） */
-export async function workOpps(items: OppItem[], ask = true) {
+/** "brain::model" 或 model_used 的「brain · model」→ 短名字，如「Opus 5.5」 */
+export function modelName(v: string): string {
+  const [b, ...m] = v.includes('::') ? v.split('::') : v.split(' · ');
+  return b ? shortName(b.trim(), m.join('::').trim()) : '';
+}
+/** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着。
+ *  model 不传就用默认模型；都只管这一批，不改站点和托管方案里设置的模型。 */
+export async function workOpps(items: OppItem[], ask = true, model?: string) {
   if (!items.length) return;
   const n = siteCount(items);
-  const pick = batchPick();
+  const pick = model || batchPick();
   if (!pick) { say('没有能用的模型：先在设置里登录 Claude / Codex，或连上 API 服务', 'err'); return; }
   const name = modelTarget(pick).name;
   const sitemap = items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : '';
-  const msg = `交给 ${name} 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n只是这批用 ${name}，不改站点和托管方案里设置的模型。`;
+  const msg = `交给 ${name} 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n只是这批用 ${name}${model && model !== batchPick() ? `（默认是 ${modelTarget(batchPick()).name}，不变）` : ''}，不改站点和托管方案里设置的模型。`;
   if (ask && items.length > 1 && !(await confirmDialog(msg, { title: `交给 ${name}`, kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
   const by = new Map<string, string[]>();
   for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);

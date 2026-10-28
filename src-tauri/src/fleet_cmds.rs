@@ -215,6 +215,8 @@ pub struct OppOverview {
     pub waiting: usize,
     /// 跨站点批量里还排着的条目 id
     pub queued: Vec<String>,
+    /// 排着的条目各用哪个模型（条目 id, "brain::model"；按站点设置的不列）
+    pub queued_model: Vec<(String, String)>,
     /// 最近一天交给 AI 处理过的（处理中、等你确认、已处理、没成功），给「处理进度」用
     pub recent: Vec<OppItem>,
 }
@@ -274,7 +276,8 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
     recent.sort_by(|a, b| b.item.worked_at.cmp(&a.item.worked_at));
     let across = ACROSS.lock().unwrap();
     let queued = across.iter().flat_map(|(_, ids, _)| ids.iter().cloned()).collect();
-    OppOverview { items, managed_open, running, waiting: across.len(), queued, recent }
+    let queued_model = across.iter().filter_map(|(_, ids, m)| m.as_ref().map(|(b, m)| (ids, format!("{b}::{m}")))).flat_map(|(ids, m)| ids.iter().map(move |id| (id.clone(), m.clone()))).collect();
+    OppOverview { items, managed_open, running, waiting: across.len(), queued, queued_model, recent }
 }
 
 /// 跨站点批量里还排着、没开始的（站点, 条目 id, 这批临时选的模型）

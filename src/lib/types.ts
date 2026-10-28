@@ -476,7 +476,7 @@ export interface SiteRow {
 export interface PendingItem { site_id: string; site_name: string; item: OpsItem }
 /** 跨站点的运营机会（自己运营的站点里还没处理的）：tier＝urgent 先处理 / value 收益大 / easy 顺手做；gain＝每月约多拿到的点击 */
 export interface OppItem { site_id: string; site_name: string; domain: string; item: OpsItem; tier: 'urgent' | 'value' | 'easy'; gain: number; ai: boolean; brain: string; model: string; step: string }
-export interface OppOverview { items: OppItem[]; managed_open: number; running: string[]; waiting: number; queued: string[]; recent: OppItem[] }
+export interface OppOverview { items: OppItem[]; managed_open: number; running: string[]; waiting: number; queued: string[]; queued_model: [string, string][]; recent: OppItem[] }
 export interface DataSourceRow { conn: Connection; sites: string[] }
 export interface BindReport { bound: [string, string][]; unmatched: string[]; kept: number; errors: string[] }
 
