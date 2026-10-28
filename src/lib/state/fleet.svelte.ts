@@ -36,14 +36,20 @@ export function needsAttention(r: SiteRow): boolean {
   return !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || r.summary.errors.length > 0;
 }
 
+// 「待处理」交给 AI 时选的模型记在本机
+const BATCH_MODEL_KEY = 'cligc.pilot.batchModel';
+function readBatchModel(): string {
+  try { return localStorage.getItem(BATCH_MODEL_KEY) ?? ''; } catch { return ''; }
+}
+
 class FleetState {
   rows = $state<SiteRow[]>([]);
   loaded = $state(false);
   pending = $state<PendingItem[]>([]);
   /** 「待处理」里的运营机会（自己运营的站点）；切到哪一块：confirm 等你确认 / opps 运营机会 */
   opps = $state<OppOverview | null>(null);
-  /** 「待处理」里交给 AI 时这批临时用的模型（"<brain>::<model>"）；空＝按站点设置 */
-  batchModel = $state('');
+  /** 「待处理」里交给 AI 时你选的模型（"<brain>::<model>"，记在本机）；空＝还没选过，用 batchPick 的默认 */
+  batchModel = $state(readBatchModel());
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -192,50 +198,49 @@ export function oppModel(i: Pick<OppItem, 'brain' | 'model'>): string {
   const m = i.model ? shortName(i.brain, i.model) : i.brain === 'codex' ? '本机默认模型' : '';
   return m ? `${brainLabel(i.brain)} · ${m}` : brainLabel(i.brain);
 }
-/** 按模型数站点：「Codex · 本机默认模型 11 个站点；Claude · Sonnet 1 个站点」 */
-function modelSummary(items: OppItem[]): string {
-  const by = new Map<string, Set<string>>();
-  for (const i of items) by.set(oppModel(i), (by.get(oppModel(i)) ?? new Set()).add(i.site_id));
-  return [...by.entries()].map(([m, s]) => `${m} ${s.size} 个站点`).join('；');
-}
-/** 这批临时选的模型的名字，如「Codex · GPT-5.5」 */
-export function batchModelLabel(v = fleet.batchModel): string {
-  if (!v) return '';
-  const b = v.split('::')[0];
-  return `${brainLabel(b)} · ${launcher.comboOpts.find((o) => o.value === v)?.label ?? (v.slice(b.length + 2) || '默认模型')}`;
-}
-/** 一个模型的短名字（按钮、下拉框上用）：Codex 本机默认 →「Codex」，sonnet →「Sonnet」，其它用模型列表里的名字 */
+/** 一个模型的短名字（下拉框、按钮上用）：Codex 本机默认 →「Codex」，其它用模型列表里的名字，如「Opus 5.5」 */
 function shortName(brain: string, model: string): string {
   if (!model) return brain.startsWith('api:') ? brainLabel(brain).replace(/ · API$/, '') : brainTitle(brain);
-  return launcher.comboOpts.find((o) => o.value === `${brain}::${model}`)?.label ?? model.replace(/^sonnet$/, 'Sonnet').replace(/^haiku$/, 'Haiku');
+  return launcher.comboOpts.find((o) => o.value === `${brain}::${model}`)?.label ?? model;
 }
-/** 交给谁：临时选了模型就是它；按站点设置时这些条目只用到一种模型就是那种，几种混着就是「AI」（没有图标） */
-export function handTarget(items: Pick<OppItem, 'brain' | 'model'>[], pick = fleet.batchModel): { icon: string; name: string } {
-  if (pick) {
-    const [b, ...m] = pick.split('::');
-    return { icon: modelIcon(b), name: shortName(b, m.join('::')) };
-  }
-  const kinds = [...new Set(items.filter((i) => i.brain).map((i) => `${i.brain}::${i.model}`))];
-  if (kinds.length !== 1) return { icon: '', name: 'AI' };
-  const [b, ...m] = kinds[0].split('::');
-  return { icon: modelIcon(b), name: shortName(b, m.join('::')) };
+/** 交给 AI 的模型选项：和启动页同一份列表，下拉框上显示短名字 */
+export function batchOptions() {
+  return launcher.comboOpts.map((o) => { const [b, ...m] = o.value.split('::'); return { ...o, short: shortName(b, m.join('::')) }; });
 }
-/** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
+/** 这一页交给 AI 用哪个模型：你选过的（记在本机）；没选过就用列表里这些站点用得最多的那个，再不行用第一个能用的 */
+export function batchPick(): string {
+  const ok = (v: string) => launcher.comboOpts.some((o) => o.value === v && !o.disabled);
+  if (fleet.batchModel && ok(fleet.batchModel)) return fleet.batchModel;
+  const n = new Map<string, number>();
+  for (const i of fleet.opps?.items ?? []) if (i.brain) n.set(`${i.brain}::${i.model}`, (n.get(`${i.brain}::${i.model}`) ?? 0) + 1);
+  const common = [...n.entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v).find(ok);
+  return common ?? launcher.comboOpts.find((o) => !o.disabled)?.value ?? '';
+}
+export function setBatchModel(v: string) {
+  fleet.batchModel = v;
+  try { localStorage.setItem(BATCH_MODEL_KEY, v); } catch { /* 存不了就只在这次有效 */ }
+}
+/** 模型的图标和短名字，如 { icon: 'claude', name: 'Opus 5.5' } */
+export function modelTarget(pick: string): { icon: string; name: string } {
+  const [b, ...m] = pick.split('::');
+  return { icon: b ? modelIcon(b) : '', name: b ? shortName(b, m.join('::')) : 'AI' };
+}
+/** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着。用这一页选的模型（不改站点和托管方案的设置） */
 export async function workOpps(items: OppItem[], ask = true) {
   if (!items.length) return;
   const n = siteCount(items);
-  const pick = fleet.batchModel;
-  const none = pick ? [] : items.filter((i) => !i.brain);
-  const models = pick ? `${batchModelLabel(pick)}（这批临时用，不改站点和托管方案的设置）。` : `${modelSummary(items)}。托管方案里的站点用方案选的模型，其它站点用站点「运营」设置里的；要临时换，在列表上方「交给 AI 时用」里选。`;
+  const pick = batchPick();
+  if (!pick) { say('没有能用的模型：先在设置里登录 Claude / Codex，或连上 API 服务', 'err'); return; }
+  const name = modelTarget(pick).name;
   const sitemap = items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : '';
-  const msg = `让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n用的模型：${models}${none.length ? `\n有 ${siteCount(none)} 个站点还没选模型，这些会失败，先去设置里选好。` : ''}`;
-  if (ask && items.length > 1 && !(await confirmDialog(msg, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
+  const msg = `交给 ${name} 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n只是这批用 ${name}，不改站点和托管方案里设置的模型。`;
+  if (ask && items.length > 1 && !(await confirmDialog(msg, { title: `交给 ${name}`, kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
   const by = new Map<string, string[]>();
   for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);
   try {
     const [b, ...m] = pick.split('::');
-    await invoke('work_across_sites', { batches: [...by.entries()], model: pick ? [b, m.join('::')] : null });
-    say(n > 3 ? `已交给 AI：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 AI：${items.length} 条`);
+    await invoke('work_across_sites', { batches: [...by.entries()], model: [b, m.join('::')] });
+    say(n > 3 ? `已交给 ${name}：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 ${name}：${items.length} 条`);
     void loadOpps();
   } catch (e) { say(String(e), 'err'); }
 }
