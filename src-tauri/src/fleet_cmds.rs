@@ -382,10 +382,29 @@ pub struct ShipItem {
 pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<ShipItem> {
     let since = crate::now_secs().saturating_sub(days.unwrap_or(30).min(90) * 86_400);
     let cfg = crate::managed::load(&state.data_dir);
+    ships(&state, |s| cfg.group_of(&s.id).is_some(), |i| i.deployed_at >= since && matches!(i.status.as_str(), "deployed" | "rolled_back" | "done"))
+}
+
+/// 什么时候算「处理完」：上线了看上线时间，其它（已处理、没成功、你驳回了）看最后一次更新
+pub fn finished_at(i: &QueueItem) -> u64 {
+    if i.deployed_at > 0 { i.deployed_at } else { i.updated_at }
+}
+
+/// 全部站点 →「处理记录」：所有站点最近 days 天交给 AI 处理过、已经有结果的条目（已上线、已处理、已回滚、没成功，
+/// 以及 AI 改过之后被你驳回的），新的在前；上线了的带上这个页面现在的搜索数据，和上线前比效果。
+#[tauri::command]
+pub fn history_across_sites(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<ShipItem> {
+    let since = crate::now_secs().saturating_sub(days.unwrap_or(7).min(90) * 86_400);
+    ships(&state, |_| true, |i| {
+        i.worked_at > 0 && finished_at(i) >= since && matches!(i.status.as_str(), "deployed" | "rolled_back" | "done" | "failed" | "dismissed")
+    })
+}
+
+fn ships(state: &AppState, site_ok: impl Fn(&crate::sites::Site) -> bool, keep: impl Fn(&QueueItem) -> bool) -> Vec<ShipItem> {
     let mut out: Vec<ShipItem> = Vec::new();
-    for s in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
+    for s in state.sites.list().into_iter().filter(|s| site_ok(s)) {
         let dir = state.sites.data_dir(&s.id);
-        let items: Vec<QueueItem> = crate::site_ops::load_queue(&dir).into_iter().filter(|i| i.deployed_at >= since && matches!(i.status.as_str(), "deployed" | "rolled_back" | "done")).collect();
+        let items: Vec<QueueItem> = crate::site_ops::load_queue(&dir).into_iter().filter(|i| keep(i)).collect();
         if items.is_empty() {
             continue;
         }
@@ -398,7 +417,7 @@ pub fn recent_ships(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec
             out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone() });
         }
     }
-    out.sort_by(|a, b| b.item.deployed_at.cmp(&a.item.deployed_at));
+    out.sort_by(|a, b| finished_at(&b.item).cmp(&finished_at(&a.item)));
     out
 }
 

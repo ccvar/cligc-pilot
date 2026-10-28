@@ -20,6 +20,7 @@
   import { ago, full, num } from './fmt';
   import BackgroundNotice from './BackgroundNotice.svelte';
   import OppsBoard from './OppsBoard.svelte';
+  import HistoryBoard from './HistoryBoard.svelte';
   import { usd } from '$lib/state/growth.svelte.js';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
@@ -156,6 +157,7 @@
       <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} triggerIcon={false} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
     {/if}
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if proposedN}<span class="cnt" data-tip="{proposedN} 条改动等你确认">{proposedN}</span>{/if}{#if oppN}<span class="cnt soft" data-tip="{oppN} 个运营机会没处理（自己运营的、托管停着的站点）">{oppN}</span>{/if}</button>
+    <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />处理记录</button>
   </div>
 
   <div class="page-body">
@@ -222,6 +224,8 @@
           </div>
         {/if}
       {/if}
+    {:else if fleet.tab === 'history'}
+      <HistoryBoard />
     {:else}
       <!-- 有 AI 改好等你确认的：上下两块（等你确认 / 运营机会）；没有就只显示运营机会，不留空块 -->
       {#if fleet.pending.length}

@@ -2,6 +2,7 @@
   // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 30 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
+  // 全部站点 →「处理记录」也用它（每天一组，limit 不限）：那里还有没成功的、你驳回的，时间按处理完的时候算。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import DiffModal from './DiffModal.svelte';
@@ -9,10 +10,11 @@
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { showDiff, rollbackItem, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
   import { ago, full } from './fmt';
+  import { modelName } from '$lib/state/fleet.svelte.js';
   import type { ShipItem, OpsItem, GscRow } from '$lib/types';
 
-  let { items }: { items: ShipItem[] } = $props();
-  const LIMIT = 5;
+  let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。' }: { items: ShipItem[]; limit?: number; empty?: string } = $props();
+  const LIMIT = $derived(limit);
   let all = $state(false);
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
@@ -20,6 +22,8 @@
   const siteOf = (id: string) => sites.list.find((s) => s.id === id);
 
   function shipState(i: OpsItem) {
+    if (i.status === 'failed') return { l: '没成功', c: 'err' };
+    if (i.status === 'dismissed') return { l: '你驳回了', c: 'line' };
     if (i.status === 'rolled_back') return { l: '已回滚', c: 'line' };
     if (i.status === 'done') return { l: '已处理', c: '' };
     if (i.attention) return { l: '上线待核对', c: 'warn' };
@@ -32,6 +36,8 @@
   type Effect = { t: string; c: string; tip: string };
   function effect(x: ShipItem): Effect {
     const i = x.item;
+    // 没上线过的（已处理、没成功、你驳回了）不谈效果
+    if (!i.deployed_at) return { t: '', c: '', tip: '' };
     const days = Math.floor((Date.now() / 1000 - i.deployed_at) / DAY);
     if (i.review) {
       const l = i.review === 'positive' ? '有效' : i.review === 'negative' ? '负面' : '持平';
@@ -67,7 +73,7 @@
 </script>
 
 <div class="rs">
-  {#if !items.length}<p class="hint">最近 30 天托管站点没有上线改动。</p>{/if}
+  {#if !items.length}<p class="hint">{empty}</p>{/if}
   {#if items.length}
     <ol class="rows">
       {#each shown as x (x.item.id)}
@@ -80,25 +86,27 @@
           <div class="row">
             <button class="main" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
               <span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>
-              <span class="tt" class:gone={i.status === 'rolled_back'}>{i.opp.title}</span>
+              <span class="tt" class:gone={i.status === 'rolled_back' || i.status === 'dismissed'}>{i.opp.title}</span>
             </button>
             {#if i.opp.page}<button class="url mono" onclick={() => openUrl(i.opp.page)} data-tip={`在浏览器打开：${i.opp.page}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
             <span class="acts">
               {#if site && i.head_sha}<button class="ic-btn ic-sm" onclick={() => showDiff(site.id, i)} aria-label="看改动" data-tip="看改动"><Icon name="diff" size={13} /></button>{/if}
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
-              <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', 'live')} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
+              <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', i.status === 'failed' ? 'todo' : i.status === 'dismissed' || i.status === 'rolled_back' ? 'closed' : 'live')} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
             </span>
             <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
-            <span class="how faint" data-tip={i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{i.auto ? '自动上线' : '人工确认'}</span>
+            <span class="how faint" data-tip={!i.deployed_at ? null : i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{!i.deployed_at ? '' : i.auto ? '自动上线' : '人工确认'}</span>
             <span class="pill {st.c}">{st.l}</span>
-            <span class="t faint" data-tip={full(i.deployed_at)}>{ago(i.deployed_at)}</span>
+            <span class="t faint" data-tip={full(i.deployed_at || i.updated_at)}>{ago(i.deployed_at || i.updated_at)}</span>
           </div>
           {#if isOpen}
             <div class="more">
               {#if CHANGE_LABEL[i.opp.change]}<span class="tag">{CHANGE_LABEL[i.opp.change]}</span>{/if}
               {#if i.attention}<p class="warn-text">要你核对：{i.attention}</p>{/if}
               {#if ef.tip}<p class="eff-d">{ef.tip}</p>{/if}
-              {#if i.ai_summary}<p>{i.ai_summary}</p>{/if}
+              {#if i.status === 'failed' && i.note}<p class="err-t">没成功：{i.note}</p>{/if}
+              {#if i.ai_summary}<p>{i.ai_summary_zh || i.ai_summary}</p>{/if}
+              {#if i.model_used}<p class="faint">模型：{modelName(i.model_used) || i.model_used}</p>{/if}
               {#if i.checks?.length}
                 {@const bad = i.checks.filter((c) => !c.ok)}
                 <p class="faint">线上验收：{i.checks.length - bad.length} 项通过{#if bad.length}，<span class="warn-text">{bad.length} 项没过（{bad.map((c) => c.label).join('、')}）</span>{/if}</p>
@@ -138,6 +146,7 @@
   .eff.up { color: var(--ok); }
   .eff.down { color: var(--err); }
   .eff-d { white-space: pre-line; }
+  .err-t { color: var(--err) !important; }
   .how { flex: none; width: 52px; text-align: right; font-size: 11px; white-space: nowrap; }
   .row > .pill { flex: none; min-width: 74px; justify-content: center; }
   .t { flex: none; width: 64px; text-align: right; font-size: 11.5px; white-space: nowrap; }

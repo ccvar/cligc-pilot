@@ -59,7 +59,7 @@ class FleetState {
   sort = $state<SiteSort>('name');
   desc = $state(false);
   page = $state(0);
-  tab = $state<'sites' | 'pending'>('sites');
+  tab = $state<'sites' | 'pending' | 'history'>('sites');
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
