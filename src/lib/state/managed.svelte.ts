@@ -44,10 +44,11 @@ export const ACTIONS: { key: string; label: string; sub: string }[] = [
 ];
 
 export const AUTONOMY_LABEL: Record<string, string> = { suggest: '只出建议', review: '改好等你确认', auto: '全自动' };
-export const AUTONOMY: { key: string; label: string; sub: string }[] = [
-  { key: 'suggest', label: '只出建议', sub: 'AI 每周读数据和站点，出计划和改进建议，不改代码。想做哪条，在「待处理」里点「让 AI 改」。' },
-  { key: 'review', label: '改好等你确认', sub: 'AI 在独立分支里改好、跑完构建和检查，每一条都等你确认再上线。' },
-  { key: 'auto', label: '全自动', sub: 'AI 按下面的发布规则自动上线，上线后检查页面，效果变差自动回滚；只把例外交给你。' },
+/** short：卡片上的一句话；sub：悬停看的完整说明 */
+export const AUTONOMY: { key: string; label: string; short: string; sub: string }[] = [
+  { key: 'suggest', label: '只出建议', short: '只出计划和建议，不改代码', sub: 'AI 每周读数据和站点，出计划和改进建议，不改代码。想做哪条，在「待处理」里点「让 AI 改」。' },
+  { key: 'review', label: '改好等你确认', short: '每一条都等你确认再上线', sub: 'AI 在独立分支里改好、跑完构建和检查，每一条都等你确认再上线。' },
+  { key: 'auto', label: '全自动', short: '按发布规则自动上线，例外交给你', sub: 'AI 按下面的发布规则自动上线，上线后检查页面，效果变差自动回滚；只把例外交给你。' },
 ];
 
 export const METRIC_LABEL: Record<string, string> = {
@@ -128,11 +129,26 @@ export const GUIDELINE_TEMPLATE = `# 内容准则
 - 不改推荐链接、邀请码和价格。
 `;
 
+const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+/** 运营节奏的说法：「每天」「每 3 天」「每周一」「每 2 周（周一）」 */
+export function cadenceLabel(g: { cadence?: string; cadence_day?: number; cadence_every?: number }): string {
+  const n = Math.max(1, g.cadence_every ?? 1);
+  const day = WEEK[(g.cadence_day ?? 1) - 1] ?? '周一';
+  if (g.cadence === 'weekly') return n === 1 ? `每${day}` : `每 ${n} 周（${day}）`;
+  return n === 1 ? '每天' : `每 ${n} 天`;
+}
+/** 平均每周最多改几条（每轮条数 × 每周几轮），保留一位小数 */
+export function perWeek(g: { cadence?: string; cadence_every?: number; per_round?: number }): number {
+  const n = Math.max(1, g.cadence_every ?? 1);
+  const rounds = g.cadence === 'weekly' ? 1 / n : 7 / n;
+  return Math.round((g.per_round ?? 0) * rounds * 10) / 10;
+}
+
 function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
   return {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false, autonomy: 'auto',
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
-    new_content: 'auto', code_changes: 'all', daily_changes: c?.daily_changes ?? 3, cadence: 'daily', cadence_day: 1, per_round: 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
+    new_content: 'auto', code_changes: 'all', daily_changes: c?.daily_changes ?? 3, cadence: 'daily', cadence_day: 1, cadence_every: 1, per_round: 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
     goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, jev_gate: true, skip_offtopic: true, created_at: 0,
   };
 }

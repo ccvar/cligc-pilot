@@ -136,12 +136,19 @@ pub fn period(schedule: &str) -> Option<u64> {
     }
 }
 
-/// 某个任务下一次到点的时刻：daily / weekly 是上次 + 周期；「weekly:N」是每周第 N 天（1＝周一）——
-/// 上次之后至少隔 6 天、落在那一天（从那天 0 点起算）。off 等没有周期的为 None。
+/// 某个任务下一次到点的时刻：daily / weekly 是上次 + 周期；「days:N」是每 N 天；
+/// 「weekly:D」「weekly:D:N」是每（N）周的第 D 天（1＝周一）——上次之后至少隔 7N−1 天、落在那一天（从那天 0 点起算）。
+/// off 等没有周期的为 None。
 pub fn next_due(schedule: &str, last: u64) -> Option<u64> {
-    if let Some(day) = schedule.strip_prefix("weekly:").and_then(|d| d.parse::<u32>().ok()) {
+    if let Some(n) = schedule.strip_prefix("days:").and_then(|d| d.parse::<u64>().ok()) {
+        return Some(last + n.max(1) * DAY);
+    }
+    if let Some(rest) = schedule.strip_prefix("weekly:") {
         use chrono::{Datelike, TimeZone};
-        let t0 = last + 6 * DAY;
+        let mut parts = rest.split(':');
+        let day = parts.next()?.parse::<u32>().ok()?;
+        let weeks = parts.next().and_then(|n| n.parse::<u64>().ok()).unwrap_or(1).max(1);
+        let t0 = last + (7 * weeks - 1) * DAY;
         let mut d = chrono::Local.timestamp_opt(t0 as i64, 0).single()?.date_naive();
         for _ in 0..7 {
             if d.weekday().number_from_monday() == day {
@@ -167,7 +174,8 @@ pub const TASKS: &[&str] = &["scan", "health", "report", "review", "plan"];
 pub fn schedule_of(site: &Site, task: &str, plan: Option<&crate::managed::ManagedGroup>) -> String {
     if let Some(g) = plan {
         return match task {
-            "scan" if g.cadence == "weekly" => format!("weekly:{}", g.cadence_day),
+            "scan" if g.cadence == "weekly" => format!("weekly:{}:{}", g.cadence_day, g.cadence_every.max(1)),
+            "scan" if g.cadence_every > 1 => format!("days:{}", g.cadence_every),
             "scan" | "health" => "daily".into(),
             _ => "weekly".into(),
         };
@@ -2655,6 +2663,12 @@ mod tests {
         let mon = chrono::Local.with_ymd_and_hms(2026, 11, 2, 9, 0, 0).single().unwrap().timestamp() as u64;
         let n2 = next_due("weekly:1", mon).unwrap();
         assert!(n2 >= mon + 6 * DAY && n2 <= mon + 7 * DAY);
+        // 每 2 周：至少隔 13 天，还是落在周一
+        let n3 = next_due("weekly:1:2", mon).unwrap();
+        assert!(n3 >= mon + 13 * DAY && n3 <= mon + 14 * DAY);
+        assert_eq!(chrono::Local.timestamp_opt(n3 as i64, 0).single().unwrap().weekday().number_from_monday(), 1);
+        // 每 3 天
+        assert_eq!(next_due("days:3", 100), Some(100 + 3 * DAY));
     }
 
     #[test]

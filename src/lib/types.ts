@@ -515,9 +515,10 @@ export interface ManagedGroup {
   code_changes: 'review' | 'small' | 'all';
   /** 老版本的每天自动上线上限，已不用（读老方案时换算成 per_round） */
   daily_changes: number;
-  /** 运营节奏：daily 每天一轮 | weekly 每周一轮（cadence_day：1＝周一 … 7＝周日） */
+  /** 运营节奏：每 cadence_every 天（daily）或每 cadence_every 周（weekly，cadence_day：1＝周一 … 7＝周日）跑一轮 */
   cadence: 'daily' | 'weekly';
   cadence_day: number;
+  cadence_every: number;
   /** 每轮最多改几条（只管托管自己跑） */
   per_round: number;
   tokens_per_week: number;

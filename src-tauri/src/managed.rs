@@ -63,6 +63,9 @@ fn default_cadence() -> String {
 fn default_cadence_day() -> u32 {
     1
 }
+fn default_cadence_every() -> u32 {
+    1
+}
 /// 老方案换算：每轮条数取原来「每天自动上线上限」和原来每轮 3 条里较小的（0 也按 1 算）
 pub const DEFAULT_PER_ROUND: u32 = 3;
 fn default_tokens() -> u64 {
@@ -104,12 +107,15 @@ pub struct ManagedGroup {
     /// 老版本的「每站每天自动上线上限」：已经不用了，只在老方案第一次读进来时换算成「每轮最多改几条」。
     #[serde(default = "default_daily")]
     pub daily_changes: u32,
-    /// 运营节奏：多久跑一轮（daily 每天 | weekly 每周，在 cadence_day 那天；1＝周一 … 7＝周日）。
+    /// 运营节奏：多久跑一轮——每 cadence_every 天（daily）或每 cadence_every 周（weekly，在 cadence_day 那天；1＝周一 … 7＝周日）。
     /// 一轮＝拉数据 → 挑最值得做的几条 → 交给 AI 改 → 检查通过的按规则上线。体检不花 AI 的钱，照样每天做。
     #[serde(default = "default_cadence")]
     pub cadence: String,
     #[serde(default = "default_cadence_day")]
     pub cadence_day: u32,
+    /// 每几天 / 每几周跑一轮（单位看 cadence）：1＝每天 / 每周。
+    #[serde(default = "default_cadence_every")]
+    pub cadence_every: u32,
     /// 每轮最多改几条（只管托管自己跑；你手动交给 AI 的不受它限制）。0＝老方案还没换算过，读进来时补上。
     #[serde(default)]
     pub per_round: u32,
@@ -219,6 +225,7 @@ impl ManagedGroup {
             daily_changes: c.daily_changes,
             cadence: default_cadence(),
             cadence_day: default_cadence_day(),
+            cadence_every: default_cadence_every(),
             per_round: c.daily_changes.clamp(1, DEFAULT_PER_ROUND),
             tokens_per_week: c.tokens_per_week,
             goal: String::new(),
@@ -390,7 +397,13 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
     }
     if !matches!(g.cadence.as_str(), "daily" | "weekly") || !(1..=7).contains(&g.cadence_day) {
-        return Err("运营节奏只能是每天，或每周选一天".into());
+        return Err("运营节奏只能是每几天，或每几周选一天".into());
+    }
+    if g.cadence == "daily" && !(1..=30).contains(&g.cadence_every) {
+        return Err("每几天跑一轮超出范围（1–30 天）".into());
+    }
+    if g.cadence == "weekly" && !(1..=8).contains(&g.cadence_every) {
+        return Err("每几周跑一轮超出范围（1–8 周）".into());
     }
     if !(1..=20).contains(&g.per_round) {
         return Err("每轮最多改的条数超出范围（1–20）".into());

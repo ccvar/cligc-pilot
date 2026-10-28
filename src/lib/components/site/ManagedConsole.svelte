@@ -30,7 +30,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
+  import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
   import type { ManagedGroup, DayCount, AiCost } from '$lib/types';
 
   const o = $derived(managed.overview);
@@ -245,7 +245,6 @@
     budget: { l: '预算', c: 'warn', i: 'gauge' }, digest: { l: '日报', c: '', i: 'news' }, paused: { l: '暂停', c: 'warn', i: 'pause' }, resumed: { l: '恢复', c: 'ok', i: 'play' }, joined: { l: '开始托管', c: 'ok', i: 'plus' }, left: { l: '退出托管', c: '', i: 'x' }, plan_cleared: { l: '清除计划', c: '', i: 'x' },
   };
   const when = ago;
-  const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
   // 「失败 N」的悬停说明：最近几条的标题和原因；余额不够、没登录这类要你先处理的，补一句下一步
   function failTip(s: { failed: number; failed_why?: [string, string][] }): string {
     const rows = (s.failed_why ?? []).map(([t, why]) => `· ${t}\n  ${why || '没有记下原因'}${turnErrorHint(why) ? `\n  → ${turnErrorHint(why)}` : ''}`);
@@ -382,7 +381,7 @@
           <div class="rules">
             <span class="model" data-tip={g.fallback_brain ? `备用：${modelLabel(g.fallback_brain, g.fallback_model)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
             {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '人审上线', small: '小改自动上线', all: '自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
-            <span data-tip={`运营节奏：${g.cadence === 'weekly' ? `每${WEEK[(g.cadence_day ?? 1) - 1]}跑一轮` : '每天跑一轮'}，每轮最多交给 AI 改 ${g.per_round} 条；该自动上线的改好就上线`}><Icon name="rocket" size={12} />{g.cadence === 'weekly' ? `每${WEEK[(g.cadence_day ?? 1) - 1]}` : '每天'}一轮 · ≤{g.per_round} 条</span>
+            <span data-tip={`运营节奏：${cadenceLabel(g)}跑一轮，每轮最多交给 AI 改 ${g.per_round} 条（平均每周最多 ${perWeek(g)} 条）；该自动上线的改好就上线`}><Icon name="rocket" size={12} />{cadenceLabel(g)}一轮 · ≤{g.per_round} 条</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
             {#if jev.configured}
               <!-- 判断模型的两条规则：点一下就开 / 关，不用进编辑器 -->

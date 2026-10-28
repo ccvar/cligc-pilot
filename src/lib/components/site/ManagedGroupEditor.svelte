@@ -8,11 +8,12 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
+  import { managed, cadenceLabel, perWeek, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
+  import InfoTip from '$lib/components/common/InfoTip.svelte';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
@@ -166,7 +167,7 @@
       </div>
 
      {:else if step === 2}
-      <div class="field"><span class="lbl">目标预设 <span class="faint cnt">点选会填好目标、勾上推荐的动作，都可以再改；可以多选</span></span>
+      <div class="field"><span class="lbl">目标预设<InfoTip label="目标预设" text="点选会填好目标、勾上推荐的动作，都可以再改；可以多选" /></span>
         <div class="presets">
           {#each GOAL_PRESETS as p (p.key)}
             <button class="preset" class:on={picked.includes(p.key)} onclick={() => togglePreset(p.key)} aria-pressed={picked.includes(p.key)}>
@@ -176,9 +177,8 @@
           {/each}
         </div>
       </div>
-      <div class="field"><label for="ge-goal">运营目标</label>
+      <div class="field"><label for="ge-goal">运营目标<InfoTip label="运营目标" text="一两句话。每次制定计划、每个改动都会围绕它。" /></label>
         <textarea id="ge-goal" class="tin plain" rows="2" bind:value={g.goal} maxlength="500" placeholder="例如：提升中文页的 Google 自然流量，重点是费率、邀请和下载相关的查询词"></textarea>
-        <small>一两句话。每次制定计划、每个改动都会围绕它。</small>
       </div>
       <div class="field"><span class="lbl">允许的动作 <span class="faint cnt">健康巡查始终开启</span></span>
         <div class="acts">
@@ -191,17 +191,15 @@
         </div>
         {#if !g.actions.length}<small class="warn-text">至少选一种，否则托管什么也不会做。</small>{/if}
       </div>
-      <div class="field"><label for="ge-topics">选题清单 <span class="faint cnt">{topicCount ? `${topicCount} 个` : '可选'}</span></label>
+      <div class="field"><label for="ge-topics">选题清单<InfoTip label="选题清单" text="写新页面时优先从这里选（已有页面覆盖的会跳过）。还没有数据的新站主要靠它。" /> <span class="faint cnt">{topicCount ? `${topicCount} 个` : '可选'}</span></label>
         <textarea id="ge-topics" class="tin plain" rows="4" bind:value={g.topics} placeholder={'一行一个关键词或主题，例如：\ngate kyc 认证教程\ngate 手续费对比'}></textarea>
-        <small>写新页面时优先从这里选（已有页面覆盖的会跳过）。还没有数据的新站主要靠它。</small>
       </div>
       <div class="field">
-        <div class="lbl-row"><label for="ge-guide">内容准则</label><span class="grow"></span>
+        <div class="lbl-row"><label for="ge-guide">内容准则<InfoTip label="内容准则" text="原样交给 AI，写新页面和修改页面都必须遵守。默认模板只是起点，按你的站点改。" /></label><span class="grow"></span>
           {#if g.guidelines !== GUIDELINE_TEMPLATE}<button class="link-btn sm" onclick={() => g && (g.guidelines = GUIDELINE_TEMPLATE)}>恢复默认模板</button>{/if}
           {#if g.guidelines.trim()}<button class="link-btn sm" onclick={() => g && (g.guidelines = '')}>清空</button>{/if}
         </div>
         <textarea id="ge-guide" class="tin guide" rows="12" bind:value={g.guidelines} placeholder="写给 AI 的写作规则：读者、语气、结构、长度、事实要求、禁区……留空就不额外约束。"></textarea>
-        <small>原样交给 AI，写新页面和修改页面都必须遵守。默认模板只是起点，按你的站点改。</small>
       </div>
      {:else}
       <div class="chosen">
@@ -212,63 +210,58 @@
       <div class="sec"><Icon name="gauge" size={13} />AI 自主程度</div>
       <div class="auto">
         {#each AUTONOMY as a (a.key)}
-          <button class="au" class:on={g.autonomy === a.key} onclick={() => g && (g.autonomy = a.key)} aria-pressed={g.autonomy === a.key}>
+          <button class="au" class:on={g.autonomy === a.key} onclick={() => g && (g.autonomy = a.key)} aria-pressed={g.autonomy === a.key} data-tip={a.sub}>
             <span class="au-top"><b>{a.label}</b>{#if g.autonomy === a.key}<Icon name="check" size={12} />{/if}</span>
-            <small>{a.sub}</small>
+            <small>{a.short}</small>
           </button>
         {/each}
       </div>
       {#if g.autonomy === 'auto'}
       <div class="sec"><Icon name="shield" size={13} />发布规则</div>
-      <div class="field"><span class="lbl">新页面（整篇新内容）</span>
+      <div class="field"><span class="lbl">新页面<InfoTip label="新页面" text={`整篇新内容。${g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}\n标题、描述、内链和已有页面的改动，检查通过就自动上线。`} /></span>
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
-        <small>{g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}标题、描述、内链和已有页面的改动，检查通过就自动上线。</small>
       </div>
-      <div class="field"><span class="lbl">代码改动（文章、页面写在代码里的站点会用到）</span>
+      <div class="field"><span class="lbl">代码改动<InfoTip label="代码改动" text={`文章、页面写在代码里的站点会用到。\n${g.code_changes === 'review' ? '改到模板、组件、样式或站点脚本的，都放进「需要你」等你看过再上线。' : (g.code_changes ?? 'all') === 'all' ? '改模板、组件、样式和站点脚本，构建、检查和上线后验收都通过就自动上线；单次改动超过 400 行的除外。' : '代码部分合计不超过 80 行、5 个文件（文章正文这类数据不算）的自动上线，更大的留给你确认。'}\n不管选哪一档，依赖、构建 / 部署配置、Worker 和服务端代码、读环境变量或调外部服务、引入新的外部包、推荐 / 邀请相关内容，都不会自动上线；上线后验收没过会自动回滚。`} /></span>
         <div class="seg">
           <button class:on={(g.code_changes ?? 'all') === 'all'} onclick={() => g && (g.code_changes = 'all')}>都自动上线</button>
           <button class:on={g.code_changes === 'small'} onclick={() => g && (g.code_changes = 'small')}>小改动自动上线</button>
           <button class:on={g.code_changes === 'review'} onclick={() => g && (g.code_changes = 'review')}>留给你确认</button>
         </div>
-        <small>{g.code_changes === 'review' ? '改到模板、组件、样式或站点脚本的，都放进「需要你」等你看过再上线。' : (g.code_changes ?? 'all') === 'all' ? '改模板、组件、样式和站点脚本，构建、检查和上线后验收都通过就自动上线；单次改动超过 400 行的除外。' : '改模板、组件、样式和站点脚本，代码部分合计不超过 80 行、5 个文件（文章正文这类数据不算），构建、检查和上线后验收都通过就自动上线；更大的留给你确认。'}
-          不管选哪一档，依赖、构建 / 部署配置、Worker 和服务端代码、读环境变量或调外部服务、引入新的外部包、推荐 / 邀请相关内容，都不会自动上线；上线后验收没过会自动回滚。</small>
       </div>
-      <div class="field"><span class="lbl">运营节奏</span>
+      <div class="field"><span class="lbl">运营节奏<InfoTip label="运营节奏" text={'每一轮：拉数据 → 挑最值得做的几条交给 AI 改 → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。\n体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受条数限制。'} /></span>
         <div class="cad">
-          <div class="seg"><button class:on={(g.cadence ?? 'daily') === 'daily'} onclick={() => g && (g.cadence = 'daily')}>每天一轮</button><button class:on={g.cadence === 'weekly'} onclick={() => g && (g.cadence = 'weekly')}>每周一轮</button></div>
+          <label class="pr" for="ge-every">每<input id="ge-every" class="tin" type="number" min="1" max={g.cadence === 'weekly' ? 8 : 30} bind:value={g.cadence_every} /></label>
+          <div class="seg"><button class:on={(g.cadence ?? 'daily') === 'daily'} onclick={() => g && (g.cadence = 'daily')}>天</button><button class:on={g.cadence === 'weekly'} onclick={() => g && (g.cadence = 'weekly')}>周</button></div>
           {#if g.cadence === 'weekly'}<Dropdown compact menuCompact value={String(g.cadence_day ?? 1)} options={WEEKDAYS} ariaLabel="每周哪天跑" onchange={(v: string) => g && (g.cadence_day = Number(v))} />{/if}
-          <label class="pr" for="ge-round">每轮最多改<input id="ge-round" class="tin" type="number" min="1" max="20" bind:value={g.per_round} />条</label>
+          <span class="pr">跑一轮，每轮最多改</span><input id="ge-round" class="tin rn" type="number" min="1" max="20" bind:value={g.per_round} aria-label="每轮最多改几条" /><span class="pr">条</span>
         </div>
-        <small>每一轮：拉数据 → 挑最值得做的几条交给 AI 改 → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。{#if g.per_round}相当于每周最多改 {(g.cadence === 'weekly' ? 1 : 7) * g.per_round} 条。{/if}体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受条数限制。</small>
+        <small>{cadenceLabel(g)}一轮{#if g.per_round}，平均每周最多改 {perWeek(g)} 条{/if}</small>
       </div>
       <div class="grid2">
-        <div class="field"><label for="ge-minp">新页面正文下限（字）</label><input id="ge-minp" class="tin" type="number" min="0" max="10000" step="100" bind:value={g.min_page_chars} />
-          <small>低于它的新页面不自动上线，转进「需要你」由你判断（术语解释这类短页可以直接放行）。0＝不检查。</small></div>
-        <div class="field"><label for="ge-tok">每站每周模型用量上限（token）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} />
-          <small>用完就暂停这个站点到下周并通知你。0＝不限。</small></div>
+        <div class="field"><label for="ge-minp">新页面正文下限（字）<InfoTip label="新页面正文下限" text="低于它的新页面不自动上线，转进「需要你」由你判断（术语解释这类短页可以直接放行）。0＝不检查。" /></label><input id="ge-minp" class="tin" type="number" min="0" max="10000" step="100" bind:value={g.min_page_chars} /></div>
+        <div class="field"><label for="ge-tok">每站每周模型用量上限（token）<InfoTip label="模型用量上限" text="用完就暂停这个站点到下周并通知你。0＝不限。" /></label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} /></div>
       </div>
-      <div class="field"><span class="lbl"><TypeSafeMark size={13} />上线前内容质检（判断模型）</span>
+      <div class="field"><span class="lbl"><TypeSafeMark size={13} />上线前内容质检<InfoTip label="上线前内容质检" text={'判断模型（TypeSafe）。规则都过了、马上要自动上线时，再看一眼新页面和大改的页面：要讲清楚目标搜索问题、信息够具体、和站点定位相关、没有没来源的数字和遗留的说明文字。\n有一项不过：选「先让 AI 重写一次」就把原因交回 AI 改一遍、重新构建和质检，过了照常自动上线，还不过才留给你确认；选「直接留给你」就不重写。分数记在待处理条目上。'} /></span>
         <div class="seg"><button class:on={g.jev_gate !== false} onclick={() => g && (g.jev_gate = true)} disabled={!jev.configured}>做质检</button><button class:on={g.jev_gate === false} onclick={() => g && (g.jev_gate = false)} disabled={!jev.configured}>不做</button></div>
         {#if jev.configured && g.jev_gate !== false}
           <div class="sub-opt"><span>质检没过时</span>
             <div class="seg"><button class:on={g.jev_rewrite !== false} onclick={() => g && (g.jev_rewrite = true)}>先让 AI 重写一次</button><button class:on={g.jev_rewrite === false} onclick={() => g && (g.jev_rewrite = false)}>直接留给你</button></div>
           </div>
         {/if}
-        <small>{#if jev.configured}规则都过了、马上要自动上线时，再让判断模型看一眼新页面和大改的页面：要讲清楚目标搜索问题、信息够具体、和站点定位相关、没有没来源的数字和遗留的说明文字。有一项不过：选「先让 AI 重写一次」就把原因交回 AI 在同一分支上改一遍、重新构建和质检，过了照常自动上线，还不过才留给你确认；选「直接留给你」就不重写。分数记在待处理条目上。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认开着。{/if}</small>
+        {#if !jev.configured}<small>要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认开着。</small>{/if}
       </div>
 
       {/if}
       <div class="sec"><Icon name="bulb" size={13} />运营机会</div>
-      <div class="field"><span class="lbl"><TypeSafeMark size={13} />和站点定位无关的搜索词（判断模型）</span>
+      <div class="field"><span class="lbl"><TypeSafeMark size={13} />和站点定位无关的搜索词<InfoTip label="无关的搜索词" text="判断模型（TypeSafe）按站点定位给每条机会的搜索词打相关度，基本无关的（比如同名词误撞、别的领域）扫描时不入队，省下改动额度；看板里照样列出来、标着「相关度低」。站点要先写好定位。" /></span>
         <div class="seg"><button class:on={g.skip_offtopic !== false} onclick={() => g && (g.skip_offtopic = true)} disabled={!jev.configured}>跳过，不交给 AI</button><button class:on={g.skip_offtopic === false} onclick={() => g && (g.skip_offtopic = false)} disabled={!jev.configured}>照常处理</button></div>
-        <small>{#if jev.configured}判断模型按站点定位给每条机会的搜索词打相关度，基本无关的（比如同名词误撞、别的领域）扫描时不入队，省下改动额度；看板里照样列出来、标着「相关度低」。站点要先写好定位。{:else}要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认跳过。{/if}</small>
+        {#if !jev.configured}<small>要先在<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>设置 → 判断模型</button>里接上 TypeSafe，接上以后默认跳过。</small>{/if}
       </div>
       <div class="sec"><Icon name="cpu" size={13} />模型</div>
       <div class="grid2">
         <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
-        <div class="field"><span class="lbl">备用模型</span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
+        <div class="field"><span class="lbl">备用模型<InfoTip label="备用模型" text="主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。" /></span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
       </div>
-      <small class="faint">主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。</small>
       {#if usesCodex}
         <div class="codex-warn" role="note">
           <b><Icon name="shield" size={13} />Codex（GPT 本地客户端）托管时会断网运行</b>
@@ -299,7 +292,7 @@
 <style>
   .cad { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .cad .pr { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
-  .cad .pr .tin { width: 64px; }
+  .cad .pr .tin, .cad .rn { width: 60px; }
   .ge { width: min(640px, calc(100vw - 32px)); }
   .cnt { font-weight: 400; font-size: 11.5px; margin-left: 4px; }
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
