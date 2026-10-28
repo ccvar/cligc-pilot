@@ -57,7 +57,7 @@
           <div class="opt" class:editing={editing === 'tg'}>
             <span class="ot"><b>机器人 Token<InfoTip label="怎么拿 Token" text={'在 Telegram 里搜 @BotFather，发 /newbot，按提示起个名字，\n它会给一串 123456789:AA… 的 Token，复制过来。'} /></b><small>还没连接</small></span>
             {#if editing === 'tg'}{@render form('123456789:AA…', '机器人 Token', 'tg-token')}
-            {:else}<button class="btn tiny" disabled={!!growth.busy} onclick={() => edit('tg')}>连接机器人</button>{/if}
+            {:else}<button class="ic-btn" disabled={!!growth.busy} onclick={() => edit('tg')} aria-label="连接机器人" data-tip="填机器人 Token，连接 Telegram"><Icon name="plus" size={15} /></button>{/if}
           </div>
         {:else if !p.bound}
           <div class="opt">
@@ -109,12 +109,12 @@
             </span>
           {:else}
             <span class="ot"><b>AdSense<InfoTip label="连接 AdSense" text={'在浏览器里用有 AdSense 的 Google 账号授权「查看 AdSense 数据」（只读）。\n用的是「数据源」里同一个 Google OAuth 客户端；它所在的 Google Cloud 项目要先启用 AdSense Management API。\nAdSense 里「网站」列表的域名和站点域名对上了，就算到那个站点。'} /></b><small>{r.has_client ? '还没连接' : '先在上面「数据源」里配好 Google OAuth 客户端'}</small></span>
-            <button class="btn tiny" disabled={!r.has_client || !!growth.busy} onclick={connectAdsense}>{#if growth.busy === 'ads'}<span class="spin"></span>等浏览器授权…{:else}在浏览器里授权{/if}</button>
+            <button class="ic-btn" disabled={!r.has_client || !!growth.busy} onclick={connectAdsense} aria-label="在浏览器里授权 AdSense" data-tip={growth.busy === 'ads' ? '等你在浏览器里授权…' : '在浏览器里授权 AdSense（只读）'}>{#if growth.busy === 'ads'}<span class="spin"></span>{:else}<Icon name="external" size={15} />{/if}</button>
           {/if}
         </div>
         <div class="opt">
           <span class="ot"><b>导入推广佣金<InfoTip label="CSV 格式" text={'每行：月份,域名,金额,来源,备注（后两列可以不写）\n例：2026-10,example.com,128.50,affiliate,OKX 返佣\n金额按美元；来源写 affiliate / sponsor / other；第一行是表头会自动跳过。'} /></b><small>也可以在站点的「数据」里一笔一笔记</small></span>
-          <button class="btn tiny ghost" disabled={!!growth.busy} onclick={importRevenue}>{#if growth.busy === 'csv'}<span class="spin"></span>导入中…{:else}<Icon name="upload" size={11} />选择 CSV…{/if}</button>
+          <button class="ic-btn" disabled={!!growth.busy} onclick={importRevenue} aria-label="选择 CSV 导入" data-tip={growth.busy === 'csv' ? '导入中…' : '选择 CSV 文件导入'}>{#if growth.busy === 'csv'}<span class="spin"></span>{:else}<Icon name="upload" size={15} />{/if}</button>
         </div>
         {@render keyRow('pagespeed', 'PageSpeed API Key', '可以不填：不填用免费额度，偶尔被限流、下次再测。\n要填的话在 Google Cloud 控制台「API 和服务 → 凭据」建一个 API Key，并启用 PageSpeed Insights API。', k.pagespeed, '不填也能测速')}
         {@render keyRow('serper', 'Serper API Key', '竞品观察用：在 serper.dev 注册拿 API Key，每次搜索扣一次额度（1000 次约 1 美元）。\n每个站点每周最多查 15 个词。不填就不查竞品。', k.serper, '填了才会查竞品')}
@@ -129,7 +129,7 @@
     {#if has}
       <button class="btn tiny ghost" disabled={!!growth.busy} onclick={() => offKey(name)}>删除</button>
     {:else if editing === name}{@render form(name === 'pagespeed' ? 'AIza…' : '粘贴 API Key', label, `key-${name}`)}
-    {:else}<button class="btn tiny ghost" disabled={!!growth.busy} onclick={() => edit(name)}>填写</button>{/if}
+    {:else}<button class="ic-btn" disabled={!!growth.busy} onclick={() => edit(name)} aria-label={`填写 ${label}`} data-tip={`填写 ${label}`}><Icon name="pencil" size={14} /></button>{/if}
   </div>
 {/snippet}
 
@@ -167,6 +167,8 @@
   .opt.editing .acts { flex: 1 1 100%; }
   /* 这一节的小按钮统一 26px 高，和输入框齐 */
   .opt .btn.tiny { height: 26px; padding: 0 10px; }
+  /* 图标按钮右边和其它行的按钮对齐（图标本身比按钮窄，往右收一点） */
+  .opt > .ic-btn { margin-right: -6px; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
   .switch.on { background: var(--ok); }
