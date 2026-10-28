@@ -252,10 +252,12 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
         });
     }
     let sitemaps: serde_json::Value = read_json(&dir, "gsc_sitemaps.json");
+    // 已经改交了能用的地址、不再提醒的旧 sitemap
+    let replaced = crate::sitemap_fix::ignored(site_dir);
     for s in sitemaps.as_array().cloned().unwrap_or_default() {
         let errors = s["errors"].as_str().and_then(|v| v.parse::<i64>().ok()).or(s["errors"].as_i64()).unwrap_or(0);
-        if errors > 0 {
-            let path = s["path"].as_str().unwrap_or_default().to_string();
+        let path = s["path"].as_str().unwrap_or_default().to_string();
+        if errors > 0 && !replaced.contains(&path) {
             tech.push(Opportunity {
                 key: format!("sitemap_error:{path}"),
                 kind: "sitemap_error".into(),

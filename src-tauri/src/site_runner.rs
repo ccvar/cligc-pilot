@@ -689,7 +689,49 @@ async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bo
     })?;
     ctx.emit_queue(&site.id);
     let level = effective_level(site, item);
-    match if manual { level.max(3) } else { level } {
+    let level = if manual { level.max(3) } else { level };
+    // sitemap 报错先由程序检查：多半是提交的地址不对或者还没被重新读取，改交 / 重新提交就好，不用 AI 改代码
+    let checked;
+    let item = if item.opp.kind == "sitemap_error" && level >= 2 {
+        job.line("先检查 sitemap 能不能打开、Search Console 里提交的地址对不对");
+        match crate::sitemap_fix::precheck(site, &site_dir, &ctx.state().conns, item).await {
+            crate::sitemap_fix::Outcome::Fixed(note) => {
+                let done = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                    i.status = "done".into();
+                    i.note = note.clone();
+                })?;
+                if let Some(d) = &done {
+                    log_item(ctx, site, "fixed", d, &note);
+                }
+                job.step("work", "ok", "程序检查后处理好了，没有改代码");
+                return Ok(note);
+            }
+            crate::sitemap_fix::Outcome::Manual(note) => {
+                // 和第 2 档的方案一样：等你处理完点确认，标记完成
+                let left = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                    i.status = "proposed".into();
+                    i.note = note.clone();
+                })?;
+                if let Some(l) = &left {
+                    log_item(ctx, site, "proposed", l, &note);
+                }
+                job.step("work", "ok", "查清楚了，要你在 Search Console 里操作一下");
+                return Ok(note);
+            }
+            crate::sitemap_fix::Outcome::Ai(diag) if !diag.is_empty() => {
+                job.line(&diag);
+                let mut it = item.clone();
+                it.opp.evidence = format!("{}\n{diag}", it.opp.evidence);
+                let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.opp.evidence = it.opp.evidence.clone());
+                checked = it;
+                &checked
+            }
+            crate::sitemap_fix::Outcome::Ai(_) => item,
+        }
+    } else {
+        item
+    };
+    match level {
         0 | 1 => Ok(String::new()),
         2 => propose(ctx, site, item).await,
         level => implement(ctx, site, job, item, level).await,

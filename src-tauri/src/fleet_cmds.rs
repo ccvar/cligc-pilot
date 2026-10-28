@@ -171,6 +171,12 @@ pub fn tier_of(o: &crate::site_ops::Opportunity) -> &'static str {
     }
 }
 
+/// AI 能直接处理、不用你拿主意的：改标题和描述、标题年份、抓取和 sitemap 报错（sitemap 先由程序检查）、图片、结构化数据。
+/// 扩写内容、新写页面、合并页面、对比竞品这类要你判断值不值得做，不算。
+pub fn ai_ready(o: &crate::site_ops::Opportunity) -> bool {
+    matches!(o.kind.as_str(), "low_ctr" | "stale_year" | "sitemap_error" | "crawl_issue" | "img_audit" | "schema")
+}
+
 /// score 是「每月大约能多拿到的点击」的那几类机会
 fn gain_of(o: &crate::site_ops::Opportunity) -> f64 {
     if matches!(o.kind.as_str(), "low_ctr" | "striking" | "declining" | "content_gap" | "cannibal" | "serp_gap") {
@@ -189,6 +195,8 @@ pub struct OppItem {
     pub tier: &'static str,
     /// 每月大约能多拿到的点击（算不出为 0）
     pub gain: f64,
+    /// AI 能直接处理、不用你拿主意
+    pub ai: bool,
 }
 
 #[derive(Serialize)]
@@ -225,7 +233,7 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
             continue;
         }
         for item in open {
-            items.push(OppItem { site_id: s.id.clone(), site_name: s.name.clone(), domain: s.domain.clone(), tier: tier_of(&item.opp), gain: gain_of(&item.opp), item });
+            items.push(OppItem { site_id: s.id.clone(), site_name: s.name.clone(), domain: s.domain.clone(), tier: tier_of(&item.opp), gain: gain_of(&item.opp), ai: ai_ready(&item.opp), item });
         }
     }
     let rank = |t: &str| match t { "urgent" => 0, "value" => 1, _ => 2 };
@@ -570,7 +578,7 @@ pub async fn bind_conn(state: &AppState, conn_id: &str, overwrite: bool, fresh: 
 
 #[cfg(test)]
 mod tests {
-    use super::tier_of;
+    use super::{ai_ready, tier_of};
     use crate::site_ops::Opportunity;
 
     fn opp(kind: &str, change: &str) -> Opportunity {
@@ -589,5 +597,15 @@ mod tests {
         assert_eq!(tier_of(&Opportunity { title: "图片问题：1张不存在".into(), ..opp("img_audit", "technical") }), "urgent");
         assert_eq!(tier_of(&opp("img_audit", "technical")), "easy");
         assert_eq!(tier_of(&opp("plan", "internal_links")), "easy");
+    }
+
+    #[test]
+    fn ai_handles_edits_and_fixes_but_not_judgment_calls() {
+        for k in ["low_ctr", "sitemap_error", "img_audit", "stale_year"] {
+            assert!(ai_ready(&opp(k, "meta")), "{k}");
+        }
+        for k in ["striking", "content_gap", "cannibal", "serp_gap", "low_rpm"] {
+            assert!(!ai_ready(&opp(k, "content")), "{k}");
+        }
     }
 }

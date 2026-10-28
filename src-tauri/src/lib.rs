@@ -12,6 +12,7 @@ mod revenue;
 mod speed;
 mod serp;
 mod page_audit;
+mod sitemap_fix;
 mod agent;
 mod bing;
 mod api_agent;
