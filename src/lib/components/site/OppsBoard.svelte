@@ -179,7 +179,11 @@
   .bi-w { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 4px; background: #fff; color: #26241f; }
   .top { display: flex; align-items: center; gap: 12px; min-height: 28px; }
   .top .sum { flex: 1; min-width: 0; }
-  .mpick { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  /* 「交给 Opus 5.5 处理」读成一句：下拉框去掉左右留白，图标和字贴近，和按钮上的写法一样紧 */
+  .mpick { flex: none; display: inline-flex; align-items: center; gap: 0; font-size: 12.5px; color: var(--dim); }
+  .mpick :global(.dd-trigger.compact) { gap: 2px; padding: 0 3px; margin: 0 1px; font-size: 12.5px; }
+  .mpick :global(.dd-trigger .dd-label) { gap: 4px; }
+  .mpick :global(.dd-trigger .dd-label svg.bi) { width: 13px; height: 13px; }
   .cnt { margin-right: 10px; }
   .cnt.working, .cnt.queued { color: var(--su-run, var(--warn)); }
   .cnt.proposed { color: var(--warn); }
