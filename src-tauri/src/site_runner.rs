@@ -788,6 +788,26 @@ async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bo
     }
 }
 
+/// 「AI 怎么改的」只要 AI 最后那段说明：一轮的回复里还夹着中途的过程话（「构建失败了，我再跑一次」），
+/// 去掉末尾的「新页面 / 改动的页面」两行，取最后一段（太短就带上前一段），最多 600 字。
+fn final_summary(reply: &str) -> String {
+    let body: Vec<&str> = reply
+        .lines()
+        .filter(|l| {
+            let t = l.trim().trim_start_matches(['-', '*', ' ']).trim_start_matches("**");
+            !["新页面：", "新页面:", "改动的页面：", "改动的页面:"].iter().any(|p| t.starts_with(p))
+        })
+        .collect();
+    let text = body.join("\n");
+    let paras: Vec<&str> = text.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).collect();
+    let mut pick: Vec<&str> = paras.iter().rev().take(1).copied().collect();
+    if pick.first().is_some_and(|p| p.chars().count() < 60) {
+        pick = paras.iter().rev().take(2).copied().collect();
+    }
+    pick.reverse();
+    pick.join("\n\n").chars().take(600).collect()
+}
+
 fn path_of(url: &str) -> String {
     url.split_once("://")
         .map(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_else(|| "/".into()))
@@ -911,6 +931,9 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
     }
 }
 
+/// 写给运营人员看的话一律用中文（站点是英文的，模型容易顺手用英文汇报）；页面内容照站点自己的语言写。
+const REPORT_IN_CHINESE: &str = "给我（运营人员）的说明一律用中文写，不管站点是什么语言；页面里的内容照站点自己的语言写。";
+
 const STOPPED: &str = "这一轮 AI 被停止了，改到一半的不会上线；要继续就再交给 AI";
 
 async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String, model: &(String, String)) -> Result<(String, crate::convo::Conversation), String> {
@@ -987,10 +1010,11 @@ async fn propose(ctx: &Ctx, site: &Site, item: &QueueItem) -> Result<String, Str
 - 为什么这样改能回应上面的搜索意图；\n\
 - 风险和需要我确认的地方。\n\
 改动方向：{guide}\n\
-这一轮只出方案，不要修改文件。我确认后会在这条会话里让你动手。",
+这一轮只出方案，不要修改文件。我确认后会在这条会话里让你动手。\n{lang}",
         title = item.opp.title,
         ev = evidence_block(&item.opp),
         guide = guidance(&item.opp),
+        lang = REPORT_IN_CHINESE,
     );
     let (conv_id, _) = run_conversation(ctx, site, "plan", "", msg).await?;
     site_ops::update_item(&ctx.site_dir(&site.id), &item.id, now(), |i| {
@@ -1079,13 +1103,14 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
 不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；需要确认的操作在这里会被自动拒绝。\n\
-完成后用两三句话说明改了哪些文件、为什么这样改。然后在最后两行按这个格式写出这次涉及的公开页面（Pilot 上线后会逐个打开验收）：\n\
+完成后另起一段，用两三句中文说明改了哪些文件、为什么这样改（{lang}）。然后在最后两行按这个格式写出这次涉及的公开页面（Pilot 上线后会逐个打开验收）：\n\
 新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
 改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
         title = item.opp.title,
         ev = evidence_block(&item.opp),
         base = site.default_branch,
         guide = guidance(&item.opp),
+        lang = REPORT_IN_CHINESE,
         // 托管方案里写了代码改动的规则（见 plan_brief 的【代码改动】）；没托管就按保守的来
         code_rule = if group_rules(ctx, site).is_some() { "代码能不能改、改多少，按上面【代码改动】的规则。" } else { "能用站点现有的数据字段和组件做到，就只改内容和数据；确实要改代码，只做最小的改动。" },
         build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
@@ -1096,8 +1121,8 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     if job.canceled() {
         return Err("已取消".into());
     }
-    let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(800).collect()).unwrap_or_default();
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
+    let summary = final_summary(&reply);
     let (new_pages, pages) = crate::site_verify::reported_pages(&reply, &site.domain);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.conv_id = conv_id.clone();
@@ -1206,9 +1231,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
 - 删掉正文里写给编辑或 AI 的说明文字；\n\
 - 不要扩大改动范围，不要改网址、依赖、构建和部署配置。\n\
 改完运行构建（`{build}`）确认通过，用 `git add` 和 `git commit` 提交到当前分支。不要推送、不要开 PR、不要部署。\n\
-最后用两三句话说明这次改了什么。",
+最后另起一段，用两三句中文说明这次改了什么（{lang}）。",
             title = item.opp.title,
             files = files.join("、"),
+            lang = REPORT_IN_CHINESE,
             build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
         );
         let (_, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
@@ -2096,7 +2122,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let health = crate::site_stage::latest_health(&site_dir, if stage.stage == "new" { 2000 } else { 600 });
     let health = if health.is_empty() { String::new() } else { format!("【最近一次体检】\n{health}\n\n") };
     let msg = format!(
-        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面，然后制定本周最多 {n} 项具体工作。\n读站点要省：先看目录结构、导航和首页，再挑流量最大或这周要动的几个页面看，一共读 15 个文件左右就够，不要逐篇通读所有文章；需要更细的数据（某个页面的查询词、某类查询词）用站点数据工具查，不要靠读文件猜。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排撑不起一个完整页面的窄题（页面厚度见上）。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要改推荐链接、邀请码、本站自己的价格和优惠、法律页面、依赖或部署配置。文章里引用的第三方工具价格可以更新，但要标明核对日期和来源。\n- 这是无人值守任务，没人回答问题：规则之间有冲突时（比如阶段建议和运营目标不一致），以「允许的动作」和运营目标为准，自己做出判断，把判断和需要运营人员留意的事写进 notes。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"notes\":\"给运营人员的说明：冲突怎么处理的、需要留意或确认的事（没有就留空）\",\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1,\"expect\":{{\"metric\":\"ctr|position|impressions|clicks|health\",\"query\":\"看哪个查询词（看整个页面就留空）\",\"note\":\"一句话写预期，比如：点击率从 2.2% 提到 3% 以上\"}}}}]}}\nexpect 是这条改动预期影响的指标：改标题和描述一般看点击率（ctr），补内容看目标查询词的排名（position），新页面看展现（impressions），修技术问题看体检（health）；按这条任务的实际意图选，上线 4 周后 Pilot 会拿数据对比。\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
+        "【托管运营 · 本周计划】你是「{name}」（{domain}）的运营负责人。下面是这个站点的阶段与定位、所在托管方案的运营方式、Pilot 拉到的数据和最近的运营记录；请先读站点的代码和主要页面，然后制定本周最多 {n} 项具体工作。\n读站点要省：先看目录结构、导航和首页，再挑流量最大或这周要动的几个页面看，一共读 15 个文件左右就够，不要逐篇通读所有文章；需要更细的数据（某个页面的查询词、某类查询词）用站点数据工具查，不要靠读文件猜。\n\n{stage_brief}{plan_brief}{health}【数据】\n{brief}\n【最近的运营记录】\n{hist}\n\n要求：\n- 按站点阶段确定本周的重点；只安排「允许的动作」里的事；围绕运营目标；新内容遵守内容准则。\n- 每一项都要落到具体页面或具体内容上，说清为什么（引用上面的数据）；优先做投入小、把握大的。\n- 可以包括规则没发现的事：内容缺口、专题页、内链结构、过时内容更新、技术问题。\n- 长尾选题先对照已有页面：能扩写已有页面就不新开页，意图相近的几个词合并成一页；不要安排用同一模板换关键词批量做的相似页面，也不要安排撑不起一个完整页面的窄题（页面厚度见上）。\n- 读站点时如果发现公开页面混入了内部说明、开发注释、占位图，或有明显偏薄的页面，可以安排「改进已有页面」任务处理。\n- 不要改推荐链接、邀请码、本站自己的价格和优惠、法律页面、依赖或部署配置。文章里引用的第三方工具价格可以更新，但要标明核对日期和来源。\n- 这是无人值守任务，没人回答问题：规则之间有冲突时（比如阶段建议和运营目标不一致），以「允许的动作」和运营目标为准，自己做出判断，把判断和需要运营人员留意的事写进 notes。\n- 这一轮只出计划，不要修改任何文件。\n最后用一个 ```json 代码块输出：{{\"notes\":\"给运营人员的说明（中文）：冲突怎么处理的、需要留意或确认的事（没有就留空）\",\"positioning\":\"站点定位，200 字以内：主题、目标读者、语言/地区、已有栏目和内容类型、商业目标\",\"tasks\":[{{\"title\":\"一句话说做什么\",\"page\":\"完整网址（新页面留空）\",\"change\":\"{kinds}\",\"why\":\"依据：引用的数据，或它补的是定位里的哪一块\",\"source\":\"data|gap|topic|positioning|health\",\"query\":\"目标查询词（没有就留空）\",\"priority\":1,\"expect\":{{\"metric\":\"ctr|position|impressions|clicks|health\",\"query\":\"看哪个查询词（看整个页面就留空）\",\"note\":\"一句话写预期，比如：点击率从 2.2% 提到 3% 以上\"}}}}]}}\nexpect 是这条改动预期影响的指标：改标题和描述一般看点击率（ctr），补内容看目标查询词的排名（position），新页面看展现（impressions），修技术问题看体检（health）；按这条任务的实际意图选，上线 4 周后 Pilot 会拿数据对比。\nsource 的含义：data＝数据里看到的问题，gap＝数据里有需求但没有页面，topic＝选题清单，positioning＝根据站点定位推导，health＝体检发现的问题。",
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
@@ -2646,6 +2672,14 @@ mod tests {
         assert!(!due("daily", 100, DAY));
         assert!(due("weekly", 0, 7 * DAY));
         assert!(!due("off", 0, 99 * DAY));
+    }
+
+    #[test]
+    fn summary_keeps_only_the_closing_explanation() {
+        let reply = "先看看页面。\n\n构建失败了，我清掉代理再跑一次。\n\n只改了 src/data/tool-facts.ts：给 Vidu 加了英文 SEO 标题和描述，围绕免费额度、错峰模式和商用这几个搜索问题。\n新页面：无\n改动的页面：https://a.com/en/links/vidu/";
+        let s = final_summary(reply);
+        assert!(s.starts_with("只改了 src/data/tool-facts.ts"), "{s}");
+        assert!(!s.contains("构建失败") && !s.contains("改动的页面"));
     }
 
     #[test]

@@ -2636,6 +2636,15 @@ fn parse_claude(ev: &serde_json::Value, ch: &Channel<TurnEvent>, collect: &Arc<M
         }
         Some("stream_event") => {
             let e = &ev["event"];
+            // 一轮里有好几段文字（中间夹着工具调用）：新的一段文字开始时空一行，不然前后两段会连成一句
+            if e.get("type").and_then(|t| t.as_str()) == Some("content_block_start") && e["content_block"].get("type").and_then(|t| t.as_str()) == Some("text") {
+                let mut c = collect.lock().unwrap();
+                if !c.text.is_empty() && !c.text.ends_with("\n\n") {
+                    let sep = if c.text.ends_with('\n') { "\n" } else { "\n\n" };
+                    c.text.push_str(sep);
+                    let _ = ch.send(TurnEvent::Delta { text: sep.to_string() });
+                }
+            }
             if e.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
                 if e["delta"].get("type").and_then(|t| t.as_str()) == Some("text_delta") {
                     let _ = ch.send(TurnEvent::Activity {

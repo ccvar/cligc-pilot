@@ -382,6 +382,8 @@ export interface Dashboard {
 export interface OpsItem {
   /** AI 自己对这次改动的说明 */
   ai_summary?: string;
+  /** ai_summary 不是中文时点「翻成中文」得到的译文 */
+  ai_summary_zh?: string;
   /** 实际执行的模型（主 / 备用） */
   model_used?: string;
   /** 这次改动涉及的文件 */

@@ -522,6 +522,9 @@ pub struct QueueItem {
     /// AI 自己对这次改动的说明（改了哪些文件、为什么这样改），截断保存。
     #[serde(default)]
     pub ai_summary: String,
+    /// ai_summary 不是中文时，点「翻成中文」得到的译文（翻一次存下来）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ai_summary_zh: String,
     /// 这次改动涉及的文件。
     #[serde(default)]
     pub files: Vec<String>,

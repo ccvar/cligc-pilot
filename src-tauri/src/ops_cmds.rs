@@ -78,6 +78,39 @@ pub async fn queue_dismiss(app: tauri::AppHandle, state: tauri::State<'_, AppSta
     site_runner::dismiss(&ctx(&app), &site, &item_id).await
 }
 
+/// 「AI 怎么改的」是英文时翻成中文：用本机 Claude 客户端的小模型（Haiku）；没装就用站点运营用的 API 连接的小模型。
+/// 译文存在条目上，同一条只翻一次。
+#[tauri::command]
+pub async fn queue_translate_summary(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<String, String> {
+    let site = state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let item = site_ops::load_queue(&dir).into_iter().find(|i| i.id == item_id).ok_or("这条机会不存在")?;
+    if !item.ai_summary_zh.is_empty() {
+        return Ok(item.ai_summary_zh);
+    }
+    if item.ai_summary.trim().is_empty() {
+        return Err("没有要翻译的说明".into());
+    }
+    let prompt = format!("把下面这段改动说明翻成简体中文。文件名、代码、网址、英文页面标题原样保留，只输出译文，不要加任何解释：\n\n{}", item.ai_summary);
+    let ask = |brain: &'static str| crate::oneshot::Ask { brain, model: "", prompt: &prompt, max_tokens: 1200, small: true, timeout: std::time::Duration::from_secs(90) };
+    let mut out = crate::oneshot::complete(&state.data_dir, &ask("claude")).await;
+    if out.is_err() {
+        // 本机没有 Claude 客户端：用站点运营的 API 连接
+        if let Ok(((brain, model), _)) = site_runner::models_for(&site, &state.data_dir) {
+            if brain.starts_with("api:") {
+                let a = crate::oneshot::Ask { brain: &brain, model: &model, prompt: &prompt, max_tokens: 1200, small: true, timeout: std::time::Duration::from_secs(90) };
+                out = crate::oneshot::complete(&state.data_dir, &a).await;
+            }
+        }
+    }
+    let zh = out.map_err(|e| format!("翻译没成功：{e}"))?.trim().to_string();
+    if zh.is_empty() {
+        return Err("翻译没成功：模型没有返回内容".into());
+    }
+    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| i.ai_summary_zh = zh.clone())?;
+    Ok(zh)
+}
+
 /// 把驳回 / 失败的条目放回待处理。
 #[tauri::command]
 pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {

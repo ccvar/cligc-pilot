@@ -13,6 +13,9 @@
   import { synd } from '$lib/state/syndication.svelte.js';
   import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
+  import { invoke } from '@tauri-apps/api/core';
+  import { say } from '$lib/state/app.svelte.js';
+  import { modelName } from '$lib/state/fleet.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { void loadQueue(site.id); });
@@ -55,6 +58,20 @@
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
+  // 「AI 怎么改的」不是中文（英文站点容易这样）：可以翻成中文，译文存在条目上；翻过的默认看译文，能切回原文
+  const foreign = (t: string) => !/[\u4e00-\u9fff]/.test(t.slice(0, 300));
+  let translating = $state('');
+  let showOrig = $state<Set<string>>(new Set());
+  async function translate(i: OpsItem) {
+    if (translating) return;
+    translating = i.id;
+    try {
+      const zh = await invoke<string>('queue_translate_summary', { id: site.id, itemId: i.id });
+      i.ai_summary_zh = zh;
+    } catch (e) { say(String(e), 'err'); }
+    finally { translating = ''; }
+  }
+  const flipOrig = (id: string) => { const n = new Set(showOrig); if (n.has(id)) n.delete(id); else n.add(id); showOrig = n; };
   // 批量：只在「未处理的机会」里勾选
   let picked = $state<Set<string>>(new Set());
   const pickable = $derived(filter === 'open' ? shown : []);
@@ -133,11 +150,16 @@
             {#if i.ai_summary || i.files?.length}
               <button class="how-t" class:open={openWhy.has(i.id)} onclick={() => toggleWhy(i.id)} aria-expanded={openWhy.has(i.id)}>
                 <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                AI 怎么改的{#if i.files?.length}<span class="faint"> · {i.files.length} 个文件</span>{/if}{#if i.model_used}<span class="faint"> · {i.model_used}</span>{/if}
+                AI 怎么改的{#if i.files?.length}<span class="faint"> · {i.files.length} 个文件</span>{/if}{#if i.model_used}<span class="faint" data-tip={i.model_used}> · {modelName(i.model_used) || i.model_used}</span>{/if}
               </button>
               {#if openWhy.has(i.id)}
                 <div class="how">
-                  {#if i.ai_summary}<p>{i.ai_summary}</p>{/if}
+                  {#if i.ai_summary}
+                    {@const zh = i.ai_summary_zh && !showOrig.has(i.id)}
+                    <p>{zh ? i.ai_summary_zh : i.ai_summary}</p>
+                    {#if i.ai_summary_zh}<button class="link-btn tr" onclick={() => flipOrig(i.id)}>{zh ? '看原文' : '看中文'}</button>
+                    {:else if foreign(i.ai_summary)}<button class="link-btn tr" onclick={() => translate(i)} disabled={translating === i.id}>{#if translating === i.id}<span class="spin"></span>翻译中…{:else}翻成中文{/if}</button>{/if}
+                  {/if}
                   {#if i.files?.length}<ul class="files">{#each i.files as f (f)}<li class="mono">{f}</li>{/each}</ul>{/if}
                 </div>
               {/if}
@@ -243,6 +265,7 @@
   .why-row { margin: -1px 0 0; }
   .how-t { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
   .how-t:hover { color: var(--text); }
+  .how .tr { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
   .how-t svg { transition: transform .16s var(--su-ease); }
   .how-t.open svg { transform: rotate(90deg); }
   .how { padding: 8px 12px; border-left: 2px solid var(--border2); margin-left: 4px; font-size: 12.5px; color: var(--dim); }
