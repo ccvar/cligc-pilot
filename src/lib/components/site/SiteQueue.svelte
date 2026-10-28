@@ -58,6 +58,9 @@
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
+  // 标题后面的目标页面：改已有页面就是那个页面，新写的页面用 AI 报上来的新网址；都没有就不显示
+  const targetOf = (i: OpsItem) => (i.opp.page?.startsWith('http') ? i.opp.page : (i.new_pages ?? [])[0] ?? '');
+  const shortPath = (u: string) => { try { const x = new URL(u); return x.pathname + x.search || '/'; } catch { return u; } };
   // 「AI 怎么改的」不是中文（英文站点容易这样）：可以翻成中文，译文存在条目上；翻过的默认看译文，能切回原文
   const foreign = (t: string) => !/[\u4e00-\u9fff]/.test(t.slice(0, 300));
   let translating = $state('');
@@ -142,6 +145,8 @@
               {#if filter === 'open' && shown.length > 1}<input class="pick" type="checkbox" checked={picked.has(i.id)} onchange={() => togglePick(i.id)} aria-label="选中这一条" />{/if}
               {#if i.status === 'deployed' && i.attention}<span class="pill warn">已上线 · 待核对</span>{:else}<span class="pill {tone(i.status)}">{STATUS_LABEL[i.status] ?? i.status}</span>{/if}
               <b class="it-title" title={i.opp.title}>{i.opp.title}</b>
+              {#if targetOf(i)}<button class="it-url mono" onclick={() => openUrl(targetOf(i))} data-tip={`在浏览器打开：${targetOf(i)}`}><span>{shortPath(targetOf(i))}</span><Icon name="external" size={11} /></button>{/if}
+              <span class="grow"></span>
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
             </div>
             <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>
@@ -260,7 +265,12 @@
   .item { display: flex; flex-direction: column; gap: 6px; padding-top: 14px; padding-bottom: 14px; }
   .it-head { min-width: 0; gap: 10px; }
   .it-head .pill { flex: none; }
-  .it-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .it-url { flex: 0 1 auto; min-width: 0; max-width: 320px; display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; font-size: 11.5px; color: var(--faint); cursor: pointer; white-space: nowrap; }
+  .it-url span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .it-url :global(svg) { flex: none; }
+  .it-url:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+  .it-head .grow { flex: 1; }
+  .it-title { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .it-meta { flex: none; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
   .why-row { margin: -1px 0 0; }
   .how-t { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
