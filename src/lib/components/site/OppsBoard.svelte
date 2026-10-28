@@ -6,7 +6,8 @@
   // 托管且在运行的站点由 AI 按托管规则自动处理，这里只给个数。
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
-  import { fleet, loadOpps, workOpps, dismissOpps, stopAcross, oppModel } from '$lib/state/fleet.svelte.js';
+  import { fleet, loadOpps, workOpps, dismissOpps, stopAcross, oppModel, handTarget } from '$lib/state/fleet.svelte.js';
+  import BrainIcon from '$lib/BrainIcon.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import Dropdown from '$lib/Dropdown.svelte';
   import { confirmDialog } from '$lib/state/app.svelte.js';
@@ -37,7 +38,10 @@
   const STAGE: Record<string, string> = { queued: '排队中', working: 'AI 处理中', failed: '没成功', proposed: '等你确认', done: '已处理' };
   // 交给 AI 时用的模型：默认按站点设置（列出现在会用到的几种），也可以这批临时换一个
   const siteModels = $derived([...new Set(open_.map(oppModel))]);
-  const modelOpts = $derived([{ value: '', label: '按站点设置', sub: siteModels.length ? `${siteModels[0]}${siteModels.length > 1 ? ` 等 ${siteModels.length} 种` : ''}` : '' }, ...launcher.comboOpts]);
+  // 「按站点设置」只用到一种模型时，下拉框上直接显示那种模型的图标和名字
+  const siteTarget = $derived(handTarget(open_, ''));
+  const readyTarget = $derived(handTarget(ready));
+  const modelOpts = $derived([{ value: '', label: '按站点设置', short: siteTarget.icon ? siteTarget.name : '按站点设置', icon: siteTarget.icon || undefined, sub: siteModels.length ? `${siteModels[0]}${siteModels.length > 1 ? ` 等 ${siteModels.length} 种` : ''}` : '' }, ...launcher.comboOpts]);
   async function stopJob(i: OppItem) {
     if (await confirmDialog(`停止 ${i.domain || i.site_name} 正在跑的作业？\n正在改的这一条会标记为没成功（改了一半的不会上线），可以再交给 AI；这个站点后面没开始的几条留在列表里。`, { title: '停止作业', kind: 'warning', confirmText: '停止' })) void cancelSiteJob(i.site_id);
   }
@@ -65,12 +69,14 @@
     <span class="acts">
       {#if busy(i)}<span class="pill" data-tip="这个站点正在跑别的作业，等它跑完再交给 AI"><span class="spin"></span>站点忙</span>
       {:else}
-        <button class="ic-btn ic-sm" onclick={() => workOpps([i], false)} aria-label="让 AI 改" data-tip="让 AI 改：改好、检查通过后留给你确认"><Icon name="wand" size={13} /></button>
+        <button class="ic-btn ic-sm" onclick={() => workOpps([i], false)} aria-label="让 AI 改" data-tip={`让 ${handTarget([i]).name} 改：改好、检查通过后留给你确认`}><Icon name="wand" size={13} /></button>
         <button class="ic-btn ic-sm" onclick={() => dismissOpps([i])} aria-label="驳回" data-tip="驳回：之后不再提这个机会"><Icon name="x" size={13} /></button>
       {/if}
     </span>
   </li>
 {/snippet}
+
+{#snippet who(t: { icon: string; name: string })}{#if t.icon}<span class="bi-w"><BrainIcon brain={t.icon} size={12} /></span>{:else}<Icon name="wand" size={11} />{/if}{/snippet}
 
 {#snippet prow(i: OppItem)}
   {@const st = stage(i)}
@@ -97,7 +103,7 @@
     {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
   </p>
   {#if o.items.length}
-    <span class="mpick" data-tip={'这一页交给 AI 时用哪个模型\n按站点设置：托管方案里的站点用方案选的，其它用站点「运营」设置里的' + (siteModels.length ? '\n现在会用到：' + siteModels.join('、') : '') + '\n选了别的只在这批临时用，不改任何设置'}>交给 AI 时用<Dropdown compact menuCompact value={fleet.batchModel} options={modelOpts} menuMin={240} searchable ariaLabel="交给 AI 时用的模型" onchange={(v: string) => (fleet.batchModel = v)} /></span>
+    <span class="mpick" data-tip={'这一页交给 AI 时用哪个模型\n按站点设置：托管方案里的站点用方案选的，其它用站点「运营」设置里的' + (siteModels.length ? '\n现在会用到：' + siteModels.join('、') : '') + '\n选了别的只在这批临时用，不改任何设置'}>交给<Dropdown compact menuCompact value={fleet.batchModel} options={modelOpts} menuMin={240} searchable ariaLabel="交给 AI 时用的模型" onchange={(v: string) => (fleet.batchModel = v)} /></span>
   {/if}
   </div>
   {#if progress.length}
@@ -119,7 +125,7 @@
         <Icon name="wand" size={13} /><b>AI 能直接处理</b><span class="faint n">{ready.length}</span>
         <small class="faint d">改标题和描述、修 sitemap 和图片这类，不用你拿主意；sitemap 报错先由程序检查，多数不用改代码</small>
         <span class="grow"></span>
-        <button class="btn tiny primary" onclick={() => workOpps(ready)} data-tip="全部交给 AI：每个站点一个作业，同时最多 3 个；改好、检查通过后留给你确认"><Icon name="wand" size={11} />全部交给 AI</button>
+        <button class="btn tiny primary" onclick={() => workOpps(ready)} data-tip="全部交给它：每个站点一个作业，同时最多 3 个；改好、检查通过后留给你确认">{@render who(readyTarget)}全部交给 {readyTarget.name}</button>
       </div>
       <div class="kinds">
         {#each readyKinds as [k, n] (k)}<span>{READY_LABEL[k] ?? KIND_LABEL[k] ?? k}<b>{n}</b></span>{/each}
@@ -137,7 +143,7 @@
         <span class="dot {g.k}"></span><b>{g.l}</b><span class="faint n">{g.items.length}</span>
         <small class="faint d">{g.d}</small>
         <span class="grow"></span>
-        {#if g.items.length}<button class="btn tiny" onclick={() => workOpps(g.items)} data-tip="这一组都交给 AI：每个站点一个作业，同时最多 3 个，改好留给你确认"><Icon name="wand" size={11} />这一组都让 AI 改</button>{/if}
+        {#if g.items.length}{@const t = handTarget(g.items)}<button class="btn tiny" onclick={() => workOpps(g.items)} data-tip="这一组都交给它：每个站点一个作业，同时最多 3 个，改好留给你确认">{@render who(t)}这一组都让 {t.name} 改</button>{/if}
       </div>
       <ul class="rows">
         {#each open ? g.items : g.items.slice(0, SHOW) as i (i.item.id)}{@render row(i)}
@@ -172,9 +178,11 @@
   .kinds b { margin-left: 5px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
   .kinds .link-btn { font-size: 12px; }
   .rows.sep { border-top: 1px solid var(--border); }
+  /* 深色按钮上的模型图标垫一个小白底，单色图标（OpenAI、Grok）也看得清 */
+  .bi-w { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 4px; background: #fff; color: #26241f; }
   .top { display: flex; align-items: center; gap: 12px; min-height: 28px; }
   .top .sum { flex: 1; min-width: 0; }
-  .mpick { flex: none; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+  .mpick { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
   .cnt { margin-right: 10px; }
   .cnt.working, .cnt.queued { color: var(--su-run, var(--warn)); }
   .cnt.proposed { color: var(--warn); }

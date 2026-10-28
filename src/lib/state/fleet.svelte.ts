@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { SiteRow, PendingItem, Site, OppItem, OppOverview } from '$lib/types';
 import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
-import { brainLabel } from './models.js';
+import { brainLabel, brainTitle, modelIcon } from './models.js';
 import { launcher } from './launcher.svelte.js';
 
 export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
@@ -203,6 +203,22 @@ export function batchModelLabel(v = fleet.batchModel): string {
   if (!v) return '';
   const b = v.split('::')[0];
   return `${brainLabel(b)} · ${launcher.comboOpts.find((o) => o.value === v)?.label ?? (v.slice(b.length + 2) || '默认模型')}`;
+}
+/** 一个模型的短名字（按钮、下拉框上用）：Codex 本机默认 →「Codex」，sonnet →「Sonnet」，其它用模型列表里的名字 */
+function shortName(brain: string, model: string): string {
+  if (!model) return brain.startsWith('api:') ? brainLabel(brain).replace(/ · API$/, '') : brainTitle(brain);
+  return launcher.comboOpts.find((o) => o.value === `${brain}::${model}`)?.label ?? model.replace(/^sonnet$/, 'Sonnet').replace(/^haiku$/, 'Haiku');
+}
+/** 交给谁：临时选了模型就是它；按站点设置时这些条目只用到一种模型就是那种，几种混着就是「AI」（没有图标） */
+export function handTarget(items: Pick<OppItem, 'brain' | 'model'>[], pick = fleet.batchModel): { icon: string; name: string } {
+  if (pick) {
+    const [b, ...m] = pick.split('::');
+    return { icon: modelIcon(b), name: shortName(b, m.join('::')) };
+  }
+  const kinds = [...new Set(items.filter((i) => i.brain).map((i) => `${i.brain}::${i.model}`))];
+  if (kinds.length !== 1) return { icon: '', name: 'AI' };
+  const [b, ...m] = kinds[0].split('::');
+  return { icon: modelIcon(b), name: shortName(b, m.join('::')) };
 }
 /** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
 export async function workOpps(items: OppItem[], ask = true) {
