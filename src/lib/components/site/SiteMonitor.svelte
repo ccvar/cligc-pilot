@@ -5,9 +5,9 @@
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
   import { ago, full } from './fmt';
-  import type { Site, MonitorView } from '$lib/types';
+  import type { Site, HealthSum, MonitorView } from '$lib/types';
 
-  let { site }: { site: Site } = $props();
+  let { site, embedded = false, onsummary }: { site: Site; embedded?: boolean; onsummary?: (s: HealthSum) => void } = $props();
   let m = $state<MonitorView | null>(null);
   let busy = $state(false);
 
@@ -15,10 +15,11 @@
     try { m = await invoke<MonitorView>('site_monitor', { id }); } catch { m = null; }
   }
   $effect(() => { void load(site.id); });
-  async function check() {
+  /** quiet：「全部重新检查」时不各自弹提示，出错照样提示 */
+  export async function check(quiet = false) {
     if (busy) return;
     busy = true;
-    try { m = await invoke<MonitorView>('check_site_monitor', { id: site.id }); say(m.down ? '首页还是打不开' : m.last?.ok ? '首页、证书、域名都查过了' : '首页这次没打开，下次再看'); }
+    try { m = await invoke<MonitorView>('check_site_monitor', { id: site.id }); if (!quiet || m.down) say(m.down ? '首页还是打不开' : m.last?.ok ? '首页、证书、域名都查过了' : '首页这次没打开，下次再看'); }
     catch (e) { say(String(e), 'err'); }
     finally { busy = false; }
   }
@@ -34,14 +35,21 @@
   }
   const cert = $derived(m ? expiry(m.cert_expires, m.cert_err, 14) : null);
   const dom = $derived(m ? expiry(m.domain_expires, m.domain_err, 60) : null);
+  $effect(() => {
+    if (!m) return;
+    const bad = [cert?.c, dom?.c];
+    onsummary?.({
+      tone: !m.checks ? 'none' : m.down || bad.includes('err') ? 'err' : bad.includes('warn') || m.uptime < 0.99 ? 'warn' : 'ok',
+      status: !m.checks ? '还没检查' : m.down ? '打不开' : bad.includes('err') ? (cert?.c === 'err' ? '证书快到期' : '域名快到期') : bad.includes('warn') ? (cert?.c === 'warn' ? '证书快到期' : '域名快到期') : '正常',
+      sub: m.uptime >= 0 ? `近 7 天可用 ${(m.uptime * 100).toFixed(m.uptime === 1 ? 0 : 1)}%` : '每小时打开一次首页',
+      checked: m.last?.ts ?? 0,
+    });
+  });
 </script>
 
-<div class="card mon">
-  <h3><Icon name="activity" />在线情况
-    <span class="sub">{#if !m?.checks}每小时自动打开一次首页{:else if m.down}<span class="err">打不开</span> · 从 {ago(m.down_since)}开始{:else}<span class="ok">正常</span>{#if m.last} · <span data-tip={full(m.last.ts)}>{ago(m.last.ts)}检查</span>{/if}{/if}</span>
-    <span class="grow"></span>
-    <button class="btn tiny" onclick={check} disabled={busy} data-tip="现在就打开首页、看证书、查域名到期">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
-  </h3>
+<div class="mon" class:card={!embedded}>
+  {#if embedded}<div class="ph">{@render head()}</div>
+  {:else}<h3><Icon name="activity" />在线情况{@render head()}</h3>{/if}
   {#if m}
     <dl class="kv">
       <dt>近 7 天</dt>
@@ -52,7 +60,16 @@
   {/if}
 </div>
 
+{#snippet head()}
+    <span class="sub">{#if !m?.checks}每小时自动打开一次首页{:else if m.down}<span class="err">打不开</span> · 从 {ago(m.down_since)}开始{:else}<span class="ok">正常</span>{#if m.last} · <span data-tip={full(m.last.ts)}>{ago(m.last.ts)}检查</span>{/if}{/if}</span>
+    <span class="grow"></span>
+    <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="现在就打开首页、看证书、查域名到期">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
+{/snippet}
+
 <style>
+  .ph { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; min-height: 26px; }
+  .ph .sub { font-size: 12px; color: var(--faint); }
+  .ph .grow { flex: 1; }
   .mon .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
   .ok { color: var(--ok); }
   .err { color: var(--err); }

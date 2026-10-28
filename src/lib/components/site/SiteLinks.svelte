@@ -6,9 +6,9 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { say } from '$lib/state/app.svelte.js';
   import { ago, full } from './fmt';
-  import type { Site, LinkReport } from '$lib/types';
+  import type { Site, HealthSum, LinkReport } from '$lib/types';
 
-  let { site }: { site: Site } = $props();
+  let { site, embedded = false, onsummary }: { site: Site; embedded?: boolean; onsummary?: (s: HealthSum) => void } = $props();
   let rep = $state<LinkReport | null>(null);
   let busy = $state(false);
   let showOk = $state(false);
@@ -17,13 +17,14 @@
     try { rep = await invoke<LinkReport>('site_links', { id }); } catch { rep = null; }
   }
   $effect(() => { const id = site.id; showOk = false; void load(id); });
-  async function check() {
+  /** quiet：「全部重新检查」时不各自弹提示，出错照样提示 */
+  export async function check(quiet = false) {
     if (busy) return;
     busy = true;
     try {
       rep = await invoke<LinkReport>('check_site_links', { id: site.id });
       const b = rep.links.filter((l) => l.verdict === 'broken').length;
-      say(rep.links.length ? (b ? `查了 ${rep.links.length} 个推广链接，${b} 个失效` : `查了 ${rep.links.length} 个推广链接，都能用`) : '没找到推广链接', b ? 'err' : undefined);
+      if (!quiet || b) say(rep.links.length ? (b ? `查了 ${rep.links.length} 个推广链接，${b} 个失效` : `查了 ${rep.links.length} 个推广链接，都能用`) : '没找到推广链接', b ? 'err' : undefined);
     } catch (e) { say(String(e), 'err'); }
     finally { busy = false; }
   }
@@ -32,14 +33,21 @@
   const good = $derived(rep?.links.filter((l) => l.verdict === 'ok') ?? []);
   const broken = $derived(bad.filter((l) => l.verdict === 'broken').length);
   const host = (u: string) => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return u; } };
+  $effect(() => {
+    if (!rep) return;
+    const unv = bad.length - broken;
+    onsummary?.({
+      tone: !rep.checked_at || !rep.links.length ? 'none' : broken ? 'err' : unv ? 'warn' : 'ok',
+      status: !rep.checked_at ? '还没检查' : !rep.links.length ? '没有推广链接' : broken ? `${broken} 个失效` : unv ? `${unv} 个没法确认` : '都能用',
+      sub: rep.links.length ? `共 ${rep.links.length} 个` : '每周检查一次',
+      checked: rep.checked_at,
+    });
+  });
 </script>
 
-<div class="card lk">
-  <h3><Icon name="link" />推广链接
-    <span class="sub">{#if !rep?.checked_at}每周自动检查一次{:else}{rep.links.length} 个{#if broken} · <span class="err-t">{broken} 个失效</span>{/if} · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{#if rep.source === 'live'} · 只看了线上首页{/if}{/if}</span>
-    <span class="grow"></span>
-    <button class="btn tiny" onclick={check} disabled={busy} data-tip="把这个站点的推广链接都访问一遍，跟到最后落地的页面">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
-  </h3>
+<div class="lk" class:card={!embedded}>
+  {#if embedded}<div class="ph">{@render head()}</div>
+  {:else}<h3><Icon name="link" />推广链接{@render head()}</h3>{/if}
   {#if !rep?.checked_at}
     <p class="hint">会找出站内的 <code>/go/…</code> 跳转和带邀请参数的站外链接，真的访问一遍：打不开、404、跳回本站的算失效，发系统通知提醒你。</p>
   {:else if !rep.links.length}
@@ -68,7 +76,16 @@
   </li>
 {/snippet}
 
+{#snippet head()}
+    <span class="sub">{#if !rep?.checked_at}每周自动检查一次{:else}{rep.links.length} 个{#if broken} · <span class="err-t">{broken} 个失效</span>{/if} · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{#if rep.source === 'live'} · 只看了线上首页{/if}{/if}</span>
+    <span class="grow"></span>
+    <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="把这个站点的推广链接都访问一遍，跟到最后落地的页面">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
+{/snippet}
+
 <style>
+  .ph { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; min-height: 26px; }
+  .ph .sub { font-size: 12px; color: var(--faint); }
+  .ph .grow { flex: 1; }
   .lk .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
   .err-t { color: var(--err); }
   .rows { list-style: none; margin: 0 -18px -16px; padding: 0; }

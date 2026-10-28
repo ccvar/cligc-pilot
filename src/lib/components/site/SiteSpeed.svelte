@@ -6,22 +6,24 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { say } from '$lib/state/app.svelte.js';
   import { ago, full } from './fmt';
-  import type { Site, SpeedReport, PageSpeed } from '$lib/types';
+  import type { Site, HealthSum, SpeedReport, PageSpeed } from '$lib/types';
 
-  let { site }: { site: Site } = $props();
+  let { site, embedded = false, onsummary }: { site: Site; embedded?: boolean; onsummary?: (s: HealthSum) => void } = $props();
   let rep = $state<SpeedReport | null>(null);
   let busy = $state(false);
   let open = $state('');
 
   $effect(() => { const id = site.id; open = ''; invoke<SpeedReport>('site_speed', { id }).then((r) => (rep = r)).catch(() => (rep = null)); });
-  async function check() {
+  /** quiet：「全部重新检查」时不各自弹提示，出错照样提示 */
+  export async function check(quiet = false) {
     if (busy) return;
     busy = true;
     try {
       rep = await invoke<SpeedReport>('check_site_speed', { id: site.id });
       const slow = rep.pages.filter(isSlow).length;
       const err = rep.pages.find((p) => p.error)?.error;
-      say(err && rep.pages.every((p) => p.error) ? err : slow ? `测了 ${rep.pages.length} 个页面，${slow} 个偏慢` : `测了 ${rep.pages.length} 个页面`, err && rep.pages.every((p) => p.error) ? 'err' : undefined);
+      const allErr = !!err && rep.pages.every((p) => p.error);
+      if (!quiet || allErr) say(allErr ? err : slow ? `测了 ${rep.pages.length} 个页面，${slow} 个偏慢` : `测了 ${rep.pages.length} 个页面`, allErr ? 'err' : undefined);
     } catch (e) { say(String(e), 'err'); }
     finally { busy = false; }
   }
@@ -31,14 +33,23 @@
   const sec = (ms: number) => `${(ms / 1000).toFixed(1)} 秒`;
   const FIELD: Record<string, string> = { FAST: '快', AVERAGE: '一般', SLOW: '慢' };
   const avg = $derived.by(() => { const ok = (rep?.pages ?? []).filter((p) => !p.error && p.score > 0); return ok.length ? Math.round(ok.reduce((a, p) => a + p.score, 0) / ok.length) : 0; });
+  $effect(() => {
+    if (!rep) return;
+    const allErr = rep.pages.length > 0 && rep.pages.every((p) => p.error);
+    const slow = rep.pages.filter(isSlow).length;
+    const lcp = rep.pages.find((p) => !p.error)?.lcp_ms ?? 0;
+    onsummary?.({
+      tone: !rep.checked_at ? 'none' : allErr ? 'warn' : slow ? 'err' : avg ? (tone(avg) as 'ok' | 'warn' | 'err') : 'none',
+      status: !rep.checked_at ? '还没测' : allErr ? '没测出来' : avg ? `${avg} 分` : '—',
+      sub: lcp ? `首页 LCP ${sec(lcp)}` : '每周测一次（手机版）',
+      checked: rep.checked_at,
+    });
+  });
 </script>
 
-<div class="card spd">
-  <h3><Icon name="gauge" />页面速度
-    <span class="sub">{#if !rep?.checked_at}每周用 PageSpeed 测一次（手机版）{:else}{#if avg}平均 <b class={tone(avg)}>{avg}</b> 分 · {/if}<span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}测</span>{/if}</span>
-    <span class="grow"></span>
-    <button class="btn tiny" onclick={check} disabled={busy} data-tip="用 Google PageSpeed Insights 测首页和搜索流量最多的几个页面，一个页面要半分钟左右">{#if busy}<span class="spin"></span>测速中…{:else}<Icon name="refresh" size={11} />立即测速{/if}</button>
-  </h3>
+<div class="spd" class:card={!embedded}>
+  {#if embedded}<div class="ph">{@render head()}</div>
+  {:else}<h3><Icon name="gauge" />页面速度{@render head()}</h3>{/if}
   {#if !rep?.checked_at}
     <p class="hint">测首页和 Search Console 里点击最多的 3 个页面：性能分、最大内容渲染（LCP）和 PageSpeed 列出的主要问题。低于 50 分的会变成「页面太慢」机会交给 AI 优化。</p>
   {:else}
@@ -67,7 +78,16 @@
   {/if}
 </div>
 
+{#snippet head()}
+    <span class="sub">{#if !rep?.checked_at}每周用 PageSpeed 测一次（手机版）{:else}{#if avg}平均 <b class={tone(avg)}>{avg}</b> 分 · {/if}<span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}测</span>{/if}</span>
+    <span class="grow"></span>
+    <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="用 Google PageSpeed Insights 测首页和搜索流量最多的几个页面，一个页面要半分钟左右">{#if busy}<span class="spin"></span>测速中…{:else}<Icon name="refresh" size={11} />立即测速{/if}</button>
+{/snippet}
+
 <style>
+  .ph { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; min-height: 26px; }
+  .ph .sub { font-size: 12px; color: var(--faint); }
+  .ph .grow { flex: 1; }
   .spd .sub { font-size: 12px; color: var(--faint); font-weight: 400; }
   .rows { list-style: none; margin: 0 -18px -16px; padding: 0; }
   .rows > li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 9px 18px; border-top: 1px solid var(--border); font-size: 12.5px; }

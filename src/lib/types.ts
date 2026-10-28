@@ -621,3 +621,6 @@ export interface SerpCompetitor { domain: string; keywords: number; above_us: nu
 export interface SerpConfig { off: boolean; keywords: string[]; gl: string; hl: string }
 export interface SerpView { has_key: boolean; config: SerpConfig; report: { checked_at: number; gl: string; hl: string; keywords: SerpKeyword[]; competitors: SerpCompetitor[] }; planned: string[] }
 export interface ApiKeys { pagespeed: boolean; serper: boolean }
+
+/** 站点概览「站点健康」里一格的状态（在线 / 推广链接 / 速度 / 体检各自报上来） */
+export interface HealthSum { tone: 'ok' | 'warn' | 'err' | 'none'; status: string; sub: string; checked: number }

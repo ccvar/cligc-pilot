@@ -5,10 +5,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
   import SiteSummary from './SiteSummary.svelte';
-  import SiteLinks from './SiteLinks.svelte';
-  import SiteMonitor from './SiteMonitor.svelte';
-  import SiteSpeed from './SiteSpeed.svelte';
-  import SiteAudit from './SiteAudit.svelte';
+  import SiteHealth from './SiteHealth.svelte';
   import SiteLaunch from './SiteLaunch.svelte';
   import SiteManagedCard from './SiteManagedCard.svelte';
   import SiteMakeCard from './SiteMakeCard.svelte';
@@ -82,7 +79,7 @@
 
   {#if hasData}<SiteSummary {site} {binds} />{/if}
 
-  {#if site.domain}<div class="cards"><SiteMonitor {site} /><SiteLinks {site} /><SiteSpeed {site} /><SiteAudit {site} /></div>{/if}
+  {#if site.domain}<SiteHealth {site} />{/if}
 
   <!-- 有数据时数据源并进「近 28 天」的标题行；还没有数据时单独一张卡，方便去接入 -->
   {#if !hasData}
