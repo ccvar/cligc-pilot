@@ -97,7 +97,7 @@
   </section>
 
   <section>
-    <h4>收益与外部数据<InfoTip label="收益与外部数据说明" text={'AdSense 收益每天更新一次，和 AI 花费一起显示在站点列表、托管页和站点的「数据」里。\n推广佣金、赞助没有统一接口：在站点里手动记，或者导入 CSV。\nPageSpeed 用来每周测页面速度，Serper 用来每周查竞品排名。Key 都只存在钥匙串。'} /></h4>
+    <h4>收益与外部数据<InfoTip label="收益与外部数据说明" text={'AdSense 收益每天更新一次，和 AI 花费一起显示在站点列表、托管页和站点的「数据」里。\n推广佣金、赞助没有统一接口：在站点里手动记，或者导入 CSV。\nPageSpeed 用来每周测页面速度（默认用已授权的 Google 账号），Serper 用来每周查竞品排名。Key 都只存在钥匙串。'} /></h4>
     {#if r && k}
       <div class="rows">
         <div class="opt">
@@ -116,7 +116,7 @@
           <span class="ot"><b>导入推广佣金<InfoTip label="CSV 格式" text={'每行：月份,域名,金额,来源,备注（后两列可以不写）\n例：2026-10,example.com,128.50,affiliate,OKX 返佣\n金额按美元；来源写 affiliate / sponsor / other；第一行是表头会自动跳过。'} /></b><small>也可以在站点的「数据」里一笔一笔记</small></span>
           <button class="ic-btn" disabled={!!growth.busy} onclick={importRevenue} aria-label="选择 CSV 导入" data-tip={growth.busy === 'csv' ? '导入中…' : '选择 CSV 文件导入'}>{#if growth.busy === 'csv'}<span class="spin"></span>{:else}<Icon name="upload" size={15} />{/if}</button>
         </div>
-        {@render keyRow('pagespeed', 'PageSpeed API Key', '可以不填：不填用免费额度，偶尔被限流、下次再测。\n要填的话在 Google Cloud 控制台「API 和服务 → 凭据」建一个 API Key，并启用 PageSpeed Insights API。', k.pagespeed, '不填也能测速')}
+        {@render keyRow('pagespeed', 'PageSpeed API Key', '一般不用填：测速会用「数据源」里已经授权的 Google 账号，额度算在它的 Google Cloud 项目上\n（项目里要启用 PageSpeed Insights API，没启用时先用匿名额度，偶尔被限流）。\n没有用浏览器登录的 Google 账号、或想用别的项目的额度时，才在这里填 API Key。', k.pagespeed, '不填就用已授权的 Google 账号')}
         {@render keyRow('serper', 'Serper API Key', '竞品观察用：在 serper.dev 注册拿 API Key，每次搜索扣一次额度（1000 次约 1 美元）。\n每个站点每周最多查 15 个词。不填就不查竞品。', k.serper, '填了才会查竞品')}
       </div>
     {/if}

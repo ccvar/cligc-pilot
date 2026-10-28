@@ -2,7 +2,8 @@
 //! 记下性能分、LCP / CLS / TBT，和真实用户数据（Chrome 用户体验报告，流量够才有）。
 //! 慢的页面变成「页面太慢」机会，附上 PageSpeed 列出的主要问题，交给 AI 做最小的优化（要你确认后才上线）。
 //!
-//! 不填 API Key 也能用（Google 给匿名调用的额度不多，偶尔会被限流，下次再测）；在设置里填了 Key 就稳定。
+//! 用谁的额度：设置里填了 API Key 用 Key；没填就用已经授权的 Google 账号（数据源里 OAuth 登录的那条，
+//! PageSpeed 只要 openid 权限，额度算在那个 OAuth 客户端所在的 Google Cloud 项目上）；都不行才用匿名额度（偶尔被限流，下次再测）。
 //! 结果存在站点数据目录的 cache/speed.json。
 
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,9 @@ pub struct PageSpeed {
     pub issues: Vec<Issue>,
     #[serde(default)]
     pub error: String,
+    /// 测出来了、但有话要说（比如用了匿名额度）
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -126,16 +130,52 @@ pub fn parse(url: &str, v: &Value) -> PageSpeed {
         field_cls: metric("CUMULATIVE_LAYOUT_SHIFT_SCORE") / 100.0,
         issues,
         error: String::new(),
+        note: String::new(),
     }
 }
 
-async fn test_page(url: &str, key: Option<&str>) -> PageSpeed {
+/// 调 PageSpeed 用的身份
+enum Auth {
+    Key(String),
+    /// 已授权 Google 账号的访问令牌
+    Google(String),
+    Anonymous,
+}
+
+/// 选身份：填了 Key 用 Key；否则用站点绑的 Google 账号（OAuth），再不行用任意一个 OAuth 登录的 Google 账号
+async fn auth_for(site: &crate::sites::Site, conns: &crate::conns::ConnStore) -> Auth {
+    if let Some(k) = crate::keychain::get_named_secret(KEY_SECRET).ok().filter(|k| !k.trim().is_empty()) {
+        return Auth::Key(k);
+    }
+    let oauth: Vec<String> = conns.list().into_iter().filter(|c| c.kind == "google" && c.key_kind == "oauth").map(|c| c.id).collect();
+    let mut order: Vec<String> = [site.data.google_conn_id.clone(), site.data.gsc_conn().to_string()].into_iter().filter(|id| oauth.contains(id)).collect();
+    order.extend(oauth);
+    order.dedup();
+    for id in order {
+        if let Ok(t) = crate::site_data::google_token(conns, &id, &["openid"]).await {
+            return Auth::Google(t);
+        }
+    }
+    Auth::Anonymous
+}
+
+/// Google 账号所在的 Cloud 项目没启用 PageSpeed Insights API
+fn api_disabled(v: &Value) -> bool {
+    let m = v["error"]["message"].as_str().unwrap_or("");
+    m.contains("has not been used") || m.contains("is disabled") || v["error"]["details"].to_string().contains("SERVICE_DISABLED")
+}
+
+async fn test_page(url: &str, auth: &Auth) -> PageSpeed {
     let mut api = format!("https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url={}&strategy=mobile&category=performance&locale=zh-CN", esc(url));
-    if let Some(k) = key {
+    if let Auth::Key(k) = auth {
         api.push_str(&format!("&key={}", esc(k)));
     }
     let fail = |e: String| PageSpeed { url: url.to_string(), error: e, ..Default::default() };
-    let resp = match crate::cf::http().get(&api).timeout(Duration::from_secs(120)).send().await {
+    let mut req = crate::cf::http().get(&api).timeout(Duration::from_secs(120));
+    if let Auth::Google(t) = auth {
+        req = req.bearer_auth(t);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => return fail(if e.is_timeout() { "PageSpeed 测试超时，下次再测".into() } else { "连不上 PageSpeed Insights".into() }),
     };
@@ -143,8 +183,10 @@ async fn test_page(url: &str, key: Option<&str>) -> PageSpeed {
     let v: Value = resp.json().await.unwrap_or(Value::Null);
     match status {
         200 => parse(url, &v),
-        429 => fail("PageSpeed 的免费额度用完了（在设置里填一个 API Key 就稳定），下次再测".into()),
-        400 | 403 if key.is_some() => fail(format!("PageSpeed API Key 不能用：{}", v["error"]["message"].as_str().unwrap_or(""))),
+        403 if matches!(auth, Auth::Google(_)) && api_disabled(&v) => fail(DISABLED.into()),
+        429 if matches!(auth, Auth::Anonymous) => fail("PageSpeed 的匿名额度用完了，下次再测（接上 Google 账号或填 API Key 就稳定）".into()),
+        429 => fail("PageSpeed 今天的额度用完了，下次再测".into()),
+        400 | 403 if matches!(auth, Auth::Key(_)) => fail(format!("PageSpeed API Key 不能用：{}", v["error"]["message"].as_str().unwrap_or(""))),
         _ => fail(format!("PageSpeed 没测出来（{status}）：{}", v["error"]["message"].as_str().unwrap_or("页面可能打不开"))),
     }
 }
@@ -167,17 +209,28 @@ fn pages_to_test(site: &crate::sites::Site, site_dir: &Path) -> Vec<String> {
     out
 }
 
-pub async fn check_site(site: &crate::sites::Site, site_dir: &Path) -> Result<SpeedReport, String> {
+const DISABLED: &str = "Google 账号所在的 Cloud 项目还没启用 PageSpeed Insights API";
+
+pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, conns: &crate::conns::ConnStore) -> Result<SpeedReport, String> {
     if site.domain.trim().is_empty() {
         return Err("这个站点还没有设置域名".into());
     }
-    let key = crate::keychain::get_named_secret(KEY_SECRET).ok().filter(|k| !k.trim().is_empty());
+    let mut auth = auth_for(site, conns).await;
     let mut pages = Vec::new();
     for (n, u) in pages_to_test(site, site_dir).into_iter().enumerate() {
         if n > 0 {
-            tokio::time::sleep(Duration::from_secs(if key.is_some() { 1 } else { 4 })).await;
+            tokio::time::sleep(Duration::from_secs(if matches!(auth, Auth::Anonymous) { 4 } else { 1 })).await;
         }
-        pages.push(test_page(&u, key.as_deref()).await);
+        let mut p = test_page(&u, &auth).await;
+        // 项目没启用 API：这次先用匿名额度测，结果里留一句怎么改
+        if p.error == DISABLED {
+            auth = Auth::Anonymous;
+            p = test_page(&u, &auth).await;
+            if p.error.is_empty() {
+                p.note = format!("{DISABLED}，这次用的匿名额度；到 Google Cloud 控制台「API 和服务 → 库」启用它就用你自己的额度");
+            }
+        }
+        pages.push(p);
     }
     let r = SpeedReport { checked_at: crate::now_secs(), pages };
     save(site_dir, &r);
@@ -229,7 +282,7 @@ pub fn schedule(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let st = app.state::<crate::AppState>();
         for site in due {
-            let _ = check_site(&site, &st.sites.data_dir(&site.id)).await;
+            let _ = check_site(&site, &st.sites.data_dir(&site.id), &st.conns).await;
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
         use tauri::Emitter;
@@ -245,7 +298,7 @@ pub fn site_speed(state: tauri::State<'_, crate::AppState>, id: String) -> Speed
 #[tauri::command]
 pub async fn check_site_speed(state: tauri::State<'_, crate::AppState>, id: String) -> Result<SpeedReport, String> {
     let site = state.sites.get(&id)?;
-    check_site(&site, &state.sites.data_dir(&id)).await
+    check_site(&site, &state.sites.data_dir(&id), &state.conns).await
 }
 
 #[cfg(test)]

@@ -56,6 +56,7 @@
             <span class="m faint" data-tip="最大内容渲染（LCP）：页面主要内容显示出来用的时间，2.5 秒内算好">LCP {sec(p.lcp_ms)}</span>
             {#if p.field}<span class="pill {p.field === 'FAST' ? 'ok' : p.field === 'SLOW' ? 'err' : 'warn'}" data-tip={`真实用户（近 28 天）：LCP ${sec(p.field_lcp_ms)}、交互响应 ${Math.round(p.field_inp_ms)} 毫秒`}>真实用户{FIELD[p.field] ?? p.field}</span>{/if}
             {#if p.issues.length}<button class="link-btn" onclick={() => (open = open === p.url ? '' : p.url)}>{open === p.url ? '收起' : `${p.issues.length} 个问题`}</button>{/if}
+            {#if p.note}<p class="note">{p.note}</p>{/if}
             {#if open === p.url}
               <ul class="iss">{#each p.issues as i (i.title)}<li>{i.title}<span class="faint">约省 {sec(i.savings_ms)}</span></li>{/each}</ul>
             {/if}

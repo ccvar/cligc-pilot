@@ -600,7 +600,7 @@ export interface PushStatus { has_token: boolean; bot_name: string; chat_name: s
 
 // ---- 页面速度（PageSpeed Insights） ----
 export interface SpeedIssue { title: string; savings_ms: number }
-export interface PageSpeed { url: string; score: number; lcp_ms: number; cls: number; tbt_ms: number; field: string; field_lcp_ms: number; field_inp_ms: number; field_cls: number; issues: SpeedIssue[]; error: string }
+export interface PageSpeed { url: string; score: number; lcp_ms: number; cls: number; tbt_ms: number; field: string; field_lcp_ms: number; field_inp_ms: number; field_cls: number; issues: SpeedIssue[]; error: string; note?: string }
 export interface SpeedReport { checked_at: number; pages: PageSpeed[] }
 
 // ---- 页面体检（图片、结构化数据） ----
