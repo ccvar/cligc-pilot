@@ -223,29 +223,33 @@
         {/if}
       {/if}
     {:else}
-      <!-- 一页里上下两块：AI 改好等你确认的、还没人处理的运营机会 -->
-      <h4 class="sec">等你确认{#if fleet.pending.length}<span class="sc">{fleet.pending.length}</span>{/if}</h4>
-      {#if !fleet.pending.length}
-        <p class="none">没有等你确认的改动</p>
+      <!-- 有 AI 改好等你确认的：上下两块（等你确认 / 运营机会）；没有就只显示运营机会，不留空块 -->
+      {#if fleet.pending.length}
+        <section class="blk">
+          <h4 class="sec">等你确认<span class="sc">{fleet.pending.length}</span></h4>
+          <div class="card tbl-card">
+            <table class="tbl">
+              <thead><tr><th style="width:170px">站点</th><th>事项</th><th style="width:84px">状态</th><th style="width:96px">更新</th></tr></thead>
+              <tbody>
+                {#each fleet.pending as p (p.item.id)}
+                  <tr class="clickable" onclick={() => openSite(p.site_id, 'queue')}>
+                    <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
+                    <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
+                    <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>
+                    <td class="faint when"><span data-tip={full(p.item.updated_at)}>{when(p.item.updated_at)}</span></td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="blk mt">
+          <h4 class="sec">运营机会{#if oppN}<span class="sc">{oppN}</span>{/if}</h4>
+          <OppsBoard />
+        </section>
       {:else}
-        <div class="card tbl-card">
-          <table class="tbl">
-            <thead><tr><th style="width:170px">站点</th><th>事项</th><th style="width:84px">状态</th><th style="width:96px">更新</th></tr></thead>
-            <tbody>
-              {#each fleet.pending as p (p.item.id)}
-                <tr class="clickable" onclick={() => openSite(p.site_id, 'queue')}>
-                  <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
-                  <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
-                  <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>
-                  <td class="faint when"><span data-tip={full(p.item.updated_at)}>{when(p.item.updated_at)}</span></td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+        <OppsBoard />
       {/if}
-      <h4 class="sec mt">运营机会{#if oppN}<span class="sc">{oppN}</span>{/if}</h4>
-      <OppsBoard />
     {/if}
    </div>
    {/key}
@@ -329,10 +333,11 @@
   .am-none { color: var(--dim); }
   .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
-  .sec { margin: 0 2px 8px; display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }
-  .sec.mt { margin-top: 26px; }
+  /* 块里：标题和内容隔 8px；两块之间多空一点（加上页面本身的 12px 间距约 28px） */
+  .blk { display: flex; flex-direction: column; gap: 8px; }
+  .blk.mt { margin-top: 16px; }
+  .sec { margin: 0 2px; display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }
   .sec .sc { font-size: 12px; font-weight: 400; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .none { margin: 0 2px; font-size: 12.5px; color: var(--faint); }
 
   .c-rev .ai { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

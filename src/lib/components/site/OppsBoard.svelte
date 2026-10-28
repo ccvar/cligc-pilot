@@ -27,6 +27,7 @@
   const todo = (items: OppItem[]) => items.filter((i) => !handed(i));
 </script>
 
+<div class="ob">
 {#if !o}
   <div class="card"><p class="hint">正在读取…</p></div>
 {:else}
@@ -68,11 +69,15 @@
     </div>
   {/each}
 {/if}
+</div>
 
 <style>
-  .sum { margin: 0 2px 10px; font-size: 12.5px; }
+  /* 说明一行、各组卡片之间统一 12px（不再叠加外层间距） */
+  .ob { display: flex; flex-direction: column; gap: 12px; }
+  /* 卡片自己不留内边距：分隔线顶到卡片两边，标题和每行各自留 16px */
+  .grp { padding: 0; overflow: hidden; }
+  .sum { margin: 0 2px; font-size: 12.5px; }
   .sum .run { color: var(--su-run, var(--warn)); }
-  .grp + .grp { margin-top: 12px; }
   .gh { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
   .gh b { font-weight: 600; }
   .gh .n { font-size: 12px; font-variant-numeric: tabular-nums; }
