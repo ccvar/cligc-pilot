@@ -281,6 +281,9 @@
   .items { padding-top: 0; padding-bottom: 0; }
   /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */
   .card.items > .list:last-child { margin-bottom: 0; }
+  /* 悬停 / 选中时整条变底色：贴着卡片上下边的那一条跟卡片一样圆角（卡片 12px 圆角减 1px 边框），不露出直角 */
+  .card.items > .list:first-child > .li:first-child { border-radius: 11px 11px 0 0; }
+  .card.items > .list:last-child > .li:last-child { border-bottom-left-radius: 11px; border-bottom-right-radius: 11px; }
   .items .list > .li:first-child { border-top: none; }
   .item { display: flex; flex-direction: column; gap: 6px; padding-top: 14px; padding-bottom: 14px; }
   .it-head { min-width: 0; gap: 10px; }
