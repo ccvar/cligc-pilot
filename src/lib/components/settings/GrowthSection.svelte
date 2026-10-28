@@ -145,13 +145,18 @@
   .opt + .opt { border-top: 1px solid var(--border); }
   .opt.dim { opacity: .55; }
   .ot { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-  .ot b { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; }
+  /* 标题不换行（「PageSpeed API Key」原来被输入框挤成两行） */
+  .ot b { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; }
   .ot small { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ot small.err-text { color: var(--err); }
   .ot small.wrap { white-space: normal; }
   .ot code { font-size: 11px; }
   .acts { flex: none; display: inline-flex; align-items: center; gap: 6px; }
-  .acts .tin { width: 200px; padding: 4.5px 9px; font-size: 12px; }
+  /* 填 Key 的输入框和旁边的小按钮同高（26px）、同圆角；窄的时候输入框先收窄，标题不被挤 */
+  .acts:has(.tin) { flex: 0 1 auto; min-width: 0; }
+  .acts .tin { flex: 0 1 150px; width: 150px; min-width: 96px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 12px; }
+  /* 这一节的小按钮统一 26px 高，和输入框齐 */
+  .opt .btn.tiny { height: 26px; padding: 0 10px; }
   .switch { position: relative; flex: none; width: 32px; height: 18px; border: none; border-radius: 999px; background: var(--border2); cursor: pointer; padding: 0; transition: background-color .18s; }
   .switch i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); transition: transform .18s var(--su-ease); }
   .switch.on { background: var(--ok); }
