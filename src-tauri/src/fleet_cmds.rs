@@ -70,6 +70,9 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
             let plan = group.map(|g| g.name.clone()).unwrap_or_default();
             let autonomy = group.map(|g| if g.active_for(&s.id) { g.autonomy.clone() } else { "stopped".to_string() }).unwrap_or_default();
             let dir = state.sites.data_dir(&s.id);
+            if !attended(&cfg, &s.id) {
+                sync_unattended(&dir);
+            }
             let q = crate::site_ops::load_queue(&dir);
             let count = |st: &str| q.iter().filter(|i| i.status == st).count();
             // 你自己取消的上线不算失败：按最近一次没被取消的那次算
@@ -135,6 +138,26 @@ pub fn pending_across_sites(state: tauri::State<'_, AppState>) -> Vec<PendingIte
     out
 }
 
+/// 没人自动处理的站点（自己运营的，或托管方案暂停 / 单独停止的）：每天同步数据时算出的机会，
+/// 还没进待处理队列的补进去（和扫描入队同一套去重和 21 天冷却：驳回过的不会再冒出来）。只在有新机会时才写文件。
+fn sync_unattended(site_dir: &std::path::Path) {
+    let cached: Vec<crate::site_ops::Opportunity> = crate::site_data::read_json(&crate::site_data::cache_dir(site_dir), "opportunities.json");
+    if cached.is_empty() {
+        return;
+    }
+    let now = crate::now_secs();
+    let q = crate::site_ops::load_queue(site_dir);
+    let fresh: Vec<_> = cached.into_iter().filter(|o| crate::site_ops::should_enqueue(&q, &o.key, now, crate::site_runner::COOLDOWN)).collect();
+    if !fresh.is_empty() {
+        let _ = crate::site_ops::enqueue(site_dir, &fresh, now, crate::site_runner::COOLDOWN);
+    }
+}
+
+/// AI 会不会自动处理这个站点的机会：在托管方案里、方案和总开关都没暂停、站点没单独停止
+fn attended(cfg: &crate::managed::ManagedConfig, site_id: &str) -> bool {
+    !cfg.paused && cfg.group_of(site_id).is_some_and(|g| g.active_for(site_id))
+}
+
 /// 运营机会的优先级：urgent 正在伤害站点的问题、value 收益大的、easy 顺手做的小改动。
 pub fn tier_of(o: &crate::site_ops::Opportunity) -> &'static str {
     match o.kind.as_str() {
@@ -179,7 +202,8 @@ pub struct OppOverview {
     pub waiting: usize,
 }
 
-/// 自己运营的站点里还没人处理的运营机会，按优先级、预计收益排。托管站点的由 AI 自动处理，只给个数。
+/// 没人自动处理的站点（自己运营的、托管停着的）里还没处理的运营机会，按优先级、预计收益排。
+/// 托管且在运行的站点由 AI 自动处理，只给个数。
 #[tauri::command]
 pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverview {
     let cfg = crate::managed::load(&state.data_dir);
@@ -190,8 +214,13 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
         if state.site_jobs.running(&s.id) {
             running.push(s.id.clone());
         }
-        let open: Vec<QueueItem> = crate::site_ops::load_queue(&state.sites.data_dir(&s.id)).into_iter().filter(|i| i.status == "open").collect();
-        if cfg.group_of(&s.id).is_some() {
+        let dir = state.sites.data_dir(&s.id);
+        let on = attended(&cfg, &s.id);
+        if !on {
+            sync_unattended(&dir);
+        }
+        let open: Vec<QueueItem> = crate::site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "open").collect();
+        if on {
             managed_open += open.len();
             continue;
         }

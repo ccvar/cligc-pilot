@@ -19,7 +19,7 @@ use crate::sites::Site;
 
 const DAY: u64 = 86_400;
 /// 同一个机会处理过后，多久之内不再重新入队。
-const COOLDOWN: u64 = 21 * DAY;
+pub(crate) const COOLDOWN: u64 = 21 * DAY;
 
 fn now() -> u64 {
     crate::now_secs()

@@ -40,8 +40,7 @@ class FleetState {
   pending = $state<PendingItem[]>([]);
   /** 「待处理」里的运营机会（自己运营的站点）；切到哪一块：confirm 等你确认 / opps 运营机会 */
   opps = $state<OppOverview | null>(null);
-  /** 开发版：「待处理」显示示例数据（只在界面上，不写进任何站点的队列） */
-  demo = $state(false);
+
   /** 刚交给 AI、还没开始的条目（列表上先标出来，作业开始后由队列状态接手） */
   handed = $state<string[]>([]);
   // 总览
@@ -58,8 +57,8 @@ class FleetState {
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
   pendingCount = $derived(this.rows.reduce((n, r) => n + r.proposed, 0));
-  /** 自己运营的站点里还没处理的运营机会（托管站点的由 AI 自动处理，不算） */
-  oppCount = $derived(this.rows.filter((r) => !r.plan).reduce((n, r) => n + r.open, 0));
+  /** 没人自动处理的站点（自己运营的、托管停着的）里还没处理的运营机会；托管且在运行的由 AI 自动处理，不算 */
+  oppCount = $derived(this.rows.filter((r) => !r.plan || r.autonomy === 'stopped').reduce((n, r) => n + r.open, 0));
 }
 
 export const fleet = new FleetState();
@@ -176,59 +175,12 @@ export async function loadFleet() {
     if (again) { again = false; void loadFleet(); }
   }
 }
-/** 开发版：打开 / 关掉示例数据 */
-export function setDemo(on: boolean) {
-  fleet.demo = on;
-  if (on) { const d = demoData(fleet.rows); fleet.opps = d.opps; fleet.pending = d.pending; }
-  else { void loadPending(); void loadOpps(); }
-}
 export async function loadPending() {
-  if (fleet.demo) return;
   try { const v = await invoke<PendingItem[]>('pending_across_sites'); fleet.pending = v; }
   catch (e) { say(String(e), 'err'); }
 }
 
-// ── 开发版示例数据：借用前几个站点的名字和图标，条目都是假的，点了也不会处理 ──
-function demoItem(id: string, kind: string, title: string, evidence: string, status = 'open', score = 0): PendingItem['item'] {
-  const now = Math.floor(Date.now() / 1000);
-  return {
-    id: `demo-${id}`, status, created_at: now - 86400, updated_at: now - Number(id) * 3700, conv_id: '', branch: '', base_sha: '', head_sha: '', pr_number: 0, pr_url: '', change_kind: '', verdict: '', merge_sha: '', deployed_at: 0, review: '', review_note: '', note: '', auto: false,
-    opp: { key: `demo:${id}`, kind, title, page: '', queries: [], clicks: 0, impressions: 0, ctr: 0, position: 0, prev_clicks: 0, score, change: 'content', evidence },
-  } as PendingItem['item'];
-}
-export function demoData(rows: SiteRow[]): { opps: OppOverview; pending: PendingItem[] } {
-  const pick = (n: number) => rows[n % Math.max(rows.length, 1)] ?? { id: 'demo', name: '示例站', domain: 'example.com' };
-  const opp = (n: number, tier: OppItem['tier'], gain: number, ...a: [string, string, string, string]) => {
-    const r = pick(n);
-    return { site_id: r.id, site_name: r.name, domain: r.domain, tier, gain, item: demoItem(a[0], a[1], a[2], a[3], 'open', gain) } as OppItem;
-  };
-  const opps: OppOverview = {
-    managed_open: 37, running: [pick(3).id], waiting: 0,
-    items: [
-      opp(0, 'urgent', 0, '1', 'crawl_issue', 'Bing 抓取 /go/old-exchange/ 返回 404', 'Bing 报告这个网址抓取失败。检查是否为死链、是否该加跳转。'),
-      opp(1, 'urgent', 0, '2', 'slow', '/guides/buy-usdt/ 打开太慢', 'PageSpeed 手机版性能分 38，LCP 5.6 秒。主要问题：适当调整图片大小（约省 1.4 秒）。'),
-      opp(2, 'urgent', 0, '3', 'declining', '/news/ 点击掉了 52%', '近 28 天点击 210（前 28 天 438），平均排名 6.1 → 11.4。'),
-      opp(0, 'value', 182, '4', 'low_ctr', '/exchanges/okx/ 排第 4，点击率只有 1.2%', '近 28 天平均排名 4.2、展现 15200、点击率 1.2%，同排名的常见点击率约 6%。'),
-      opp(3, 'value', 96, '5', 'striking', '「usdt 怎么买」排第 11，差一点进首页', '这些查询词近 28 天合计展现 8800、平均排名 11.2。'),
-      opp(1, 'value', 64, '6', 'serp_gap', '「欧易交易所」排第 7，前 3 名都是别人', 'Google 上排在前面的是 okx.com、binance.com、zhihu.com。'),
-      opp(4, 'value', 40, '7', 'content_gap', '没有专门回应「btc 手续费」的页面', '近 28 天展现 3100，最好的页面排在 18 位左右。'),
-      opp(2, 'value', 0, '8', 'low_rpm', '/guides/wallet/ 访问多、广告收入低', '近 28 天 4200 次浏览，每千次收入约 $0.80，站内中位数约 $4.10。'),
-      opp(0, 'easy', 0, '9', 'stale_year', '/guides/best-wallet/ 标题年份是 2025', '搜索的人看到旧年份会以为内容过时。'),
-      opp(1, 'easy', 0, '10', 'img_audit', '图片问题：23 张缺替代文字', '体检时在构建产物里发现 23 张图片没有 alt。'),
-      opp(4, 'easy', 0, '11', 'schema', '3 个页面的结构化数据有问题', 'Article 缺 作者 author、图片 image。'),
-    ],
-  };
-  const pend = (n: number, id: string, kind: string, title: string, status: string) => { const r = pick(n); return { site_id: r.id, site_name: r.name, item: demoItem(id, kind, title, '', status) }; };
-  const pending: PendingItem[] = [
-    pend(0, '21', 'low_ctr', '改 /exchanges/binance/ 的标题和描述', 'proposed'),
-    pend(2, '22', 'content_gap', '新页面：「usdt trc20 和 erc20 区别」', 'proposed'),
-    pend(1, '23', 'crawl_issue', '修 /go/bybit/ 的跳转', 'failed'),
-  ];
-  return { opps, pending };
-}
-
 export async function loadOpps() {
-  if (fleet.demo) return;
   try { fleet.opps = await invoke<OppOverview>('opportunities_across_sites'); }
   catch (e) { say(String(e), 'err'); }
 }
@@ -236,7 +188,6 @@ const siteCount = (items: OppItem[]) => new Set(items.map((i) => i.site_id)).siz
 /** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
 export async function workOpps(items: OppItem[], ask = true) {
   if (!items.length) return;
-  if (fleet.demo) { say('这是示例数据，不会真的处理'); return; }
   const n = siteCount(items);
   if (ask && items.length > 1 && !(await confirmDialog(`让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。`, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
   const by = new Map<string, string[]>();
@@ -251,7 +202,6 @@ export async function workOpps(items: OppItem[], ask = true) {
 /** 驳回（只问一次）：之后不会再提这些机会，驳回的在站点「待处理」里能恢复 */
 export async function dismissOpps(items: OppItem[]) {
   if (!items.length) return;
-  if (fleet.demo) { say('这是示例数据，不会真的处理'); return; }
   const one = items.length === 1;
   if (!(await confirmDialog(one ? `驳回「${items[0].item.opp.title}」？之后不会再提这个机会。` : `驳回这 ${items.length} 条机会？之后不会再提这些机会。`, { title: one ? '驳回' : '批量驳回', kind: 'warning', confirmText: one ? '驳回' : `驳回 ${items.length} 条` }))) return;
   let failed = 0;

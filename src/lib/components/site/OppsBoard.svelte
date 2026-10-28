@@ -1,7 +1,7 @@
 <script lang="ts">
-  // 全部站点 →「待处理」→「运营机会」：自己运营的站点里还没处理的机会，按优先级分三组——
+  // 全部站点 →「待处理」→「运营机会」：没人自动处理的站点（自己运营的、托管停着的）里还没处理的机会，按优先级分三组——
   // 先处理（正在伤害站点）、收益大、顺手做。每条可以让 AI 改、驳回、打开站点；每组可以一键全交给 AI（同时最多 3 个站点在跑）。
-  // 托管站点的机会由 AI 按托管规则自动处理，这里只给个数。
+  // 托管且在运行的站点由 AI 按托管规则自动处理，这里只给个数。
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
   import { fleet, loadOpps, workOpps, dismissOpps } from '$lib/state/fleet.svelte.js';
@@ -12,6 +12,7 @@
 
   $effect(() => { void loadOpps(); });
   const o = $derived(fleet.opps);
+  const sitesN = $derived(new Set((o?.items ?? []).map((i) => i.site_id)).size);
   const TIERS = [
     { k: 'urgent', l: '先处理', d: '正在伤害站点：抓取出错、页面打不开或太慢、点击掉得厉害' },
     { k: 'value', l: '收益大', d: '按数据估算多拿点击最多的：点击率低、排名 8–20、内容缺口、对比竞品' },
@@ -30,7 +31,7 @@
   <div class="card"><p class="hint">正在读取…</p></div>
 {:else}
   <p class="sum faint">
-    {#if o.items.length}自己运营的站点有 {o.items.length} 个机会没处理{:else}自己运营的站点暂时没有新机会{/if}{#if o.managed_open} · 托管站点的 {o.managed_open} 个由 AI 按托管规则自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
+    {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
   </p>
   {#each groups as g (g.k)}
     {@const open = expanded.includes(g.k)}
