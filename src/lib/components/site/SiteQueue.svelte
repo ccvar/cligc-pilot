@@ -58,6 +58,11 @@
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   let openWhy = $state<Set<string>>(new Set());
+  // 已上线、已驳回 / 回滚：每条默认只留标题一行，点标题或左边的箭头展开看详情；上线后有待核对的默认展开
+  const foldable = $derived(filter === 'live' || filter === 'closed');
+  let unfolded = $state<Set<string>>(new Set());
+  const folded = (i: OpsItem) => foldable && !unfolded.has(i.id) && !(i.status === 'deployed' && i.attention);
+  const flipFold = (id: string) => { const n = new Set(unfolded); if (n.has(id)) n.delete(id); else n.add(id); unfolded = n; };
   // 机会的说明常常是「数据依据 + 做法」写成一大段：按「做法 / 改法 / 怎么改」拆成两行，各自默认最多两行，点「展开全文」看完整的
   function splitEvidence(t: string): { k: string; v: string }[] {
     const m = t.match(/^(.*?)[。；;\s]*(?:做法|改法|怎么改|建议做法)[:：]\s*(.+)$/s);
@@ -151,12 +156,14 @@
           <div class="li item" class:picked={picked.has(i.id)}>
             <div class="row it-head">
               {#if filter === 'open' && shown.length > 1}<input class="pick" type="checkbox" checked={picked.has(i.id)} onchange={() => togglePick(i.id)} aria-label="选中这一条" />{/if}
+              {#if foldable}<button class="fold" class:open={!folded(i)} onclick={() => flipFold(i.id)} aria-label={folded(i) ? '展开' : '收起'} aria-expanded={!folded(i)}><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
               {#if i.status === 'deployed' && i.attention}<span class="pill warn">已上线 · 待核对</span>{:else}<span class="pill {tone(i.status)}">{STATUS_LABEL[i.status] ?? i.status}</span>{/if}
-              <b class="it-title" title={i.opp.title}>{i.opp.title}</b>
+              {#if foldable}<button class="it-title as-btn" title={i.opp.title} onclick={() => flipFold(i.id)}>{i.opp.title}</button>{:else}<b class="it-title" title={i.opp.title}>{i.opp.title}</b>{/if}
               {#if targetOf(i)}<button class="it-url mono" onclick={() => openUrl(targetOf(i))} data-tip={`在浏览器打开：${targetOf(i)}`}><span>{shortPath(targetOf(i))}</span><Icon name="external" size={11} /></button>{/if}
               <span class="grow"></span>
               <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
             </div>
+            {#if !folded(i)}
             <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>
             <dl class="it-ev" class:open={openEv.has(i.id)}>
               {#each splitEvidence(i.opp.evidence) as part, n (n)}<dt>{part.k}</dt><dd>{part.v}</dd>{/each}
@@ -227,6 +234,7 @@
               {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
               {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
             </div>
+            {/if}
           </div>
         {/each}
       </div>
@@ -281,6 +289,12 @@
   .it-url :global(svg) { flex: none; }
   .it-url:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
   .it-head .grow { flex: 1; }
+  .fold { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: -4px; border: 0; padding: 0; background: none; color: var(--faint); cursor: pointer; border-radius: 4px; }
+  .fold svg { transition: transform .16s var(--su-ease); }
+  .fold.open svg { transform: rotate(90deg); }
+  .fold:hover { color: var(--text); }
+  .it-title.as-btn { border: 0; padding: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--text); text-align: left; cursor: pointer; }
+  .it-title.as-btn:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border2); }
   .it-title { flex: 0 1 auto; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .it-meta { flex: none; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
   .why-row { margin: -1px 0 0; }
