@@ -52,6 +52,7 @@
   import { isWindows } from '$lib/state/env';
   import { updater, openUpdateCenter, initUpdater } from '$lib/state/updater.svelte.js';
   import { openSearch, initSearch } from '$lib/state/search.svelte.js';
+  import { nav, initNav, goBack, goForward } from '$lib/state/nav.svelte.js';
   import { app, finishConfirm, initApp } from '$lib/state/app.svelte.js';
   import { panes, splitConversation, singleConversationDragOver, endConversationDrag, addSplit, focusSplit, initPanes, isPageRef, paneRefLabel, closeSplit, startConversationPointerDrag } from '$lib/state/panes.svelte.js';
   import { leaves } from '$lib/conversationLayout';
@@ -96,6 +97,7 @@
   initManaged();
   initBackground();
   initGrowth();
+  initNav();
   initAppMenu();
   initPhone();
   initSuggest();
@@ -138,7 +140,7 @@
 <main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible}>
   <!-- 融合式标题栏：透明拖拽条铺满顶部，红绿灯与工具按钮浮在其上（macOS Overlay） -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 140 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
+  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 194 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
 
   <!-- 顶部工具：折叠侧栏 + 搜索会话（窗口模式紧挨红绿灯右侧；全屏时无红绿灯，与左栏菜单左对齐） -->
   <div class="win-tools" class:fs={ui.isFullscreen} class:win={isWindows}>
@@ -154,6 +156,13 @@
         <circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.4" />
         <path d="M11.7 11.7L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
       </svg>
+    </button>
+    <!-- 后退 / 前进：在去过的页面之间来回（⌘[ / ⌘]） -->
+    <button class="wt" onclick={goBack} disabled={!nav.back.length} title="后退（⌘[）" aria-label="后退">
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path d="M11 4L6 9l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </button>
+    <button class="wt" onclick={goForward} disabled={!nav.fwd.length} title="前进（⌘]）" aria-label="前进">
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path d="M7 4l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>
     {#if phone.ready.length || phone.pending.length}
       <!-- 连着安卓手机时显示：AI 可以在对话里操作手机、截图 -->

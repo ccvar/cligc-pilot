@@ -312,11 +312,11 @@
   .thread-head:global(.elevated)::after { opacity: 1; }
   /* 侧栏收起：红绿灯 + 悬浮的折叠/搜索钮压在内容区左上，页头统一左让位（全部视图受益）。
      发现更新时顶部临时增加更新入口，页头再让出一个按钮宽度，避免压住页面标题图标。 */
-  :global(.app.rail-collapsed) .thread-head { padding-left: 140px; }
-  :global(.app.rail-collapsed.fs) .thread-head, :global(.app.rail-collapsed.win) .thread-head { padding-left: 100px; }
-  :global(.app.rail-collapsed.top-update-visible) .thread-head { padding-left: 167px; }
+  :global(.app.rail-collapsed) .thread-head { padding-left: 194px; }
+  :global(.app.rail-collapsed.fs) .thread-head, :global(.app.rail-collapsed.win) .thread-head { padding-left: 154px; }
+  :global(.app.rail-collapsed.top-update-visible) .thread-head { padding-left: 221px; }
   :global(.app.rail-collapsed.top-update-visible.fs) .thread-head,
-  :global(.app.rail-collapsed.top-update-visible.win) .thread-head { padding-left: 127px; }
+  :global(.app.rail-collapsed.top-update-visible.win) .thread-head { padding-left: 181px; }
   /* 分屏里：左右内边距和旁边窗格的标题（RemotePane .rp-head：12px / 8px）一致，× 和图标才在同一位置。
      侧栏收起时上面那几条（给红绿灯让位）分数更高，照样生效。 */
   .thread-head.in-pane { padding-left: 12px; padding-right: 8px; }

@@ -587,11 +587,11 @@
   .thread-head:global(.elevated)::after { opacity: 1; }
   /* 侧栏收起：红绿灯 + 悬浮的折叠/搜索钮压在内容区左上，页头统一左让位（全部视图受益）。
      发现更新时顶部临时增加更新入口，页头再让出一个按钮宽度，避免压住页面标题图标。 */
-  :global(.app.rail-collapsed) .thread-head { padding-left: 140px; }
-  :global(.app.rail-collapsed.fs) .thread-head, :global(.app.rail-collapsed.win) .thread-head { padding-left: 100px; }
-  :global(.app.rail-collapsed.top-update-visible) .thread-head { padding-left: 167px; }
+  :global(.app.rail-collapsed) .thread-head { padding-left: 194px; }
+  :global(.app.rail-collapsed.fs) .thread-head, :global(.app.rail-collapsed.win) .thread-head { padding-left: 154px; }
+  :global(.app.rail-collapsed.top-update-visible) .thread-head { padding-left: 221px; }
   :global(.app.rail-collapsed.top-update-visible.fs) .thread-head,
-  :global(.app.rail-collapsed.top-update-visible.win) .thread-head { padding-left: 127px; }
+  :global(.app.rail-collapsed.top-update-visible.win) .thread-head { padding-left: 181px; }
   /* 会话头同时承担应用标题栏：展开、折叠与分屏都固定成与 win-tools 相同的 30px，
      避免域名按钮的上下 padding 把标题整行撑低。 */
   .thread-head.conversation-thread-head {
