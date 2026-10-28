@@ -279,7 +279,8 @@
   .empty { text-align: center; padding: 28px 18px; }
   .empty p:first-child { margin: 0 0 2px; font-size: 13px; font-weight: 550; }
   .items { padding-top: 0; padding-bottom: 0; }
-  .items .list { margin-bottom: 0; }
+  /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */
+  .card.items > .list:last-child { margin-bottom: 0; }
   .items .list > .li:first-child { border-top: none; }
   .item { display: flex; flex-direction: column; gap: 6px; padding-top: 14px; padding-bottom: 14px; }
   .it-head { min-width: 0; gap: 10px; }
