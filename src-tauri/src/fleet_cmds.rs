@@ -197,6 +197,11 @@ pub struct OppItem {
     pub gain: f64,
     /// AI 能直接处理、不用你拿主意
     pub ai: bool,
+    /// 交给 AI 时用的模型（托管方案里的站点用方案选的，其它用站点「运营」设置）；brain 为空＝还没选模型
+    pub brain: String,
+    pub model: String,
+    /// AI 处理中时作业走到哪一步（如「构建」「检查」）
+    pub step: String,
 }
 
 #[derive(Serialize)]
@@ -208,6 +213,10 @@ pub struct OppOverview {
     pub running: Vec<String>,
     /// 跨站点批量里还排着、没开始的站点数
     pub waiting: usize,
+    /// 跨站点批量里还排着的条目 id
+    pub queued: Vec<String>,
+    /// 最近一天交给 AI 处理过的（处理中、等你确认、已处理、没成功），给「处理进度」用
+    pub recent: Vec<OppItem>,
 }
 
 /// 没人自动处理的站点（自己运营的、托管停着的）里还没处理的运营机会，按优先级、预计收益排。
@@ -215,11 +224,14 @@ pub struct OppOverview {
 #[tauri::command]
 pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverview {
     let cfg = crate::managed::load(&state.data_dir);
+    let since = crate::now_secs().saturating_sub(86_400);
     let mut items = Vec::new();
+    let mut recent = Vec::new();
     let mut managed_open = 0;
     let mut running = Vec::new();
     for s in state.sites.list() {
-        if state.site_jobs.running(&s.id) {
+        let job = state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running");
+        if job.is_some() {
             running.push(s.id.clone());
         }
         let dir = state.sites.data_dir(&s.id);
@@ -227,58 +239,122 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
         if !on {
             sync_unattended(&dir);
         }
-        let open: Vec<QueueItem> = crate::site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "open").collect();
+        let q = crate::site_ops::load_queue(&dir);
         if on {
-            managed_open += open.len();
+            managed_open += q.iter().filter(|i| i.status == "open").count();
             continue;
         }
-        for item in open {
-            items.push(OppItem { site_id: s.id.clone(), site_name: s.name.clone(), domain: s.domain.clone(), tier: tier_of(&item.opp), gain: gain_of(&item.opp), ai: ai_ready(&item.opp), item });
+        let (brain, model) = match crate::site_runner::models_for(&s, &state.data_dir) {
+            Ok(((b, m), _)) => (b, m),
+            Err(_) => (String::new(), String::new()),
+        };
+        let step = job.as_ref().and_then(|j| j.steps.iter().find(|x| x.status == "running").map(|x| x.label.clone())).unwrap_or_default();
+        for item in q {
+            let mine = item.status == "working" || (item.status != "open" && item.worked_at >= since);
+            if item.status != "open" && !mine {
+                continue;
+            }
+            let row = OppItem {
+                site_id: s.id.clone(),
+                site_name: s.name.clone(),
+                domain: s.domain.clone(),
+                tier: tier_of(&item.opp),
+                gain: gain_of(&item.opp),
+                ai: ai_ready(&item.opp),
+                brain: brain.clone(),
+                model: model.clone(),
+                step: if item.status == "working" { step.clone() } else { String::new() },
+                item,
+            };
+            if mine { recent.push(row) } else { items.push(row) }
         }
     }
     let rank = |t: &str| match t { "urgent" => 0, "value" => 1, _ => 2 };
     items.sort_by(|a, b| rank(a.tier).cmp(&rank(b.tier)).then(b.item.opp.score.total_cmp(&a.item.opp.score)));
-    OppOverview { items, managed_open, running, waiting: ACROSS.load(std::sync::atomic::Ordering::SeqCst) }
+    recent.sort_by(|a, b| b.item.worked_at.cmp(&a.item.worked_at));
+    let across = ACROSS.lock().unwrap();
+    let queued = across.iter().flat_map(|(_, ids)| ids.iter().cloned()).collect();
+    OppOverview { items, managed_open, running, waiting: across.len(), queued, recent }
 }
 
-static ACROSS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// 跨站点批量里还排着、没开始的（站点, 条目 id）
+static ACROSS: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
+static ACROSS_LOOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// 跨站点批量让 AI 改：每个站点一个作业（里面按顺序一条一条做），同时最多跑 3 个作业，其余排着等。
-/// 立即返回；作业开始、结束会照常发 site-job / site-queue 事件。
+/// 立即返回；作业开始、结束会照常发 site-job / site-queue 事件。已经排着的条目不会重复排。
 #[tauri::command]
 pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>) -> Result<usize, String> {
+    use std::sync::atomic::Ordering;
     use tauri::Manager;
-    let batches: Vec<(String, Vec<String>)> = batches.into_iter().filter(|(_, ids)| !ids.is_empty()).collect();
     if batches.iter().any(|(_, ids)| ids.iter().any(|x| x.contains(','))) {
         return Err("条目 id 不合法".into());
     }
-    let n = batches.len();
-    ACROSS.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+    let n = {
+        let mut q = ACROSS.lock().unwrap();
+        let mut n = 0;
+        for (site, ids) in batches {
+            let ids: Vec<String> = ids.into_iter().filter(|id| !q.iter().any(|(_, x)| x.contains(id))).collect();
+            if ids.is_empty() {
+                continue;
+            }
+            n += 1;
+            match q.iter_mut().find(|(s, _)| *s == site) {
+                Some((_, x)) => x.extend(ids),
+                None => q.push((site, ids)),
+            }
+        }
+        n
+    };
+    let _ = tauri::Emitter::emit(&app, "across-changed", ());
+    if ACROSS_LOOP.swap(true, Ordering::SeqCst) {
+        return Ok(n);
+    }
     tauri::async_runtime::spawn(async move {
         let st = app.state::<AppState>();
-        let deadline = crate::now_secs() + 6 * 3600;
-        let mut left = batches;
         // 每 10 秒看一圈：有空位、站点自己没在跑作业的就开始（某个站点忙着不耽误后面的）
-        while !left.is_empty() {
-            left.retain(|(site_id, ids)| {
-                let gone = st.sites.get(site_id).is_err();
-                let started = !gone && st.site_jobs.running_count() < crate::site_runner::MAX_PARALLEL_JOBS && !st.site_jobs.running(site_id) && {
+        loop {
+            let started = {
+                let mut q = ACROSS.lock().unwrap();
+                let before = q.len();
+                q.retain(|(site_id, ids)| {
+                    if st.sites.get(site_id).is_err() {
+                        return false;
+                    }
+                    let go = st.site_jobs.running_count() < crate::site_runner::MAX_PARALLEL_JOBS && !st.site_jobs.running(site_id);
+                    if !go {
+                        return true;
+                    }
                     let ctx = crate::site_runner::Ctx { app: app.clone() };
                     let r = if ids.len() == 1 { crate::site_runner::start(ctx, site_id, "work", "manual", Some(ids[0].clone())) } else { crate::site_runner::start(ctx, site_id, "batch", "manual", Some(ids.join(","))) };
-                    r.is_ok()
-                };
-                let done = gone || started || crate::now_secs() > deadline;
-                if done {
-                    ACROSS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    r.is_err()
+                });
+                if q.is_empty() {
+                    ACROSS_LOOP.store(false, Ordering::SeqCst);
+                    break;
                 }
-                !done
-            });
-            if !left.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                before != q.len()
+            };
+            if started {
+                let _ = tauri::Emitter::emit(&app, "across-changed", ());
             }
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
     });
     Ok(n)
+}
+
+/// 停止排队：还没开始的都不做了（条目留在待处理里）；已经在跑的作业不受影响，要停就在站点作业上点停止。
+#[tauri::command]
+pub fn stop_across_sites(app: tauri::AppHandle) -> usize {
+    let n = {
+        let mut q = ACROSS.lock().unwrap();
+        let n = q.iter().map(|(_, ids)| ids.len()).sum();
+        q.clear();
+        n
+    };
+    let _ = tauri::Emitter::emit(&app, "across-changed", ());
+    n
 }
 
 /// 「最近上线」的一条：改动本身，加上这个页面现在近 28 天的搜索数据（和上线前那 28 天对比看效果）。

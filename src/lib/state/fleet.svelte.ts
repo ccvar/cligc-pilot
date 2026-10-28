@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { SiteRow, PendingItem, Site, OppItem, OppOverview } from '$lib/types';
 import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
+import { brainLabel } from './models.js';
 
 export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
@@ -42,7 +43,6 @@ class FleetState {
   opps = $state<OppOverview | null>(null);
 
   /** 刚交给 AI、还没开始的条目（列表上先标出来，作业开始后由队列状态接手） */
-  handed = $state<string[]>([]);
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -185,17 +185,41 @@ export async function loadOpps() {
   catch (e) { say(String(e), 'err'); }
 }
 const siteCount = (items: OppItem[]) => new Set(items.map((i) => i.site_id)).size;
+/** 交给 AI 时用的模型：托管方案里的站点用方案选的，其它用站点「运营」设置 */
+export function oppModel(i: Pick<OppItem, 'brain' | 'model'>): string {
+  if (!i.brain) return '还没选模型';
+  const m = i.model ? i.model.replace(/^sonnet$/, 'Sonnet').replace(/^haiku$/, 'Haiku') : i.brain === 'codex' ? '本机默认模型' : '';
+  return m ? `${brainLabel(i.brain)} · ${m}` : brainLabel(i.brain);
+}
+/** 按模型数站点：「Codex · 本机默认模型 11 个站点；Claude · Sonnet 1 个站点」 */
+function modelSummary(items: OppItem[]): string {
+  const by = new Map<string, Set<string>>();
+  for (const i of items) by.set(oppModel(i), (by.get(oppModel(i)) ?? new Set()).add(i.site_id));
+  return [...by.entries()].map(([m, s]) => `${m} ${s.size} 个站点`).join('；');
+}
 /** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着 */
 export async function workOpps(items: OppItem[], ask = true) {
   if (!items.length) return;
   const n = siteCount(items);
-  if (ask && items.length > 1 && !(await confirmDialog(`让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : ''}`, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
+  const none = items.filter((i) => !i.brain);
+  const sitemap = items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : '';
+  const msg = `让 AI 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n用的模型：${modelSummary(items)}。托管方案里的站点用方案选的模型，其它站点用站点「运营」设置里的。${none.length ? `\n有 ${siteCount(none)} 个站点还没选模型，这些会失败，先去设置里选好。` : ''}`;
+  if (ask && items.length > 1 && !(await confirmDialog(msg, { title: '批量让 AI 改', kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
   const by = new Map<string, string[]>();
   for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);
   try {
     await invoke('work_across_sites', { batches: [...by.entries()] });
-    fleet.handed = [...new Set([...fleet.handed, ...items.map((i) => i.item.id)])];
     say(n > 3 ? `已交给 AI：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 AI：${items.length} 条`);
+    void loadOpps();
+  } catch (e) { say(String(e), 'err'); }
+}
+/** 停止排队：还没开始的不做了（留在待处理里），已经在跑的不受影响 */
+export async function stopAcross() {
+  const n = fleet.opps?.queued.length ?? 0;
+  if (!n || !(await confirmDialog(`还有 ${n} 条排着没开始，都不做了？\n它们会回到列表里，之后可以再交给 AI。正在跑的不受影响，要停就点那一条旁边的停止。`, { title: '停止排队', kind: 'warning', confirmText: '停止排队' }))) return;
+  try {
+    const k = await invoke<number>('stop_across_sites');
+    say(`已停止排队，${k} 条回到列表`);
     void loadOpps();
   } catch (e) { say(String(e), 'err'); }
 }
@@ -242,7 +266,9 @@ export function initFleet() {
     // 每周的推广链接检查跑完（后台），列表上的「推广链接失效」跟着更新
     const un3 = listen('links-checked', soon);
     const un4 = listen('monitor-checked', soon);
-    return () => { void un1.then((f) => f()); void un2.then((f) => f()); void un3.then((f) => f()); void un4.then((f) => f()); };
+    // 跨站点批量排队变了（交给 AI、开始一个站点、停止排队）
+    const un5 = listen('across-changed', soon);
+    return () => { for (const u of [un1, un2, un3, un4, un5]) void u.then((f) => f()); };
   });
 }
 

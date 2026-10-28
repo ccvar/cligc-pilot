@@ -215,6 +215,22 @@ fn schema_problems(html: &str, low: &str) -> (bool, bool, Vec<String>) {
     (!blocks.is_empty(), article, problems)
 }
 
+/// 把 <script>…</script>、<template>…</template> 里的内容换成空格（位置不变）
+fn without_scripts(html: &str, low: &str) -> String {
+    let mut b = html.as_bytes().to_vec();
+    for tag in ["script", "template"] {
+        let (open, close) = (format!("<{tag}"), format!("</{tag}"));
+        let mut at = 0;
+        while let Some(i) = low[at..].find(&open).map(|i| i + at) {
+            let Some(body) = low[i..].find('>').map(|j| i + j + 1) else { break };
+            let end = low[body..].find(&close).map(|j| body + j).unwrap_or(low.len());
+            b[body..end].fill(b' ');
+            at = end.max(body);
+        }
+    }
+    String::from_utf8(b).unwrap_or_else(|_| html.to_string())
+}
+
 pub fn audit(out: &Path, domain: &str) -> AuditReport {
     let host = crate::revenue::norm_host(domain);
     let hosts = vec![host.clone()];
@@ -224,9 +240,16 @@ pub fn audit(out: &Path, domain: &str) -> AuditReport {
         let page = crate::site_make::page_url(out, &file);
         let low = html.to_ascii_lowercase();
         r.pages += 1;
-        for t in tags(&html, &low, "img") {
+        // 脚本里拼出来的 <img src="${…}"> 不是页面上的图片，不算（不然会被当成「图片不存在」）
+        let shown = without_scripts(&html, &low);
+        let shown_low = shown.to_ascii_lowercase();
+        for t in tags(&shown, &shown_low, "img") {
             r.images += 1;
             let src = attr(t, "src").or_else(|| attr(t, "data-src")).unwrap_or_default();
+            // 模板占位（${…}、{{…}}）是没渲染的代码，不是真图片
+            if src.contains("${") || src.contains("{{") {
+                continue;
+            }
             if !has_attr(t, "alt") && r.no_alt.len() < CAP {
                 r.no_alt.push(ImgIssue { page: page.clone(), src: src.clone(), bytes: 0 });
             }
@@ -404,6 +427,16 @@ pub fn llms_txt(name: &str, domain: &str, out: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn images_built_in_scripts_are_not_page_images() {
+        let html = r#"<p>汇率</p><script>el.innerHTML = `<img src="/icons/${c}.svg">`; // 中文</script><img src="/a.png"><template><img src="/t.png"></template>"#;
+        let shown = without_scripts(html, &html.to_ascii_lowercase());
+        assert_eq!(shown.len(), html.len());
+        let low = shown.to_ascii_lowercase();
+        let srcs: Vec<String> = tags(&shown, &low, "img").into_iter().filter_map(|t| attr(t, "src")).collect();
+        assert_eq!(srcs, vec!["/a.png"]);
+    }
 
     #[test]
     fn alt_attribute_presence() {
