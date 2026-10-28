@@ -110,7 +110,8 @@ pub async fn list_bing_sites(state: tauri::State<'_, AppState>, conn_id: String)
 /// 没接数据源的地方，按域名在所有已连接的 Google / Bing 账号里找对应的资源并填上（只填空着的，不改你选过的）。
 /// 和设置里的「匹配站点」同一套认法（`fleet_cmds::bind_conn`）：GA4 按数据流的网址、Search Console 优先网域资源、
 /// Bing 只认验证过的站点；账号按连接顺序一个一个来，前面的账号填上了，后面的就不再动。返回填了哪些（站点 id，说明）。
-pub async fn auto_bind_data(state: &AppState) -> Vec<(String, String)> {
+/// `fresh`：GA4 数据流主机名不用 6 小时缓存（刚导入的站点，媒体资源可能是新建的）。
+pub async fn auto_bind_data(state: &AppState, fresh: bool) -> Vec<(String, String)> {
     let pending = state.sites.list().into_iter().any(|s| {
         let d = &s.data;
         !s.domain.trim().is_empty() && (d.gsc_site.is_empty() || d.ga4_property.is_empty() || d.bing_site.is_empty())
@@ -120,7 +121,7 @@ pub async fn auto_bind_data(state: &AppState) -> Vec<(String, String)> {
     }
     let mut filled = Vec::new();
     for c in state.conns.list().into_iter().filter(|c| c.kind == "google" || c.kind == "bing") {
-        let Ok(r) = crate::fleet_cmds::bind_conn(state, &c.id, false, false).await else { continue };
+        let Ok(r) = crate::fleet_cmds::bind_conn(state, &c.id, false, fresh).await else { continue };
         for (id, (name, what)) in r.bound_ids.into_iter().zip(r.bound) {
             filled.push((id, format!("{name}：{what}")));
         }
@@ -128,12 +129,12 @@ pub async fn auto_bind_data(state: &AppState) -> Vec<(String, String)> {
     filled
 }
 
-/// 站点总览加载时跑一次：没接的数据源按域名自动接上。
+/// 站点总览加载时跑一次、导入站点后再跑一次（`fresh`）：没接的数据源按域名自动接上。
 /// 接上之后在后台把这些站点的数据拉一遍（拉完发 site-data 事件，开着的看板会刷新）。
 #[tauri::command]
-pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State<'_, AppState>, fresh: Option<bool>) -> Result<Vec<String>, String> {
     use tauri::{Emitter, Manager};
-    let filled = auto_bind_data(&state).await;
+    let filled = auto_bind_data(&state, fresh.unwrap_or(false)).await;
     let ids: Vec<String> = filled.iter().map(|(id, _)| id.clone()).collect();
     if !ids.is_empty() {
         let app2 = app.clone();

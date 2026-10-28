@@ -153,15 +153,17 @@ let loading = false;
 let again = false;
 // 每次启动只自动识别一次：没配置部署的站点去 Cloudflare 找对应的 Pages 项目，没接的数据源去 Google / Bing 账号里按域名找
 let autodetected = false;
-async function autodetectDeploys() {
+/** 导入站点后也跑一次：刚导入的站点没配部署、没接数据源，马上去 Cloudflare / Google / Bing 里找（数据流不用缓存）。 */
+export async function autodetectDeploys(fresh = false) {
   autodetected = true;
   try {
     const [deploys, data] = await Promise.all([
-      fleet.rows.some((r) => r.deploy_mode === 'none') ? invoke<string[]>('autodetect_cf_deploys').catch(() => []) : Promise.resolve([] as string[]),
-      invoke<string[]>('autodetect_data_bindings').catch(() => [] as string[]),
+      fresh || fleet.rows.some((r) => r.deploy_mode === 'none') ? invoke<string[]>('autodetect_cf_deploys').catch(() => []) : Promise.resolve([] as string[]),
+      invoke<string[]>('autodetect_data_bindings', { fresh }).catch(() => [] as string[]),
     ]);
     if (deploys.length) say(`在 Cloudflare 里认出了 ${deploys.length} 个站点的部署：${deploys.join('；')}`);
     if (data.length) say(`按域名接上了 ${data.length} 个站点的数据源：${data.join('；')}。数据马上开始拉取`);
+    if (fresh && !data.length) say('已连接的 Google / Bing 账号里没按域名找到新导入站点的数据源，可以在站点设置里手动选');
     if (deploys.length || data.length) {
       await refreshSites();
       void loadFleet();

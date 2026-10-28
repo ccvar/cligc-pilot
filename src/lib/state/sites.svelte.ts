@@ -393,6 +393,7 @@ export async function confirmImport() {
     await refreshSites();
     say(`已导入站点「${site.name}」`);
     openSite(site.id);
+    autodetectSoon();
   } catch (e) { f.err = String(e); f.busy = false; }
 }
 
@@ -411,6 +412,7 @@ export async function confirmBatchImport() {
   }
   f.busy = false;
   await refreshSites();
+  if (ok) autodetectSoon();
   const failed = todo.length - ok;
   if (!failed) { sites.imp = blankImport(); say(`已导入 ${ok} 个站点`); }
   else say(ok ? `已导入 ${ok} 个，${failed} 个没导进去，原因见清单` : '都没导进去，原因见清单', 'err');
@@ -482,6 +484,10 @@ export async function removeSite(s: Site) {
   } catch (e) { say(String(e), 'err'); }
 }
 
+// 导入后按域名去找部署和数据源；fleet.svelte.ts 依赖本文件，按需加载避免循环引用
+function autodetectSoon() {
+  void import('./fleet.svelte.js').then((m) => m.autodetectDeploys(true));
+}
 // 数据拉完后刷新站点总览（「未接数据」、点击数），短时间内多次只刷一次
 let fleetTimer: ReturnType<typeof setTimeout> | undefined;
 function loadFleetSoon() {
