@@ -30,7 +30,7 @@
   <div class="card"><p class="hint">正在读取…</p></div>
 {:else}
   <p class="sum faint">
-    {#if o.items.length}自己运营的站点有 {o.items.length} 个机会没处理{:else}自己运营的站点没有待处理的运营机会{/if}{#if o.managed_open} · 托管站点的 {o.managed_open} 个由 AI 按托管规则自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
+    {#if o.items.length}自己运营的站点有 {o.items.length} 个机会没处理{:else}自己运营的站点暂时没有新机会{/if}{#if o.managed_open} · 托管站点的 {o.managed_open} 个由 AI 按托管规则自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}
   </p>
   {#each groups as g (g.k)}
     {@const open = expanded.includes(g.k)}

@@ -14,6 +14,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
+  import { setDemo } from '$lib/state/fleet.svelte.js';
   import { fleet, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
@@ -30,6 +31,10 @@
   $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.mode; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
+  const dev = import.meta.env.DEV;
+  // 看示例数据时，页签上的数字跟着示例走
+  const proposedN = $derived(fleet.demo ? fleet.pending.filter((p) => p.item.status === 'proposed').length : fleet.pendingCount);
+  const oppN = $derived(fleet.demo ? fleet.opps?.items.length ?? 0 : fleet.oppCount);
   const totals = $derived({
     sites: rows.length,
     proposed: fleet.pendingCount,
@@ -153,7 +158,7 @@
     {#if fleet.tab === 'sites' && modeOpts.length > 2}
       <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} triggerIcon={false} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
     {/if}
-    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if totals.proposed}<span class="cnt" data-tip="{totals.proposed} 条改动等你确认">{totals.proposed}</span>{/if}{#if fleet.oppCount}<span class="cnt soft" data-tip="自己运营的站点有 {fleet.oppCount} 个运营机会没处理">{fleet.oppCount}</span>{/if}</button>
+    <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if proposedN}<span class="cnt" data-tip="{proposedN} 条改动等你确认">{proposedN}</span>{/if}{#if oppN}<span class="cnt soft" data-tip="自己运营的站点有 {oppN} 个运营机会没处理">{oppN}</span>{/if}</button>
   </div>
 
   <div class="page-body">
@@ -221,16 +226,11 @@
         {/if}
       {/if}
     {:else}
-      <div class="pv">
-        <span class="seg">
-          <button class:on={fleet.pendView === 'confirm'} onclick={() => (fleet.pendView = 'confirm')}>等你确认{#if fleet.pending.length}<span class="sc">{fleet.pending.length}</span>{/if}</button>
-          <button class:on={fleet.pendView === 'opps'} onclick={() => (fleet.pendView = 'opps')}>运营机会{#if fleet.oppCount}<span class="sc">{fleet.oppCount}</span>{/if}</button>
-        </span>
-      </div>
-      {#if fleet.pendView === 'opps'}
-        <OppsBoard />
-      {:else if !fleet.pending.length}
-        <div class="card"><p class="hint">所有站点都没有需要你确认的改动。{#if fleet.oppCount}<button class="link-btn" onclick={() => (fleet.pendView = 'opps')}>看看 {fleet.oppCount} 个运营机会</button>{/if}</p></div>
+      <!-- 一页里上下两块：AI 改好等你确认的、还没人处理的运营机会 -->
+      {#if fleet.demo}<div class="demo-bar"><Icon name="eye" size={13} />正在看示例数据：只在界面上显示，点了也不会处理<span class="grow"></span><button class="link-btn" onclick={() => setDemo(false)}>退出示例</button></div>{/if}
+      <h4 class="sec">等你确认{#if fleet.pending.length}<span class="sc">{fleet.pending.length}</span>{/if}</h4>
+      {#if !fleet.pending.length}
+        <p class="none">没有等你确认的改动</p>
       {:else}
         <div class="card tbl-card">
           <table class="tbl">
@@ -248,6 +248,9 @@
           </table>
         </div>
       {/if}
+      <h4 class="sec mt">运营机会{#if oppN}<span class="sc">{oppN}</span>{/if}</h4>
+      <OppsBoard />
+      {#if dev && !fleet.demo}<button class="link-btn demo-btn" onclick={() => setDemo(true)} data-tip="开发版才有：在这一页填上示例数据看效果，不写进任何站点">看示例效果</button>{/if}
     {/if}
    </div>
    {/key}
@@ -331,9 +334,13 @@
   .am-none { color: var(--dim); }
   .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
-  .pv { display: flex; margin-bottom: 12px; }
-  .pv .sc { margin-left: 6px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
-  .pv .on .sc { color: var(--dim); }
+  .sec { margin: 0 2px 8px; display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }
+  .sec.mt { margin-top: 26px; }
+  .sec .sc { font-size: 12px; font-weight: 400; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .none { margin: 0 2px; font-size: 12.5px; color: var(--faint); }
+  .demo-bar { display: flex; align-items: center; gap: 7px; margin-bottom: 16px; padding: 8px 12px; border: 1px dashed var(--border2); border-radius: 10px; font-size: 12.5px; color: var(--dim); }
+  .demo-bar .grow { flex: 1; }
+  .demo-btn { display: block; margin: 18px auto 0; font-size: 12px; color: var(--faint); }
   .c-rev .ai { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
