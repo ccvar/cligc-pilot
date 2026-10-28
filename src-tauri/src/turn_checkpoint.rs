@@ -58,7 +58,7 @@ pub fn wrap(store: ConvStore, conv_id: String, ui: Channel<TurnEvent>) -> Channe
         if let Some((text, tools)) = snapshot {
             let _ = store.checkpoint(
                 &conv_id,
-                Message { role: "assistant".into(), text, tools, ts: crate::now_secs(), hidden: false, error: false, limit_reset: None, partial: true },
+                Message { role: "assistant".into(), text, tools, ts: crate::now_secs(), hidden: false, error: false, limit_reset: None, partial: true, unfinished: String::new() },
             );
         }
         // 界面那头关了（窗口关掉）也不影响这一轮继续跑

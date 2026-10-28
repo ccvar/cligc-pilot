@@ -865,6 +865,8 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
         Ok(r) => Ok(r),
         // 作业被用户取消：这一轮是被停掉的，不是模型失败，不换备用模型重跑
         Err(_) if st.site_jobs.is_canceled(&site.id) => Err("已取消".into()),
+        // 你在会话里点了停止：同样不换备用模型
+        Err(e) if e.starts_with(STOPPED) => Err(e),
         Err(e) => {
             let Some(fb) = fallback else { return Err(e) };
             crate::managed::log(&st.data_dir, crate::managed::Activity {
@@ -881,6 +883,8 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
         }
     }
 }
+
+const STOPPED: &str = "这一轮 AI 被停止了，改到一半的不会上线；要继续就再交给 AI";
 
 async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String, model: &(String, String)) -> Result<(String, crate::convo::Conversation), String> {
     let st = ctx.state();
@@ -936,9 +940,13 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
     st.site_jobs.set_conversation(&site.id, "");
     let conv = conv?;
     let _ = ctx.app.emit("conversations-changed", ());
-    let failed = conv.messages.last().is_some_and(|m| m.role == "assistant" && m.error);
-    if failed {
-        let e = conv.messages.last().map(|m| m.text.clone()).unwrap_or_default();
+    let last = conv.messages.last().filter(|m| m.role == "assistant");
+    // 有半截回答的失败（你在会话里点了停止、中途出错）也算没完成：改到一半的不能拿去构建、上线
+    if let Some(m) = last.filter(|m| m.error || !m.unfinished.is_empty()) {
+        if m.unfinished.starts_with("已停止") {
+            return Err(STOPPED.into());
+        }
+        let e = if m.unfinished.is_empty() { &m.text } else { &m.unfinished };
         return Err(format!("模型这一轮没有完成：{}", e.lines().next().unwrap_or("")));
     }
     Ok((conv_id, conv))

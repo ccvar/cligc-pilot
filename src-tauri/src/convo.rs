@@ -55,6 +55,10 @@ pub struct Message {
     /// 「中断前的进度」；这一轮正常结束会被正式回复替换掉。运行中不对外返回（界面有实时的那份）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub partial: bool,
+    /// 这一轮没正常结束（被停止、出错）时的原因，如「已停止」；正常结束为空。
+    /// error 只在「失败且没产出内容」时才标红，有半截回答的失败靠它认出来（无人值守任务不能把半截当做完）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub unfinished: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -500,6 +504,7 @@ fn interrupted(c: &mut Conversation, now: u64) {
             error: true,
             limit_reset: None,
             partial: false,
+            unfinished: String::new(),
         }),
         _ => {}
     }
@@ -558,6 +563,7 @@ mod tests {
             error: role == "assistant" && text.is_empty(),
             limit_reset: None,
             partial: false,
+            unfinished: String::new(),
         }
     }
     fn conv(id: &str, session: &str, msgs: Vec<Message>) -> Conversation {
@@ -801,6 +807,7 @@ mod tests {
                 error: false,
                 limit_reset: None,
                 partial: false,
+                unfinished: String::new(),
             },
             Message {
                 role: "assistant".into(),
@@ -811,6 +818,7 @@ mod tests {
                 error: true,
                 limit_reset: None,
                 partial: false,
+                unfinished: String::new(),
             },
             msg("user", "最新请求"),
         ];

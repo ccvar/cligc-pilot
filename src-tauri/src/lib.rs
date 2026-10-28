@@ -3579,6 +3579,7 @@ fn user_msg(text: String, now: u64) -> Message {
         error: false,
         limit_reset: None,
         partial: false,
+        unfinished: String::new(),
     }
 }
 fn assistant_msg(res: &agent::TurnResult, now: u64, brain: &str) -> Message {
@@ -3600,6 +3601,7 @@ fn assistant_msg(res: &agent::TurnResult, now: u64, brain: &str) -> Message {
         error: !res.ok && (res.text.trim().is_empty() || brain.starts_with("api:")),
         limit_reset: res.limit_reset,
         partial: false,
+        unfinished: if res.ok { String::new() } else if res.error.is_empty() { "没有正常结束".into() } else { res.error.clone() },
     }
 }
 
@@ -5236,4 +5238,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod assistant_msg_tests {
+    use super::*;
+
+    fn res(ok: bool, text: &str, error: &str) -> agent::TurnResult {
+        agent::TurnResult { ok, text: text.into(), tools: vec![], error: error.into(), session_ref: String::new(), usage: None, limit_reset: None }
+    }
+
+    #[test]
+    fn a_stopped_turn_with_partial_text_is_marked_unfinished() {
+        let m = assistant_msg(&res(false, "我先看看代码，再改……", "已停止"), 1, "codex");
+        assert!(!m.error, "有半截回答的 CLI 失败不标红");
+        assert_eq!(m.unfinished, "已停止");
+        let ok = assistant_msg(&res(true, "改好了", ""), 1, "claude");
+        assert!(ok.unfinished.is_empty());
+    }
 }
