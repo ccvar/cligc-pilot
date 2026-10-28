@@ -42,7 +42,7 @@
     }
     return out;
   });
-  // 上面的小柱状图：选的时间范围里每天一根，按结果叠起来（上线 / 已处理 / 没成功或回滚；你驳回的不画），点一根跳到那天
+  // 上面的小方块图：选的时间范围里每天一列，按结果叠起来（上线 / 已处理 / 没成功或回滚；你驳回的不画），点一列跳到那天
   const bars = $derived.by(() => {
     const out: { key: string; label: string; live: number; done: number; bad: number }[] = [];
     const today = new Date(); today.setHours(12, 0, 0, 0);
@@ -59,9 +59,14 @@
     }
     return out;
   });
-  const peak = $derived(Math.max(1, ...bars.map((b) => b.live + b.done + b.bad)));
-  const H = 40;
-  const seg = (n: number) => (n ? Math.max(3, Math.round((n / peak) * H)) : 0);
+  // 一个方块＝一条，每天一列从下往上叠：上线、已处理、没成功 / 回滚；一天最多画 8 格，多的在顶上写「+N」
+  const CAP = 8;
+  // 超过 8 条时先保证没成功 / 回滚的露出来（出问题的不能被「+N」藏住），再补已处理、上线；精确数字看悬停
+  function cells(b: { live: number; done: number; bad: number }): string[] {
+    const bad = Math.min(b.bad, CAP), done = Math.min(b.done, CAP - bad), live = Math.min(b.live, CAP - bad - done);
+    return [...Array(live).fill('live'), ...Array(done).fill('done'), ...Array(bad).fill('bad')];
+  }
+  const rows = $derived(Math.min(CAP, Math.max(1, ...bars.map((b) => b.live + b.done + b.bad))));
   function jump(key: string) {
     document.getElementById(`hd-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -77,13 +82,13 @@
   {#if items && items.length}
     <div class="card chart">
       <div class="lg"><span><i class="live"></i>上线</span><span><i class="done"></i>已处理</span><span><i class="bad"></i>没成功 / 回滚</span></div>
-      <div class="cols" style="height:{H}px" role="group" aria-label="最近 {days} 天每天处理完的条数">
+      <div class="cols" role="group" aria-label="最近 {days} 天每天处理完的条数">
         {#each bars as b (b.key)}
           {@const total = b.live + b.done + b.bad}
-          <button class="col" disabled={!total} onclick={() => jump(b.key)} data-tip={`${b.label}：${total ? `上线 ${b.live} · 已处理 ${b.done} · 没成功 / 回滚 ${b.bad}` : '没有'}`} aria-label={`${b.label}：上线 ${b.live}，已处理 ${b.done}，没成功或回滚 ${b.bad}`}>
-            {#if total}
-              <span class="stack">{#if b.bad}<i class="bad" style="height:{seg(b.bad)}px"></i>{/if}{#if b.done}<i class="done" style="height:{seg(b.done)}px"></i>{/if}{#if b.live}<i class="live" style="height:{seg(b.live)}px"></i>{/if}</span>
-            {:else}<span class="zero"></span>{/if}
+          {@const cs = cells(b)}
+          <button class="col" style="height:{rows * 12 + (total > CAP ? 14 : 0)}px" disabled={!total} onclick={() => jump(b.key)} data-tip={`${b.label}：${total ? `上线 ${b.live} · 已处理 ${b.done} · 没成功 / 回滚 ${b.bad}` : '没有'}`} aria-label={`${b.label}：上线 ${b.live}，已处理 ${b.done}，没成功或回滚 ${b.bad}`}>
+            {#each cs as c, n (n)}<i class="sq {c}"></i>{:else}<i class="sq empty"></i>{/each}
+            {#if total > CAP}<span class="more">+{total - CAP}</span>{/if}
           </button>
         {/each}
       </div>
@@ -112,22 +117,21 @@
   .day { display: flex; flex-direction: column; gap: 8px; scroll-margin-top: 12px; }
   .dl { display: flex; align-items: baseline; gap: 8px; margin: 4px 2px 0; font-size: 12.5px; font-weight: 600; color: var(--dim); }
   .dl .faint { font-size: 11.5px; font-weight: 400; }
-  /* 小柱状图：每天一根，叠放的几段之间留 2px 白缝，顶端圆角；空的日子只画一条底线 */
+  /* 小方块图：每天一列，一个方块一条，方块之间留 2px 白缝；空的日子画一个淡色方块 */
   .chart { padding: 12px 18px 10px; }
   .lg { display: flex; gap: 14px; justify-content: flex-end; font-size: 11.5px; color: var(--dim); margin-bottom: 8px; }
   .lg span { display: inline-flex; align-items: center; gap: 5px; }
-  .lg i { width: 8px; height: 8px; border-radius: 2px; }
-  .cols { display: flex; align-items: flex-end; gap: 3px; }
-  .col { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; border: 0; padding: 0; background: none; cursor: pointer; border-radius: 4px; }
+  .lg i { width: 10px; height: 10px; border-radius: 2.5px; }
+  .cols { display: flex; align-items: flex-end; gap: 4px; }
+  .col { flex: 1; min-width: 0; display: flex; flex-direction: column-reverse; align-items: center; gap: 2px; border: 0; padding: 0; background: none; cursor: pointer; border-radius: 4px; }
   .col:disabled { cursor: default; }
-  .col:not(:disabled):hover { background: var(--su-hover, #f6f5f1); }
-  .stack { width: min(100%, 22px); display: flex; flex-direction: column; gap: 2px; }
-  .stack i:first-child { border-radius: 3px 3px 0 0; }
-  .zero { width: min(100%, 22px); height: 2px; border-radius: 1px; background: var(--border); }
+  .col:not(:disabled):hover .sq { filter: brightness(1.08); outline: 1px solid color-mix(in srgb, var(--text) 25%, transparent); outline-offset: 0; }
+  .sq { display: block; width: 10px; height: 10px; border-radius: 2.5px; flex: none; }
+  .sq.empty { background: var(--border); opacity: .6; }
   .live { background: var(--ok); }
   .done { background: #9a958a; }
   .bad { background: var(--err); }
-  .stack i { display: block; }
+  .more { font-size: 10px; line-height: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
   .ax { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--faint); }
   /* 卡片只留左右 18px（列表行自己会顶到两边），上下不留空，第一行上面不画分隔线 */
   .list { padding: 0 18px; overflow: hidden; }
