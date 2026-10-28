@@ -308,17 +308,17 @@ fn over_tokens(b: &Budget) -> Option<String> {
 
 fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
     match task {
-        "scan" => &[("data", "拉取数据"), ("scan", "扫描机会"), ("work", "处理机会"), ("ship", "提交 / 上线")],
+        "scan" => &[("data", "拉取数据"), ("scan", "扫描机会"), ("work", "处理机会"), ("quality", "内容质检"), ("ship", "提交 / 上线")],
         "health" => &[("data", "拉取数据"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("report", "体检报告")],
         "report" => &[("data", "拉取数据"), ("report", "生成周报")],
         "review" => &[("data", "拉取数据"), ("review", "对比上线前后")],
         "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
-        "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
-        "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
-        "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
-        "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "watch" => &[("watch", "上线后检查")],
         _ => &[],
     }
@@ -332,6 +332,13 @@ pub(crate) const MAX_PARALLEL_JOBS: usize = 3;
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {
     start_with_model(ctx, site_id, task, trigger, item_id, None)
+}
+
+/// 「执行但不上线」的站点：这一轮照方案规则判定、照常做内容质检（只记分数，不交回重写），但最后不上线，都留给你确认。
+static HOLD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn held(site_id: &str) -> bool {
+    HOLD.lock().unwrap().iter().any(|s| s == site_id)
 }
 
 /// 临时换模型的作业：（brain, model），只在这个作业里用、不改站点和方案设置，作业结束就恢复。
@@ -356,6 +363,13 @@ pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
     // 一个站点同时只有一个作业，按站点记就够；没指定的作业也要清掉，免得用上一次的
     set_model_override(site_id, model);
+    {
+        let mut h = HOLD.lock().unwrap();
+        h.retain(|s| s != site_id);
+        if task == "cycle" && item_id.as_deref() == Some("hold") {
+            h.push(site_id.to_string());
+        }
+    }
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
     tauri::async_runtime::spawn(async move {
@@ -376,7 +390,7 @@ pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item
                     "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "batch" => work_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "plan" => plan(&ctx, &site, &job).await,
-                    "cycle" => cycle(&ctx, &site, &job, item_id.as_deref() == Some("hold")).await,
+                    "cycle" => cycle(&ctx, &site, &job).await,
                     "watch" => watch(&ctx, &site, &job).await,
                     "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
                     "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
@@ -398,6 +412,7 @@ pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         set_model_override(&site.id, None);
+        HOLD.lock().unwrap().retain(|s| s != &site.id);
         job.finish(&res);
         if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
             record_run(
@@ -470,7 +485,7 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         job.step("ship", "skipped", "");
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
-    let (done, notes, stopped) = work_queue(ctx, site, job, trigger, false).await;
+    let (done, notes, stopped) = work_queue(ctx, site, job, trigger).await;
     match &stopped {
         Some(why) if done == 0 => job.step("work", "failed", why),
         _ => job.step("work", "ok", &format!("处理了 {done} 个")),
@@ -483,8 +498,7 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
 }
 
 /// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明，因预算停下的原因）。
-/// hold：这一轮改好的都留给你确认（最多到「改好等你确认」那一档），不自动上线。
-async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str, hold: bool) -> (usize, Vec<String>, Option<String>) {
+async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>, Option<String>) {
     let site_dir = ctx.site_dir(&site.id);
     // 全托管：只挑方案允许的动作
     let rules = group_rules(ctx, site);
@@ -510,7 +524,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str, hold: bool
             break;
         }
         job.step("work", "running", &item.opp.title);
-        match process(ctx, site, job, &item, false, hold).await {
+        match process(ctx, site, job, &item, false).await {
             Ok(msg) => {
                 done += 1;
                 notes.push(msg);
@@ -532,8 +546,8 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str, hold: bool
 /// 立即执行一整轮（托管方案里「立即执行」）：制定本周计划 → 按方案处理排在前面的几条
 /// （全自动按发布规则自动上线，改好等你确认停在等你确认，只出建议只出计划）。
 /// 本周已经有计划、里面还有没做的就沿用，不再花一轮重新制定；本周用量已满就不开始。
-/// hold＝「执行但不上线」：这一轮照常制定计划、改、跑检查，但改好的都留在「需要你」等你确认，新页面也不发布。
-async fn cycle(ctx: &Ctx, site: &Site, job: &Job, hold: bool) -> Result<String, String> {
+/// 「执行但不上线」（启动时 item_id 传 "hold"，见 HOLD）：这一轮照常制定计划、改、跑检查和质检，但改好的都留在「需要你」等你确认。
+async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let t0 = now();
     let site_dir = ctx.site_dir(&site.id);
     if let Some(why) = over_budget(&budget(site, &site_dir, &ctx.state().convos)) {
@@ -558,7 +572,7 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job, hold: bool) -> Result<String, 
         job.step("ship", "skipped", "");
         return Ok(planned);
     }
-    let (done, notes, stopped) = work_queue(ctx, site, job, "manual", hold).await;
+    let (done, notes, stopped) = work_queue(ctx, site, job, "manual").await;
     if let (Some(why), 0) = (&stopped, done) {
         job.step("work", "failed", why);
         job.step("ship", "skipped", "");
@@ -591,7 +605,7 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
     }
     job.step("work", "running", &item.opp.title);
     // 你手动点「让 AI 改」：没托管或「只出建议」的站点也按「改好等你确认」处理
-    let r = process(ctx, site, job, &item, true, false).await;
+    let r = process(ctx, site, job, &item, true).await;
     if let Err(e) = &r {
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
             i.status = "failed".into();
@@ -732,7 +746,7 @@ pub fn source_of(o: &Opportunity) -> &str {
     }
 }
 
-async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool, hold: bool) -> Result<String, String> {
+async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
@@ -742,8 +756,6 @@ async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bo
     ctx.emit_queue(&site.id);
     let level = effective_level(site, item);
     let level = if manual { level.max(3) } else { level };
-    // 「执行但不上线」：改好、检查通过也只留给你确认
-    let level = if hold { level.min(3) } else { level };
     // sitemap 报错先由程序检查：多半是提交的地址不对或者还没被重新读取，改交 / 重新提交就好，不用 AI 改代码
     let checked;
     let item = if item.opp.kind == "sitemap_error" && level >= 2 {
@@ -1197,32 +1209,54 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         verdict = format!("托管方案「{}」不允许「{}」这类改动，留给你确认", managed.name, crate::managed::action_label(&item.opp.change));
     }
     // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
-    // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）
+    // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）。流程上单独一步，跳过也写明为什么。
+    // 「执行但不上线」也照常质检，只记分数给你审核时参考，不交回 AI 重写。
+    let hold = held(&site.id);
     let mut rewrite: Option<(String, Vec<String>)> = None;
-    if level >= 5 && verdict == "auto" && managed.jev_gate {
-        if let Some(jev) = crate::typesafe::client() {
-            let files = crate::managed::content_page_files(&diff);
-            if !files.is_empty() {
-                job.line("判断模型（Jev）内容质检…");
-                let positioning = crate::site_stage::load_positioning(&site_dir).text;
-                let target = if item.opp.target.trim().is_empty() { item.opp.queries.first().map(|q| q.key.clone()).unwrap_or_default() } else { item.opp.target.clone() };
-                match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &site.app_dir(&wt), &files).await {
-                    Ok(quality) => {
-                        let why = crate::jev_checks::gate_verdict(&quality);
-                        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
-                        if why.is_empty() {
-                            job.line("内容质检通过");
-                        } else if managed.jev_rewrite && !item.jev_rewritten {
-                            // 先不留给你：把原因交回 AI 重写一次，再走一遍检查和质检
-                            rewrite = Some((why, files.iter().map(|(f, _)| f.clone()).collect()));
-                        } else {
-                            verdict = format!("内容质检没过（判断模型 Jev）{}：{why}，留给你确认", if item.jev_rewritten { "，AI 按原因重写过一次还是没过" } else { "" });
-                        }
+    if !checks_ok {
+        job.step("quality", "skipped", "检查没通过，不用质检");
+    } else if level < 5 {
+        job.step("quality", "skipped", "不是全自动托管，改好留给你看");
+    } else if !managed.jev_gate {
+        job.step("quality", "skipped", "托管方案没开上线前内容质检");
+    } else if verdict != "auto" {
+        job.step("quality", "skipped", "已经有别的原因要留给你确认");
+    } else if let Some(jev) = crate::typesafe::client() {
+        let files = crate::managed::content_page_files(&diff);
+        if files.is_empty() {
+            job.step("quality", "skipped", "只改了标题、描述、数据或代码，没有成段的页面正文");
+        } else {
+            job.step("quality", "running", &format!("判断模型（Jev）看 {} 个页面", files.len()));
+            job.line("判断模型（Jev）内容质检…");
+            let positioning = crate::site_stage::load_positioning(&site_dir).text;
+            let target = if item.opp.target.trim().is_empty() { item.opp.queries.first().map(|q| q.key.clone()).unwrap_or_default() } else { item.opp.target.clone() };
+            match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &site.app_dir(&wt), &files).await {
+                Ok(quality) => {
+                    let why = crate::jev_checks::gate_verdict(&quality);
+                    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
+                    if why.is_empty() {
+                        job.step("quality", "ok", &format!("{} 个页面都通过", files.len()));
+                        job.line("内容质检通过");
+                    } else if hold {
+                        job.step("quality", "failed", &format!("没过：{why}（这次不上线，只记分数）"));
+                        job.line(&format!("内容质检没过：{why}。这次是「执行但不上线」，不交回重写，分数记在条目上"));
+                    } else if managed.jev_rewrite && !item.jev_rewritten {
+                        // 先不留给你：把原因交回 AI 重写一次，再走一遍检查和质检
+                        job.step("quality", "failed", &format!("没过：{why}，交回 AI 重写一次"));
+                        rewrite = Some((why, files.iter().map(|(f, _)| f.clone()).collect()));
+                    } else {
+                        job.step("quality", "failed", &format!("没过：{why}"));
+                        verdict = format!("内容质检没过（判断模型 Jev）{}：{why}，留给你确认", if item.jev_rewritten { "，AI 按原因重写过一次还是没过" } else { "" });
                     }
-                    Err(e) => job.line(&format!("内容质检没做成（{e}），按原来的规则判定")),
+                }
+                Err(e) => {
+                    job.step("quality", "skipped", &format!("没做成（{e}），按原来的规则判定"));
+                    job.line(&format!("内容质检没做成（{e}），按原来的规则判定"));
                 }
             }
         }
+    } else {
+        job.step("quality", "skipped", "没接判断模型（设置 → 判断模型）");
     }
     if let Some((why, files)) = rewrite {
         job.line(&format!("内容质检没过：{why}。交回 AI 按原因重写一次"));
@@ -1267,6 +1301,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         pr = crate::site_github::create_pr(&cb.token, &site.repo, &branch, &site.default_branch, &format!("ops: improve {}", path_of(&item.opp.page)), &body).await?;
     }
     let status = if checks_ok { "proposed" } else { "failed" };
+    // 「执行但不上线」里本来可以自动上线的：写清楚是你选的不上线，不是规则拦的
+    if hold && verdict == "auto" {
+        verdict = "按方案规则可以自动上线；这次选了「执行但不上线」，等你确认".into();
+    }
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = status.into();
         i.head_sha = head_sha.clone();
@@ -1286,14 +1324,20 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if level >= 5 && verdict != "auto" {
         log_item(ctx, site, "proposed", item, &verdict);
     }
-    if !(level >= 4 && verdict == "auto") {
+    if !(level >= 4 && verdict == "auto") || hold {
         crate::push::proposal(&ctx.app, site, &item.id);
-        let why = if verdict == "auto" { "检查通过，按方案留给你确认后上线".to_string() } else { format!("检查通过，留给你确认：{verdict}") };
+        let why = if hold && verdict == "auto" {
+            "检查都通过（按方案规则本来可以自动上线）；这次选了「执行但不上线」，留给你确认".to_string()
+        } else if verdict == "auto" {
+            "检查通过，按方案留给你确认后上线".to_string()
+        } else {
+            format!("检查通过，留给你确认：{verdict}")
+        };
         job.step("ship", "skipped", &why);
         job.line(&why);
     }
     // 第 4 档：白名单内自动合并上线；第 5 档：判定通过即自动上线，上线 1 小时后再检查一次页面。
-    if level >= 4 && verdict == "auto" {
+    if level >= 4 && verdict == "auto" && !hold {
         job.step("ship", "running", if level >= 5 { "全托管，自动合并上线" } else { "白名单内改动，自动合并上线" });
         match accept(ctx, site, job, &item.id, true).await {
             Ok(m) => {
