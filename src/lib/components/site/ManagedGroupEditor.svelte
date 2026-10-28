@@ -228,14 +228,20 @@
           <button class:on={g.code_changes === 'review'} onclick={() => g && (g.code_changes = 'review')}>留给你确认</button>
         </div>
       </div>
-      <div class="field"><span class="lbl">运营节奏<InfoTip label="运营节奏" text={'每一轮：拉数据 → 挑最值得做的几条交给 AI 改 → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。\n体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受条数限制。'} /></span>
+      <div class="field"><span class="lbl">运营节奏<InfoTip label="运营节奏" text={'到点跑一轮：拉数据 → 从这个站点没处理的机会里挑最值得做的几个交给 AI → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。\n体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受这个数限制。'} /></span>
         <div class="cad">
+          <span class="rl">频率</span>
           <label class="pr" for="ge-every">每<input id="ge-every" class="tin" type="number" min="1" max={g.cadence === 'weekly' ? 8 : 30} bind:value={g.cadence_every} /></label>
           <div class="seg"><button class:on={(g.cadence ?? 'daily') === 'daily'} onclick={() => g && (g.cadence = 'daily')}>天</button><button class:on={g.cadence === 'weekly'} onclick={() => g && (g.cadence = 'weekly')}>周</button></div>
           {#if g.cadence === 'weekly'}<Dropdown compact menuCompact value={String(g.cadence_day ?? 1)} options={WEEKDAYS} ariaLabel="每周哪天跑" onchange={(v: string) => g && (g.cadence_day = Number(v))} />{/if}
-          <span class="pr">跑一轮，每轮最多改</span><input id="ge-round" class="tin rn" type="number" min="1" max="20" bind:value={g.per_round} aria-label="每轮最多改几条" /><span class="pr">条</span>
+          <span class="pr">跑一轮</span>
         </div>
-        <small>{cadenceLabel(g)}一轮{#if g.per_round}，平均每周最多改 {perWeek(g)} 条{/if}</small>
+        <div class="cad">
+          <span class="rl">每轮</span>
+          <label class="pr" for="ge-round">最多处理<input id="ge-round" class="tin" type="number" min="1" max="20" bind:value={g.per_round} />个机会</label>
+          <InfoTip label="一个机会是什么" text={'一个机会＝一处具体的改进，例如：\n· 改一个页面的标题和描述\n· 扩写或更新一个已有页面\n· 写一篇新页面\n· 修一个技术问题（死链、sitemap、抓取错误）\n就是站点「待处理 → 未处理的机会」里的一条。'} />
+        </div>
+        <small>{cadenceLabel(g)}跑一轮，每次挑最值得做的 {g.per_round || 0} 个交给 AI；平均每周最多 {perWeek(g)} 个。</small>
       </div>
       <div class="grid2">
         <div class="field"><label for="ge-minp">新页面正文下限（字）<InfoTip label="新页面正文下限" text="低于它的新页面不自动上线，转进「需要你」由你判断（术语解释这类短页可以直接放行）。0＝不检查。" /></label><input id="ge-minp" class="tin" type="number" min="0" max="10000" step="100" bind:value={g.min_page_chars} /></div>
@@ -292,7 +298,9 @@
 <style>
   .cad { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .cad .pr { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); }
-  .cad .pr .tin, .cad .rn { width: 60px; }
+  .cad .pr .tin { width: 60px; }
+  .cad + .cad { margin-top: 8px; }
+  .cad .rl { width: 32px; flex: none; font-size: 12.5px; color: var(--faint); }
   .ge { width: min(640px, calc(100vw - 32px)); }
   .cnt { font-weight: 400; font-size: 11.5px; margin-left: 4px; }
   .picker { border: 1px solid var(--border2); border-radius: 10px; overflow: hidden; }
