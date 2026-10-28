@@ -131,6 +131,9 @@ pub async fn google_token(conns: &ConnStore, conn_id: &str, scopes: &[&str]) -> 
     google::access_token(&id, &cred, scopes).await
 }
 
+/// 算「AI 带来的访问」的来源（GA4 的 sessionSource，部分匹配、不分大小写）
+pub const AI_SOURCES: &str = "chatgpt|openai|perplexity|gemini\\.google|bard\\.google|copilot|claude\\.ai|deepseek|kimi|moonshot|doubao|yuanbao|tongyi|qianwen|metaso|you\\.com|phind|poe\\.com|meta\\.ai|grok|mistral";
+
 /// GA4：近 90 天按天、近 28 天（和前 28 天）按页面、来源、事件。
 async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, String), String> {
     let (start90, end) = (day(90), day(1));
@@ -168,6 +171,17 @@ async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, S
     write_json(dir, "ga4_pages_prev.json", &prev)?;
     let sources = to_ga(google::ga4_report(token, property, &start28, &end, &["sessionSourceMedium"], &gm, 50, None).await?);
     write_json(dir, "ga4_sources.json", &sources)?;
+    // AI 搜索 / 聊天带来的访问（ChatGPT、Perplexity、Gemini…）：按天、按来源，近 90 天。拉不到不影响别的
+    let ai_filter = json!({ "filter": { "fieldName": "sessionSource", "stringFilter": { "matchType": "PARTIAL_REGEXP", "value": AI_SOURCES, "caseSensitive": false } } });
+    if let Ok(rows) = google::ga4_report(token, property, &start90, &end, &["date", "sessionSource"], &["sessions", "totalUsers", "screenPageViews", "engagedSessions"], 2000, Some(ai_filter)).await {
+        let mut ai = to_ga(rows);
+        for r in ai.iter_mut() {
+            if r.key.len() == 8 {
+                r.key = format!("{}-{}-{}", &r.key[..4], &r.key[4..6], &r.key[6..]);
+            }
+        }
+        write_json(dir, "ga4_ai.json", &ai)?;
+    }
     // 事件：先按事件名，再按注册过的事件级自定义维度拆分（如 exchange / placement）。
     let standard = ["page_view", "session_start", "first_visit", "user_engagement", "scroll"];
     let mut events: Vec<EventRow> = google::ga4_report(token, property, &start28, &end, &["eventName"], &["eventCount", "totalUsers"], 100, None)
@@ -365,9 +379,14 @@ pub struct Summary {
     /// Bing 索引里的网址数（GetCrawlStats 最新一天的 InIndex）
     #[serde(default)]
     pub bing_indexed: f64,
+    /// AI 搜索 / 聊天带来的会话：近 28 天、前 28 天
+    #[serde(default)]
+    pub ai_sessions: f64,
+    #[serde(default)]
+    pub ai_sessions_prev: f64,
 }
 
-pub const SUMMARY_V: u32 = 2;
+pub const SUMMARY_V: u32 = 3;
 
 /// 按日期的行里，以最新一天为终点的近 days 天和再往前 days 天的合计
 fn windows<T>(rows: &[T], date: impl Fn(&T) -> &str, val: impl Fn(&T) -> f64, days: i64) -> (f64, f64, Vec<(String, f64)>) {
@@ -403,6 +422,8 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
     let gp: Vec<Row> = read_json(&dir, "gsc_pages.json");
     let sitemaps: Vec<serde_json::Value> = read_json(&dir, "gsc_sitemaps.json");
     let users = windows(&gad, |r| &r.key, |r| r.users, 28);
+    let ai_rows: Vec<GaRow> = read_json(&dir, "ga4_ai.json");
+    let ai = windows(&ai_rows, |r| &r.key, |r| r.sessions, 28);
     let sessions = windows(&gad, |r| &r.key, |r| r.sessions, 28);
     let g = windows(&gsd, |r| &r.key, |r| r.clicks, 28);
     let b = windows(&bsd, |r| &r.key, |r| r.clicks, 28);
@@ -440,6 +461,8 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
             .map(|c| c["submitted"].as_str().and_then(|n| n.parse::<f64>().ok()).or_else(|| c["submitted"].as_f64()).unwrap_or(0.0))
             .sum(),
         bing_indexed: read_json::<serde_json::Value>(&dir, "bing_index.json")["in_index"].as_f64().unwrap_or(0.0),
+        ai_sessions: ai.0,
+        ai_sessions_prev: ai.1,
     }
 }
 
@@ -552,6 +575,8 @@ pub struct Dashboard {
     pub bing_pages: Vec<Row>,
     pub bing_crawl: Value,
     pub opportunities: Vec<crate::site_ops::Opportunity>,
+    /// AI 带来的访问：按天 × 来源（近 90 天）
+    pub ga4_ai: Vec<GaRow>,
 }
 
 fn sort_rows(mut v: Vec<Row>) -> Vec<Row> {
@@ -591,6 +616,7 @@ pub fn dashboard(site_dir: &Path) -> Dashboard {
         bing_pages: sort_rows(bp).into_iter().take(50).collect(),
         bing_crawl: read_json(&dir, "bing_crawl.json"),
         opportunities: read_json(&dir, "opportunities.json"),
+        ga4_ai: read_json(&dir, "ga4_ai.json"),
     }
 }
 

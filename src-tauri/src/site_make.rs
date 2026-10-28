@@ -506,7 +506,7 @@ fn drop_blocks(s: &str, tags: &[&str]) -> String {
     out
 }
 
-fn strip_tags(s: &str) -> String {
+pub(crate) fn strip_tags(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
     for c in s.chars() {
@@ -524,14 +524,14 @@ fn strip_tags(s: &str) -> String {
 }
 
 /// 第一个 `<tag …>…</tag>` 的内部。
-fn inner<'a>(html: &'a str, low: &str, tag: &str) -> Option<&'a str> {
+pub(crate) fn inner<'a>(html: &'a str, low: &str, tag: &str) -> Option<&'a str> {
     let a = low.find(&format!("<{tag}"))?;
     let start = a + low[a..].find('>')? + 1;
     let end = low[start..].find(&format!("</{tag}>")).map(|i| start + i).unwrap_or(html.len());
     html.get(start..end)
 }
 
-fn attr(tag: &str, name: &str) -> Option<String> {
+pub(crate) fn attr(tag: &str, name: &str) -> Option<String> {
     let low = tag.to_ascii_lowercase();
     for q in ['"', '\''] {
         let key = format!("{name}={q}");
@@ -544,7 +544,7 @@ fn attr(tag: &str, name: &str) -> Option<String> {
 }
 
 /// 所有 `<tagname …>` 开始标签的原文。
-fn tags<'a>(html: &'a str, low: &str, name: &str) -> Vec<&'a str> {
+pub(crate) fn tags<'a>(html: &'a str, low: &str, name: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let pat = format!("<{name}");
     let mut from = 0;
@@ -588,7 +588,7 @@ fn resolve_link(root: &Path, page: &Path, href: &str) -> Option<PathBuf> {
 }
 
 /// 构建产物里的文件 → 网址路径（`guide/index.html` → `/guide/`）。
-fn page_url(out: &Path, p: &Path) -> String {
+pub(crate) fn page_url(out: &Path, p: &Path) -> String {
     let r = p.strip_prefix(out).unwrap_or(p).to_string_lossy().replace('\\', "/");
     let r = r.strip_suffix("index.html").map(|x| x.to_string()).unwrap_or(r);
     format!("/{r}")
@@ -627,7 +627,7 @@ pub fn page_htmls(out: &Path) -> Vec<(String, String)> {
 }
 
 /// 正经页面（跳过跳转页和 404）：(文件, HTML)。
-fn real_pages(out: &Path) -> Vec<(PathBuf, String)> {
+pub(crate) fn real_pages(out: &Path) -> Vec<(PathBuf, String)> {
     let mut files = Vec::new();
     walk(out, &[], &mut files, &|p| has_ext(p, &["html"]));
     files.sort();

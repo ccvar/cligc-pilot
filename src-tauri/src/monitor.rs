@@ -267,9 +267,8 @@ pub fn schedule(app: &tauri::AppHandle) {
             alerts.extend(a);
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
-        use tauri_plugin_notification::NotificationExt;
         for (title, body) in alerts.into_iter().take(5) {
-            let _ = app.notification().builder().title(&title).body(&body).show();
+            crate::push::notify(&app, &title, &body);
         }
         use tauri::Emitter;
         let _ = app.emit("monitor-checked", ());

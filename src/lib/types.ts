@@ -374,6 +374,8 @@ export interface Dashboard {
   bing_pages: DataRow[];
   bing_crawl: unknown;
   opportunities: Opportunity[];
+  /** AI 搜索 / 聊天带来的访问：key＝日期，key2＝来源（近 90 天） */
+  ga4_ai?: GaRow[];
 }
 
 // ---- 运营 ----
@@ -439,6 +441,8 @@ export interface SiteSummary {
   search_clicks?: number; search_clicks_prev?: number; search_impressions?: number;
   /** Google 近 28 天有展示的页面数、站点地图提交的网址数、Bing 索引里的网址数 */
   google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
+  /** AI 搜索 / 聊天带来的会话：近 28 天、前 28 天 */
+  ai_sessions?: number; ai_sessions_prev?: number;
 }
 /** Search Console 一行（页面或查询词）近 28 天的合计 */
 export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
@@ -466,6 +470,8 @@ export interface SiteRow {
   autonomy: string; deploy_mode: string; has_data: boolean; summary: SiteSummary;
   proposed: number; failed: number; open: number; job: string;
   last_deploy_ts: number; last_deploy_ok: boolean | null; active_at: number;
+  /** 收益（本月 / 上月，美元）和本月能估出的 AI 花费 */
+  money?: Money; cost_month_usd?: number;
 }
 export interface PendingItem { site_id: string; site_name: string; item: OpsItem }
 export interface DataSourceRow { conn: Connection; sites: string[] }
@@ -534,8 +540,10 @@ export interface ManagedSite {
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
   /** 这个月的 AI 用量和花费、上线了几条 */
   cost: AiCost; shipped_month: number;
+  /** 收益（AdSense + 手动记的） */
+  money?: Money;
 }
-export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number; cost_month: AiCost; shipped_month: number }
+export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number; cost_month: AiCost; shipped_month: number; revenue_month?: number; revenue_tracked?: boolean }
 /** AI 用量：tokens＝折算 token；usd＝能按官方价估出金额的部分（API 连接）；sub_tokens＝走订阅额度的；unpriced_tokens＝按量计费但认不出价格的 */
 export interface AiCost { tokens: number; usd: number; sub_tokens: number; unpriced_tokens: number; rough: boolean; turns: number }
 /** 后台停过的一段：closed＝客户端没开，asleep＝电脑睡着了 */
@@ -578,3 +586,31 @@ export interface TypeSafeStatus {
   month_tokens: number;
   month_cost_usd: number;
 }
+
+// ---- 收益（AdSense + 手动记的，美元） ----
+export interface Money { month: number; last_month: number; adsense_month: number; adsense_last: number; rpm: number; tracked: boolean }
+export interface RevenueEntry { id: string; month: string; amount: number; source: 'affiliate' | 'sponsor' | 'other' | string; note: string; created_at: number }
+export interface PageRevenue { url: string; earnings: number; views: number }
+export interface SiteRevenue { money: Money; entries: RevenueEntry[]; top_pages: PageRevenue[]; cost: AiCost; adsense: boolean }
+export interface RevenueStatus { connected: boolean; email: string; account: string; account_name: string; fetched_at: number; error: string; has_client: boolean }
+export interface RevenueImport { added: number; unknown: string[]; bad_lines: number[] }
+
+// ---- 手机通知（Telegram） ----
+export interface PushStatus { has_token: boolean; bot_name: string; chat_name: string; bound: boolean; enabled: boolean; allow_approve: boolean; pair_code: string; pair_until: number; last_err: string }
+
+// ---- 页面速度（PageSpeed Insights） ----
+export interface SpeedIssue { title: string; savings_ms: number }
+export interface PageSpeed { url: string; score: number; lcp_ms: number; cls: number; tbt_ms: number; field: string; field_lcp_ms: number; field_inp_ms: number; field_cls: number; issues: SpeedIssue[]; error: string }
+export interface SpeedReport { checked_at: number; pages: PageSpeed[] }
+
+// ---- 页面体检（图片、结构化数据） ----
+export interface ImgIssue { page: string; src: string; bytes: number }
+export interface AuditReport { checked_at: number; pages: number; images: number; no_alt: ImgIssue[]; broken: ImgIssue[]; large: ImgIssue[]; schema_pages: number; article_pages: number; schema: { page: string; problem: string }[]; llms: string }
+
+// ---- 竞品观察（Serper） ----
+export interface SerpHit { pos: number; domain: string; title: string; link: string; snippet: string }
+export interface SerpKeyword { q: string; manual: boolean; ours: number | null; our_url: string; prev: number | null; prev_checked: boolean; top: SerpHit[]; new_domains: string[]; error: string }
+export interface SerpCompetitor { domain: string; keywords: number; above_us: number; avg_pos: number }
+export interface SerpConfig { off: boolean; keywords: string[]; gl: string; hl: string }
+export interface SerpView { has_key: boolean; config: SerpConfig; report: { checked_at: number; gl: string; hl: string; keywords: SerpKeyword[]; competitors: SerpCompetitor[] }; planned: string[] }
+export interface ApiKeys { pagespeed: boolean; serper: boolean }

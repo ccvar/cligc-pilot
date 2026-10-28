@@ -7,6 +7,7 @@
   import ApiServices from '$lib/ApiServices.svelte';
   import TypeSafeSection from './TypeSafeSection.svelte';
   import BackgroundSection from './BackgroundSection.svelte';
+  import GrowthSection from './GrowthSection.svelte';
   import type { ApiProfile } from '$lib/apiProfiles';
   import AppIcon from '$lib/AppIcon.svelte';
   import PlusIcon from '$lib/components/icons/PlusIcon.svelte';
@@ -314,6 +315,7 @@
       <TypeSafeSection />
 
       <BackgroundSection />
+      <GrowthSection />
 
       <div class="brain-row about-card">
         <span class="brain-ic"><AppIcon size={20} /></span>

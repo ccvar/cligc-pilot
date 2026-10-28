@@ -246,9 +246,8 @@ pub fn schedule(app: &tauri::AppHandle) {
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
         if !newly.is_empty() {
-            use tauri_plugin_notification::NotificationExt;
             let body = format!("{}{}", newly.iter().take(3).cloned().collect::<Vec<_>>().join("、"), if newly.len() > 3 { format!(" 等 {} 个", newly.len()) } else { String::new() });
-            let _ = app.notification().builder().title(format!("{} 个推广链接失效", newly.len())).body(&body).show();
+            crate::push::notify(&app, &format!("{} 个推广链接失效", newly.len()), &body);
         }
         use tauri::Emitter;
         let _ = app.emit("links-checked", ());

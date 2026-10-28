@@ -19,6 +19,7 @@
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
   import BackgroundNotice from './BackgroundNotice.svelte';
+  import { usd } from '$lib/state/growth.svelte.js';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
@@ -33,6 +34,17 @@
     proposed: fleet.pendingCount,
   });
   const n = num;
+  // 有站点在记收益（连了 AdSense 或手动记过）才显示「本月收益」这一列
+  const showRev = $derived(fleet.rows.some((r) => r.money?.tracked));
+  function revTip(r: SiteRow) {
+    const m = r.money;
+    if (!m) return '';
+    const ai = r.cost_month_usd ?? 0;
+    const lines = [`本月收益 ${usd(m.month)}${m.adsense_month ? `（AdSense ${usd(m.adsense_month)}）` : ''}`, `上月 ${usd(m.last_month)}`];
+    if (ai >= 0.01) lines.push(`本月 AI 花费 ${usd(ai)}，差额 ${usd(m.month - ai)}`);
+    if (m.rpm) lines.push(`近 28 天每千次浏览 ${usd(m.rpm)}`);
+    return lines.join('\n');
+  }
   const when = ago;
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
   // 站点后面的下拉：按部署方式筛选（只列出现在有站点的方式，带个数）
@@ -167,6 +179,7 @@
               <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 28 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
               <th class="num c-idx"><button class="th" onclick={() => sortBy('indexed')} data-tip={'Google：近 28 天有展示的页面 / 站点地图提交的网址（Search Console 接口不再给收录数，用有展示的页面近似）\nBing：索引里的网址数'}><GscMark size={11} /><BingMark size={11} />已编入{arrow('indexed')}</button></th>
               <th class="c-trend"><span class="th-l"><GaMark size={11} />会话趋势</span></th>
+              {#if showRev}<th class="num c-rev"><button class="th" onclick={() => sortBy('revenue')} data-tip="这个月的收益（AdSense + 手动记的，美元），下面是本月 AI 花费">本月收益{arrow('revenue')}</button></th>{/if}
               <th class="c-when"><button class="th" onclick={() => sortBy('active')}>最近活动{arrow('active')}</button></th>
             </tr></thead>
             <tbody>
@@ -189,10 +202,11 @@
                   {:else}
                     <td class="num nodata" colspan="2">未接数据</td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
+                  {#if showRev}<td class="num c-rev">{#if r.money?.tracked}<span class="v" data-tip={revTip(r)}>{usd(r.money.month)}</span>{#if (r.cost_month_usd ?? 0) >= 0.01}<small class="ai">AI {usd(r.cost_month_usd ?? 0)}</small>{/if}{:else}<span class="faint">—</span>{/if}</td>{/if}
                   <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
                 </tr>
               {:else}
-                <tr><td colspan="9" class="faint">没有符合条件的站点</td></tr>
+                <tr><td colspan={showRev ? 10 : 9} class="faint">没有符合条件的站点</td></tr>
               {/each}
             </tbody>
           </table>
@@ -308,6 +322,7 @@
   .am-none { color: var(--dim); }
   .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
+  .c-rev .ai { display: block; font-size: 11px; color: var(--faint); white-space: nowrap; }
   .sn-cell { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sn { font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px; }
   .kind { margin-left: 8px; color: var(--faint); font-size: 11.5px; }
@@ -322,6 +337,9 @@
   @media (prefers-reduced-motion: reduce) { .sk-row i { animation: none; } }
   @container page (max-width: 760px) {
     .c-when { display: none; }
+  }
+  @container page (max-width: 820px) {
+    .c-rev { display: none; }
   }
   @container page (max-width: 980px) {
     .c-trend { display: none; }

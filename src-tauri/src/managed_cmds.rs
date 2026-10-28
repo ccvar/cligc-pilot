@@ -220,6 +220,8 @@ pub struct ManagedSite {
     /// 这个月（本地时间 1 号起）的 AI 用量和花费、上线了几条
     pub cost: crate::usage::Cost,
     pub shipped_month: usize,
+    /// 收益（AdSense + 手动记的，见 revenue）
+    pub money: crate::revenue::Money,
 }
 
 #[derive(Serialize)]
@@ -232,6 +234,9 @@ pub struct ManagedOverview {
     /// 所有托管站点这个月的 AI 用量合计、上线条数
     pub cost_month: crate::usage::Cost,
     pub shipped_month: usize,
+    /// 所有托管站点这个月的收益合计；有没有任何站点在记收益
+    pub revenue_month: f64,
+    pub revenue_tracked: bool,
 }
 
 /// 本地时间这个月 1 号零点
@@ -252,6 +257,8 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
     let mut cost_month = crate::usage::Cost::default();
     let mut shipped_month_total = 0;
     let convs = state.convos.list();
+    let ads = crate::revenue::load_cache(&state.data_dir);
+    let (mut revenue_month, mut revenue_tracked) = (0.0, false);
     let sites = state
         .sites
         .list()
@@ -275,7 +282,11 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             cost_month.add(&cost);
             let shipped_month = q.iter().filter(|i| i.deployed_at as i64 >= month && matches!(i.status.as_str(), "deployed" | "done")).count();
             shipped_month_total += shipped_month;
+            let money = crate::revenue::site_money(&ads, &s, &dir);
+            revenue_month += money.month;
+            revenue_tracked |= money.tracked;
             ManagedSite {
+                money,
                 cost,
                 shipped_month,
                 stage: stg.stage.clone(),
@@ -298,7 +309,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             }
         })
         .collect();
-    ManagedOverview { groups: cfg.groups.clone(), config: cfg, sites, shipped_today, waiting: waiting_total, cost_month, shipped_month: shipped_month_total }
+    ManagedOverview { groups: cfg.groups.clone(), config: cfg, sites, shipped_today, waiting: waiting_total, cost_month, shipped_month: shipped_month_total, revenue_month, revenue_tracked }
 }
 
 #[tauri::command]

@@ -70,7 +70,7 @@ fn pct(v: f64) -> String {
     format!("{:.1}%", v * 100.0)
 }
 
-fn path_of(url: &str) -> String {
+pub fn path_of(url: &str) -> String {
     url.split_once("://")
         .map(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_else(|| "/".into()))
         .unwrap_or_else(|| url.to_string())
@@ -270,8 +270,13 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
     }
 
     let cannibal = cannibal_opportunities(&qp, min_impr);
+    // 收益、速度、页面体检、竞品（各自的模块按自己的缓存算）
+    let money = crate::revenue::opportunities(site_dir);
+    let speed = crate::speed::opportunities(site_dir);
+    let audit = crate::page_audit::opportunities(site_dir);
+    let serp = crate::serp::opportunities(site, site_dir);
 
-    for mut group in [low, striking, declining, gap, tech, cannibal] {
+    for mut group in [low, striking, declining, gap, tech, cannibal, money, speed, audit, serp] {
         group.sort_by(|a, b| b.score.total_cmp(&a.score));
         group.truncate(10);
         out.extend(group);

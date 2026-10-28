@@ -220,8 +220,7 @@ impl Ctx {
         self.state().sites.data_dir(id)
     }
     fn notify(&self, title: &str, body: &str) {
-        use tauri_plugin_notification::NotificationExt;
-        let _ = self.app.notification().builder().title(title).body(body).show();
+        crate::push::notify(&self.app, title, body);
     }
     fn emit_queue(&self, site_id: &str) {
         let q = site_ops::load_queue(&self.site_dir(site_id));
@@ -618,7 +617,8 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
 pub fn effective_level(site: &Site, item: &QueueItem) -> u8 {
     let mut level = site.ops.level;
     // 改事实（久未更新的页面）、合并或拉开页面（两个页面抢词）：不管什么档位都留给你确认
-    if matches!(item.opp.kind.as_str(), "stale" | "cannibal") {
+    // 收入偏低、页面太慢、页面体检、对比竞品：改动面大或要人判断，也都留给你确认
+    if matches!(item.opp.kind.as_str(), "stale" | "cannibal" | "low_rpm" | "slow" | "img_audit" | "schema" | "serp_gap") {
         return level.min(3);
     }
     if level >= 5 {
@@ -668,7 +668,7 @@ pub fn source_of(o: &Opportunity) -> &str {
         return &o.source;
     }
     match o.kind.as_str() {
-        "crawl_issue" | "sitemap_error" => "health",
+        "crawl_issue" | "sitemap_error" | "slow" | "img_audit" | "schema" => "health",
         "content_gap" => "gap",
         _ => "data",
     }
@@ -730,6 +730,11 @@ fn guidance(o: &Opportunity) -> &'static str {
         "cannibal" => "按依据里的步骤二选一：合并（保留强的页面，弱的做 301 跳转）或拉开两个页面的角度。只动这两个页面、跳转配置和指向它们的站内链接。",
         "stale" => "只核对和更新有时效的信息（数字、活动、步骤、规定），保持原有结构和语气；拿不准的不要改，写进说明。不改网址。",
         "stale_year" => "只改标题和描述里表示「今年 / 最新」的年份，其它文字不动。不改正文、不改网址。",
+        "low_rpm" => "让读者愿意多看、多点：补实用的内容和小结，在合适位置加站内相关文章链接；和主题相关时可以用站点已有的推广链接（/go/…）。不新增广告代码、不堆广告位、不改网址。",
+        "slow" => "按依据里 PageSpeed 列出的问题做最小的优化：压缩或换成合适尺寸的图片、给图片标宽高、首屏以外的图片懒加载、推迟不必要的脚本。不改页面内容和外观。",
+        "img_audit" => "按依据里的清单处理图片：缺的替代文字（alt）按图片内容写一句简短描述（装饰图用 alt=\"\"）；修好或删掉引用不存在的图片；过大的图片压缩或缩小尺寸。不改正文。",
+        "schema" => "修好或补上页面的结构化数据（JSON-LD）：按依据里的问题改，字段和页面上显示的内容一致，不编造作者、日期和评分。不改正文。",
+        "serp_gap" => "对比依据里排在前面的页面（看它们的标题和摘要回应了什么），补上这个页面缺的要点、把标题和描述写得更对题；用自己的话写，不要照抄别人的内容。不改网址。",
         _ => change_guidance(&o.change),
     }
 }
@@ -1148,6 +1153,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         log_item(ctx, site, "proposed", item, &verdict);
     }
     if !(level >= 4 && verdict == "auto") {
+        crate::push::proposal(&ctx.app, site, &item.id);
         let why = if verdict == "auto" { "检查通过，按方案留给你确认后上线".to_string() } else { format!("检查通过，留给你确认：{verdict}") };
         job.step("ship", "skipped", &why);
         job.line(&why);
@@ -2391,8 +2397,13 @@ pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     std::fs::write(d.join(format!("{}.md", data.date)), digest_markdown(&data)).map_err(|e| e.to_string())?;
     std::fs::write(d.join(format!("{}.json", data.date)), serde_json::to_vec_pretty(&data).unwrap_or_default()).map_err(|e| e.to_string())?;
     let body = format!("{} 个站点 · AI 上线 {} 项 · {} 项需要你", data.sites_total, data.shipped, data.needs.len());
-    use tauri_plugin_notification::NotificationExt;
-    let _ = app.notification().builder().title("托管日报").body(&body).show();
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title("托管日报").body(&body).show();
+    }
+    // 手机上看到的日报多带几行：要你处理的事（Telegram，见 push）
+    let needs: Vec<String> = data.needs.iter().take(8).map(|n| format!("· {}：{}", n.site_name, n.title)).collect();
+    crate::push::send(app, format!("托管日报 {}\n{body}{}{}", data.date, if needs.is_empty() { String::new() } else { format!("\n\n需要你：\n{}", needs.join("\n")) }, if data.needs.len() > 8 { format!("\n…还有 {} 项", data.needs.len() - 8) } else { String::new() }));
     crate::managed::log(&st.data_dir, crate::managed::Activity { ts: now(), kind: "digest".into(), title: "托管日报".into(), detail: body.clone(), ..Default::default() });
     Ok(body)
 }
@@ -2467,6 +2478,12 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             crate::index_check::schedule(&app);
             // Pilot 自己的数据：每周备份到 GitHub 私有仓库（打开了才备份，见 backup）
             crate::backup::schedule(&app);
+            // 收益：连了 AdSense 就每天拉一次报表（见 revenue）
+            crate::revenue::schedule(&app);
+            // 页面速度（PageSpeed）、页面体检（图片、结构化数据）、竞品观察（Serper）：每周一次
+            crate::speed::schedule(&app);
+            crate::page_audit::schedule(&app);
+            crate::serp::schedule(&app);
             // 同时最多跑这么多个运营作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建
             let mut busy = st.site_jobs.running_count();
             for site in st.sites.list() {

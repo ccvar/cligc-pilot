@@ -446,6 +446,13 @@ fn add_verify_files(site: &Site, site_dir: &Path, out: &Path, job: &Job) {
             job.line("已把 IndexNow 验证文件放进构建产物");
         }
     }
+    // 站点自己没有 llms.txt：按页面标题和描述生成一份（给 AI 搜索看的站点目录，见 page_audit）
+    if !site.domain.is_empty() && !out.join("llms.txt").exists() {
+        let txt = crate::page_audit::llms_txt(&site.name, &site.domain, out);
+        if std::fs::write(out.join("llms.txt"), txt).is_ok() {
+            job.line("已生成 llms.txt 放进构建产物（给 AI 搜索看的站点目录）");
+        }
+    }
     // Pilot 把站点加到 Bing 后一直带上（Bing 会定期复查验证）
     if !site.data.bing_auth.is_empty() {
         let f = out.join("BingSiteAuth.xml");

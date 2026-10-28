@@ -44,6 +44,9 @@ pub struct SiteRow {
     pub channels: Vec<crate::syndicate::ChannelBrief>,
     /// 最近活动：会话、上线、站点设置里最晚的那个。
     pub active_at: u64,
+    /// 收益（本月 / 上月）和本月 AI 花费（美元，能估出来的部分）
+    pub money: crate::revenue::Money,
+    pub cost_month_usd: f64,
 }
 
 #[tauri::command]
@@ -56,6 +59,8 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
         }
     }
     let cfg = crate::managed::load(&state.data_dir);
+    let ads = crate::revenue::load_cache(&state.data_dir);
+    let month = crate::managed_cmds::month_start();
     state
         .sites
         .list()
@@ -73,6 +78,8 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
             let last_ts = last.as_ref().map(|d| d.ts).unwrap_or(0);
             let mon = crate::monitor::load(&dir);
             SiteRow {
+                money: crate::revenue::site_money(&ads, &s, &dir),
+                cost_month_usd: crate::usage::site_cost(&dir, month).usd,
                 active_at: s.updated_at.max(last_ts).max(last_conv.get(&s.id).copied().unwrap_or(0)),
                 has_data: !s.data.gsc_site.is_empty() || !s.data.ga4_property.is_empty() || !s.data.bing_site.is_empty(),
                 summary: crate::site_data::summary(&dir),

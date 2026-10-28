@@ -6,6 +6,8 @@
   import LineChart from './LineChart.svelte';
   import OpportunityRow from './OpportunityRow.svelte';
   import SiteReports from './SiteReports.svelte';
+  import SiteRevenue from './SiteRevenue.svelte';
+  import SiteSerp from './SiteSerp.svelte';
   import GscMark from '$lib/components/icons/GscMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
   import GaMark from '$lib/components/icons/GaMark.svelte';
@@ -34,6 +36,27 @@
   let hideLow = $state(false);
   const opps = $derived(hideLow ? allOpps.filter((o) => o.relevance == null || o.relevance >= 1.5) : allOpps);
   const prevOf = (r: object) => (r as { prev_clicks?: number }).prev_clicks;
+  // AI 搜索 / 聊天带来的访问：以最新一天为终点的近 28 天（和前 28 天），按来源合计
+  const ai = $derived.by(() => {
+    const rows = d?.ga4_ai ?? [];
+    const end = rows.reduce((m, r) => (r.key > m ? r.key : m), '');
+    if (!end) return null;
+    const endT = Date.parse(end);
+    const ago = (k: string) => Math.round((endT - Date.parse(k)) / 86400000);
+    const by = new Map<string, number>();
+    let cur = 0, prev = 0;
+    for (const r of rows) {
+      const a = ago(r.key);
+      if (a >= 0 && a < 28) { cur += r.sessions; by.set(aiName(r.key2 ?? ''), (by.get(aiName(r.key2 ?? '')) ?? 0) + r.sessions); }
+      else if (a >= 28 && a < 56) prev += r.sessions;
+    }
+    return { cur, prev, sources: [...by.entries()].sort((a, b) => b[1] - a[1]) };
+  });
+  function aiName(src: string) {
+    const s = src.toLowerCase();
+    for (const [k, v] of [['chatgpt', 'ChatGPT'], ['openai', 'ChatGPT'], ['perplexity', 'Perplexity'], ['gemini', 'Gemini'], ['bard', 'Gemini'], ['copilot', 'Copilot'], ['claude', 'Claude'], ['deepseek', 'DeepSeek'], ['kimi', 'Kimi'], ['moonshot', 'Kimi'], ['doubao', '豆包'], ['yuanbao', '元宝'], ['tongyi', '通义'], ['qianwen', '通义'], ['metaso', '秘塔'], ['grok', 'Grok'], ['poe', 'Poe'], ['you.com', 'You.com'], ['phind', 'Phind'], ['meta.ai', 'Meta AI'], ['mistral', 'Mistral']]) if (s.includes(k)) return v;
+    return src;
+  }
 </script>
 
 <div class="dt">
@@ -43,6 +66,7 @@
       <p class="hint">在站点设置里接入 Google（GA4 + Search Console）和 Bing 后，这里会显示趋势、查询词、页面和 Pilot 按规则找出的运营机会。</p>
       <div class="row"><button class="btn small primary" onclick={() => (sites.tab = 'settings')}>去接入</button></div>
     </div>
+    <SiteRevenue {site} />
   {:else}
     <div class="bar">
       <span class="faint">近 28 天，与前 28 天对比 · {#if fetched}<span data-tip={full(fetched)}>{agoTs(fetched)}同步</span>{:else}还没同步过{/if} · 每天早上 7 点自动同步</span>
@@ -91,6 +115,8 @@
         {/if}
       </div>
       <p class="faint note src"><GscMark size={11} />Search Console 数据有 2–3 天延迟。</p>
+
+      <SiteRevenue {site} />
 
       {#if d.gsc_daily.length || d.ga4_daily.length}
         <div class="card">
@@ -168,6 +194,8 @@
         </div>
       </div>
 
+      {#if site.domain}<SiteSerp {site} />{/if}
+
       {#if site.data.ga4_property}
         <div class="two">
           <div class="card">
@@ -192,6 +220,19 @@
               {/each}
             {:else}
               <p class="hint">没有自定义事件。站点里埋的事件（如推荐链接点击）会出现在这里；要按参数拆分，需在 GA4 里把参数注册为自定义维度。</p>
+            {/if}
+          </div>
+          <div class="card">
+            <h3><Icon name="sparkles" />AI 带来的访问 <span class="sub src"><GaMark size={11} />GA4 · 近 28 天</span></h3>
+            {#if ai && ai.cur + ai.prev > 0}
+              {@const dl = dlt(ai.cur, ai.prev)}
+              <div class="ai-top"><b>{n(ai.cur)}</b><span class="faint">次会话</span><em class:up={dl.dir > 0} class:down={dl.dir < 0}>{dl.text || '—'}</em></div>
+              <table class="tbl">
+                <thead><tr><th>来源</th><th class="num">会话</th></tr></thead>
+                <tbody>{#each ai.sources.slice(0, 8) as [name, v] (name)}<tr><td class="trunc">{name}</td><td class="num">{n(v)}</td></tr>{/each}</tbody>
+              </table>
+            {:else}
+              <p class="hint">近 28 天还没有从 ChatGPT、Perplexity、Gemini、DeepSeek 这些 AI 搜索 / 聊天点进来的访问。页面被 AI 引用、读者点了链接，就会出现在这里。上线时 Pilot 会给没有 llms.txt 的站点生成一份，方便 AI 读懂站点。</p>
             {/if}
           </div>
         </div>
@@ -230,4 +271,9 @@
   .soft-note { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; background: #fdf8ec; border: 1px solid #f0e4c4; font-size: 12.5px; color: #6b4a10; }
   .low-filter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 400; color: var(--dim); cursor: pointer; }
   .low-filter input { margin: 0; accent-color: var(--accent); }
+  .ai-top { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+  .ai-top b { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ai-top em { font-style: normal; font-size: 12px; color: var(--faint); margin-left: 4px; }
+  .ai-top em.up { color: var(--ok); }
+  .ai-top em.down { color: var(--err); }
 </style>

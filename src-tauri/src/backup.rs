@@ -268,8 +268,7 @@ pub fn schedule(app: &tauri::AppHandle) {
         let r = run(&st.data_dir, &st.conns).await;
         RUNNING.store(false, Ordering::SeqCst);
         if let Err(e) = r {
-            use tauri_plugin_notification::NotificationExt;
-            let _ = app.notification().builder().title("Pilot 数据备份失败").body(&e).show();
+            crate::push::notify(&app, "Pilot 数据备份失败", &e);
         }
         use tauri::Emitter;
         let _ = app.emit("backup-done", ());

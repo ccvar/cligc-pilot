@@ -7,6 +7,11 @@ mod monitor;
 mod index_check;
 mod background;
 mod backup;
+mod push;
+mod revenue;
+mod speed;
+mod serp;
+mod page_audit;
 mod agent;
 mod bing;
 mod api_agent;
@@ -4865,6 +4870,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             setup_app_menu(app.handle())?;
             site_runner::start_scheduler(app.handle().clone());
+            push::start(app.handle().clone());
             // 邮箱验证码的本机端口（phone.cjs 的 mail-* 命令从这里取）
             tauri::async_runtime::spawn(mail::serve(data_dir.clone()));
             // 先恢复上次的窗口大小 / 位置，再显示
@@ -5173,6 +5179,30 @@ pub fn run() {
             background::background_set,
             background::background_dismiss_notice,
             backup::backup_status,
+            push::push_status,
+            push::push_set_token,
+            push::push_pair,
+            push::push_set,
+            push::push_test,
+            push::push_forget,
+            revenue::revenue_status,
+            revenue::adsense_connect,
+            revenue::adsense_refresh,
+            revenue::adsense_disconnect,
+            revenue::site_revenue,
+            revenue::revenue_add,
+            revenue::revenue_remove,
+            revenue::revenue_import,
+            speed::site_speed,
+            speed::check_site_speed,
+            serp::site_serp,
+            serp::set_site_serp,
+            serp::check_site_serp,
+            serp::api_keys_status,
+            serp::api_key_set,
+            serp::api_key_remove,
+            page_audit::site_audit,
+            page_audit::check_site_audit,
             backup::backup_set,
             backup::backup_now,
             backup::backup_preview,

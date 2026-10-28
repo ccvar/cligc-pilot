@@ -268,9 +268,9 @@ pub fn read_key_file(path: String) -> Result<String, String> {
 const OAUTH_CLIENT_ACCOUNT: &str = "google-oauth-client";
 
 #[derive(serde::Deserialize, Serialize, Clone)]
-struct OAuthClient {
-    client_id: String,
-    client_secret: String,
+pub(crate) struct OAuthClient {
+    pub client_id: String,
+    pub client_secret: String,
 }
 
 #[derive(Serialize)]
@@ -280,7 +280,7 @@ pub struct OAuthClientInfo {
     pub client_id: String,
 }
 
-fn load_client(state: &AppState) -> Option<OAuthClient> {
+pub(crate) fn load_client(state: &AppState) -> Option<OAuthClient> {
     if let Some(c) = crate::keychain::get_named_secret(OAUTH_CLIENT_ACCOUNT).ok().and_then(|raw| serde_json::from_str::<OAuthClient>(&raw).ok()) {
         return Some(c);
     }

@@ -5,7 +5,7 @@ import { say } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 
 export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
-export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed';
+export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
 export function trafficDown(r: SiteRow): boolean {
@@ -125,6 +125,7 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
               : sort === 'impr' ? -(r.summary.search_impressions ?? 0)
                 : sort === 'ctr' ? -searchCtr(r)
                   : sort === 'indexed' ? -(r.summary.google_pages ?? 0)
+                    : sort === 'revenue' ? -(r.money?.month ?? 0)
                     : -(r.proposed * 1000 + r.failed);
   const out = [...rows].sort((a, b) => {
     const ka = key(a), kb = key(b);

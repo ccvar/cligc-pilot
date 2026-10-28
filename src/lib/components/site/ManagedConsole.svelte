@@ -21,6 +21,7 @@
   import RecentShips from './RecentShips.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
+  import { usd } from '$lib/state/growth.svelte.js';
   import BackgroundNotice from './BackgroundNotice.svelte';
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
@@ -261,7 +262,7 @@
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
       <h1>托管运营<InfoTip text={'每个方案管一个或多个站点，各有自己的自主程度和规则；一个站点只属于一个方案，不在方案里的站点由你自己运营。\n方案和站点都能单独暂停。'} label="托管方案说明" /> {#if allOff}<span class="pill warn">全部已暂停</span>{/if}</h1>
-      <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}{#if o && costText(o.cost_month)}{' · '}<span class="cost-h" data-tip={costTip(o.cost_month, o.shipped_month, '所有托管站点')}>本月 AI {costText(o.cost_month)}</span>{/if}</p>
+      <p class="hint">{o ? `托管 ${o.sites.length} 个站点 · 今天 AI 自动上线 ${o.shipped_today} 项 · ${o.waiting} 项需要你` : '读取中…'}{#if o && costText(o.cost_month)}{' · '}<span class="cost-h" data-tip={costTip(o.cost_month, o.shipped_month, '所有托管站点')}>本月 AI {costText(o.cost_month)}</span>{/if}{#if o?.revenue_tracked}{' · '}<span class="cost-h" data-tip="所有托管站点这个月的收益（AdSense + 手动记的，美元）">本月收益 {usd(o.revenue_month ?? 0)}</span>{/if}</p>
     </div>
     <div class="row">
       <button class="btn small primary" onclick={() => newGroup()}><Icon name="plus" size={13} />新增方案</button>
@@ -404,7 +405,8 @@
                       {#if need > 0}<span class="warn-text">待你处理 {need}</span>{/if}
                       {#if s.failed}<span class="err-text">失败 {s.failed}</span>{/if}
                       {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
-                      {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>本月 {costText(s.cost)}</span>{/if}
+                      {#if s.money?.tracked}<span class="faint cost" data-tip={`本月收益（AdSense + 手动记的）；上月 ${usd(s.money.last_month)}`}>收益 {usd(s.money.month)}</span>{/if}
+                      {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>{s.money?.tracked ? 'AI' : '本月'} {costText(s.cost)}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
                     </span>
                   {/if}
