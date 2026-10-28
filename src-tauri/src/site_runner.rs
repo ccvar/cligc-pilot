@@ -815,11 +815,14 @@ fn change_guidance(change: &str) -> &'static str {
     }
 }
 
-/// 没选具体模型时用什么：Claude 用 `sonnet` 别名（跟随 CLI 的当前版本）；
+/// 没选具体模型时用什么：Claude 用 Sonnet 5 的完整 ID（不用 `sonnet` 别名：CLI 会把别名解析成旧版本，
+/// 界面上写着 Sonnet、实际跑的是 4.6；和前端模型列表里的「Sonnet」是同一个）；
 /// Codex 留空＝不传模型参数、用本机 codex 配置里的默认模型（和对话里「跟随 Codex 默认」一样）；其它服务必须明确选择。
+pub(crate) const SONNET: &str = "claude-sonnet-5";
+
 fn default_model(brain: &str) -> Option<String> {
     match brain {
-        "claude" => Some("sonnet".into()),
+        "claude" => Some(SONNET.into()),
         "codex" => Some(String::new()),
         _ => None,
     }
@@ -2816,7 +2819,7 @@ mod tests {
     #[test]
     fn codex_without_a_model_uses_the_local_default() {
         assert_eq!(default_model("codex"), Some(String::new()));
-        assert_eq!(default_model("claude"), Some("sonnet".into()));
+        assert_eq!(default_model("claude"), Some("claude-sonnet-5".into()));
         assert_eq!(default_model("some-api"), None);
     }
 

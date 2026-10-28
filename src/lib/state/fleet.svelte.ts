@@ -189,7 +189,7 @@ const siteCount = (items: OppItem[]) => new Set(items.map((i) => i.site_id)).siz
 /** 交给 AI 时用的模型：托管方案里的站点用方案选的，其它用站点「运营」设置 */
 export function oppModel(i: Pick<OppItem, 'brain' | 'model'>): string {
   if (!i.brain) return '还没选模型';
-  const m = i.model ? i.model.replace(/^sonnet$/, 'Sonnet').replace(/^haiku$/, 'Haiku') : i.brain === 'codex' ? '本机默认模型' : '';
+  const m = i.model ? shortName(i.brain, i.model) : i.brain === 'codex' ? '本机默认模型' : '';
   return m ? `${brainLabel(i.brain)} · ${m}` : brainLabel(i.brain);
 }
 /** 按模型数站点：「Codex · 本机默认模型 11 个站点；Claude · Sonnet 1 个站点」 */

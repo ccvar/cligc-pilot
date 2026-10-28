@@ -78,7 +78,7 @@ async fn via_claude(ask: &Ask<'_>) -> Result<String, String> {
     if let Ok(Some(token)) = crate::keychain::claude_oauth_token() {
         cmd.env_remove("ANTHROPIC_AUTH_TOKEN").env_remove("ANTHROPIC_API_KEY").env("CLAUDE_CODE_OAUTH_TOKEN", token);
     }
-    let model = if ask.small { "haiku" } else if ask.model.is_empty() { "sonnet" } else { ask.model };
+    let model = if ask.small { "haiku" } else if ask.model.is_empty() { crate::site_runner::SONNET } else { ask.model };
     // 在临时目录里跑：不读任何项目的 CLAUDE.md / 设置
     cmd.args(["-p", ask.prompt, "--model", model])
         .current_dir(std::env::temp_dir())
