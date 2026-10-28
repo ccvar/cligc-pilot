@@ -7,16 +7,21 @@
     kind = 'warning',
     confirmText = '确认',
     cancelText = '取消',
+    altText = '',
     onConfirm,
     onCancel,
+    onAlt,
   }: {
     title?: string;
     message: string;
     kind?: Kind;
     confirmText?: string;
     cancelText?: string;
+    /** 第三个按钮（放在取消和确认中间），比如「执行但不上线」 */
+    altText?: string;
     onConfirm: () => void;
     onCancel: () => void;
+    onAlt?: () => void;
   } = $props();
 
   let confirmButton = $state<HTMLButtonElement | null>(null);
@@ -56,6 +61,7 @@
     </div>
     <div class="confirm-actions">
       <button class="confirm-cancel" type="button" onclick={onCancel}>{cancelText}</button>
+      {#if altText && onAlt}<button class="confirm-cancel alt" type="button" onclick={onAlt}>{altText}</button>{/if}
       <button bind:this={confirmButton} class="confirm-submit {kind}" type="button" onclick={onConfirm}>{confirmText}</button>
     </div>
   </dialog>

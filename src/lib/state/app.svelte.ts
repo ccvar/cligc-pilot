@@ -23,8 +23,8 @@ class AppState {
   flashKind = $state<'ok' | 'err'>('ok');
   /** 报错翻译成人话后的后端原文（没翻译时为空），吐司里放小字 */
   flashRaw = $state('');
-  confirmState = $state<null | { message: string; title: string; kind: ConfirmKind; confirmText: string; cancelText: string }>(null);
-  confirmResolve: ((value: boolean) => void) | null = null;
+  confirmState = $state<null | { message: string; title: string; kind: ConfirmKind; confirmText: string; cancelText: string; altText?: string }>(null);
+  confirmResolve: ((value: boolean | 'alt') => void) | null = null;
   activeConn = $derived.by(() => {
     if (this.activeConnId === WORKSPACE_CONN_ID) return LOCAL_CONN;
     if (this.activeConnId === SITES_CONN_ID) return SITES_CONN;
@@ -89,7 +89,7 @@ async function refreshApiProfiles() {
 let confirmQueue: Promise<unknown> = Promise.resolve();
 export function confirmDialog(message: string, options: { title?: string; kind?: ConfirmKind; confirmText?: string; cancelText?: string } = {}) {
   const show = () => new Promise<boolean>((resolve) => {
-    app.confirmResolve = resolve;
+    app.confirmResolve = (v) => resolve(v === true);
     app.confirmState = {
       message,
       title: options.title || '请确认操作',
@@ -103,7 +103,18 @@ export function confirmDialog(message: string, options: { title?: string; kind?:
   return p;
 }
 
-export function finishConfirm(value: boolean) {
+/** 三个按钮的确认框：确认 / 另一个选择（altText，放在取消和确认中间）/ 取消。返回 'confirm' | 'alt' | null */
+export function choiceDialog(message: string, options: { title?: string; kind?: ConfirmKind; confirmText?: string; altText: string; cancelText?: string }) {
+  const show = () => new Promise<boolean | 'alt'>((resolve) => {
+    app.confirmResolve = resolve;
+    app.confirmState = { message, title: options.title || '请确认操作', kind: options.kind || 'warning', confirmText: options.confirmText || '确认', cancelText: options.cancelText || '取消', altText: options.altText };
+  });
+  const p = confirmQueue.then(show, show);
+  confirmQueue = p.then(() => undefined, () => undefined);
+  return p.then((v) => (v === 'alt' ? 'alt' : v ? 'confirm' : null));
+}
+
+export function finishConfirm(value: boolean | 'alt') {
   const resolve = app.confirmResolve;
   app.confirmResolve = null;
   app.confirmState = null;

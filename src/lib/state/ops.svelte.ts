@@ -76,8 +76,9 @@ export async function addToQueue(siteId: string, opp: Opportunity) {
   try { await invoke('queue_add', { id: siteId, opp }); await loadQueue(siteId); say('已加入待处理'); }
   catch (e) { say(String(e), 'err'); }
 }
-export async function runTask(siteId: string, task: string) {
-  try { await invoke('run_ops_task', { id: siteId, task }); }
+/** hold：「执行但不上线」——这一轮改好的都留给你确认（只对 cycle 有用） */
+export async function runTask(siteId: string, task: string, hold = false) {
+  try { await invoke('run_ops_task', { id: siteId, task, hold }); }
   catch (e) { say(String(e), 'err'); }
 }
 export async function workItem(siteId: string, item: OpsItem) {

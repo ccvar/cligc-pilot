@@ -376,7 +376,7 @@ pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item
                     "recheck" => recheck(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "batch" => work_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "plan" => plan(&ctx, &site, &job).await,
-                    "cycle" => cycle(&ctx, &site, &job).await,
+                    "cycle" => cycle(&ctx, &site, &job, item_id.as_deref() == Some("hold")).await,
                     "watch" => watch(&ctx, &site, &job).await,
                     "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
                     "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
@@ -470,7 +470,7 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         job.step("ship", "skipped", "");
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
-    let (done, notes, stopped) = work_queue(ctx, site, job, trigger).await;
+    let (done, notes, stopped) = work_queue(ctx, site, job, trigger, false).await;
     match &stopped {
         Some(why) if done == 0 => job.step("work", "failed", why),
         _ => job.step("work", "ok", &format!("处理了 {done} 个")),
@@ -483,7 +483,8 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
 }
 
 /// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明，因预算停下的原因）。
-async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>, Option<String>) {
+/// hold：这一轮改好的都留给你确认（最多到「改好等你确认」那一档），不自动上线。
+async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str, hold: bool) -> (usize, Vec<String>, Option<String>) {
     let site_dir = ctx.site_dir(&site.id);
     // 全托管：只挑方案允许的动作
     let rules = group_rules(ctx, site);
@@ -509,7 +510,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             break;
         }
         job.step("work", "running", &item.opp.title);
-        match process(ctx, site, job, &item, false).await {
+        match process(ctx, site, job, &item, false, hold).await {
             Ok(msg) => {
                 done += 1;
                 notes.push(msg);
@@ -531,7 +532,8 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
 /// 立即执行一整轮（托管方案里「立即执行」）：制定本周计划 → 按方案处理排在前面的几条
 /// （全自动按发布规则自动上线，改好等你确认停在等你确认，只出建议只出计划）。
 /// 本周已经有计划、里面还有没做的就沿用，不再花一轮重新制定；本周用量已满就不开始。
-async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
+/// hold＝「执行但不上线」：这一轮照常制定计划、改、跑检查，但改好的都留在「需要你」等你确认，新页面也不发布。
+async fn cycle(ctx: &Ctx, site: &Site, job: &Job, hold: bool) -> Result<String, String> {
     let t0 = now();
     let site_dir = ctx.site_dir(&site.id);
     if let Some(why) = over_budget(&budget(site, &site_dir, &ctx.state().convos)) {
@@ -556,7 +558,7 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         job.step("ship", "skipped", "");
         return Ok(planned);
     }
-    let (done, notes, stopped) = work_queue(ctx, site, job, "manual").await;
+    let (done, notes, stopped) = work_queue(ctx, site, job, "manual", hold).await;
     if let (Some(why), 0) = (&stopped, done) {
         job.step("work", "failed", why);
         job.step("ship", "skipped", "");
@@ -589,7 +591,7 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
     }
     job.step("work", "running", &item.opp.title);
     // 你手动点「让 AI 改」：没托管或「只出建议」的站点也按「改好等你确认」处理
-    let r = process(ctx, site, job, &item, true).await;
+    let r = process(ctx, site, job, &item, true, false).await;
     if let Err(e) = &r {
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
             i.status = "failed".into();
@@ -730,7 +732,7 @@ pub fn source_of(o: &Opportunity) -> &str {
     }
 }
 
-async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
+async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool, hold: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
@@ -740,6 +742,8 @@ async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bo
     ctx.emit_queue(&site.id);
     let level = effective_level(site, item);
     let level = if manual { level.max(3) } else { level };
+    // 「执行但不上线」：改好、检查通过也只留给你确认
+    let level = if hold { level.min(3) } else { level };
     // sitemap 报错先由程序检查：多半是提交的地址不对或者还没被重新读取，改交 / 重新提交就好，不用 AI 改代码
     let checked;
     let item = if item.opp.kind == "sitemap_error" && level >= 2 {

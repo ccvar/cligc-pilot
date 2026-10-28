@@ -302,8 +302,10 @@
     kind={app.confirmState.kind}
     confirmText={app.confirmState.confirmText}
     cancelText={app.confirmState.cancelText}
+    altText={app.confirmState.altText}
     onConfirm={() => finishConfirm(true)}
     onCancel={() => finishConfirm(false)}
+    onAlt={() => finishConfirm('alt')}
   />
 {/if}
 

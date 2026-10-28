@@ -4,7 +4,7 @@
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { app, confirmDialog } from '$lib/state/app.svelte.js';
+  import { app, confirmDialog, choiceDialog } from '$lib/state/app.svelte.js';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
   import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
   import { sites, loadSiteStatus } from '$lib/state/sites.svelte.js';
@@ -128,13 +128,18 @@
       return;
     }
     const what = g?.autonomy === 'auto'
-      ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后按方案改排在前面的几条（每次最多 3 条）、跑构建和检查，符合发布规则的改动会直接上线到 ${name}；新页面${g.new_content === 'auto' ? '也会自动发布' : '会留给你确认'}，其余的放进「需要你」。继续吗？`
+      ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后按方案改排在前面的 ${g.per_round} 个、跑构建和检查。\n\n「执行并自动上线」：符合发布规则的改动直接上线到 ${name}，新页面${g.new_content === 'auto' ? '也会自动发布' : '留给你确认'}，其余的放进「需要你」。\n「执行但不上线」：改好、检查通过的也都放进「需要你」，你看过再上线。`
       : g?.autonomy === 'review'
-        ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后改排在前面的几条（每次最多 3 条）、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
+        ? `现在为 ${name} 执行一整轮：本周还没有计划就先让 AI 制定（已有就沿用），然后改排在前面的 ${g.per_round} 个、跑构建和检查，改好的都留给你确认，不会自动上线。继续吗？`
         : `现在为 ${name} 制定本周计划（只出建议，不改代码）。继续吗？`;
     const note = g?.stopped.includes(id) ? '\n\n（这个站点的托管暂停着：这一次是你手动执行，执行完照样保持暂停。）' : '';
-    if (!(await confirmDialog(what + note, { title: '立即执行', kind: g?.autonomy === 'auto' ? 'warning' : 'info', confirmText: g?.autonomy === 'auto' ? '执行并自动上线' : '执行' }))) return;
-    await runTask(id, 'cycle');
+    let hold = false;
+    if (g?.autonomy === 'auto') {
+      const c = await choiceDialog(what + note, { title: '立即执行', kind: 'warning', confirmText: '执行并自动上线', altText: '执行但不上线' });
+      if (!c) return;
+      hold = c === 'alt';
+    } else if (!(await confirmDialog(what + note, { title: '立即执行', kind: 'info', confirmText: '执行' }))) return;
+    await runTask(id, 'cycle', hold);
     managed.progress = new Set([...managed.progress, id]);
     void loadManaged();
   }
