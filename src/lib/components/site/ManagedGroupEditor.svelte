@@ -235,6 +235,8 @@
       <div class="grid2">
         <div class="field"><label for="ge-daily">每站每天自动上线上限（条）</label><input id="ge-daily" class="tin" type="number" min="0" max="50" bind:value={g.daily_changes} />
           <small>超出的改动转进「需要你」等你决定；0＝全部人审人发。</small></div>
+        <div class="field"><label for="ge-weekly">每站每周改动上限（条）</label><input id="ge-weekly" class="tin" type="number" min="0" max="500" bind:value={g.changes_per_week} />
+          <small>最近 7 天 AI 改出东西的条数到了就先停，下周再接着做；失败的不算，你手动交给 AI 的不受限。0＝不限。</small></div>
         <div class="field"><label for="ge-minp">新页面正文下限（字）</label><input id="ge-minp" class="tin" type="number" min="0" max="10000" step="100" bind:value={g.min_page_chars} />
           <small>低于它的新页面不自动上线，转进「需要你」由你判断（术语解释这类短页可以直接放行）。0＝不检查。</small></div>
         <div class="field"><label for="ge-tok">每站每周模型用量上限（token）</label><input id="ge-tok" class="tin" type="number" min="0" step="100000" bind:value={g.tokens_per_week} />

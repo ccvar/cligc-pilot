@@ -243,7 +243,8 @@ pub struct Budget {
 pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) -> Budget {
     let since = now().saturating_sub(7 * DAY);
     let q = site_ops::load_queue(site_dir);
-    let changes = q.iter().filter(|i| i.worked_at >= since).count() as u32;
+    // 只算改出东西的（处理中的也算，免得同时跑的几条一起冲过上限）；失败的、你停掉的不占额度
+    let changes = q.iter().filter(|i| i.worked_at >= since && matches!(i.status.as_str(), "working" | "proposed" | "merged" | "deployed" | "done" | "rolled_back")).count() as u32;
     let conn_id = crate::site_cmds::site_conn_id(&site.id);
     let tokens: u64 = convos
         .list()
@@ -252,18 +253,22 @@ pub fn budget(site: &Site, site_dir: &Path, convos: &crate::convo::ConvStore) ->
         .map(|c| if c.billed_tokens > 0 { c.billed_tokens } else { c.total_tokens })
         .sum();
     // 托管站点用所在方案的上限；站点数据目录是 <数据目录>/sites/<id>
-    let tokens_limit = site_dir
-        .parent()
-        .and_then(Path::parent)
-        .and_then(|root| crate::managed::load(root).group_of(&site.id).map(|g| g.tokens_per_week))
-        .unwrap_or(site.ops.budget.tokens_per_week);
-    Budget { changes_used: changes, changes_limit: site.ops.budget.changes_per_week, tokens_used: tokens, tokens_limit }
+    let group = site_dir.parent().and_then(Path::parent).and_then(|root| crate::managed::load(root).group_of(&site.id).cloned());
+    let tokens_limit = group.as_ref().map(|g| g.tokens_per_week).unwrap_or(site.ops.budget.tokens_per_week);
+    let changes_limit = group.as_ref().map(|g| g.changes_per_week).unwrap_or(site.ops.budget.changes_per_week);
+    Budget { changes_used: changes, changes_limit, tokens_used: tokens, tokens_limit }
 }
 
+/// 托管自己跑时的额度：每周改动条数（0＝不限）和模型用量都管。
 fn over_budget(b: &Budget) -> Option<String> {
-    if b.changes_used >= b.changes_limit {
+    if b.changes_limit > 0 && b.changes_used >= b.changes_limit {
         return Some(format!("本周改动已达上限（{} 条）", b.changes_limit));
     }
+    over_tokens(b)
+}
+
+/// 你手动交给 AI 时只看模型用量：改动条数的上限只约束托管自己跑。
+fn over_tokens(b: &Budget) -> Option<String> {
     if b.tokens_limit > 0 && b.tokens_used >= b.tokens_limit {
         return Some(format!("本周模型用量已达上限（{} token）", b.tokens_limit));
     }
@@ -541,7 +546,7 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
 
 const OPS_MAX_REQUESTS: usize = 120;
 
-const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周 token」，或等用量滚出最近 7 天。";
+const BUDGET_HINT: &str = "可以在托管方案里调高「每站每周改动上限」或「每站每周 token」，或等最近 7 天滚过去。";
 
 /// 手动对某一条机会立即按站点档位处理。
 async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
@@ -551,7 +556,7 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
         return Err("这条机会已经在处理或处理过了".into());
     }
     let b = budget(site, &site_dir, &ctx.state().convos);
-    if let Some(why) = over_budget(&b) {
+    if let Some(why) = over_tokens(&b) {
         return Err(why);
     }
     job.step("work", "running", &item.opp.title);
@@ -580,7 +585,7 @@ async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<Strin
             break;
         }
         let b = budget(site, &ctx.site_dir(&site.id), &ctx.state().convos);
-        if let Some(why) = over_budget(&b) {
+        if let Some(why) = over_tokens(&b) {
             job.line(&format!("{why}，剩下的 {} 条没有处理", ids.len() - n));
             notes.push(why);
             break;
@@ -2674,6 +2679,9 @@ mod tests {
         assert!(over_budget(&Budget { changes_used: 10, changes_limit: 10, tokens_used: 0, tokens_limit: 0 }).is_some());
         assert!(over_budget(&Budget { changes_used: 1, changes_limit: 10, tokens_used: 5, tokens_limit: 5 }).is_some());
         assert!(over_budget(&Budget { changes_used: 1, changes_limit: 10, tokens_used: 1, tokens_limit: 0 }).is_none());
+        // 0＝不限；你手动交给 AI 时不看条数
+        assert!(over_budget(&Budget { changes_used: 99, changes_limit: 0, tokens_used: 0, tokens_limit: 0 }).is_none());
+        assert!(over_tokens(&Budget { changes_used: 10, changes_limit: 10, tokens_used: 0, tokens_limit: 0 }).is_none());
     }
 
     /// 真实 git：工作树分支 → 模拟模型改动 → Pilot 兜底提交（本机没有 git 身份也能提交）→ 差异分类 →

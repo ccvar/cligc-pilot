@@ -514,6 +514,8 @@ export interface ManagedGroup {
   /** 代码改动：review 留给你确认 | small 小改动自动上线 | all 都自动上线（依赖和部署配置除外） */
   code_changes: 'review' | 'small' | 'all';
   daily_changes: number;
+  /** 每站每周改动上限（条，托管自己跑时；失败的不算，手动交给 AI 的不受限）；0＝不限 */
+  changes_per_week: number;
   tokens_per_week: number;
   /** 运营目标（一两句话） */
   goal: string;
