@@ -178,8 +178,16 @@ const GROK_MODELS = [
   { value: 'grok-4.6', label: 'Grok 4.6', sub: '上一代 · 500k 上下文' },
   { value: 'grok-4.5', label: 'Grok 4.5', sub: '上一代 · 500k 上下文' },
 ];
+/** API 连接里的模型 ID 换成好认的名字：认识的用各家列表里的名字（claude-opus-5-5 →「Opus 5.5」），不认识的照原样 */
+function apiModelName(id: string): string {
+  if (id === 'claude-sonnet-5') return 'Sonnet 5';
+  return [...CLAUDE_MODELS, ...CODEX_MODELS, ...GROK_MODELS].find((m) => m.value && m.value === id)?.label ?? id;
+}
 function modelOptsFor(b: string) {
-  if (b.startsWith('api:')) return (apiProfile(b)?.models ?? []).map((id) => ({ value: id, label: id, sub: brainAvailability(b) }));
+  // API 的模型名前加「API」，和本机客户端的同名模型分得开（如「API Opus 5.5」和「Opus 5.5」）；小字里是「API · 连接名」
+  if (b.startsWith('api:')) {
+    return (apiProfile(b)?.models ?? []).map((id) => ({ value: id, label: `API ${apiModelName(id)}`, sub: brainAvailability(b) }));
+  }
   return b === 'codex' ? CODEX_MODELS : b === 'grok' ? GROK_MODELS : CLAUDE_MODELS;
 }
 // launcher / 会话里可选：预设档位 + 该厂商的全局自定义模型 ID（定时任务表单仍只用预设 + 自己的 modelCustom）。
