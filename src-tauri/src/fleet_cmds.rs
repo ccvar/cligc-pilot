@@ -439,14 +439,16 @@ pub struct DayUsage {
 
 /// 「处理记录」图表下面那一行：所有站点最近 days 天每天的 AI 运营用量（扫描、计划、改动都算），从早到晚，没用的日子也列出来。
 #[tauri::command]
-pub fn ai_usage_daily(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<DayUsage> {
+pub fn ai_usage_daily(state: tauri::State<'_, AppState>, days: Option<u64>, sites: Option<Vec<String>>) -> Vec<DayUsage> {
     use chrono::Datelike;
     let days = days.unwrap_or(7).clamp(1, 90) as i64;
     let today = chrono::Local::now().date_naive();
     let start = today - chrono::Duration::days(days - 1);
     let since = start.and_hms_opt(0, 0, 0).and_then(|d| d.and_local_timezone(chrono::Local).earliest()).map(|d| d.timestamp()).unwrap_or(0);
     let mut by_day = std::collections::HashMap::new();
-    for s in state.sites.list() {
+    // sites：全部站点页标题旁勾选的那几个；空＝全部
+    let only = sites.unwrap_or_default();
+    for s in state.sites.list().into_iter().filter(|s| only.is_empty() || only.contains(&s.id)) {
         crate::usage::site_daily(&state.sites.data_dir(&s.id), since, &mut by_day);
     }
     (0..days)

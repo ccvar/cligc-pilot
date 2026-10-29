@@ -14,29 +14,29 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
   import BackgroundNotice from './BackgroundNotice.svelte';
   import OppsBoard from './OppsBoard.svelte';
   import HistoryBoard from './HistoryBoard.svelte';
+  import SitePicker from './SitePicker.svelte';
   import { usd } from '$lib/state/growth.svelte.js';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
-  const rows = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
+  const all = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
+  // 标题旁勾了几个站点就只看它们（列表、提醒、待处理、处理记录都按它）
+  const rows = $derived(all.filter((r) => inPicks(r.id)));
   const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag).filter((r) => !fleet.mode || r.deploy_mode === fleet.mode), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const pageRows = $derived(filtered.slice(fleet.page * PAGE_SIZE, (fleet.page + 1) * PAGE_SIZE));
-  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.mode; fleet.page = 0; });
+  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.mode; void fleet.picks; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
-  const proposedN = $derived(fleet.pendingCount);
-  const oppN = $derived(fleet.oppCount);
-  const totals = $derived({
-    sites: rows.length,
-    proposed: fleet.pendingCount,
-  });
+  const proposedN = $derived(fleet.picks.length ? rows.reduce((n, r) => n + r.proposed, 0) : fleet.pendingCount);
+  const oppN = $derived(fleet.picks.length ? rows.filter((r) => !r.plan || r.autonomy === 'stopped').reduce((n, r) => n + r.open, 0) : fleet.oppCount);
+  const pending = $derived(fleet.pending.filter((p) => inPicks(p.site_id)));
   const n = num;
   // 有站点在记收益（连了 AdSense 或手动记过）才显示「本月收益」这一列
   const showRev = $derived(fleet.rows.some((r) => r.money?.tracked));
@@ -117,7 +117,7 @@
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
       <h1>全部站点</h1>
-      <p class="hint">{totals.sites} 个站点</p>
+      <SitePicker rows={all} />
     </div>
     <div class="row">
       {#if issues.length}
@@ -170,7 +170,7 @@
       {/if}
       {#if !fleet.loaded && !rows.length}
         <div class="card tbl-card skel" aria-busy="true">{#each [64, 52, 58, 46] as w, i (i)}<div class="sk-row"><i class="sk-ic"></i><i style="width:{w * 3}px"></i><span class="grow"></span><i style="width:80px"></i></div>{/each}</div>
-      {:else if !rows.length}
+      {:else if !all.length}
         <div class="card"><p class="hint">还没有站点。导入一个已有的站点，或到「站点制作」让 AI 从零做一个；做好并配置上线后会出现在这里。</p></div>
       {:else}
         <div class="card tbl-card">
@@ -228,14 +228,14 @@
       <HistoryBoard />
     {:else}
       <!-- 有 AI 改好等你确认的：上下两块（等你确认 / 运营机会）；没有就只显示运营机会，不留空块 -->
-      {#if fleet.pending.length}
+      {#if pending.length}
         <section class="blk">
-          <h4 class="sec">等你确认<span class="sc">{fleet.pending.length}</span></h4>
+          <h4 class="sec">等你确认<span class="sc">{pending.length}</span></h4>
           <div class="card tbl-card">
             <table class="tbl">
               <thead><tr><th style="width:170px">站点</th><th>事项</th><th style="width:84px">状态</th><th style="width:96px">更新</th></tr></thead>
               <tbody>
-                {#each fleet.pending as p (p.item.id)}
+                {#each pending as p (p.item.id)}
                   <tr class="clickable" onclick={() => openSite(p.site_id, 'queue', '', p.item.id)}>
                     <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
                     <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>

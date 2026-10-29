@@ -60,6 +60,8 @@ class FleetState {
   desc = $state(false);
   page = $state(0);
   tab = $state<'sites' | 'pending' | 'history'>('sites');
+  /** 标题旁下拉里勾选的站点：只看这几个（站点列表、待处理、处理记录都按它筛）；空＝全部 */
+  picks = $state<string[]>([]);
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
@@ -71,6 +73,11 @@ class FleetState {
 export const fleet = new FleetState();
 
 export const PAGE_SIZE = 50;
+
+/** 这个站点在不在标题旁勾选的范围里（没勾任何站点＝都在） */
+export function inPicks(id: string): boolean {
+  return !fleet.picks.length || fleet.picks.includes(id);
+}
 
 function hay(r: SiteRow) {
   return `${r.name} ${r.domain} ${r.repo} ${r.tags.join(' ')}`.toLowerCase();

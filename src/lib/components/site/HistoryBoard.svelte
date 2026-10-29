@@ -5,16 +5,22 @@
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
+  import { fleet, inPicks } from '$lib/state/fleet.svelte.js';
   import type { ShipItem, DayUsage, AiCost } from '$lib/types';
 
   let days = $state(7);
   let kind = $state<'all' | 'live' | 'bad' | 'dismissed'>('all');
-  let items = $state<ShipItem[] | null>(null);
+  let loaded = $state<ShipItem[] | null>(null);
+  // 标题旁勾了几个站点就只看它们的
+  const items = $derived(loaded && loaded.filter((x) => inPicks(x.site_id)));
   let usage = $state<DayUsage[]>([]);
   $effect(() => {
     const d = days;
-    invoke<ShipItem[]>('history_across_sites', { days: d }).then((v) => (items = v)).catch((e) => { items = []; say(String(e), 'err'); });
-    invoke<DayUsage[]>('ai_usage_daily', { days: d }).then((v) => (usage = v)).catch(() => (usage = []));
+    invoke<ShipItem[]>('history_across_sites', { days: d }).then((v) => (loaded = v)).catch((e) => { loaded = []; say(String(e), 'err'); });
+  });
+  $effect(() => {
+    const d = days;
+    invoke<DayUsage[]>('ai_usage_daily', { days: d, sites: [...fleet.picks] }).then((v) => (usage = v)).catch(() => (usage = []));
   });
   // 每天的 AI 用量（扫描、计划、改动都算）：方块下面单独一行，自己的刻度，不和条数混在一张图上
   const useOf = (key: string) => usage.find((u) => u.date === key)?.cost;
@@ -109,7 +115,7 @@
           {/each}
         </div>
       {/if}
-      <div class="ax"><span>{bars[0]?.label.split(' ')[0]}</span>{#if total.tokens}<span class="ut" data-tip="所有站点 AI 运营的用量：扫描、制定计划、写改动都算，所以和上面的条数不是一一对应。金额只算 API 连接按官方价估的部分，订阅额度内的不收钱">AI 用量 {kTok(total.tokens)} token{#if total.usd >= 0.01} · API 约 ${total.usd.toFixed(2)}{/if}{#if total.sub} · 订阅额度内 {kTok(total.sub)}{/if}</span>{/if}<span>今天</span></div>
+      <div class="ax"><span>{bars[0]?.label.split(' ')[0]}</span>{#if total.tokens}<span class="ut" data-tip="{fleet.picks.length ? '勾选的这几个站点' : '所有站点'} AI 运营的用量：扫描、制定计划、写改动都算，所以和上面的条数不是一一对应。金额只算 API 连接按官方价估的部分，订阅额度内的不收钱">AI 用量 {kTok(total.tokens)} token{#if total.usd >= 0.01} · API 约 ${total.usd.toFixed(2)}{/if}{#if total.sub} · 订阅额度内 {kTok(total.sub)}{/if}</span>{/if}<span>今天</span></div>
     </div>
   {/if}
   {#if !items}

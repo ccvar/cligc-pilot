@@ -7,7 +7,7 @@
   // 托管且在运行的站点由 AI 按托管规则自动处理，这里只给个数。
   import Icon from './Icon.svelte';
   import SiteIcon from './SiteIcon.svelte';
-  import { fleet, loadOpps, workOpps, dismissOpps, stopAcross, batchPick, setBatchModel, modelTarget, modelName } from '$lib/state/fleet.svelte.js';
+  import { fleet, inPicks, loadOpps, workOpps, dismissOpps, stopAcross, batchPick, setBatchModel, modelTarget, modelName } from '$lib/state/fleet.svelte.js';
   import ModelMenu from './ModelMenu.svelte';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { confirmDialog } from '$lib/state/app.svelte.js';
@@ -17,7 +17,8 @@
   import type { OppItem } from '$lib/types';
 
   $effect(() => { void loadOpps(); });
-  const o = $derived(fleet.opps);
+  // 标题旁勾了几个站点就只看它们的机会
+  const o = $derived(fleet.opps && (fleet.picks.length ? { ...fleet.opps, items: fleet.opps.items.filter((i) => inPicks(i.site_id)), recent: fleet.opps.recent.filter((i) => inPicks(i.site_id)) } : fleet.opps));
   const sitesN = $derived(new Set((o?.items ?? []).map((i) => i.site_id)).size);
   const TIERS = [
     { k: 'urgent', l: '先处理', d: '正在伤害站点：页面太慢、点击掉得厉害' },
