@@ -8,7 +8,6 @@
   import GaMark from '$lib/components/icons/GaMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
-  import Dropdown from '$lib/Dropdown.svelte';
   import type { SiteRow, ChannelBrief } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
@@ -22,17 +21,16 @@
   import HistoryBoard from './HistoryBoard.svelte';
   import SitePicker from './SitePicker.svelte';
   import DeployMark from './DeployMark.svelte';
-  import { cfProductSvg } from '$lib/components/icons/cfProduct';
   import { usd } from '$lib/state/growth.svelte.js';
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const all = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
   // 标题旁勾了几个站点就只看它们（列表、提醒、待处理、处理记录都按它）
   const rows = $derived(all.filter((r) => inPicks(r.id)));
-  const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag).filter((r) => !fleet.mode || r.deploy_mode === fleet.mode), fleet.sort, fleet.desc));
+  const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
   const pageRows = $derived(filtered.slice(fleet.page * PAGE_SIZE, (fleet.page + 1) * PAGE_SIZE));
-  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.mode; void fleet.picks; fleet.page = 0; });
+  $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.picks; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
   const proposedN = $derived(fleet.picks.length ? rows.reduce((n, r) => n + r.proposed, 0) : fleet.pendingCount);
@@ -52,20 +50,6 @@
   }
   const when = ago;
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
-  // 站点后面的下拉：按部署方式筛选（只列出现在有站点的方式，带个数）
-  const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
-  const line = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
-  const MODE_SVG: Record<string, string> = {
-    '': line('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
-    direct: cfProductSvg('pages'), workers: cfProductSvg('workers'),
-    pages_git: line('<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>'),
-    vps: line('<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>'),
-    none: line('<circle cx="12" cy="12" r="9"/><path d="M8 12h8"/>'),
-  };
-  const modeOpts = $derived([
-    { value: '', label: `全部 · ${rows.length}`, short: '部署方式', svg: MODE_SVG[''] },
-    ...MODE_ORDER.filter((m) => rows.some((r) => r.deploy_mode === m)).map((m) => ({ value: m, label: `${MODE[m]} · ${rows.filter((r) => r.deploy_mode === m).length}`, short: MODE[m], svg: MODE_SVG[m] })),
-  ]);
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
   // 右上角的提醒：有问题才出现，点开按问题分组，点一组就只看这组站点
@@ -154,9 +138,6 @@
 
   <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
-    {#if fleet.tab === 'sites' && modeOpts.length > 2}
-      <div class="mode-dd"><Dropdown bare menuCompact menuMin={200} triggerIcon={false} value={fleet.mode} options={modeOpts} ariaLabel="按部署方式筛选" onchange={(v: string) => (fleet.mode = v)} /></div>
-    {/if}
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if proposedN}<span class="cnt" data-tip="{proposedN} 条改动等你确认">{proposedN}</span>{/if}{#if oppN}<span class="cnt soft" data-tip="{oppN} 个运营机会没处理（自己运营的、托管停着的站点）">{oppN}</span>{/if}</button>
     <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />处理记录</button>
   </div>
@@ -285,7 +266,6 @@
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
-  .mode-dd { display: flex; align-items: center; margin: 0 6px 2px 4px; }
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
