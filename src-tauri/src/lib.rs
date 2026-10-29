@@ -13,6 +13,7 @@ mod speed;
 mod serp;
 mod page_audit;
 mod sitemap_fix;
+mod safety;
 mod agent;
 mod bing;
 mod api_agent;
@@ -5181,6 +5182,8 @@ pub fn run() {
             fleet_cmds::check_site_links,
             fleet_cmds::site_monitor,
             fleet_cmds::check_site_monitor,
+            fleet_cmds::site_safety,
+            fleet_cmds::check_site_safety,
             background::background_status,
             background::background_set,
             background::background_dismiss_notice,

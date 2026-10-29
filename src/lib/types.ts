@@ -457,6 +457,9 @@ export interface ChannelBrief { kind: string; target_name: string; target_url: s
 /** 在线监测（首页每小时、证书每天、域名每周） */
 export interface UptimePing { ts: number; ok: boolean; status: number; ms: number; err: string }
 export interface MonitorView { last: UptimePing | null; down: boolean; down_since: number; uptime: number; avg_ms: number; checks: number; cert_expires: number; cert_err: string; cert_checked: number; domain_expires: number; domain_err: string; domain_checked: number }
+/** 安全标记检查（每天一次，见 safety.rs）：state ok 没标记 / warn 有提醒 / bad 被标记或拦截 / unknown 这次没查到 */
+export interface SafetyCheck { key: 'google' | 'cf_page' | 'cf_dns' | 'quad9'; state: 'ok' | 'warn' | 'bad' | 'unknown'; note: string }
+export interface SafetyView { checked: number; checks: SafetyCheck[]; flagged_since: number; alerted: boolean }
 /** 推广链接检查（每周一次，见 link_check） */
 export interface LinkResult { href: string; url: string; pages: number; sample_page: string; status: number; final_url: string; hops: number; verdict: 'ok' | 'unverified' | 'broken'; note: string }
 export interface LinkReport { checked_at: number; source: string; links: LinkResult[] }
@@ -466,6 +469,8 @@ export interface SiteRow {
   links_broken?: number;
   /** 在线监测：首页连续两次打不开（从什么时候）、证书 / 域名还剩几天、证书出错原因 */
   site_down?: boolean; down_since?: number; down_err?: string; cert_days?: number | null; cert_err?: string; domain_days?: number | null;
+  /** 被谁标记为危险网站（Google 安全浏览、Cloudflare、Quad9；没被标记为空） */
+  unsafe_by?: string;
   id: string; name: string; domain: string; source: string; repo: string; pinned: boolean; tags: string[];
   level: number;
   /** 所在托管方案名（没托管为空） */

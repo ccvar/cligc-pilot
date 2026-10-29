@@ -38,6 +38,8 @@ pub struct SiteRow {
     pub cert_days: Option<i64>,
     pub cert_err: String,
     pub domain_days: Option<i64>,
+    /// 被谁标记为危险网站（Google 安全浏览、Cloudflare、Quad9；没被标记为空）
+    pub unsafe_by: String,
     /// 上次推广链接检查里失效的个数
     pub links_broken: usize,
     /// 分发渠道（站点列表上显示图标）
@@ -100,6 +102,7 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 cert_days: mon.cert_days(crate::now_secs()),
                 cert_err: mon.cert_err.clone(),
                 domain_days: mon.domain_days(crate::now_secs()),
+                unsafe_by: crate::safety::load(&dir).summary(),
                 id: s.id,
                 name: s.name,
                 domain: s.domain,
@@ -527,6 +530,28 @@ pub async fn check_site_monitor(app: tauri::AppHandle, state: tauri::State<'_, A
     use tauri::Emitter;
     let _ = app.emit("monitor-checked", ());
     Ok(monitor_view(m))
+}
+
+#[tauri::command]
+pub fn site_safety(state: tauri::State<'_, AppState>, id: String) -> Result<crate::safety::Safety, String> {
+    state.sites.get(&id)?;
+    Ok(crate::safety::load(&state.sites.data_dir(&id)))
+}
+
+/// 现在就查一遍有没有被 Google / Cloudflare / Quad9 标记为危险。
+#[tauri::command]
+pub async fn check_site_safety(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<crate::safety::Safety, String> {
+    let site = state.sites.get(&id)?;
+    if site.domain.trim().is_empty() {
+        return Err("这个站点还没有设置域名".into());
+    }
+    let (s, alerts) = crate::safety::check_site(&site, &state.sites.data_dir(&id), true).await;
+    for (title, body) in alerts {
+        crate::push::notify(&app, &title, &body);
+    }
+    use tauri::Emitter;
+    let _ = app.emit("monitor-checked", ());
+    Ok(s)
 }
 
 #[tauri::command]

@@ -1,6 +1,7 @@
 //! 推广链接检查：站点靠推广 / 邀请链接赚钱，链接坏了页面照样能打开，没人会发现。
 //! 每周把每个站点的推广链接（站内的 `/go/…` 跳转，和带 ref / invite / affiliate 等标记的站外链接）真的访问一遍，
 //! 一跳一跳跟到底，看最后落在哪：打不开、404、跳回本站首页的算失效；被目标网站拦了自动访问（403 / 429 / 503）的标「没法确认」。
+//! 落地的网站被 Google 标记为危险的也算失效（访客会先看到红色警告页，还可能连累本站，见 safety）。
 //! 只发 HTTP 请求，不用 AI；结果存在站点数据目录的 cache/links.json。
 
 use serde::{Deserialize, Serialize};
@@ -203,8 +204,21 @@ pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, out_dir: Opt
         }
     };
     let mut links = Vec::new();
+    // 落地的网站顺带查一下有没有被 Google 标记为危险（同一个网站只查一次）
+    let mut flagged: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     for (url, (href, pages, sample)) in found {
-        let (status, final_url, hops, verdict, note) = check_one(&c, &url, &domain).await;
+        let (status, final_url, hops, mut verdict, mut note) = check_one(&c, &url, &domain).await;
+        let host = reqwest::Url::parse(&final_url).ok().and_then(|u| u.host_str().map(|h| h.trim_start_matches("www.").to_ascii_lowercase())).unwrap_or_default();
+        if !host.is_empty() && host != domain.trim_start_matches("www.") && verdict != "broken" {
+            if !flagged.contains_key(&host) {
+                let f = crate::safety::google_flags_host(&host).await;
+                flagged.insert(host.clone(), f);
+            }
+            if let Some(Some(why)) = flagged.get(&host) {
+                verdict = "broken";
+                note = why.clone();
+            }
+        }
         links.push(LinkResult { href, url, pages, sample_page: sample, status, final_url, hops, verdict: verdict.into(), note });
     }
     // 坏的排前面，同一类里用得多的排前面

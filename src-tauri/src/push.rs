@@ -404,6 +404,7 @@ fn status_text(st: &crate::AppState) -> String {
     let mut proposed = 0;
     let mut failed = 0;
     let mut down = Vec::new();
+    let mut flagged = Vec::new();
     for s in &sites {
         let dir = st.sites.data_dir(&s.id);
         let q = crate::site_ops::load_queue(&dir);
@@ -411,6 +412,9 @@ fn status_text(st: &crate::AppState) -> String {
         failed += q.iter().filter(|i| i.status == "failed").count();
         if !s.domain.is_empty() && crate::monitor::load(&dir).down() {
             down.push(s.domain.clone());
+        }
+        if !s.domain.is_empty() && crate::safety::load(&dir).is_flagged() {
+            flagged.push(s.domain.clone());
         }
     }
     let since = now().saturating_sub(86_400);
@@ -426,6 +430,9 @@ fn status_text(st: &crate::AppState) -> String {
         t.push_str("站点都能打开");
     } else {
         t.push_str(&format!("打不开：{}", down.join("、")));
+    }
+    if !flagged.is_empty() {
+        t.push_str(&format!("\n被标记为危险网站：{}", flagged.join("、")));
     }
     t
 }

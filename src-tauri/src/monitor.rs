@@ -1,6 +1,6 @@
 //! 网站在线监测：每小时打开一次每个站点的首页（打不开连续两次就通知），每天看一眼 HTTPS 证书还有多久过期，
 //! 每周用 RDAP 查一次域名到期日。证书 14 天内、域名 60 天内到期会提醒。只发网络请求，不用 AI。
-//! 结果存在站点数据目录的 cache/uptime.json。
+//! 结果存在站点数据目录的 cache/uptime.json。同一轮里顺带查有没有被标记为危险网站（safety，每天一次）。
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -263,7 +263,11 @@ pub fn schedule(app: &tauri::AppHandle) {
         let st = app.state::<crate::AppState>();
         let mut alerts = Vec::new();
         for site in st.sites.list().into_iter().filter(|s| !s.domain.trim().is_empty()) {
-            let (_, a) = check_site(&site, &st.sites.data_dir(&site.id), false).await;
+            let dir = st.sites.data_dir(&site.id);
+            let (_, a) = check_site(&site, &dir, false).await;
+            alerts.extend(a);
+            // 有没有被标记为危险网站：每天一次（见 safety）
+            let (_, a) = crate::safety::check_site(&site, &dir, false).await;
             alerts.extend(a);
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);

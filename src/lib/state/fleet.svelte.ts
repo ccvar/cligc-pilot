@@ -6,7 +6,7 @@ import { sites, refreshSites } from './sites.svelte.js';
 import { brainLabel, brainTitle, modelIcon } from './models.js';
 import { launcher } from './launcher.svelte.js';
 
-export type SiteFilter = 'all' | 'attention' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
+export type SiteFilter = 'all' | 'attention' | 'unsafe' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
@@ -31,9 +31,9 @@ export function clicksChange(r: SiteRow): number {
 export function expiring(r: SiteRow): boolean {
   return !!r.cert_err || (r.cert_days != null && r.cert_days <= 14) || (r.domain_days != null && r.domain_days <= 60);
 }
-/** 需要你关注：有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
+/** 需要你关注：被标记为危险网站、有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
-  return !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || r.summary.errors.length > 0;
+  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || r.summary.errors.length > 0;
 }
 
 // 「待处理」交给 AI 时选的模型记在本机
@@ -82,6 +82,7 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
     && (!tag || r.tags.includes(tag))
     && (f === 'all'
       || (f === 'attention' && needsAttention(r))
+      || (f === 'unsafe' && !!r.unsafe_by)
       || (f === 'offline' && !!r.site_down)
       || (f === 'expiry' && expiring(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
@@ -93,6 +94,7 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
 }
 /** 右上角提醒里的问题分组（按要紧程度排）；soft＝不算问题，只是提示。 */
 export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
+  { k: 'unsafe', l: '被标记为危险网站' },
   { k: 'offline', l: '网站打不开' },
   { k: 'expiry', l: '证书或域名快到期' },
   { k: 'failed', l: '上线或运营任务失败' },
@@ -107,6 +109,7 @@ const IGNORE_KEY = 'pilot.fleet.ignoredIssues';
 function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${r.failed}`;
   if (k === 'links') return String(r.links_broken ?? 0);
+  if (k === 'unsafe') return r.unsafe_by ?? '';
   if (k === 'offline') return String(r.down_since ?? 0);
   // 按「哪几样要处理」记：天数每天在变，不能用天数，不然忽略了第二天又冒出来
   if (k === 'expiry') return `${r.cert_err ? 'e' : ''}${r.cert_days != null && r.cert_days <= 14 ? 'c' : ''}${r.domain_days != null && r.domain_days <= 60 ? 'd' : ''}`;

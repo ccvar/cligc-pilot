@@ -1208,6 +1208,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if level >= 5 && verdict == "auto" && !managed.allows(&item.opp.change) {
         verdict = format!("托管方案「{}」不允许「{}」这类改动，留给你确认", managed.name, crate::managed::action_label(&item.opp.change));
     }
+    // 站点被标记为危险网站（Google 安全浏览、Cloudflare、Quad9）：先查清原因，期间自动上线暂停
+    let unsafe_by = crate::safety::load(&site_dir).summary();
+    if verdict == "auto" && !unsafe_by.is_empty() {
+        verdict = format!("站点现在被 {unsafe_by} 标记为危险网站，自动上线先暂停，留给你确认（标记解除后恢复）");
+    }
     // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
     // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）。流程上单独一步，跳过也写明为什么。
     // 「执行但不上线」也照常质检，只记分数给你审核时参考，不交回 AI 重写。
