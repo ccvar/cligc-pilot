@@ -395,7 +395,7 @@ pub fn finished_at(i: &QueueItem) -> u64 {
     if i.deployed_at > 0 { i.deployed_at } else { i.updated_at }
 }
 
-/// 全部站点 →「处理记录」：所有站点最近 days 天交给 AI 处理过、已经有结果的条目（已上线、已处理、已回滚、没成功，
+/// 全部站点 →「近期动态」：所有站点最近 days 天交给 AI 处理过、已经有结果的条目（已上线、已处理、已回滚、没成功，
 /// 以及 AI 改过之后被你驳回的），新的在前；上线了的带上这个页面现在的搜索数据，和上线前比效果。
 #[tauri::command]
 pub fn history_across_sites(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<ShipItem> {
@@ -437,7 +437,7 @@ pub struct DayUsage {
     pub cost: crate::usage::Cost,
 }
 
-/// 「处理记录」图表下面那一行：所有站点最近 days 天每天的 AI 运营用量（扫描、计划、改动都算），从早到晚，没用的日子也列出来。
+/// 「近期动态」图表下面那一行：所有站点最近 days 天每天的 AI 运营用量（扫描、计划、改动都算），从早到晚，没用的日子也列出来。
 #[tauri::command]
 pub fn ai_usage_daily(state: tauri::State<'_, AppState>, days: Option<u64>, sites: Option<Vec<String>>) -> Vec<DayUsage> {
     use chrono::Datelike;

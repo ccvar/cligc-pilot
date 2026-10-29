@@ -2,7 +2,7 @@
   // 托管页记录卡片里的「最近上线」tab：所有托管站点最近 30 天上线的改动，新的在前（卡片和 tab 在 ManagedConsole）。
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
-  // 全部站点 →「处理记录」也用它（每天一组，limit 不限）：那里还有没成功的、你驳回的，时间按处理完的时候算。
+  // 全部站点 →「近期动态」也用它（每天一组，limit 不限）：那里还有没成功的、你驳回的，时间按处理完的时候算。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import DiffModal from './DiffModal.svelte';

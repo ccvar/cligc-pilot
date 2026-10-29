@@ -25,7 +25,7 @@
 
   // 制作中的站点在「站点制作」里，不进全部站点的列表和统计
   const all = $derived(fleet.rows.filter((r) => !isMaking(r.id)));
-  // 标题旁勾了几个站点就只看它们（列表、提醒、待处理、处理记录都按它）
+  // 标题旁勾了几个站点就只看它们（列表、提醒、待处理、近期动态都按它）
   const rows = $derived(all.filter((r) => inPicks(r.id)));
   const filtered = $derived(sortRows(applyFilter(rows, fleet.query, fleet.filter, fleet.tag), fleet.sort, fleet.desc));
   const pages = $derived(Math.max(1, Math.ceil(filtered.length / PAGE_SIZE)));
@@ -139,7 +139,7 @@
   <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if proposedN}<span class="cnt" data-tip="{proposedN} 条改动等你确认">{proposedN}</span>{/if}{#if oppN}<span class="cnt soft" data-tip="{oppN} 个运营机会没处理（自己运营的、托管停着的站点）">{oppN}</span>{/if}</button>
-    <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />处理记录</button>
+    <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />近期动态</button>
   </div>
 
   <div class="page-body">

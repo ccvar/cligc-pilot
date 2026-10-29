@@ -1,6 +1,6 @@
 <script lang="ts">
   // 全部站点标题旁的「N 个站点」：点开是和站点切换器一样的可搜索列表，但能多选。
-  // 勾了几个就只看这几个（站点列表、待处理、处理记录都按它筛）；一个都没勾＝全部。
+  // 勾了几个就只看这几个（站点列表、待处理、近期动态都按它筛）；一个都没勾＝全部。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import DeployMark from './DeployMark.svelte';

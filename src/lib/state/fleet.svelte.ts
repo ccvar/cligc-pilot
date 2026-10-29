@@ -58,7 +58,7 @@ class FleetState {
   desc = $state(false);
   page = $state(0);
   tab = $state<'sites' | 'pending' | 'history'>('sites');
-  /** 标题旁下拉里勾选的站点：只看这几个（站点列表、待处理、处理记录都按它筛）；空＝全部 */
+  /** 标题旁下拉里勾选的站点：只看这几个（站点列表、待处理、近期动态都按它筛）；空＝全部 */
   picks = $state<string[]>([]);
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));

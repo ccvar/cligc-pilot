@@ -129,7 +129,7 @@
 {:else}
   <div class="top">
   <p class="sum faint">
-    {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}{#if !active && doneToday} · <button class="okt link-btn" onclick={() => (fleet.tab = 'history')} data-tip="去「处理记录」看">今天 AI 处理完 {doneToday} 个</button>{/if}
+    {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}{#if !active && doneToday} · <button class="okt link-btn" onclick={() => (fleet.tab = 'history')} data-tip="去「近期动态」看">今天 AI 处理完 {doneToday} 个</button>{/if}
   </p>
   </div>
   {#if progress.length}

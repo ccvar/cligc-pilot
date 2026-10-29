@@ -450,7 +450,7 @@ export interface SiteSummary {
 export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
 /** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
 export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string; /** 这一条 AI 处理时的用量 */ cost?: AiCost | null }
-/** 「处理记录」图表下那一行：某一天所有站点的 AI 运营用量 */
+/** 「近期动态」图表下那一行：某一天所有站点的 AI 运营用量 */
 export interface DayUsage { date: string; cost: AiCost }
 /** 全部站点列表上的一个分发渠道 */
 export interface ChannelBrief { kind: string; target_name: string; target_url: string; mode: string; daily_limit: number; enabled: boolean; published: number; failed: number }
