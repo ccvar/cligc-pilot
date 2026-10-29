@@ -93,7 +93,7 @@
             <span class="acts">
               {#if site && i.head_sha}<button class="ic-btn ic-sm" onclick={() => showDiff(site.id, i)} aria-label="看改动" data-tip="看改动"><Icon name="diff" size={13} /></button>{/if}
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
-              <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', i.status === 'failed' ? 'todo' : i.status === 'dismissed' || i.status === 'rolled_back' ? 'closed' : 'live')} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
+              <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', '', i.id)} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
             </span>
             <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
             <span class="how faint" data-tip={!i.deployed_at ? null : i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{!i.deployed_at ? '' : i.auto ? '自动上线' : '人工确认'}</span>

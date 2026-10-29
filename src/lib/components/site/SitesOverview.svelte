@@ -236,7 +236,7 @@
               <thead><tr><th style="width:170px">站点</th><th>事项</th><th style="width:84px">状态</th><th style="width:96px">更新</th></tr></thead>
               <tbody>
                 {#each fleet.pending as p (p.item.id)}
-                  <tr class="clickable" onclick={() => openSite(p.site_id, 'queue')}>
+                  <tr class="clickable" onclick={() => openSite(p.site_id, 'queue', '', p.item.id)}>
                     <td class="sn-cell"><b class="sn"><SiteIcon id={p.site_id} size={13} />{p.site_name}</b></td>
                     <td class="trunc">{p.item.opp.title}<small class="kind">{KIND_LABEL[p.item.opp.kind] ?? ''}</small></td>
                     <td><span class="pill {p.item.status === 'failed' ? 'err' : 'warn'}">{STATUS_LABEL[p.item.status]}</span></td>

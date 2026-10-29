@@ -83,7 +83,7 @@
 
 {#snippet row(i: OppItem)}
   <li class="row">
-    <button class="main" onclick={() => openSite(i.site_id, 'queue')} data-tip={`打开 ${i.domain || i.site_name} 的待处理\n\n${i.item.opp.evidence}`}>
+    <button class="main" onclick={() => openSite(i.site_id, 'queue', '', i.item.id)} data-tip={`打开 ${i.domain || i.site_name} 的待处理\n\n${i.item.opp.evidence}`}>
       <span class="site"><SiteIcon id={i.site_id} size={13} /><span class="sn">{i.domain || i.site_name}</span></span>
       <span class="tt">{i.item.opp.title}<small class="kind">{KIND_LABEL[i.item.opp.kind] ?? ''}</small></span>
     </button>
@@ -109,7 +109,7 @@
 {#snippet prow(i: OppItem)}
   {@const st = stage(i)}
   <li class="row">
-    <button class="main" onclick={() => openSite(i.site_id, 'queue')} data-tip={`打开 ${i.domain || i.site_name} 的待处理${i.item.note ? `\n\n${i.item.note}` : ''}`}>
+    <button class="main" onclick={() => openSite(i.site_id, 'queue', '', i.item.id)} data-tip={`打开 ${i.domain || i.site_name} 的待处理${i.item.note ? `\n\n${i.item.note}` : ''}`}>
       <span class="site"><SiteIcon id={i.site_id} size={13} /><span class="sn">{i.domain || i.site_name}</span></span>
       <span class="tt">{i.item.opp.title}<small class="kind">{KIND_LABEL[i.item.opp.kind] ?? ''}</small></span>
     </button>
@@ -117,7 +117,7 @@
     <span class="acts">
       {#if st === 'working'}<button class="ic-btn ic-sm" onclick={() => stopJob(i)} aria-label="停止" data-tip="停止这个站点正在跑的作业"><Icon name="stop" size={13} /></button>
       {:else if st === 'failed'}<button class="ic-btn ic-sm" onclick={() => workOpps([i], false)} disabled={busy(i)} aria-label="再交给 AI" data-tip="再交给 AI 改一次"><Icon name="refresh" size={13} /></button>
-      {:else if st === 'proposed'}<button class="ic-btn ic-sm" onclick={() => openSite(i.site_id, 'queue')} aria-label="去确认" data-tip="去看改动、确认或驳回"><Icon name="arrow" size={13} /></button>{/if}
+      {:else if st === 'proposed'}<button class="ic-btn ic-sm" onclick={() => openSite(i.site_id, 'queue', '', i.item.id)} aria-label="去确认" data-tip="去看改动、确认或驳回"><Icon name="arrow" size={13} /></button>{/if}
     </span>
   </li>
 {/snippet}

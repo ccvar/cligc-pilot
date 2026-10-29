@@ -167,7 +167,7 @@
                   <div class="foot">
                     {#if t.page}<span class="mono url">{t.page}</span>{/if}
                     <span class="grow"></span>
-                    {#if p.task_item?.[i]}<button class="link-btn" onclick={() => openSite(cur.id, 'queue')}>在任务队列里看</button>{/if}
+                    {#if p.task_item?.[i]}<button class="link-btn" onclick={() => openSite(cur.id, 'queue', '', p.task_item?.[i])}>在任务队列里看</button>{/if}
                     {#if ['', 'open', 'dismissed'].includes(p.task_status?.[i] ?? '')}<button class="btn tiny quiet" onclick={() => removeTask(i)} data-tip="从计划里删掉；以后 AI 还可能再提类似的">移出计划</button>{/if}
                     {#if p.task_item?.[i] && ['open', 'proposed', 'failed'].includes(p.task_status?.[i] ?? '')}<button class="btn tiny quiet" onclick={() => rejectTask(i)} data-tip="以后不再提这个机会"><Icon name="x" size={11} />驳回</button>{/if}
                   </div>

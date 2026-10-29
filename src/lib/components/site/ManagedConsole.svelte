@@ -494,7 +494,7 @@
                   </div>
                   <span class="ev-r">
                     <span class="faint t" data-tip={full(a.ts)}>{when(a.ts)}</span>
-                    {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue')}>看详情</button>{/if}
+                    {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue', '', a.item_id)}>看详情</button>{/if}
                   </span>
                 </div>
               {/each}

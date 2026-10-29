@@ -126,7 +126,7 @@
                           <span class="grow"></span>
                           {#if i.status !== 'deployed'}<button class="btn tiny quiet" onclick={() => dismissItem(site, i)}><Icon name="x" size={11} />驳回</button>{/if}
                         {/if}
-                        <button class="link-btn" onclick={() => openSite(x.site_id, 'queue')}>在任务队列里看</button>
+                        <button class="link-btn" onclick={() => openSite(x.site_id, 'queue', '', i.id)}>在任务队列里看</button>
                       </div>
                     </div>
                   {/if}

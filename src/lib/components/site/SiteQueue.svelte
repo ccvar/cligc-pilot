@@ -1,7 +1,7 @@
 <script lang="ts">
   import { escClose } from '$lib/escClose';
   import './site.css';
-  import { untrack } from 'svelte';
+  import { untrack, tick } from 'svelte';
   import Icon from './Icon.svelte';
   import type { Site, OpsItem } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
@@ -46,6 +46,29 @@
     untrack(() => {
       if (explicit) { explicit = false; return; }
       filter = !counts.todo && counts.open ? 'open' : 'todo';
+    });
+  });
+  // 从别处点「看详情」跳过来定位某一条：切到它所在的栏、展开、滚过去闪一下。
+  // 队列是旧缓存、里面还没有这一条（刚上线的）就重读一次，还没有就算了
+  let listEl = $state<HTMLElement>();
+  let flash = $state('');
+  let reread = '';
+  $effect(() => {
+    const want = sites.queueItem;
+    const q = ops.queue[site.id];
+    if (!want || !q) return;
+    const it = q.find((x) => x.id === want);
+    untrack(() => {
+      if (!it) {
+        if (reread !== want) { reread = want; void loadQueue(site.id); } else sites.queueItem = '';
+        return;
+      }
+      sites.queueItem = '';
+      filter = (Object.keys(groups) as (keyof typeof groups)[]).find((k) => inGroup(it, k)) ?? filter;
+      unfolded = new Set([...unfolded, it.id]);
+      flash = it.id;
+      void tick().then(() => listEl?.querySelector(`[data-qid="${CSS.escape(it.id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+      setTimeout(() => { if (flash === it.id) flash = ''; }, 2400);
     });
   });
   let openChecks = $state<Set<string>>(new Set());
@@ -151,9 +174,9 @@
           {/if}
         </div>
       {/if}
-      <div class="list">
+      <div class="list" bind:this={listEl}>
         {#each shown as i (i.id)}
-          <div class="li item" class:picked={picked.has(i.id)}>
+          <div class="li item" class:picked={picked.has(i.id)} class:flash={flash === i.id} data-qid={i.id}>
             <div class="row it-head">
               {#if filter === 'open' && shown.length > 1}<input class="pick" type="checkbox" checked={picked.has(i.id)} onchange={() => togglePick(i.id)} aria-label="选中这一条" />{/if}
               {#if foldable}<button class="fold" class:open={!folded(i)} onclick={() => flipFold(i.id)} aria-label={folded(i) ? '展开' : '收起'} aria-expanded={!folded(i)}><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 3L7.5 6L4.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
@@ -264,6 +287,8 @@
   .lh-hint { font-size: 12px; line-height: 1.5; min-width: 0; }
   .pick { margin: 0 2px 0 0; flex: none; cursor: pointer; }
   .item.picked { background: var(--su-hover); }
+  .item.flash { animation: qflash 2.4s ease-out; }
+  @keyframes qflash { 0%, 40% { background: color-mix(in srgb, var(--accent, var(--ok)) 12%, transparent); } 100% { background: transparent; } }
   .qnote { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--dim); padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
   .qnote :global(svg) { flex: none; margin-top: 4px; }
   .qnote span { flex: 1; }
