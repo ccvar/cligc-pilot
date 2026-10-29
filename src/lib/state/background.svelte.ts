@@ -5,7 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { say, confirmDialog } from './app.svelte.js';
 import { openConnectionSetup } from './settings.svelte.js';
-import { openUpdateCenter } from './updater.svelte.js';
+import { checkPilotUpdate } from './updater.svelte.js';
 import { isMainWindow } from './env';
 import type { BackgroundStatus, BackupStatus, BackupManifest } from '$lib/types';
 
@@ -86,7 +86,8 @@ export function initAppMenu() {
   $effect(() => {
     if (!isMainWindow) return;
     const un = listen<string>('app-menu', (e) => {
-      if (e.payload === 'update') openUpdateCenter();
+      // 检查更新：打开设置，结果显示在设置底部的版本行
+      if (e.payload === 'update') { openConnectionSetup(); void checkPilotUpdate(false); }
       else if (e.payload === 'settings') openConnectionSetup();
     });
     return () => void un.then((f) => f());

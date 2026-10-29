@@ -3,7 +3,6 @@ import { check as checkUpdate } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { isMainWindow } from './env';
 import { say, confirmDialog } from './app.svelte.js';
-import { settings } from './settings.svelte.js';
 
 // 应用版本 + 在线检查更新（Tauri updater：拉 release 仓 latest.json，ed25519 验签后下载安装再重启）。
 type PilotUpdateStatus = 'idle' | 'checking' | 'available' | 'current' | 'unreachable' | 'updating' | 'waiting' | 'done' | 'failed';
@@ -18,9 +17,8 @@ class UpdaterState {
   pilotUpdateError = $state('');
   pilotReleaseNotes = $state('');
   pilotPublishedAt = $state('');
-  updateCenterOpen = $state(false);
   updateCheckedAt = $state(0);
-  topUpdateVisible = $derived(isMainWindow && (!!this.updAvail || this.updateCenterOpen || this.updBusy));
+  topUpdateVisible = $derived(isMainWindow && (!!this.updAvail || this.updBusy));
 }
 
 export const updater = new UpdaterState();
@@ -116,35 +114,18 @@ async function installPilotUpdate() {
   finally { updater.updBusy = false; }
 }
 export async function runUpdate() { await installPilotUpdate(); }
-export function pilotUpdateLabel(status: PilotUpdateStatus): string {
-  switch (status) {
-    case 'checking': return '检查中';
-    case 'available': return '可更新';
-    case 'current': return '已是最新';
-    case 'unreachable': return '无法检查';
-    case 'updating': return '更新中';
-    case 'waiting': return '等待重启';
-    case 'done': return '已完成';
-    case 'failed': return '失败';
-    default: return '尚未检查';
+/** 设置底部版本行后面的小字：检查、更新的结果直接写在这里，不另开面板 */
+export function pilotUpdateHint(): string {
+  if (updater.updBusy) return updater.updMsg || '正在更新…';
+  switch (updater.pilotUpdateStatus) {
+    case 'checking': return '正在检查…';
+    case 'available': return `有新版本 ${updater.updAvail}`;
+    case 'current': return '已是最新版';
+    case 'unreachable': return '这次没连上更新服务器';
+    case 'waiting': return '已装好，重启 Pilot 后生效';
+    case 'failed': return '更新没成功';
+    default: return '';
   }
-}
-export function pilotUpdateMessage(): string {
-  if (updater.updBusy) return updater.updMsg || '正在更新';
-  if (updater.pilotUpdateStatus === 'unreachable' || updater.pilotUpdateStatus === 'failed') return updater.pilotUpdateError || updater.updMsg || '无法完成更新检查';
-  if (updater.updAvail) return `${updater.appVersion || '当前版本'} → ${updater.updAvail}`;
-  if (updater.pilotUpdateStatus === 'current') return updater.appVersion ? `当前 v${updater.appVersion}，已是最新版` : '当前已是最新版';
-  return updater.pilotUpdateStatus === 'checking' ? '正在检查客户端更新…' : '尚未检查客户端更新';
-}
-export function openUpdateCenter() {
-  if (!isMainWindow) { say('请在 Pilot 主窗口中打开更新中心', 'err'); return; }
-  settings.setupOpen = false;
-  updater.updateCenterOpen = true;
-  if (!updater.updateCheckedAt || Date.now() - updater.updateCheckedAt > 10 * 60 * 1000) void checkPilotUpdate(false);
-}
-export function closeUpdateCenter() {
-  if (updater.updBusy) return;
-  updater.updateCenterOpen = false;
 }
 
 export function initUpdater() {

@@ -23,7 +23,6 @@ export const pilotWindowLabel = currentPilotWindowLabel();
 
 export const SHEET_WIDTH = {
   setup: { id: 'connection-settings', defaultWidth: 400, minWidth: 360, maxWidth: 720, label: '调整设置面板宽度' },
-  updateCenter: { id: 'update-center', defaultWidth: 540, minWidth: 440, maxWidth: 900, label: '调整更新中心面板宽度' },
 } satisfies Record<string, SheetWidthOptions>;
 
 // 本地对话是一个不落 connections.json 的虚拟连接：没有凭据，只给模型一个隔离的工作目录。

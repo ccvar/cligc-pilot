@@ -14,8 +14,7 @@
   import PromptLibrary from '$lib/components/library/PromptLibrary.svelte';
   import SearchDialog from '$lib/components/SearchDialog.svelte';
   import SettingsSheet from '$lib/components/settings/SettingsSheet.svelte';
-  import UpdateCenter from '$lib/components/settings/UpdateCenter.svelte';
-  import SshConnectDialog from '$lib/components/remote/SshConnectDialog.svelte';
+    import SshConnectDialog from '$lib/components/remote/SshConnectDialog.svelte';
   import ConnectionMenu from '$lib/components/sidebar/ConnectionMenu.svelte';
   import ConnectionRemarkDialog from '$lib/components/sidebar/ConnectionRemarkDialog.svelte';
   import SftpContextMenu from '$lib/components/remote/SftpContextMenu.svelte';
@@ -50,7 +49,7 @@
   import { onCtxMenu, onTipHover, ui, startDrag, toggleRail, initUi } from '$lib/state/ui.svelte.js';
   import { editor, onEditKey, initEditor } from '$lib/state/editor.svelte.js';
   import { isWindows } from '$lib/state/env';
-  import { updater, openUpdateCenter, initUpdater } from '$lib/state/updater.svelte.js';
+  import { updater, runUpdate, initUpdater } from '$lib/state/updater.svelte.js';
   import { openSearch, initSearch } from '$lib/state/search.svelte.js';
   import { nav, initNav, goBack, goForward } from '$lib/state/nav.svelte.js';
   import { app, finishConfirm, initApp } from '$lib/state/app.svelte.js';
@@ -172,8 +171,8 @@
       </button>
     {/if}
     {#if updater.topUpdateVisible}
-      <button class="wt upd" class:active={updater.updateCenterOpen} onclick={openUpdateCenter}
-        title={updater.pilotUpdateStatus === 'checking' ? '正在检查更新' : updater.updAvail ? `发现新版本 ${updater.updAvail}，打开更新中心` : '打开更新中心'} aria-label="打开更新中心">
+      <button class="wt upd" onclick={() => void runUpdate()} disabled={updater.updBusy}
+        data-tip={updater.updBusy ? updater.updMsg || '正在更新…' : `发现新版本 ${updater.updAvail}，点一下更新`} aria-label="更新 Pilot">
         {#if updater.updBusy || updater.pilotUpdateStatus === 'checking'}
           <svg class="upd-spin" width="15" height="15" viewBox="0 0 18 18" fill="none"><path d="M15.5 9a6.5 6.5 0 1 1-2-4.72" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
         {:else}
@@ -287,7 +286,6 @@
 
 <SearchDialog />
 <SettingsSheet />
-<UpdateCenter />
 <SshConnectDialog />
 <ConnectionMenu />
 <ConnectionRemarkDialog />

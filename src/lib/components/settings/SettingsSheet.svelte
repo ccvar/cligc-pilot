@@ -44,7 +44,7 @@
   import { selectConn, openConnCtx, connectionDisplayName, distroOf, sshSub, connections, toggleConnCtx } from '$lib/state/connections.svelte.js';
   import { elapsedLabel } from '$lib/state/messages.svelte.js';
   import { customsOf } from '$lib/state/models';
-  import { updater, openUpdateCenter } from '$lib/state/updater.svelte.js';
+  import { updater, checkPilotUpdate, runUpdate, pilotUpdateHint } from '$lib/state/updater.svelte.js';
   import type { Connection } from '$lib/types';
 
   // 连接按类型分组、每条一行（组的样子见 ConnGroup）。Google / Bing（网站数据）、安卓手机、邮箱也是组，
@@ -319,11 +319,19 @@
 
       <div class="brain-row about-card">
         <span class="brain-ic"><AppIcon size={20} /></span>
-        <span class="brain-main"><b>Cligc Pilot</b><small>{updater.appVersion ? `v${updater.appVersion}` : ''}{updater.updMsg ? ` · ${updater.updMsg}` : ''}</small></span>
-        <button class="btn small ghost bare about-update-entry" onclick={openUpdateCenter} disabled={!isMainWindow}>
-          <UpdateIcon size={14} />
-          <span>{updater.updAvail ? `新版本 ${updater.updAvail}` : '检查更新'}</span>
-        </button>
+        <span class="brain-main"><b>Cligc Pilot</b><small class:upd-ok={updater.pilotUpdateStatus === 'current' && !updater.updBusy} class:upd-err={['unreachable', 'failed'].includes(updater.pilotUpdateStatus) && !updater.updBusy}>{updater.appVersion ? `v${updater.appVersion}` : ''}{pilotUpdateHint() ? ` · ${pilotUpdateHint()}` : ''}</small></span>
+        {#if updater.updAvail && !updater.updBusy}
+          <!-- 有新版本：直接在这里更新（会先弹确认，下载装好后自动重启） -->
+          <button class="btn small ghost bare about-update-entry" onclick={() => void runUpdate()} disabled={!isMainWindow}>
+            <UpdateIcon size={14} /><span>更新到 {updater.updAvail}</span>
+          </button>
+        {:else}
+          {@const busy = updater.updBusy || updater.pilotUpdateStatus === 'checking'}
+          <button class="btn small ghost bare about-update-entry" onclick={() => void checkPilotUpdate(false)} disabled={!isMainWindow || busy}>
+            {#if busy}<span class="wr-spin"></span>{:else}<UpdateIcon size={14} />{/if}
+            <span>{updater.updBusy ? '更新中…' : busy ? '检查中…' : '检查更新'}</span>
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -461,7 +469,9 @@
   .brains-list > .brain-block + .brain-block { border-top: 1px solid var(--border); }
   /* 版本和检查更新：只有一行，不要标题和卡片、不缩进，左右和上面卡片的边对齐 */
   .about-card { padding: 2px 0; margin-top: 17px; } /* 没有标题：和上一组隔开的距离同组与组之间（17 + gap 7） */
-  .about-card .about-update-entry { margin-right: -10px; } /* 按钮的内边距伸出去，文字贴齐右边；悬停底色照样左右对称 */
+  .about-card .about-update-entry { margin-right: -10px; }
+  .about-card small.upd-ok { color: var(--ok); }
+  .about-card small.upd-err { color: var(--err); } /* 按钮的内边距伸出去，文字贴齐右边；悬停底色照样左右对称 */
   /* 每个大脑（行 + 自定义模型）成一块，块内贴紧。 */
   .brain-block { display: flex; flex-direction: column; gap: 0; }
   /* 未安装行：一键安装挪到状态文字下方（缩进对齐 brain-main），复制小图标同行在旁 */
