@@ -150,10 +150,10 @@
   .bad { background: var(--err); }
   .lg .use { background: color-mix(in srgb, var(--text) 30%, transparent); }
   .more { font-size: 10px; line-height: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
-  /* 用量那一行：一种颜色，和上面的方块按天对齐（同样的列宽和间距），中间一条细线隔开 */
-  .urow { display: flex; align-items: flex-end; gap: 4px; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); box-sizing: content-box; }
-  .ucol { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; justify-content: center; }
-  .ucol i { display: block; width: 10px; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--text) 30%, transparent); }
+  /* 用量那一行：一种颜色，和上面的方块按天对齐（同样的列宽和间距）；从虚线往下长，和上面往上长的方块背靠背，一眼对上是同一天 */
+  .urow { display: flex; align-items: flex-start; gap: 4px; margin-top: 6px; padding-top: 2px; border-top: 1px dashed var(--border); box-sizing: content-box; }
+  .ucol { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-start; justify-content: center; }
+  .ucol i { display: block; width: 10px; border-radius: 0 0 2px 2px; background: color-mix(in srgb, var(--text) 30%, transparent); }
   .ucol:hover i { background: color-mix(in srgb, var(--text) 55%, transparent); }
   .ut { color: var(--dim); }
   .ax { display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--faint); }
