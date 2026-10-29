@@ -18,7 +18,6 @@ class UpdaterState {
   pilotUpdateError = $state('');
   pilotReleaseNotes = $state('');
   pilotPublishedAt = $state('');
-  pilotUpdateReceipt = $state('');
   updateCenterOpen = $state(false);
   updateCheckedAt = $state(0);
   topUpdateVisible = $derived(isMainWindow && (!!this.updAvail || this.updateCenterOpen || this.updBusy));
@@ -153,9 +152,10 @@ export function initUpdater() {
     updater.appVersion = v;
     try {
       const receipt = JSON.parse(localStorage.getItem(PILOT_UPDATE_RECEIPT_KEY) || 'null') as { target?: string } | null;
-      if (receipt?.target && sameUpdateVersion(v, receipt.target)) {
-        updater.pilotUpdateReceipt = `Pilot 已更新到 ${v}`;
+      // 重启后只在主窗口冒一条提示，不打开更新中心——更新成功没什么需要用户再操作的
+      if (isMainWindow && receipt?.target && sameUpdateVersion(v, receipt.target)) {
         localStorage.removeItem(PILOT_UPDATE_RECEIPT_KEY);
+        setTimeout(() => say(`Pilot 已更新到 ${v}`), 1500);
       }
     } catch { /* 忽略损坏的回执 */ }
   }).catch(() => { /* */ });

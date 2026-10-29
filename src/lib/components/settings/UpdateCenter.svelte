@@ -32,7 +32,6 @@
       </div>
     </header>
     <div class="sheet-body update-center-body">
-      {#if updater.pilotUpdateReceipt}<div class="update-center-notice success">{updater.pilotUpdateReceipt}</div>{/if}
       <section class="update-section">
         <div class="update-item pilot">
           <span class="update-item-icon"><AppIcon size={20} /></span>
@@ -89,8 +88,6 @@
   .update-center-title-copy small { color: var(--faint); font-size: 9.5px; line-height: 1.2; font-weight: 400; }
   .update-center-head-actions { display: flex; align-items: center; gap: 5px; }
   .update-center-body { flex: 1 1 auto; min-height: 0; gap: 13px; padding: 15px 17px 18px; }
-  .update-center-notice { padding: 8px 10px; border: 1px solid #e6dfd3; border-radius: 9px; background: #f7f4ee; color: var(--dim); font-size: 11px; line-height: 1.5; }
-  .update-center-notice.success { border-color: #cfe5d8; background: #eef8f2; color: var(--ok); }
   .update-section { display: grid; gap: 7px; }
   .update-item { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; padding: 9px 10px; }
   .update-item.pilot { border: 1px solid var(--border); border-radius: 11px; background: #fff; }
