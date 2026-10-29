@@ -14,7 +14,8 @@
   // 搜索框下的轻量 tab：按部署方式分；站点只有一种部署方式时不显示
   let mode = $state('');
   const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
-  const MODE_L: Record<string, string> = { direct: 'Pages', workers: 'Workers', pages_git: 'Git 构建', vps: 'VPS', none: '未配置' };
+  const MODE_L: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', pages_git: 'Pages · Git 自动构建', vps: 'VPS', none: '未配置部署' };
+  const MODE_I: Record<string, 'zap' | 'branch' | 'server' | 'x'> = { workers: 'zap', pages_git: 'branch', vps: 'server', none: 'x' };
   const modes = $derived(MODE_ORDER.map((m) => ({ m, l: MODE_L[m], n: rows.filter((r) => r.deploy_mode === m).length })).filter((x) => x.n));
   let hi = $state(0);
   let root: HTMLDivElement | undefined = $state();
@@ -76,8 +77,8 @@
       </div>
       {#if modes.length > 1}
         <div class="sp-tabs" role="tablist" aria-label="按部署方式">
-          <button type="button" role="tab" class:on={!mode} aria-selected={!mode} onclick={() => (mode = '')}>全部<span class="n">{rows.length}</span></button>
-          {#each modes as x (x.m)}<button type="button" role="tab" class:on={mode === x.m} aria-selected={mode === x.m} onclick={() => (mode = x.m)}>{x.l}<span class="n">{x.n}</span></button>{/each}
+          <button type="button" role="tab" class:on={!mode} aria-selected={!mode} onclick={() => (mode = '')} aria-label="全部" data-tip="全部">全部<span class="n">{rows.length}</span></button>
+          {#each modes as x (x.m)}<button type="button" role="tab" class:on={mode === x.m} aria-selected={mode === x.m} onclick={() => (mode = x.m)} aria-label={x.l} data-tip={`${x.l} · ${x.n} 个`}>{#if x.m === 'direct'}<CfMark size={12} />{:else}<Icon name={MODE_I[x.m]} size={12} />{/if}<span class="n">{x.n}</span></button>{/each}
         </div>
       {/if}
       <div class="sp-list" role="listbox" aria-multiselectable="true" bind:this={listEl}>
@@ -114,13 +115,14 @@
   .sp-trigger.open .chev { transform: rotate(180deg); }
   .sp-clear { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .sp-clear:hover { background: var(--su-hover); color: var(--text); }
-  .sp-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 340px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sp-in .16s cubic-bezier(.2, .7, .2, 1) backwards; font-weight: 400; }
+  .sp-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 320px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sp-in .16s cubic-bezier(.2, .7, .2, 1) backwards; font-weight: 400; }
   @keyframes sp-in { from { opacity: 0; transform: translateY(-4px); } }
   .sp-search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .sp-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }
   .sp-search input::placeholder { color: var(--faint); }
-  .sp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px 0; }
-  .sp-tabs button { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 7px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; transition: background-color .12s, color .12s; }
+  .sp-tabs { display: flex; gap: 2px; padding: 6px 8px 0; overflow-x: auto; scrollbar-width: none; }
+  .sp-tabs::-webkit-scrollbar { display: none; }
+  .sp-tabs button { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; transition: background-color .12s, color .12s; }
   .sp-tabs button:hover { color: var(--text); background: var(--su-hover); }
   .sp-tabs button.on { color: var(--text); background: var(--su-hover); font-weight: 550; }
   .sp-tabs .n { font-size: 11px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
