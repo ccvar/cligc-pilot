@@ -255,14 +255,15 @@
   .iss-row:hover .iss-x, .iss-x:focus-visible { opacity: 1; }
   .iss-x:hover { background: var(--su-hover); color: var(--text); }
   .iss-mask { position: fixed; inset: 0; z-index: 30; }
-  .iss-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: 300px; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
-  .iss-g { display: flex; flex-direction: column; align-items: stretch; gap: 2px; text-align: left; padding: 8px 10px; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--text); }
+  /* 宽度跟着内容走：至少和按钮一样宽，最宽 320px，站点名太长就省略 */
+  .iss-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; min-width: max(100%, 200px); max-width: 320px; box-sizing: border-box; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
+  .iss-g { display: flex; flex-direction: column; align-items: stretch; gap: 1px; text-align: left; padding: 7px 10px; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--text); }
   .iss-g:hover { background: var(--su-hover); }
-  .iss-t { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .iss-t { display: flex; align-items: center; gap: 16px; font-size: 13px; }
   .iss-t b { font-weight: 550; flex: 1; }
   .iss-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
   .iss-g.soft .iss-n { background: var(--su-hover); color: var(--dim); }
-  .iss-sites { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .iss-sites { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 24px; } /* 给悬停出现的忽略按钮留位置 */
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
