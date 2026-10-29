@@ -11,6 +11,11 @@
   let { rows }: { rows: SiteRow[] } = $props();
   let open = $state(false);
   let q = $state('');
+  // 搜索框下的轻量 tab：按部署方式分；站点只有一种部署方式时不显示
+  let mode = $state('');
+  const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
+  const MODE_L: Record<string, string> = { direct: 'Pages', workers: 'Workers', pages_git: 'Git 构建', vps: 'VPS', none: '未配置' };
+  const modes = $derived(MODE_ORDER.map((m) => ({ m, l: MODE_L[m], n: rows.filter((r) => r.deploy_mode === m).length })).filter((x) => x.n));
   let hi = $state(0);
   let root: HTMLDivElement | undefined = $state();
   let input: HTMLInputElement | undefined = $state();
@@ -22,19 +27,20 @@
     const rank = new Map(sites.recent.map((id, i) => [id, i]));
     const needle = q.trim().toLowerCase();
     return [...rows]
+      .filter((r) => !mode || r.deploy_mode === mode)
       .filter((r) => !needle || `${r.name} ${r.domain} ${r.repo} ${r.tags.map((t) => `#${t}`).join(' ')}`.toLowerCase().includes(needle))
       .sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9) || (a.domain || a.name).localeCompare(b.domain || b.name, 'zh'));
   });
-  $effect(() => { void q; hi = 0; });
+  $effect(() => { void q; void mode; hi = 0; });
 
   function toggle() {
     open = !open;
-    if (open) { q = ''; hi = 0; requestAnimationFrame(() => input?.focus()); }
+    if (open) { q = ''; mode = ''; hi = 0; requestAnimationFrame(() => input?.focus()); }
   }
   function flip(id: string) {
     fleet.picks = picked.has(id) ? [...picked].filter((x) => x !== id) : [...picked, id];
   }
-  // 搜索时：把搜到的都勾上；没搜：不用全选（一个不勾就是全部）
+  // 搜索或切了 tab 时：把列出来的都勾上；都没有：不用全选（一个不勾就是全部）
   function pickAllShown() { fleet.picks = [...new Set([...picked, ...items.map((r) => r.id)])]; }
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); open = false; return; }
@@ -68,6 +74,12 @@
         <Icon name="search" size={13} />
         <input bind:this={input} bind:value={q} placeholder={`在 ${rows.length} 个站点里搜索`} spellcheck="false" autocapitalize="off" autocorrect="off" />
       </div>
+      {#if modes.length > 1}
+        <div class="sp-tabs" role="tablist" aria-label="按部署方式">
+          <button type="button" role="tab" class:on={!mode} aria-selected={!mode} onclick={() => (mode = '')}>全部<span class="n">{rows.length}</span></button>
+          {#each modes as x (x.m)}<button type="button" role="tab" class:on={mode === x.m} aria-selected={mode === x.m} onclick={() => (mode = x.m)}>{x.l}<span class="n">{x.n}</span></button>{/each}
+        </div>
+      {/if}
       <div class="sp-list" role="listbox" aria-multiselectable="true" bind:this={listEl}>
         {#each items as r, i (r.id)}
           {@const on = picked.has(r.id)}
@@ -85,7 +97,7 @@
       <div class="sp-foot">
         <span>{picked.size ? `已选 ${picked.size} 个` : '没勾＝看全部'} · ↑↓ Enter 勾选</span>
         <span class="grow"></span>
-        {#if q.trim() && items.length}<button type="button" onclick={pickAllShown}>勾选搜到的 {items.length} 个</button>{/if}
+        {#if (q.trim() || mode) && items.length}<button type="button" onclick={pickAllShown}>{q.trim() ? `勾选搜到的 ${items.length} 个` : `这 ${items.length} 个全勾上`}</button>{/if}
         {#if picked.size}<button type="button" onclick={() => (fleet.picks = [])}>清空</button>{/if}
       </div>
     </div>
@@ -102,11 +114,16 @@
   .sp-trigger.open .chev { transform: rotate(180deg); }
   .sp-clear { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border: none; background: none; border-radius: 6px; color: var(--faint); cursor: pointer; }
   .sp-clear:hover { background: var(--su-hover); color: var(--text); }
-  .sp-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 320px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sp-in .16s cubic-bezier(.2, .7, .2, 1) backwards; font-weight: 400; }
+  .sp-pop { position: absolute; z-index: 60; top: calc(100% + 6px); left: -8px; width: 340px; max-width: calc(100vw - 32px); background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; animation: sp-in .16s cubic-bezier(.2, .7, .2, 1) backwards; font-weight: 400; }
   @keyframes sp-in { from { opacity: 0; transform: translateY(-4px); } }
   .sp-search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--faint); }
   .sp-search input { flex: 1; min-width: 0; border: none; outline: none; background: none; font: inherit; font-size: 13px; color: var(--text); }
   .sp-search input::placeholder { color: var(--faint); }
+  .sp-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 8px 0; }
+  .sp-tabs button { flex: none; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 7px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; transition: background-color .12s, color .12s; }
+  .sp-tabs button:hover { color: var(--text); background: var(--su-hover); }
+  .sp-tabs button.on { color: var(--text); background: var(--su-hover); font-weight: 550; }
+  .sp-tabs .n { font-size: 11px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
   .sp-list { max-height: 340px; overflow-y: auto; padding: 4px; }
   .sp-opt { width: 100%; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: none; background: none; border-radius: 8px; font: inherit; color: var(--text); text-align: left; cursor: pointer; }
   .sp-opt.hi { background: #f4f3ef; }
