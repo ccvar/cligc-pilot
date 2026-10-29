@@ -3,7 +3,7 @@
   // 勾了几个就只看这几个（站点列表、待处理、处理记录都按它筛）；一个都没勾＝全部。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
-  import CfProductMark from '$lib/components/icons/CfProductMark.svelte';
+  import DeployMark from './DeployMark.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import type { SiteRow } from '$lib/types';
@@ -15,7 +15,6 @@
   let mode = $state('');
   const MODE_ORDER = ['direct', 'workers', 'pages_git', 'vps', 'none'];
   const MODE_L: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', pages_git: 'Pages · Git 自动构建', vps: 'VPS', none: '未配置部署' };
-  const MODE_I: Record<string, 'branch' | 'server' | 'x'> = { pages_git: 'branch', vps: 'server', none: 'x' };
   const modes = $derived(MODE_ORDER.map((m) => ({ m, l: MODE_L[m], n: rows.filter((r) => r.deploy_mode === m).length })).filter((x) => x.n));
   let hi = $state(0);
   let root: HTMLDivElement | undefined = $state();
@@ -78,7 +77,7 @@
       {#if modes.length > 1}
         <div class="sp-tabs" role="tablist" aria-label="按部署方式">
           <button type="button" role="tab" class:on={!mode} aria-selected={!mode} onclick={() => (mode = '')} aria-label="全部" data-tip="全部">全部<span class="n">{rows.length}</span></button>
-          {#each modes as x (x.m)}<button type="button" role="tab" class:on={mode === x.m} aria-selected={mode === x.m} onclick={() => (mode = x.m)} aria-label={x.l} data-tip={`${x.l} · ${x.n} 个`}>{#if x.m === 'direct'}<CfProductMark kind="pages" size={12} />{:else if x.m === 'workers'}<CfProductMark kind="workers" size={12} />{:else}<Icon name={MODE_I[x.m]} size={12} />{/if}<span class="n">{x.n}</span></button>{/each}
+          {#each modes as x (x.m)}<button type="button" role="tab" class:on={mode === x.m} aria-selected={mode === x.m} onclick={() => (mode = x.m)} aria-label={x.l} data-tip={`${x.l} · ${x.n} 个`}>{#if x.m === 'none'}<Icon name="x" size={12} />{:else}<DeployMark mode={x.m} />{/if}<span class="n">{x.n}</span></button>{/each}
         </div>
       {/if}
       <div class="sp-list" role="listbox" aria-multiselectable="true" bind:this={listEl}>
@@ -89,7 +88,7 @@
             <span class="ck" aria-hidden="true">{#if on}<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2 5 8.5l4.5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}</span>
             <span class="ic"><SiteIcon id={r.id} size={16} /></span>
             <span class="txt"><b>{r.domain || r.name}</b>{#if r.domain && r.domain !== r.name}<small>{r.name}</small>{/if}</span>
-            <span class="dep" data-tip={MODE_L[r.deploy_mode] ?? null}>{#if r.deploy_mode === 'vps'}<Icon name="server" size={11} />{:else if r.deploy_mode === 'direct'}<CfProductMark kind="pages" size={11} />{:else if r.deploy_mode === 'workers'}<CfProductMark kind="workers" size={11} />{:else if r.deploy_mode === 'pages_git'}<Icon name="branch" size={11} />{/if}</span>
+            <span class="dep" data-tip={MODE_L[r.deploy_mode] ?? null}><DeployMark mode={r.deploy_mode} size={11} /></span>
           </button>
         {:else}
           <p class="empty">没有匹配的站点</p>

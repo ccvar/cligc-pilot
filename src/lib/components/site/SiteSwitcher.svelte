@@ -3,7 +3,7 @@
   // 站名旁的铅笔（或双击站名）就地改名，回车保存、Esc 取消。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
-  import CfMark from '$lib/components/icons/CfMark.svelte';
+  import DeployMark from './DeployMark.svelte';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
@@ -107,7 +107,7 @@
             onmouseenter={() => (hi = i)} onclick={() => pick(s.id)}>
             <span class="ic"><SiteIcon id={s.id} size={16} /></span>
             <span class="txt"><b>{s.name}</b>{#if s.domain && s.domain !== s.name}<small>{s.domain}</small>{/if}</span>
-            <span class="dep" data-tip={s.deploy.mode === 'vps' ? 'VPS' : s.deploy.mode === 'none' ? '未配置部署' : s.deploy.mode === 'workers' ? 'Cloudflare Workers' : 'Cloudflare Pages'}>{#if s.deploy.mode === 'vps'}<Icon name="server" size={11} />{:else if s.deploy.mode !== 'none'}<CfMark size={11} />{/if}</span>
+            <span class="dep" data-tip={s.deploy.mode === 'vps' ? 'VPS' : s.deploy.mode === 'none' ? '未配置部署' : s.deploy.mode === 'workers' ? 'Cloudflare Workers' : s.deploy.mode === 'pages_git' ? 'Pages · Git 自动构建' : 'Cloudflare Pages'}><DeployMark mode={s.deploy.mode} size={11} /></span>
             {#if s.id === cur?.id}<Icon name="check" size={13} />{/if}
           </button>
         {:else}

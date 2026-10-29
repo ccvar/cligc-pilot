@@ -1,7 +1,7 @@
 <script lang="ts">
   import './site.css';
   import Icon from './Icon.svelte';
-  import CfMark from '$lib/components/icons/CfMark.svelte';
+  import CfProductMark from '$lib/components/icons/CfProductMark.svelte';
   import type { Site } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
@@ -51,7 +51,7 @@
 
     {#if site.deploy.mode !== 'vps'}
     <div class="card">
-      <h3><CfMark size={14} />{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="ic-btn ic-sm" onclick={() => loadPagesDeploys(site.id)} aria-label="刷新部署记录" data-tip="刷新部署记录"><Icon name="refresh" size={14} /></button></h3>
+      <h3><CfProductMark kind={site.deploy.mode === 'workers' ? 'workers' : 'pages'} size={14} />{site.deploy.mode === 'workers' ? 'Workers' : 'Cloudflare Pages'} 部署记录 <span class="grow"></span><button class="ic-btn ic-sm" onclick={() => loadPagesDeploys(site.id)} aria-label="刷新部署记录" data-tip="刷新部署记录"><Icon name="refresh" size={14} /></button></h3>
       {#if sites.pagesErr[site.id]}<div class="err-note">{sites.pagesErr[site.id]}</div>
       {:else if !pages.length}<p class="hint">还没有部署记录（项目尚未创建，或首次上线前）。</p>
       {:else}

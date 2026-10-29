@@ -6,8 +6,8 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import Icon from './Icon.svelte';
+  import CfProductMark from '$lib/components/icons/CfProductMark.svelte';
   import GhMark from '$lib/components/icons/GhMark.svelte';
-  import CfMark from '$lib/components/icons/CfMark.svelte';
   import GoogleMark from '$lib/components/icons/GoogleMark.svelte';
   import GscMark from '$lib/components/icons/GscMark.svelte';
   import BingMark from '$lib/components/icons/BingMark.svelte';
@@ -150,7 +150,7 @@
     <div class="lstep" class:done={st.pages && (st.domain_attached || !site.domain)}>
       <span class="n">{st.pages && (st.domain_attached || !site.domain) ? '✓' : 2}</span>
       <div class="lb">
-        <b><span class="si"><CfMark size={14} /></span>Cloudflare Pages 项目与域名</b>
+        <b><span class="si"><CfProductMark kind="pages" size={14} /></span>Cloudflare Pages 项目与域名</b>
         <small>{st.pages ? `项目 ${site.deploy.project}${st.pages_domains.length ? ` · ${st.pages_domains.join('、')}` : ''}` : needDeploy ? '选好 Cloudflare 账号和项目名，创建 Pages 项目' : `将创建项目 ${site.deploy.project}`}{site.domain && !st.domain_attached ? `，并绑定 ${site.domain}（同账号的域名会自动加 CNAME）` : ''}</small>
         {#if !(st.pages && (st.domain_attached || !site.domain))}
           {#if needDeploy}
