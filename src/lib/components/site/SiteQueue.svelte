@@ -187,7 +187,7 @@
             <li>
               <span class="pill {tone(i.status)}">{#if i.status === 'working'}<span class="spin"></span>{/if}{STATUS_LABEL[i.status] ?? i.status}</span>
               <span class="mv-t" data-tip={i.note || i.opp.title}>{i.opp.title}</span>
-              <button class="btn tiny" onclick={() => (sites.queueItem = i.id)}>去「{TAB_LABEL[tabOf(i)]}」看</button>
+              <button class="link-btn" onclick={() => (sites.queueItem = i.id)}>去「{TAB_LABEL[tabOf(i)]}」看 →</button>
             </li>
           {/each}
         </ul>
@@ -343,11 +343,12 @@
   .lvl:hover { color: var(--text); }
   .empty { text-align: center; padding: 28px 18px; }
   .empty p:first-child { margin: 0 0 2px; font-size: 13px; font-weight: 550; }
-  .moved { list-style: none; margin: 10px auto 0; padding: 0; max-width: 560px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
-  .moved li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; font-size: 12.5px; }
+  /* 卡片里直接一行一条（不再套一层框）：状态 · 标题 · 去哪一栏看，整行居中 */
+  .moved { list-style: none; margin: 12px auto 0; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .moved li { display: flex; align-items: center; justify-content: center; gap: 10px; max-width: 100%; font-size: 12.5px; }
   .moved .pill { flex: none; }
-  .mv-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .moved .btn { flex: none; }
+  .mv-t { min-width: 0; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+  .moved .link-btn { flex: none; font-size: 12px; }
   .items { padding-top: 0; padding-bottom: 0; }
   /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */
   .card.items > .list:last-child { margin-bottom: 0; }
