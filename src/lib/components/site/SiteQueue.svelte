@@ -102,6 +102,8 @@
   const when = clock;
   const tone = (s: string) => (s === 'proposed' ? 'warn' : s === 'deployed' || s === 'done' ? 'ok' : s === 'failed' ? 'err' : s === 'working' ? 'run' : '');
   const myPlan = $derived(managed.overview?.groups.find((g) => g.sites.includes(site.id)));
+  // 托管停着（方案暂停或这个站点单独停止）：扫描只找机会，不交给 AI
+  const planOff = $derived(!!myPlan && (myPlan.paused || myPlan.stopped.includes(site.id)));
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   // 「用 XX 改」：按钮上写这个站点默认用的模型（托管站点是方案里的主模型）；▾ 换个模型只用这一次
@@ -190,8 +192,8 @@
       <button class:on={filter === 'closed'} onclick={() => (filter = 'closed')}>已驳回 / 回滚{#if counts.closed}<span class="n">{counts.closed}</span>{/if}</button>
     </div>
     <span class="grow"></span>
-    <button class="link-btn lvl" onclick={() => (sites.tab = 'overview')}>{myPlan ? `托管：${myPlan.name} · ${AUTONOMY_LABEL[myPlan.autonomy] ?? ''}` : '自己运营'}</button>
-    <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}<Icon name="scan" size={12} />立即扫描{/if}</button>
+    <button class="link-btn lvl" class:off={planOff} onclick={() => (sites.tab = 'overview')}>{myPlan ? `托管：${myPlan.name} · ${myPlan.paused ? '方案已暂停' : planOff ? '已停止' : AUTONOMY_LABEL[myPlan.autonomy] ?? ''}` : '自己运营'}</button>
+    <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy} data-tip={planOff ? '托管停着：拉最新数据、找出新的机会放进「未处理的机会」，不交给 AI 改；想改哪条再手动点' : myPlan || site.ops.level >= 2 ? '拉最新数据、找出新的机会，再按优先级挑前几条交给 AI，按方案规则改好上线或等你确认' : '拉最新数据、找出新的机会，放进「未处理的机会」'}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}<Icon name="scan" size={12} />立即扫描{/if}</button>
   </div>
 
   {#if showJob && job}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
@@ -362,6 +364,7 @@
   .checks li { line-height: 1.55; }
   .checks .ck-i { display: inline-block; width: 16px; color: var(--ok); }
   .checks li.bad .ck-i { color: var(--warn); }
+  .link-btn.lvl.off { color: var(--warn); }
   .link-btn.allow { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; margin-top: -2px; }
   .list-head { display: flex; align-items: center; gap: 12px; margin: 0 -18px; padding: 9px 18px; min-height: 42px; border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; font-size: 12.5px; }
   .list-head.on { background: var(--su-run-soft); }

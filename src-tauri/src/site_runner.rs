@@ -569,6 +569,14 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
         job.step("ship", "skipped", "");
         return Ok(format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
     }
+    // 托管停着（方案暂停或这个站点单独停止）：只找机会，不交给 AI；想改哪条在「未处理的机会」里手动点
+    if let Some(g) = group_rules(ctx, site).filter(|g| !g.active_for(&site.id)) {
+        let why = if g.paused { "托管方案已暂停" } else { "这个站点的托管已停止" };
+        job.step("work", "skipped", &format!("{why}，只找机会不改"));
+        job.step("quality", "skipped", "");
+        job.step("ship", "skipped", "");
+        return Ok(format!("发现 {} 个机会，新入队 {} 个（{why}，没有交给 AI；想改哪条在「未处理的机会」里手动点）", opps.len(), added.len()));
+    }
     let (done, notes, stopped) = work_queue(ctx, site, job, trigger).await;
     match &stopped {
         Some(why) if done == 0 => job.step("work", "failed", why),
