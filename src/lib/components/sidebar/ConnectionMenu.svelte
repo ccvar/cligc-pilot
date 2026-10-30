@@ -22,7 +22,7 @@
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshEdit(c); }}>编辑连接…</button>
       {#if workbench.termState[c.id]?.on || workbench.termState[c.id]?.busy}
-        <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void disconnectTerm(c.id).then((ok) => { if (ok) forgetSftpView(c.id); }); }}>断开连接…</button>
+        <button class="ctx-item" role="menuitem" onclick={() => { const id = c.id; connections.connCtx = null; void disconnectTerm(id).then((ok) => { if (ok) forgetSftpView(id); }); }}>断开连接…</button>
       {/if}
     {:else if c.kind === 'cloudflare'}
       <div class="ctx-div"></div>
@@ -34,10 +34,10 @@
       <button class="ctx-item" role="menuitem" onclick={() => openGhUpdate(c)}>更新 Token…</button>
     {:else if c.kind === 'wordpress'}
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
-      <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void wpLogin(c.id); }}>重新授权…</button>
+      <button class="ctx-item" role="menuitem" onclick={() => { const id = c.id; connections.connCtx = null; void wpLogin(id); }}>重新授权…</button>
     {:else if c.kind === 'blogger'}
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
-      <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void bloggerLogin(c.id); }}>重新授权…</button>
+      <button class="ctx-item" role="menuitem" onclick={() => { const id = c.id; connections.connCtx = null; void bloggerLogin(id); }}>重新授权…</button>
     {:else if isDataConn(c)}
       <button class="ctx-item" role="menuitem" disabled={!!datasrc.binding} data-tip={c.kind === 'google' ? '按域名在这个账号里找 GA4 媒体资源和 Search Console 资源，自动填到还没绑定的站点上' : '按域名在这个账号里找 Bing 站点，自动填到还没绑定的站点上'}
         onclick={() => void autoBindSites(c.id)}>匹配站点</button>
