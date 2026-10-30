@@ -631,9 +631,21 @@ pub fn touches_money(line: &str) -> bool {
 const LEAK_MARKERS: &[&str] = &["TODO", "FIXME", "TBD", "lorem ipsum", "placeholder", "待补图", "待补充", "占位图", "占位文字", "上线前替换", "此处插入", "本文由 AI 生成", "按提示词", "via.placeholder.com", "dummyimage.com", "placehold.co"];
 
 /// 文字里有没有内部痕迹（开发注释、占位、内部说明），有就返回是哪个标记。
+/// 英文标记要整词：TODO / FIXME / TBD 这种代码里的写法还要大小写一致（西班牙语的 todo / todos 是「全部」，不能算）；
+/// lorem ipsum、placeholder 不分大小写但也要整词；中文标记和占位图域名照旧按包含算。
 pub fn leak_marker(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    LEAK_MARKERS.iter().copied().find(|m| lower.contains(&m.to_lowercase()))
+    LEAK_MARKERS.iter().copied().find(|m| {
+        if !m.is_ascii() || m.contains('.') {
+            return lower.contains(&m.to_lowercase());
+        }
+        let code = m.chars().all(|c| c.is_ascii_uppercase());
+        let (hay, needle) = if code { (text, m.to_string()) } else { (lower.as_str(), m.to_lowercase()) };
+        hay.match_indices(needle.as_str()).any(|(i, _)| {
+            let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+            !hay[..i].chars().next_back().is_some_and(word) && !hay[i + needle.len()..].chars().next().is_some_and(word)
+        })
+    })
 }
 
 /// 文字量：汉字按字、其它按词（粗算，只用于判断「新页面是不是太薄」）。
@@ -1167,6 +1179,19 @@ mod group_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leak_markers_need_whole_words() {
+        // 西班牙语的 todo / todos、英文的 placeholders 里带的词不算
+        assert_eq!(leak_marker("no implica que todos los productos estén disponibles"), None);
+        assert_eq!(leak_marker("Todo sobre Binance en Argentina"), None);
+        // 真的开发注释、占位
+        assert_eq!(leak_marker("TODO: 补上手续费表"), Some("TODO"));
+        assert_eq!(leak_marker("价格（TBD）"), Some("TBD"));
+        assert_eq!(leak_marker("Lorem ipsum dolor sit amet"), Some("lorem ipsum"));
+        assert_eq!(leak_marker("这里待补充数据"), Some("待补充"));
+        assert!(leak_marker("img https://via.placeholder.com/300").is_some());
+    }
 
     /// 动态文件长过两倍上限就只留最新的一段；读的时候只看尾部，新的在前。
     #[test]
