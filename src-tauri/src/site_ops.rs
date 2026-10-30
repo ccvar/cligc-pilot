@@ -77,6 +77,17 @@ pub fn path_of(url: &str) -> String {
 }
 
 /// 从缓存算出机会列表（按 score 降序，每类最多 10 条）。没有数据就是空列表。
+/// 网址是不是本站域名下的（含 www；站点没填域名就都算）
+fn own_host(url: &str, domain: &str) -> bool {
+    let d = domain.trim().trim_end_matches('/').to_ascii_lowercase();
+    if d.is_empty() {
+        return true;
+    }
+    let host = url.split("://").nth(1).unwrap_or(url).split(['/', '?', '#']).next().unwrap_or_default().split(':').next().unwrap_or_default().to_ascii_lowercase();
+    let bare = |h: &str| h.strip_prefix("www.").unwrap_or(h).to_string();
+    bare(&host) == bare(&d)
+}
+
 pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
     let dir = cache_dir(site_dir);
     let min_impr = site.ops.min_impressions.max(10) as f64;
@@ -257,7 +268,8 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
     for s in sitemaps.as_array().cloned().unwrap_or_default() {
         let errors = s["errors"].as_str().and_then(|v| v.parse::<i64>().ok()).or(s["errors"].as_i64()).unwrap_or(0);
         let path = s["path"].as_str().unwrap_or_default().to_string();
-        if errors > 0 && !replaced.contains(&path) {
+        // 网域资源（sc-domain:）里有所有子域名的 sitemap：只算本站域名（含 www）的，别的子域名不是这个站的问题
+        if errors > 0 && !replaced.contains(&path) && own_host(&path, &site.domain) {
             tech.push(Opportunity {
                 key: format!("sitemap_error:{path}"),
                 kind: "sitemap_error".into(),
@@ -902,6 +914,15 @@ pub fn kind_label(k: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sitemap_errors_only_count_the_sites_own_host() {
+        assert!(own_host("https://cligx.com/sitemap.xml", "cligx.com"));
+        assert!(own_host("https://www.cligx.com/sitemap.xml", "cligx.com"));
+        assert!(own_host("https://cligx.com/sitemap.xml", "www.cligx.com"));
+        assert!(!own_host("https://tt.cligx.com/sitemap-index.xml", "cligx.com"));
+        assert!(own_host("https://anything.com/s.xml", ""));
+    }
 
     #[test]
     fn ctr_curve_is_monotonic() {
