@@ -77,7 +77,7 @@ export async function saveEdit() {
     await invoke('sftp_write', { connId, path, b64 });
     editor.edOriginal = text; editor.edOriginalB64 = b64; editor.edFormat.mixed = false; editor.edSaved = true;
     say(`已保存 ${path}`);
-    if (sftp.sftpConnId === connId) void loadDir(parentOf(path), true);
+    if (sftp.views[connId]) void loadDir(parentOf(path), true, false, sftp.views[connId]);
   } catch (e) { editor.edErr = String(e); }
   finally { editor.edSaving = false; }
 }

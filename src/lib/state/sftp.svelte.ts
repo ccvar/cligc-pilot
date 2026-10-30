@@ -31,31 +31,17 @@ const COL_MIN: Record<ColKey, number> = { perm: 62, size: 48, date: 92 };
 const COL_MAX: Record<ColKey, number> = { perm: 200, size: 160, date: 240 };
 const COL_DEF: Record<ColKey, number> = { perm: 96, size: 76, date: 128 };
 
-class SftpState {
-  sftpConnId = $state(''); // 已加载文件列表所属的连接；换连接才重置，切页签不重置
+/** 一台机器的文件面板：目录树、展开、选中、加载状态。每台一份——分屏时每个窗格各显示自己那台的。 */
+export class SftpView {
+  readonly connId: string;
   sftpPath = $state('');
   sftpPathDraft = $state('');
   sftpKids = $state<Record<string, SftpEntry[]>>({}); // 目录路径 → 它的孩子
   sftpOpenDirs = $state(new Set<string>());
   sftpLoading = $state<Record<string, boolean>>({});
   sftpSel = $state('');
-  sftpSort = $state<{ key: 'name' | 'size' | 'mtime'; asc: boolean }>({ key: 'name', asc: true });
   sftpBusy = $state(false);
   sftpErr = $state('');
-  sftpXfer = $state(''); // 上传/下载进行中的提示文案
-  sftpDownloadTask = $state<null | { id: string; name: string; drag: boolean; started: boolean; cancelling: boolean; progress: DownloadProgress | null }>(null);
-  sftpUploadTask = $state<null | { id: string; started: boolean; cancelling: boolean }>(null);
-  sftpNativeDragging = $state(false);
-  sftpTransfers = $state<TransferRecord[]>(loadSftpTransfers());
-  sftpHistoryTimer: ReturnType<typeof setTimeout> | undefined;
-  sftpCancellableIds = $derived([this.sftpDownloadTask, this.sftpUploadTask].filter(task => task?.started).map(task => task!.id));
-  sftpFileOver = $state(false);
-  sftpDropTarget = $state<SftpDropTarget | null>(null);
-  sftpDropCapture: Promise<LocalDropCapture | null> | null = null;
-  sftpClipboard = $state<null | { connId: string; path: string; name: string; dir: boolean }>(null);
-  // connId + path：切换服务器时，旧服务器仍在进行的删除不会误伤当前列表状态。
-  sftpDeleting = $state(new Set<string>());
-  colW = $state(loadColW());
   // 树 → 扁平行（只把展开着的目录的孩子摊进来）。
   sftpRows = $derived.by(() => {
     const out: SftpRow[] = [];
@@ -80,6 +66,48 @@ class SftpState {
   sftpPathEdit = $state(false);
   sftpPathEl = $state<HTMLInputElement | null>(null);
   crumbEl = $state<HTMLElement | null>(null);
+  constructor(connId: string) { this.connId = connId; }
+}
+/** 还没建好的面板先显示这个空的（模板里不能现建状态） */
+export const EMPTY_VIEW = new SftpView('');
+
+class SftpState {
+  // 每台机器的文件面板（连接 id → 面板）；sftpConnId 是「现在在操作哪一个」：
+  // 默认是当前机器，在哪个窗格的文件面板里点、右键、拖文件进来，就切到那一个。下面那些操作都作用在它上面
+  views = $state<Record<string, SftpView>>({});
+  sftpConnId = $state('');
+  get cur(): SftpView | undefined { return this.views[this.sftpConnId]; }
+  get sftpPath() { return this.cur?.sftpPath ?? ''; }
+  set sftpPath(x: string) { if (this.cur) this.cur.sftpPath = x; }
+  get sftpPathDraft() { return this.cur?.sftpPathDraft ?? ''; }
+  set sftpPathDraft(x: string) { if (this.cur) this.cur.sftpPathDraft = x; }
+  get sftpKids() { return this.cur?.sftpKids ?? {}; }
+  set sftpKids(x: Record<string, SftpEntry[]>) { if (this.cur) this.cur.sftpKids = x; }
+  get sftpOpenDirs() { return this.cur?.sftpOpenDirs ?? new Set<string>(); }
+  set sftpOpenDirs(x: Set<string>) { if (this.cur) this.cur.sftpOpenDirs = x; }
+  get sftpSel() { return this.cur?.sftpSel ?? ''; }
+  set sftpSel(x: string) { if (this.cur) this.cur.sftpSel = x; }
+  get sftpBusy() { return this.cur?.sftpBusy ?? false; }
+  set sftpBusy(x: boolean) { if (this.cur) this.cur.sftpBusy = x; }
+  get sftpErr() { return this.cur?.sftpErr ?? ''; }
+  set sftpErr(x: string) { if (this.cur) this.cur.sftpErr = x; }
+  get sftpRows(): SftpRow[] { return this.cur?.sftpRows ?? []; }
+  get sftpSelectedRow(): SftpRow | undefined { return this.cur?.sftpSelectedRow; }
+  sftpSort = $state<{ key: 'name' | 'size' | 'mtime'; asc: boolean }>({ key: 'name', asc: true });
+  sftpXfer = $state(''); // 上传/下载进行中的提示文案
+  sftpDownloadTask = $state<null | { id: string; name: string; drag: boolean; started: boolean; cancelling: boolean; progress: DownloadProgress | null }>(null);
+  sftpUploadTask = $state<null | { id: string; started: boolean; cancelling: boolean }>(null);
+  sftpNativeDragging = $state(false);
+  sftpTransfers = $state<TransferRecord[]>(loadSftpTransfers());
+  sftpHistoryTimer: ReturnType<typeof setTimeout> | undefined;
+  sftpCancellableIds = $derived([this.sftpDownloadTask, this.sftpUploadTask].filter(task => task?.started).map(task => task!.id));
+  sftpFileOver = $state(false);
+  sftpDropTarget = $state<SftpDropTarget | null>(null);
+  sftpDropCapture: Promise<LocalDropCapture | null> | null = null;
+  sftpClipboard = $state<null | { connId: string; path: string; name: string; dir: boolean }>(null);
+  // connId + path：切换服务器时，旧服务器仍在进行的删除不会误伤当前列表状态。
+  sftpDeleting = $state(new Set<string>());
+  colW = $state(loadColW());
   // ---- 右键菜单 ----
   fctxMenu = $state<null | { x: number; y: number; row: SftpRow | null }>(null);
   fctxMenuEl = $state<HTMLDivElement | null>(null);
@@ -238,25 +266,22 @@ export function onColKey(e: KeyboardEvent, k: ColKey) {
   setColW(k, sftp.colW[k] + d);
   saveColW();
 }
-/** 读一个目录的孩子进缓存。force=true 时无视缓存重读（改动后刷新用）。 */
-export async function loadDir(path: string, force = false, quiet = false): Promise<boolean> {
-  const id = sftp.sftpConnId;
-  if (!force && sftp.sftpKids[path]) return true;
-  sftp.sftpLoading = { ...sftp.sftpLoading, [path]: true };
+/** 读一个目录的孩子进缓存。force=true 时无视缓存重读（改动后刷新用）。v：哪台机器的面板（默认正在操作的那个）。 */
+export async function loadDir(path: string, force = false, quiet = false, v: SftpView | undefined = sftp.cur): Promise<boolean> {
+  if (!v) return false;
+  if (!force && v.sftpKids[path]) return true;
+  v.sftpLoading = { ...v.sftpLoading, [path]: true };
   try {
-    const list = await invoke<SftpEntry[]>('sftp_list', { connId: id, path });
-    if (sftp.sftpConnId !== id) return false; // 加载途中换了连接，丢弃
-    sftp.sftpKids = { ...sftp.sftpKids, [path]: list };
+    const list = await invoke<SftpEntry[]>('sftp_list', { connId: v.connId, path });
+    v.sftpKids = { ...v.sftpKids, [path]: list };
     return true;
   } catch (e) {
-    if (path === sftp.sftpPath) sftp.sftpErr = String(e); else if (!quiet) say(String(e), 'err');
+    if (path === v.sftpPath) v.sftpErr = String(e); else if (!quiet) say(String(e), 'err');
     return false;
   } finally {
-    sftp.sftpLoading = { ...sftp.sftpLoading, [path]: false };
+    v.sftpLoading = { ...v.sftpLoading, [path]: false };
   }
 }
-// 切走的连接的文件列表（只在内存里）：切回来直接显示
-const views = new Map<string, { path: string; kids: Record<string, SftpEntry[]>; open: Set<string>; sel: string }>();
 // 每个连接上次打开的目录（存在本机）：切换连接、重开应用后回到那里，不再每次从 home 起步
 const LAST_KEY = 'cligc.pilot.sftpLastDir';
 function lastDirs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(LAST_KEY) || '{}') || {}; } catch { return {}; } }
@@ -265,51 +290,63 @@ function rememberDir(connId: string, path: string) {
   try { localStorage.setItem(LAST_KEY, JSON.stringify({ ...lastDirs(), [connId]: path })); } catch { /* */ }
 }
 /** 换树根（path 为空＝去 home）。 */
-export async function sftpGo(path: string) {
-  const id = sftp.sftpConnId;
-  sftp.sftpBusy = true; sftp.sftpErr = '';
+export async function sftpGo(path: string, v: SftpView | undefined = sftp.cur) {
+  if (!v) return;
+  v.sftpBusy = true; v.sftpErr = '';
   try {
-    const p = path || await invoke<string>('sftp_home', { connId: id });
-    if (sftp.sftpConnId !== id) return;
-    sftp.sftpPath = p; sftp.sftpPathDraft = p; sftp.sftpSel = '';
-    sftp.sftpOpenDirs = new Set();
-    if (await loadDir(p, true)) rememberDir(id, p);
-  } catch (e) { sftp.sftpErr = friendly(e); }
-  finally { sftp.sftpBusy = false; }
+    const p = path || await invoke<string>('sftp_home', { connId: v.connId });
+    v.sftpPath = p; v.sftpPathDraft = p; v.sftpSel = '';
+    v.sftpOpenDirs = new Set();
+    if (await loadDir(p, true, false, v)) rememberDir(v.connId, p);
+  } catch (e) { v.sftpErr = friendly(e); }
+  finally { v.sftpBusy = false; }
+}
+/** 某个窗格要显示这台机器的文件：第一次就建一个面板、回到上次打开的目录（没有或已经不在了就从 home 起步）；
+ *  建过的直接显示，后台悄悄刷新一次（SFTP 连接本身后端一直留着）。 */
+export function ensureSftpView(connId: string) {
+  if (!connId) return;
+  const had = sftp.views[connId];
+  if (had) { void sftpRefresh(had); return; }
+  const v = new SftpView(connId);
+  sftp.views = { ...sftp.views, [connId]: v };
+  const last = lastDir(connId);
+  void sftpGo(last, v).then(() => { if (last && v.sftpErr) void sftpGo('', v); });
 }
 export function sftpUp() {
   if (!sftp.sftpPath || sftp.sftpPath === '/') return;
   void sftpGo(parentOf(sftp.sftpPath));
 }
-export function startPathEdit() { sftp.sftpPathDraft = sftp.sftpPath; sftp.sftpPathEdit = true; }
+export function startPathEdit() { const v = sftp.cur; if (!v) return; v.sftpPathDraft = v.sftpPath; v.sftpPathEdit = true; }
 export function commitPath() {
-  const p = sftp.sftpPathDraft.trim();
-  sftp.sftpPathEdit = false;
-  if (p && p !== sftp.sftpPath) void sftpGo(p);
+  const v = sftp.cur;
+  if (!v) return;
+  const p = v.sftpPathDraft.trim();
+  v.sftpPathEdit = false;
+  if (p && p !== v.sftpPath) void sftpGo(p, v);
 }
 /** 刷新：重读当前展开着的每一层，**保留展开状态**（sftpGo 是「换根」，会把整棵树收起来）。 */
-export async function sftpRefresh() {
-  if (!sftp.sftpPath || sftp.sftpBusy) return;
-  sftp.sftpBusy = true; sftp.sftpErr = '';
+export async function sftpRefresh(v: SftpView | undefined = sftp.cur) {
+  if (!v || !v.sftpPath || v.sftpBusy) return;
+  v.sftpBusy = true; v.sftpErr = '';
   try {
-    const dirs = [sftp.sftpPath, ...sftp.sftpOpenDirs];
-    const ok = await Promise.all(dirs.map((d) => loadDir(d, true, true))); // 没了的目录下面统一收掉，不用一个个弹错
+    const dirs = [v.sftpPath, ...v.sftpOpenDirs];
+    const ok = await Promise.all(dirs.map((d) => loadDir(d, true, true, v))); // 没了的目录下面统一收掉，不用一个个弹错
     // 远端已经不在了的目录：连同展开态一起丢掉，别在树里留幽灵行
-    const gone = dirs.filter((_, i) => !ok[i] && dirs[i] !== sftp.sftpPath);
+    const gone = dirs.filter((_, i) => !ok[i] && dirs[i] !== v.sftpPath);
     if (gone.length) {
-      const n = new Set(sftp.sftpOpenDirs);
-      const kids = { ...sftp.sftpKids };
+      const n = new Set(v.sftpOpenDirs);
+      const kids = { ...v.sftpKids };
       for (const d of gone) { n.delete(d); delete kids[d]; }
-      sftp.sftpOpenDirs = n; sftp.sftpKids = kids;
+      v.sftpOpenDirs = n; v.sftpKids = kids;
     }
-  } finally { sftp.sftpBusy = false; }
+  } finally { v.sftpBusy = false; }
 }
 export async function toggleDir(r: SftpRow) {
-  if (isSftpDeleting(r.path)) return;
-  const n = new Set(sftp.sftpOpenDirs);
-  if (n.has(r.path)) { n.delete(r.path); sftp.sftpOpenDirs = n; return; }
-  if (!(await loadDir(r.path))) return;
-  n.add(r.path); sftp.sftpOpenDirs = n;
+  const v = sftp.cur;
+  if (!v || isSftpDeleting(r.path)) return;
+  if (v.sftpOpenDirs.has(r.path)) { const n = new Set(v.sftpOpenDirs); n.delete(r.path); v.sftpOpenDirs = n; return; }
+  if (!(await loadDir(r.path, false, false, v))) return;
+  v.sftpOpenDirs = new Set(v.sftpOpenDirs).add(r.path);
 }
 /** 试着把它当目录读一下。不是目录就 false —— 调用方退回按文件处理，不报错。 */
 async function isRemoteDir(path: string): Promise<boolean> {
@@ -320,8 +357,9 @@ async function isRemoteDir(path: string): Promise<boolean> {
  *  软链＝先当目录试（sftp 的 readdir 给的是 lstat，指向目录的软链这里 dir=false）；文件＝在线编辑。 */
 export async function sftpOpenRow(r: SftpRow) {
   if (isSftpDeleting(r.path)) return;
-  if (r.dir && !r.link) { await sftpGo(r.path); return; }
-  if (r.link && await isRemoteDir(r.path)) { await sftpGo(r.path); return; }
+  const v = sftp.cur;
+  if (r.dir && !r.link) { await sftpGo(r.path, v); return; }
+  if (r.link && await isRemoteDir(r.path)) { await sftpGo(r.path, v); return; }
   sftpEdit(r.path);
 }
 export function fmtSize(n: number): string {
@@ -368,7 +406,7 @@ export async function pasteSftpEntry(dir = sftp.sftpPath, copied = sftp.sftpClip
     const target = sftpJoin(dir, name);
     await invoke('sftp_copy', { connId, from: copied.path, to: target });
     say(name === copied.name ? `已粘贴「${name}」` : `已粘贴为「${name}」`);
-    if (sftp.sftpConnId === connId) await loadDir(dir, true);
+    await loadDir(dir, true, false, sftp.views[connId]);
   } catch (e) { say(String(e), 'err'); }
   finally { sftp.sftpXfer = ''; }
 }
@@ -408,11 +446,12 @@ export async function saveFileRename() {
     if (entries.some(entry => entry.name === name)) throw new Error('同名文件或文件夹已存在，请换一个名字');
     await invoke('sftp_rename', { connId: edit.connId, from: edit.path, to: target });
     if (sftp.fileRename === edit) sftp.fileRename = null;
-    if (sftp.sftpConnId === edit.connId) {
-      if (sftp.sftpSel === edit.path) sftp.sftpSel = target;
+    const v = sftp.views[edit.connId];
+    if (v) {
+      if (v.sftpSel === edit.path) v.sftpSel = target;
       const prefix = `${edit.path}/`;
-      sftp.sftpOpenDirs = new Set([...sftp.sftpOpenDirs].filter(path => path !== edit.path && !path.startsWith(prefix)));
-      await loadDir(dir, true);
+      v.sftpOpenDirs = new Set([...v.sftpOpenDirs].filter(path => path !== edit.path && !path.startsWith(prefix)));
+      await loadDir(dir, true, false, v);
     }
   } catch (e) {
     if (sftp.fileRename === edit) { edit.err = String(e); edit.busy = false; }
@@ -431,7 +470,7 @@ export async function confirmFsAsk() {
     if (sftp.fsAsk.mode === 'mkdir') await invoke('sftp_mkdir', { connId, path: sftpJoin(dir, v) });
     else await invoke('sftp_create_file', { connId, path: sftpJoin(dir, v) });
     sftp.fsAsk = null;
-    if (sftp.sftpConnId === connId) await loadDir(dir, true);
+    await loadDir(dir, true, false, sftp.views[connId]);
   } catch (e) { if (sftp.fsAsk) { sftp.fsAsk.err = String(e); sftp.fsAsk.busy = false; } }
 }
 export async function sftpDelete(r: SftpRow) {
@@ -447,13 +486,14 @@ export async function sftpDelete(r: SftpRow) {
   sftp.sftpDeleting = new Set(sftp.sftpDeleting).add(key);
   try {
     await invoke('sftp_remove', { connId, path: r.path, dir: isDir });
-    if (sftp.sftpConnId === connId) {
+    const v = sftp.views[connId];
+    if (v) {
       const prefix = `${r.path.replace(/\/+$/, '')}/`;
-      sftp.sftpOpenDirs = new Set([...sftp.sftpOpenDirs].filter((path) => path !== r.path && !path.startsWith(prefix)));
-      const kids = { ...sftp.sftpKids };
+      v.sftpOpenDirs = new Set([...v.sftpOpenDirs].filter((path) => path !== r.path && !path.startsWith(prefix)));
+      const kids = { ...v.sftpKids };
       for (const path of Object.keys(kids)) if (path === r.path || path.startsWith(prefix)) delete kids[path];
-      sftp.sftpKids = kids;
-      await loadDir(parentOf(r.path), true);
+      v.sftpKids = kids;
+      await loadDir(parentOf(r.path), true, false, v);
     }
   } catch (e) { say(String(e), 'err'); }
   finally {
@@ -583,7 +623,7 @@ export async function sftpUpload(dir = sftp.sftpPath) {
   finally {
     sftp.sftpXfer = '';
     if (uploaded && !failed) say(uploaded > 1 ? `已上传 ${uploaded} 个文件` : '已上传');
-    if (sftp.sftpConnId === connId) await loadDir(dir, true);
+    await loadDir(dir, true, false, sftp.views[connId]);
   }
 }
 async function uploadSftpFile(connId: string, dir: string, name: string, local?: string, file?: File) {
@@ -656,7 +696,7 @@ async function sftpUploadDropped(files: File[], dir = sftp.sftpPath, connId = sf
     if (uploaded && !failed) say(uploaded > 1 ? `已上传 ${uploaded} 个项目` : '已上传');
     // A cancelled upload can retain partial remote data. Refresh only its
     // original connection, even if the user switched servers during capture.
-    if (attempted && sftp.sftpConnId === connId) await loadDir(dir, true);
+    if (attempted) await loadDir(dir, true, false, sftp.views[connId]);
   }
 }
 export function onSftpDragOver(e: DragEvent) {
@@ -702,30 +742,11 @@ export function initSftp() {
       discardSftpLocalDrop();
     };
   });
-  // 首次开文件面板或换了连接 → 回到这个连接上次打开的目录（没有或已经不在了就从 home 起步）；关了再开则保留原目录。
+  // 换了当前机器：接下来的文件操作默认作用在它的面板上（面板本身由各个窗格的 SftpPanel 建、按需加载）
   $effect(() => {
     const id = app.activeConnId;
-    if (app.view !== 'remote' || !app.isSshConn || !workbench.wb.files || !id) return;
-    if (sftp.sftpConnId === id) return;
-    // 先把离开的这台的列表留在内存里：切回来直接显示，不用重新读一遍（SFTP 连接本身后端一直留着）
-    if (sftp.sftpConnId && sftp.sftpPath) views.set(sftp.sftpConnId, { path: sftp.sftpPath, kids: sftp.sftpKids, open: sftp.sftpOpenDirs, sel: sftp.sftpSel });
-    sftp.sftpConnId = id; sftp.sftpErr = '';
-    const v = views.get(id);
-    if (v) {
-      sftp.sftpPath = v.path; sftp.sftpPathDraft = v.path; sftp.sftpKids = v.kids; sftp.sftpOpenDirs = v.open; sftp.sftpSel = v.sel;
-      void sftpRefresh(); // 后台悄悄刷新一下，列表不清空
-      return;
-    }
-    sftp.sftpPath = ''; sftp.sftpPathDraft = '';
-    sftp.sftpKids = {}; sftp.sftpOpenDirs = new Set(); sftp.sftpSel = '';
-    const last = lastDir(id);
-    void sftpGo(last).then(() => { if (last && sftp.sftpErr && sftp.sftpConnId === id) void sftpGo(''); });
-  });
-  $effect(() => { if (sftp.sftpPathEdit && sftp.sftpPathEl) { sftp.sftpPathEl.focus(); sftp.sftpPathEl.select(); } });
-  // 路径深了就把尾巴（当前目录）滚进视野——面包屑是从左往右长的。
-  $effect(() => {
-    void sftp.sftpCrumbs;
-    if (sftp.crumbEl) sftp.crumbEl.scrollLeft = sftp.crumbEl.scrollWidth;
+    if (app.view !== 'remote' || !app.isSshConn || !id) return;
+    sftp.sftpConnId = id;
   });
   $effect(() => {
     if (!sftp.fctxMenu || !sftp.fctxMenuEl) return;

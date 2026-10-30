@@ -119,7 +119,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div class="wb-split v" title="拖动调整宽度" role="separator" aria-orientation="vertical" onmousedown={(e) => startWbResize(e, 'v')}></div>
     {/if}
-    <SftpPanel />
+    {#if app.activeConnId}<SftpPanel connId={app.activeConnId} solo={workbench.wbFilesSolo} />{/if}
   {/if}
 </div>
 

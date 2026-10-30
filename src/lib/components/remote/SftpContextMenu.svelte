@@ -33,7 +33,7 @@
         <button class="ctx-item" role="menuitem" onclick={() => pasteSftpEntry()} disabled={!!sftp.sftpXfer || sftp.sftpClipboard.connId !== sftp.sftpConnId}>粘贴</button>
       {/if}
       <button class="ctx-item" role="menuitem" onclick={() => copyPath(sftp.sftpPath)}>复制当前路径</button>
-      <button class="ctx-item" role="menuitem" onclick={sftpRefresh}>刷新</button>
+      <button class="ctx-item" role="menuitem" onclick={() => sftpRefresh()}>刷新</button>
     {/if}
   </div>
 {/if}

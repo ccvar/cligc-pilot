@@ -2,42 +2,54 @@
   import SftpTransfers from '$lib/SftpTransfers.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import { workbench, missingSshCredential } from '$lib/state/workbench.svelte.js';
-  import { sftp, onSftpDragOver, onSftpDragLeave, onSftpDrop, sftpUp, commitPath, sftpGo, startPathEdit, sftpRefresh, openMkdir, isSftpDeleting, sftpUpload, sftpDownloadSelected, cancelSftpTransfer, clearSftpTransfers, revealSftpTransfer, retryOrRepairSftp, setSort, openFctx, isSftpDeleteTarget, onSftpDragStart, sftpOpenRow, toggleDir, focusFileRename, saveFileRename, openRename, fmtSize, fmtStamp, startColDrag, onColKey } from '$lib/state/sftp.svelte.js';
+  import { sftp, EMPTY_VIEW, ensureSftpView, onSftpDragOver, onSftpDragLeave, onSftpDrop, sftpUp, commitPath, sftpGo, startPathEdit, sftpRefresh, openMkdir, isSftpDeleting, sftpUpload, sftpDownloadSelected, cancelSftpTransfer, clearSftpTransfers, revealSftpTransfer, retryOrRepairSftp, setSort, openFctx, isSftpDeleteTarget, onSftpDragStart, sftpOpenRow, toggleDir, focusFileRename, saveFileRename, openRename, fmtSize, fmtStamp, startColDrag, onColKey } from '$lib/state/sftp.svelte.js';
   import { isMac } from '$lib/state/env';
+
+  // 每个窗格一块：显示 connId 那台机器的文件。solo＝主区收起时撑满整宽（只有聚焦的工作台会这样）
+  let { connId, solo = false }: { connId: string; solo?: boolean } = $props();
+  $effect(() => { ensureSftpView(connId); });
+  const v = $derived(sftp.views[connId] ?? EMPTY_VIEW);
+  // 在这块面板里点、右键、拖文件进来、键盘操作：接下来的文件操作都作用在这台机器上
+  const claim = () => { sftp.sftpConnId = connId; };
+  $effect(() => { if (v.sftpPathEdit && v.sftpPathEl) { v.sftpPathEl.focus(); v.sftpPathEl.select(); } });
+  // 路径深了就把尾巴（当前目录）滚进视野——面包屑是从左往右长的。
+  $effect(() => { void v.sftpCrumbs; if (v.crumbEl) v.crumbEl.scrollLeft = v.crumbEl.scrollWidth; });
+  const over = $derived(sftp.sftpFileOver && sftp.sftpDropTarget?.connId === connId);
 </script>
 
-<aside class="files-wrap" class:solo={workbench.wbFilesSolo} class:fileover={sftp.sftpFileOver}
-    style="{workbench.wbFilesSolo ? '' : `width:${workbench.wb.filesW}px;`} --fw-perm:{sftp.colW.perm}px; --fw-size:{sftp.colW.size}px; --fw-date:{sftp.colW.date}px"
+<aside class="files-wrap" class:solo class:fileover={over}
+    onpointerdowncapture={claim} onfocusincapture={claim} oncontextmenucapture={claim} ondragentercapture={claim} ondragovercapture={claim}
+    style="{solo ? '' : `width:${workbench.wb.filesW}px;`} --fw-perm:{sftp.colW.perm}px; --fw-size:{sftp.colW.size}px; --fw-date:{sftp.colW.date}px"
     ondragenter={onSftpDragOver} ondragover={onSftpDragOver} ondragleave={onSftpDragLeave} ondrop={onSftpDrop}>
-  {#if sftp.sftpFileOver}
-    <div class="files-drop-overlay"><b>松开上传</b><small title={sftp.sftpDropTarget?.remoteDir}>到 {sftp.sftpDropTarget?.remoteDir || sftp.sftpPath || '当前目录'}</small></div>
+  {#if over}
+    <div class="files-drop-overlay"><b>松开上传</b><small title={sftp.sftpDropTarget?.remoteDir}>到 {sftp.sftpDropTarget?.remoteDir || v.sftpPath || '当前目录'}</small></div>
   {/if}
   <div class="files-bar">
-    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={sftpUp} disabled={sftp.sftpBusy || !sftp.sftpPath || sftp.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-    {#if sftp.sftpPathEdit}
-      <input class="tin fpath" bind:this={sftp.sftpPathEl} bind:value={sftp.sftpPathDraft} spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="/"
-        onblur={() => (sftp.sftpPathEdit = false)}
-        onkeydown={(e) => { if (e.key === 'Enter') commitPath(); else if (e.key === 'Escape') sftp.sftpPathEdit = false; }} />
+    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={sftpUp} disabled={v.sftpBusy || !v.sftpPath || v.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    {#if v.sftpPathEdit}
+      <input class="tin fpath" bind:this={v.sftpPathEl} bind:value={v.sftpPathDraft} spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="/"
+        onblur={() => (v.sftpPathEdit = false)}
+        onkeydown={(e) => { if (e.key === 'Enter') commitPath(); else if (e.key === 'Escape') v.sftpPathEdit = false; }} />
     {:else}
       <!-- 面包屑：点哪一段跳哪一层。尾巴上那块空白本身是个按钮 ——
            点它＝切成输入框直接敲路径（资源管理器那套），键盘也 Tab 得到。 -->
-      <div class="fcrumbs" bind:this={sftp.crumbEl}>
-        {#each sftp.sftpCrumbs as c, i (c.path)}
+      <div class="fcrumbs" bind:this={v.crumbEl}>
+        {#each v.sftpCrumbs as c, i (c.path)}
           {#if i > 0}<span class="fcrumb-sep">›</span>{/if}
-          <button class="fcrumb" class:cur={c.path === sftp.sftpPath} disabled={sftp.sftpBusy} onclick={() => sftpGo(c.path)}>{c.name}</button>
+          <button class="fcrumb" class:cur={c.path === v.sftpPath} disabled={v.sftpBusy} onclick={() => sftpGo(c.path)}>{c.name}</button>
         {/each}
         <button class="fcrumb-blank" aria-label="直接输入路径" data-tip="点这里可直接输入路径" onclick={startPathEdit}></button>
       </div>
     {/if}
-    <button class="fbtn" aria-label="刷新" data-tip="刷新" onclick={sftpRefresh} disabled={sftp.sftpBusy}><RefreshIcon spinning={sftp.sftpBusy} /></button>
-    <button class="fbtn" aria-label="新建文件夹" data-tip="新建文件夹" onclick={() => openMkdir()} disabled={sftp.sftpBusy}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.8 4.2A1.4 1.4 0 0 1 3.2 2.8h3l1.4 1.6h5.2a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4v-7.6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7.4v3.4M6.3 9.1h3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg></button>
-    <SftpTransfers records={sftp.sftpTransfers} busy={sftp.sftpBusy || !!sftp.sftpXfer || sftp.sftpNativeDragging}
-      canDownload={!sftp.fileRename && !!sftp.sftpSelectedRow && !isSftpDeleting(sftp.sftpSelectedRow.path)} selectedName={sftp.sftpSelectedRow?.name}
+    <button class="fbtn" aria-label="刷新" data-tip="刷新" onclick={() => sftpRefresh()} disabled={v.sftpBusy}><RefreshIcon spinning={v.sftpBusy} /></button>
+    <button class="fbtn" aria-label="新建文件夹" data-tip="新建文件夹" onclick={() => openMkdir()} disabled={v.sftpBusy}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.8 4.2A1.4 1.4 0 0 1 3.2 2.8h3l1.4 1.6h5.2a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4v-7.6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7.4v3.4M6.3 9.1h3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg></button>
+    <SftpTransfers records={sftp.sftpTransfers} busy={v.sftpBusy || !!sftp.sftpXfer || sftp.sftpNativeDragging}
+      canDownload={!sftp.fileRename && !!v.sftpSelectedRow && !isSftpDeleting(v.sftpSelectedRow.path)} selectedName={v.sftpSelectedRow?.name}
       cancellableIds={sftp.sftpCancellableIds} onupload={() => sftpUpload()} ondownload={sftpDownloadSelected}
       oncancel={cancelSftpTransfer} onclear={clearSftpTransfers} onreveal={revealSftpTransfer} />
   </div>
   <!-- 出错就地给个重试：首次加载失败时 sftpPath 还是空的，刷新键（要有当前目录）帮不上忙 -->
-  {#if sftp.sftpErr}<button type="button" class="err-note files-err" onclick={retryOrRepairSftp} title={missingSshCredential(sftp.sftpErr) ? '打开连接设置并补录密码' : '点击重试'}>{sftp.sftpErr} · {missingSshCredential(sftp.sftpErr) ? '补录密码' : '点此重试'}</button>{/if}
+  {#if v.sftpErr}<button type="button" class="err-note files-err" onclick={retryOrRepairSftp} title={missingSshCredential(v.sftpErr) ? '打开连接设置并补录密码' : '点击重试'}>{v.sftpErr} · {missingSshCredential(v.sftpErr) ? '补录密码' : '点此重试'}</button>{/if}
   <div class="fhead">
     <button class="fh fh-name" onclick={() => setSort('name')}>名称{#if sftp.sftpSort.key === 'name'}<span class="fh-ar" class:desc={!sftp.sftpSort.asc}>^</span>{/if}</button>
     <span class="fh fh-perm">{@render colGrip('perm')}权限</span>
@@ -46,26 +58,26 @@
   </div>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="files-list" role="tree" tabindex="-1" aria-label="远端文件" oncontextmenu={(e) => openFctx(e, null)}>
-    {#if sftp.sftpBusy && !sftp.sftpRows.length}
+    {#if v.sftpBusy && !v.sftpRows.length}
       <div class="files-empty">读取中…</div>
-    {:else if !sftp.sftpRows.length}
-      <div class="files-empty">{sftp.sftpErr ? '' : '空目录'}</div>
+    {:else if !v.sftpRows.length}
+      <div class="files-empty">{v.sftpErr ? '' : '空目录'}</div>
     {:else}
-      {#each sftp.sftpRows as r (r.path)}
+      {#each v.sftpRows as r (r.path)}
         {@const deleting = isSftpDeleting(r.path)}
         {@const deleteTarget = isSftpDeleteTarget(r.path)}
-        {@const renaming = sftp.fileRename?.connId === sftp.sftpConnId && sftp.fileRename?.path === r.path}
+        {@const renaming = sftp.fileRename?.connId === connId && sftp.fileRename?.path === r.path}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="frow" class:on={sftp.sftpSel === r.path} class:deleting class:drop-target={sftp.sftpFileOver && sftp.sftpDropTarget?.remoteDir === r.path && r.dir && !r.link} data-sftp-drop-path={r.path} role="treeitem" tabindex="0" aria-selected={sftp.sftpSel === r.path} aria-expanded={r.dir && !r.link ? sftp.sftpOpenDirs.has(r.path) : undefined} aria-level={r.depth + 1} aria-busy={deleting}
-          draggable={isMac && !deleting && !renaming && !sftp.sftpBusy && !sftp.sftpXfer && !sftp.sftpNativeDragging} ondragstart={(e) => onSftpDragStart(e, r)}
-          onclick={() => { if (!deleting) sftp.sftpSel = r.path; }}
+        <div class="frow" class:on={v.sftpSel === r.path} class:deleting class:drop-target={over && sftp.sftpDropTarget?.remoteDir === r.path && r.dir && !r.link} data-sftp-drop-path={r.path} role="treeitem" tabindex="0" aria-selected={v.sftpSel === r.path} aria-expanded={r.dir && !r.link ? v.sftpOpenDirs.has(r.path) : undefined} aria-level={r.depth + 1} aria-busy={deleting}
+          draggable={isMac && !deleting && !renaming && !v.sftpBusy && !sftp.sftpXfer && !sftp.sftpNativeDragging} ondragstart={(e) => onSftpDragStart(e, r)}
+          onclick={() => { if (!deleting) v.sftpSel = r.path; }}
           ondblclick={() => { if (!deleting && !renaming) sftpOpenRow(r); }}
           oncontextmenu={(e) => { e.stopPropagation(); if (!deleting) openFctx(e, r); }}
           onkeydown={(e) => { if (!deleting && !renaming && e.key === 'Enter') sftpOpenRow(r); }}>
           <span class="fname" style="padding-left:{r.depth * 15}px">
             {#if r.dir && !r.link}
-              <button class="fchev" class:open={sftp.sftpOpenDirs.has(r.path)} aria-label="展开" disabled={deleting} onclick={(e) => { e.stopPropagation(); if (!deleting) toggleDir(r); }}>
-                {#if sftp.sftpLoading[r.path]}<span class="fspin"></span>{:else}<svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}
+              <button class="fchev" class:open={v.sftpOpenDirs.has(r.path)} aria-label="展开" disabled={deleting} onclick={(e) => { e.stopPropagation(); if (!deleting) toggleDir(r); }}>
+                {#if v.sftpLoading[r.path]}<span class="fspin"></span>{:else}<svg width="9" height="9" viewBox="0 0 12 12" fill="none"><path d="M4.5 2.5 8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>{/if}
               </button>
             {:else}
               <span class="fchev-sp"></span>

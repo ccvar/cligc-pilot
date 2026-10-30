@@ -56,7 +56,9 @@ function harness(overrides = {}) {
     localStorage: { getItem:key => storage.get(key) ?? null, setItem:(key, value) => storage.set(key, value) },
     setTimeout:callback => { const id=++timerSerial; timers.set(id, callback); return id; },
     clearTimeout:id => timers.delete(id),
-    loadDir:async (path, force) => reloads.push({ path, force }),
+    // 刷新带着面板（哪台机器的）：上传途中切到别的机器，也只刷新原来那台自己的面板
+    views:{ 'server-a':{ connId:'server-a' }, 'server-b':{ connId:'server-b' } },
+    loadDir:async (path, force, _quiet, view) => reloads.push({ path, force, conn:view?.connId }),
     revealItemInDir:async path => reveals.push(path),
     attachFile:async file => attached.push(file),
     splitConversation:id => id === 'chat-b' ? { id } : null,
@@ -469,7 +471,7 @@ test('upload file selection keeps its source server and records confirmed byte t
   assert.equal(ctx.sftpTransfers[0].files, 1);
   assert.equal(ctx.sftpUploadTask, null);
   assert.equal(ctx.sftpXfer, '');
-  assert.equal(reloads.length, 0, 'Changing servers must not reload the old directory on the new server');
+  assert.deepEqual(reloads, [{ path:'/config', force:true, conn:'server-a' }], 'Changing servers reloads the original server\'s own panel, never the new one');
 });
 
 test('streaming uploads can be cancelled and do not start the next file in the batch', async () => {
@@ -567,7 +569,7 @@ test('first dropped upload failure or cancellation refreshes partial files only 
       assert.equal(calls[0].args.connId, 'server-a');
       assert.equal(calls[0].args.remote, '/config/partial.bin');
       assert.equal(ctx.sftpTransfers[0].status, status);
-      assert.deepEqual(reloads, switched ? [] : [{ path:'/config', force:true }]);
+      assert.deepEqual(reloads, [{ path:'/config', force:true, conn:'server-a' }]);
       assert.equal(ctx.sftpXfer, '');
     }
   }
@@ -707,7 +709,7 @@ test('quick drop snapshots the connection and hovered child directory before cap
   assert.equal(upload.args.connId, 'server-a');
   assert.equal(upload.args.remote, `${folder.path}/sample.txt`);
   assert.equal(ctx.sftpTransfers[0].connId, 'server-a');
-  assert.equal(reloads.length, 0);
+  assert.ok(reloads.every(reload => reload.conn === 'server-a'), 'Only the original server\'s panel is refreshed');
   assert.equal(calls.some(call => call.command === 'sftp_discard_local_drop'), false);
   assert.equal(calls.find(call => call.command === 'sftp_consume_local_drop').args.entries[0].directory, false);
 });

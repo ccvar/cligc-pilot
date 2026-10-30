@@ -115,7 +115,7 @@ export async function saveSshEdit() {
       // 补录凭据后原地恢复工作台，不要求用户再点终端和文件区的刷新按钮。
       await tick();
       if (app.view === 'remote' && workbench.wb.term) void reconnectTerm(conn.id);
-      if (app.view === 'remote' && workbench.wb.files && sftp.sftpConnId === conn.id) void sftpGo(sftp.sftpPath);
+      if (app.view === 'remote' && sftp.views[conn.id]) void sftpGo(sftp.views[conn.id].sftpPath, sftp.views[conn.id]);
     }
   } catch (e) { sshForm.sshErr = String(e); }
   finally { sshForm.sshConnecting = false; }
