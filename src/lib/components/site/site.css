@@ -223,9 +223,8 @@
 .su .src { display: inline-flex; align-items: center; gap: 5px; }
 .su .src svg { flex: none; }
 .su .err-note.src, .su p.src { display: flex; }
-/* 侧栏收起：红绿灯和悬浮的展开侧栏 / 搜索 / 前进后退按钮压在内容区左上，页头往右让位（和对话页的 .thread-head 同一组数值）；
-   有更新时顶部多一个更新按钮，再让一个按钮宽度。写在最后、选择器更具体，窄屏的 padding 简写盖不掉 */
-.app.rail-collapsed .su .page-head { padding-left: 194px; }
-.app.rail-collapsed.fs .su .page-head, .app.rail-collapsed.win .su .page-head { padding-left: 154px; }
-.app.rail-collapsed.top-update-visible .su .page-head { padding-left: 221px; }
-.app.rail-collapsed.top-update-visible.fs .su .page-head, .app.rail-collapsed.top-update-visible.win .su .page-head { padding-left: 181px; }
+/* 页头放在窗口最上面那一行（和红绿灯、展开侧栏 / 搜索按钮同一行，和对话页一样），收起 / 展开侧栏时标题不上下跳。
+   侧栏收起时红绿灯和浮动按钮压在内容区左上，页头往右让出 --tools-w（+page.svelte 按有没有更新、手机按钮算）。
+   写在最后、选择器更具体，窄屏的 padding 简写盖不掉 */
+.app .su .page-head { padding-top: 2px; min-height: 28px; }
+.app.rail-collapsed .su .page-head { padding-left: var(--tools-w, 194px); }

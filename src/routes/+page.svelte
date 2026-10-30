@@ -138,7 +138,8 @@
   onresize={() => { hideTip(); ui.imgTip = null; ui.hoverWant = ''; }}
   onkeydown={(e) => { if (editor.edOpen) { onEditKey(e); return; } if (e.key === 'Escape') { if (ui.lightbox) ui.lightbox = ''; } }}
 />
-<main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible}>
+<!-- --tools-w：侧栏收起时左上角红绿灯 + 浮动按钮占的宽度（有更新、连着手机各多一个按钮），页头按它往右让位 -->
+<main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible} style="--tools-w: {(ui.isFullscreen || isWindows ? 154 : 194) + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0)}px">
   <!-- 融合式标题栏：透明拖拽条铺满顶部，红绿灯与工具按钮浮在其上（macOS Overlay） -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 194 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
