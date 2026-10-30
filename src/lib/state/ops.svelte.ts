@@ -92,8 +92,10 @@ export async function runTask(siteId: string, task: string, hold = false) {
   try { await invoke('run_ops_task', { id: siteId, task, hold }); }
   catch (e) { say(String(e), 'err'); }
 }
-export async function workItem(siteId: string, item: OpsItem) {
-  try { await invoke('queue_work', { id: siteId, itemId: item.id }); }
+/** model：这一次临时换的模型（"brain::model"），不改站点和托管方案的设置 */
+export async function workItem(siteId: string, item: OpsItem, model = '') {
+  const [b, ...m] = model.split('::');
+  try { await invoke('queue_work', { id: siteId, itemId: item.id, model: model ? [b, m.join('::')] : null }); }
   catch (e) { say(String(e), 'err'); }
 }
 /** 待你确认的这一版合不进主分支：放回待处理，马上让 AI 在最新的主分支上重改 */

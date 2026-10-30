@@ -1,4 +1,5 @@
 <script lang="ts">
+  import OpsErrorHint from './OpsErrorHint.svelte';
   import './site.css';
   import Icon from './Icon.svelte';
   import type { SiteJob } from '$lib/types';
@@ -38,7 +39,7 @@
     </div>
     {#if focus?.detail}<div class="step-detail mono" title={focus.detail}>{focus.label} · {focus.detail}</div>{/if}
   {/if}
-  {#if job.error}<div class="err-note">{job.error}</div>{/if}
+  {#if job.error}<div class="err-note">{job.error}</div><OpsErrorHint text={job.error} />{/if}
   {#if showLog}<pre class="log" bind:this={logEl}>{job.log.join('\n') || '（还没有输出）'}</pre>{/if}
 </div>
 

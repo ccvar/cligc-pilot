@@ -85,10 +85,17 @@ pub fn run_ops_task(app: tauri::AppHandle, id: String, task: String, hold: Optio
     site_runner::start(ctx(&app), &id, &task, "manual", arg)
 }
 
-/// 立即按站点档位处理队列里的一条机会。
+/// 立即按站点档位处理队列里的一条机会。`model`：这一次临时换的模型（brain, model），不改站点和托管方案的设置。
 #[tauri::command]
-pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
-    site_runner::start(ctx(&app), &id, "work", "manual", Some(item_id))
+pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String, model: Option<(String, String)>) -> Result<String, String> {
+    site_runner::start_with_model(ctx(&app), &id, "work", "manual", Some(item_id), model)
+}
+
+/// 这个站点让 AI 改时默认用的模型（brain, model）：托管站点用方案里的主模型，否则用站点运营设置的；没设好返回空。
+#[tauri::command]
+pub fn site_ops_model(state: tauri::State<'_, AppState>, id: String) -> Result<(String, String), String> {
+    let site = state.sites.get(&id)?;
+    Ok(site_runner::models_for(&site, &state.data_dir).map(|(m, _)| m).unwrap_or_default())
 }
 
 /// 批量让 AI 改（按顺序处理选中的条目）。

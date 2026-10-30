@@ -159,3 +159,26 @@ export function friendly(e: unknown): string {
   const x = explainError(e);
   return x.known ? `${x.text}\n（原文：${x.raw}）` : x.raw;
 }
+
+/** 站点运营作业（AI 改动）失败时的下一步：说清楚问题在哪、去哪改。billing 是服务商充值页（认得出是哪家才给）。
+ *  和对话里的 turnErrorHint 同一组判断，只是说法按「让 AI 改」这个场景写。 */
+export function opsErrorHint(text: string): { text: string; billing: string; settings: boolean } | null {
+  if (!text) return null;
+  const billing = /anthropic/i.test(text) ? 'https://console.anthropic.com/settings/billing'
+    : /openai|gpt/i.test(text) ? 'https://platform.openai.com/settings/organization/billing/overview'
+    : /deepseek/i.test(text) ? 'https://platform.deepseek.com/top_up'
+    : /openrouter/i.test(text) ? 'https://openrouter.ai/settings/credits' : '';
+  if (/credit balance is too low|insufficient[_ ](quota|balance|funds)|余额不足|账户余额|payment required|\b402\b/i.test(text))
+    return { text: '这个站点用的模型服务余额不够了：到服务商后台充值后再让 AI 改，或者换个模型重试。站点和托管方案用哪个模型，在「设置 → API 服务」和托管方案里改。', billing, settings: true };
+  if (/invalid[ _-]?(x-)?api[ _-]?key|incorrect api key|authentication[_ ]error|unauthorized|\b401\b|密钥(无效|错误)/i.test(text))
+    return { text: '模型服务不认这个 API 密钥（填错或过期了）：到「设置 → API 服务」里检查密钥，或者换个模型重试。', billing: '', settings: true };
+  if (/not logged in|please run \/login|claude login|未登录/i.test(text))
+    return { text: '本机的客户端还没登录：到「设置」里登录后再让 AI 改，或者换个模型重试。', billing: '', settings: true };
+  if (/model.{0,40}(not found|does not exist|not available|unsupported)|unknown model|模型不存在/i.test(text))
+    return { text: '这个模型用不了（名字不对，或者账号没开通）：换个模型重试，或者到站点 / 托管方案里改成别的模型。', billing: '', settings: false };
+  if (/rate[ _-]?limit|too many requests|\b429\b|usage limit|quota (exceeded|reached)|limit reached|额度(用完|不足)/i.test(text))
+    return { text: '请求太频繁或额度用完了：等一会儿再让 AI 改，或者换个模型重试。', billing, settings: false };
+  if (/overloaded|\b529\b|\b50[0234]\b|internal server error|bad gateway|service unavailable/i.test(text))
+    return { text: '模型服务商那边暂时出了问题：稍等片刻再让 AI 改。', billing: '', settings: false };
+  return null;
+}

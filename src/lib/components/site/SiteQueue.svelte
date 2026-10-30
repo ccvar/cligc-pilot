@@ -6,6 +6,9 @@
   import type { Site, OpsItem } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
+  import ModelMenu from './ModelMenu.svelte';
+  import OpsErrorHint from './OpsErrorHint.svelte';
+  import BrainIcon from '$lib/BrainIcon.svelte';
   import { clock, full as fullTime } from './fmt';
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
@@ -16,7 +19,7 @@
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
-  import { modelName } from '$lib/state/fleet.svelte.js';
+  import { modelName, modelTarget } from '$lib/state/fleet.svelte.js';
 
   let { site }: { site: Site } = $props();
   $effect(() => { void loadQueue(site.id); });
@@ -98,6 +101,16 @@
   const myPlan = $derived(managed.overview?.groups.find((g) => g.sites.includes(site.id)));
   const full = $derived(myPlan ? budgetFull(managed.overview?.sites.find((x) => x.id === site.id)?.budget) : '');
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
+  // 「用 XX 改」：按钮上写这个站点默认用的模型（托管站点是方案里的主模型）；▾ 换个模型只用这一次
+  let siteModel = $state('');
+  $effect(() => { const id = site.id; invoke<[string, string]>('site_ops_model', { id }).then(([b, m]) => { if (id === site.id) siteModel = b ? `${b}::${m}` : ''; }).catch(() => (siteModel = '')); });
+  const mt = $derived(modelTarget(siteModel));
+  let mMenu = $state<{ at: { left: number; top: number; bottom: number; right: number }; item: OpsItem } | null>(null);
+  function openModelMenu(e: MouseEvent, item: OpsItem) {
+    e.preventDefault();
+    const r = e.type === 'contextmenu' ? { left: e.clientX, right: e.clientX + 260, top: e.clientY, bottom: e.clientY } : (e.currentTarget as HTMLElement).getBoundingClientRect();
+    mMenu = { at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, item };
+  }
   let openWhy = $state<Set<string>>(new Set());
   // 已上线、已驳回 / 回滚：每条默认只留标题一行，点标题或左边的箭头展开看详情；上线后有待核对的默认展开
   const foldable = $derived(filter === 'live' || filter === 'closed');
@@ -268,7 +281,7 @@
                 {/each}
               </div>
             {/if}
-            {#if i.note}<p class="verdict">{i.note}</p>{/if}
+            {#if i.note}<p class="verdict">{i.note}</p>{#if i.status === 'failed'}<OpsErrorHint text={i.note} />{/if}{/if}
             {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
             {#if i.checks?.length}
               {@const bad = i.checks.filter((c) => !c.ok).length}
@@ -287,7 +300,7 @@
               {#if i.status === 'proposed' && conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} disabled={busy} data-tip="丢掉这一版，让 AI 在最新的主分支上重新改；改好后照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
               {:else if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
               {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto' && !conflicts.has(i.id))) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
-              {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy}><Icon name="sparkles" size={11} />{i.status === 'failed' && i.head_sha ? '让 AI 重新改' : '让 AI 改'}</button>{/if}
+              {#if canWork(i)}<span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, i)} disabled={busy} data-tip={`用 ${mt.name} ${i.status === 'failed' && i.head_sha ? '重新改一遍' : '改'}：这个站点默认的模型${siteModel ? '' : '（还没设好，会提示你去设）'}\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} {i.status === 'failed' && i.head_sha ? '重新改' : '改'}</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, i)} disabled={busy} aria-label="换个模型改" data-tip="换个模型改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>{/if}
               {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
               {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}
@@ -313,6 +326,8 @@
     <div class="sheet-body"><pre class="diff">{#each ops.diff.text.split('\n') as l, n (n)}<span class={l.startsWith('+') && !l.startsWith('+++') ? 'add' : l.startsWith('-') && !l.startsWith('---') ? 'del' : l.startsWith('@@') ? 'hunk' : ''}>{l}{'\n'}</span>{/each}</pre></div>
   </div>
 {/if}
+
+{#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
   .checks { list-style: none; margin: 2px 0 4px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
@@ -349,6 +364,11 @@
   .moved .pill { flex: none; }
   .mv-t { min-width: 0; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
   .moved .link-btn { flex: none; font-size: 12px; }
+  /* 「用 XX 改」+ ▾：两个按钮拼成一个 */
+  .split { display: inline-flex; }
+  .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .split .caret { padding: 0 6px; margin-left: -1px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .bi-w { display: inline-flex; }
   .items { padding-top: 0; padding-bottom: 0; }
   /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */
   .card.items > .list:last-child { margin-bottom: 0; }
