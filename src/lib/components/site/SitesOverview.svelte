@@ -63,6 +63,19 @@
   const endLabel = $derived([ends.ga4, ends.gsc].filter(Boolean).sort().pop() ?? '');
   const endsTip = $derived([ends.ga4 && `GA4 到 ${md(ends.ga4)}`, ends.gsc && `Google 到 ${md(ends.gsc)}`, ends.bing && `Bing 到 ${md(ends.bing)}`].filter(Boolean).join(' · '));
   let moreOpen = $state(false);
+  // 下面内容区给滚动条留了位置（scrollbar-gutter），标题行和 tab 行的右边距也加上这一截，三行的右边才对齐
+  let bodyEl = $state<HTMLElement>();
+  let sb = $state(0);
+  $effect(() => {
+    const el = bodyEl;
+    if (!el) return;
+    // 内容区一直给滚动条留着位置（scrollbar-gutter: stable），先量一次；窗口缩放、系统滚动条设置变了再量
+    const measure = () => { sb = el.offsetWidth - el.clientWidth; };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
   $effect(() => {
     if (!moreOpen) return;
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') moreOpen = false; };
@@ -123,7 +136,7 @@
 {/snippet}
 
 <!-- 找站点走顶部的全局搜索（名称 / 域名 / 仓库 / #标签，直接跳转），这里只留筛选。 -->
-<div class="su page ov">
+<div class="su page ov" style="--sb: {sb}px">
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
@@ -197,7 +210,7 @@
   </div>
   </div>
 
-  <div class="page-body">
+  <div class="page-body" bind:this={bodyEl}>
    {#key fleet.tab}
    <div class="pane" class:wide={fleet.tab === 'sites'}>
     {#if fleet.tab === 'sites'}
@@ -312,12 +325,16 @@
 <style>
   .iss-wrap { position: relative; }
   /* tab 行右边放统计时间段和 ⋯；tab 自己会横向滚动（会裁掉弹出层），所以工具放在外面 */
-  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: 20px; flex: none; }
+  .su.ov .page-head { padding-right: calc(28px + var(--sb, 0px)); }
+  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: calc(28px + var(--sb, 0px)); flex: none; }
   .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
+  @container page (max-width: 640px) {
+    .su.ov .page-head, .tabs-bar { padding-right: calc(16px + var(--sb, 0px)); }
+  }
   .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
   .pop-wrap { position: relative; display: inline-flex; }
   /* 低频入口：平时淡一点，悬停 / 打开时再深 */
-  .tab-tools .ic-more { width: 28px; height: 28px; color: var(--faint); }
+  .tab-tools .ic-more { width: 28px; height: 28px; margin-right: -8px; color: var(--faint); } /* 三个点贴齐右边，悬停底色照样左右对称 */
   .tab-tools .ic-more:hover:not(:disabled), .tab-tools .ic-more.on { color: var(--text); }
   /* ⋯ 菜单顶部：统计时间段（两段切换）+ 截至哪天，下面一条线再接批量操作 */
   .range-sec { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; margin-bottom: 2px; border-bottom: 1px solid var(--border); }
