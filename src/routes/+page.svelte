@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { initScrollbarWidth } from '$lib/scrollbarWidth';
   import { hideTip } from '$lib/tip';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import ConversationCanvas from '$lib/ConversationCanvas.svelte';
@@ -78,6 +79,7 @@
   initComposer();
   initThread();
   initUi();
+  initScrollbarWidth();
   initSearch();
   initUpdater();
   initApp();
