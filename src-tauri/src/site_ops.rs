@@ -789,7 +789,8 @@ pub const ROUTE_GROUP_MAX: usize = 5;
 
 /// 批量交给 AI 前：选中的待处理条目里，同一种页面（同一路由、都是改标题 / 描述）的合成一条（其余的作为 also 一起改），
 /// 一个分支、一次检查、一次确认。返回合并后要处理的条目 id（保持原来的顺序）和并掉了几条。
-pub fn group_same_route(site_dir: &Path, ids: &[String]) -> Result<(Vec<String>, usize), String> {
+/// `own_file(页面)`：这个页面在站点代码里有自己的内容文件（一篇一个 md / mdx）——各改各的文件、不会冲突，不合。
+pub fn group_same_route(site_dir: &Path, ids: &[String], own_file: impl Fn(&str) -> bool) -> Result<(Vec<String>, usize), String> {
     let mut merged = 0;
     let out = with_queue(site_dir, |q| {
         let mut keep: Vec<String> = Vec::new();
@@ -797,7 +798,7 @@ pub fn group_same_route(site_dir: &Path, ids: &[String]) -> Result<(Vec<String>,
         let mut groups: Vec<(String, String, usize)> = Vec::new();
         for id in ids {
             let Some(i) = q.iter().position(|x| &x.id == id) else { continue };
-            let key = (q[i].status == "open").then(|| route_key(&q[i].opp)).flatten();
+            let key = (q[i].status == "open" && !own_file(&q[i].opp.page)).then(|| route_key(&q[i].opp)).flatten();
             let slot = key.as_ref().and_then(|k| groups.iter_mut().find(|(gk, _, n)| gk == k && *n < ROUTE_GROUP_MAX));
             match slot {
                 Some((_, head, n)) => {
@@ -1094,17 +1095,18 @@ mod tests {
         let q = load_queue(&dir);
         let id = |k: &str| q.iter().find(|i| i.opp.key == k).unwrap().id.clone();
         let ids: Vec<String> = ["a", "b", "c", "d", "e", "f"].iter().map(|k| id(k)).collect();
-        let (keep, n) = group_same_route(&dir, &ids).unwrap();
-        // /exchange/* 的三条改标题合成一条；别的路由、补内容、一级页面都不动
-        assert_eq!(n, 2);
-        assert_eq!(keep, vec![id("a"), id("c"), id("d"), id("e")]);
+        // okx 这页有自己的内容文件（一篇一个 md）：各改各的，不合
+        let (keep, n) = group_same_route(&dir, &ids, |p| p.ends_with("/exchange/okx/")).unwrap();
+        // /exchange/* 的另外两条改标题合成一条；别的路由、补内容、一级页面、有自己文件的都不动
+        assert_eq!(n, 1);
+        assert_eq!(keep, vec![id("a"), id("c"), id("d"), id("e"), id("f")]);
         let q = load_queue(&dir);
         let head = q.iter().find(|i| i.opp.key == "a").unwrap();
-        assert_eq!(head.also.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(), vec!["b", "f"]);
-        assert_eq!(q.len(), 4);
+        assert_eq!(head.also.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(), vec!["b"]);
+        assert_eq!(q.len(), 5);
         // 并进去的不会再单独入队
         enqueue(&dir, &[o("b", "meta", "https://cexqa.com/exchange/kucoin/")], 2, 0).unwrap();
-        assert_eq!(load_queue(&dir).len(), 4);
+        assert_eq!(load_queue(&dir).len(), 5);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

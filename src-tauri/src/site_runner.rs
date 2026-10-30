@@ -589,6 +589,32 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     Ok(format!("新入队 {} 个，处理 {done} 个。{}", added.len(), notes.join("；")))
 }
 
+/// 站点代码里「一篇一个文件」的内容（md / mdx …）的文件名（小写，index.md 取所在目录名）。
+/// 这种页面各改各的文件，不会互相冲突，批量时不用合成一条；只有页面没有自己的内容文件（模板 / 代码生成的）才合。
+async fn content_stems(ctx: &Ctx, site: &Site) -> std::collections::HashSet<String> {
+    let gh = ctx.state().conns.get(&site.gh_conn_id).ok();
+    let Ok(dir) = crate::site_git::code_dir(site, gh.as_ref()) else { return Default::default() };
+    let out = crate::site_git::git_ok(&dir, &["ls-files"], "").await.unwrap_or_default();
+    let mut set = std::collections::HashSet::new();
+    for l in out.lines() {
+        let p = Path::new(l.trim());
+        if !p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "mdx" | "markdown" | "mdoc")) {
+            continue;
+        }
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let name = if stem.eq_ignore_ascii_case("index") { p.parent().and_then(|d| d.file_name()).and_then(|s| s.to_str()).unwrap_or("") } else { stem };
+        if !name.is_empty() {
+            set.insert(name.to_ascii_lowercase());
+        }
+    }
+    set
+}
+
+fn has_own_file(stems: &std::collections::HashSet<String>, page: &str) -> bool {
+    let last = page.split(['?', '#']).next().unwrap_or("").trim_end_matches('/').rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    !last.is_empty() && stems.contains(&last)
+}
+
 /// 按分数挑前 N 个还没处理的条目，按站点档位处理（改、检查、提 PR / 上线）。返回（处理了几个，说明，因预算停下的原因）。
 async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize, Vec<String>, Option<String>) {
     let site_dir = ctx.site_dir(&site.id);
@@ -598,7 +624,8 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
     // 同一种页面的改标题 / 描述合成一条（同批量让 AI 改）
     let ids: Vec<String> = picked.iter().map(|i| i.id.clone()).collect();
-    if let Ok((keep, n)) = site_ops::group_same_route(&site_dir, &ids) {
+    let own = content_stems(ctx, site).await;
+    if let Ok((keep, n)) = site_ops::group_same_route(&site_dir, &ids, |p| has_own_file(&own, p)) {
         if n > 0 {
             job.line(&format!("有 {n} 条和别的是同一种页面，合在一起交给 AI"));
             let q = site_ops::load_queue(&site_dir);
@@ -624,6 +651,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             stopped = Some(why);
             break;
         }
+        job.reset_from("work");
         job.step("work", "running", &item.opp.title);
         match process(ctx, site, job, &item, false).await {
             Ok(msg) => {
@@ -750,7 +778,8 @@ async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<Strin
         return Err("没有选中的条目".into());
     }
     // 同一种页面的改标题 / 描述合成一条：一个分支一起改，免得各改各的、先合的让后面的合不进去
-    let (ids, grouped) = site_ops::group_same_route(&ctx.site_dir(&site.id), &ids)?;
+    let own = content_stems(ctx, site).await;
+    let (ids, grouped) = site_ops::group_same_route(&ctx.site_dir(&site.id), &ids, |p| has_own_file(&own, p))?;
     if grouped > 0 {
         job.line(&format!("有 {grouped} 条和别的是同一种页面（多半是同一个模板生成的），合在一起交给 AI，一次改好"));
         ctx.emit_queue(&site.id);
@@ -768,6 +797,9 @@ async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<Strin
             break;
         }
         job.line(&format!("—— 第 {}/{} 条 ——", n + 1, ids.len()));
+        if n > 0 {
+            job.reset_from("work");
+        }
         match work_one(ctx, site, job, &id).await {
             Ok(m) => {
                 ok += 1;
@@ -2129,6 +2161,7 @@ async fn resolve(ctx: &Ctx, site: &Site, job: &Job, only: Option<&str>) -> Resul
         }
         let Some(item) = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == id && matches!(i.status.as_str(), "proposed" | "failed") && !i.branch.is_empty()) else { continue };
         job.line(&format!("—— 「{}」放到最新代码上 ——", item.opp.title));
+        job.reset_from("rebase");
         job.step("rebase", "running", &item.opp.title);
         match rebase_item(ctx, site, job, &item).await {
             Ok(()) => {

@@ -255,6 +255,18 @@ impl Job {
         });
     }
 
+    /// 批量里换下一条之前：从 `from` 这一步起都回到「未开始」，步骤条不再挂着上一条的勾和转圈
+    pub fn reset_from(&self, from: &str) {
+        self.with(|s| {
+            if let Some(i) = s.steps.iter().position(|x| x.key == from) {
+                for st in &mut s.steps[i..] {
+                    st.status = "pending".into();
+                    st.detail.clear();
+                }
+            }
+        });
+    }
+
     pub fn line(&self, line: &str) {
         let line = self.scrub(line);
         let line: String = line.chars().take(2000).collect();
