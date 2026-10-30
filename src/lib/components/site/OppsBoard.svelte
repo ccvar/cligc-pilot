@@ -35,9 +35,12 @@
   const allRecent = $derived([...(o?.items ?? []).filter(isQueued), ...(o?.recent ?? [])].sort((a, b) => ORDER[stage(a)] - ORDER[stage(b)]));
   // 还有排队 / 处理中的：整批都列出来看进度；都跑完了就只留没成功的（要你重试），等你确认的在上面「等你确认」里，已处理的收起来
   const active = $derived(allRecent.some((i) => ['queued', 'working'].includes(stage(i))));
-  const progress = $derived(active ? allRecent : allRecent.filter((i) => stage(i) === 'failed'));
+  // 改好了等你确认的在页面上面「等你确认」里列着，这里只算进数字、不再列一遍
+  const progress = $derived(active ? allRecent.filter((i) => stage(i) !== 'proposed') : allRecent.filter((i) => stage(i) === 'failed'));
   const doneToday = $derived(allRecent.filter((i) => stage(i) === 'done').length);
-  const counts = $derived(progress.reduce((m, i) => ({ ...m, [stage(i)]: (m[stage(i)] ?? 0) + 1 }), {} as Record<string, number>));
+  // 数字和进度条按这一批全部算（含等你确认的），列表里才去掉等你确认的
+  const batch = $derived(active ? allRecent : progress);
+  const counts = $derived(batch.reduce((m, i) => ({ ...m, [stage(i)]: (m[stage(i)] ?? 0) + 1 }), {} as Record<string, number>));
   const finished = $derived((counts.done ?? 0) + (counts.proposed ?? 0) + (counts.failed ?? 0));
   let progOpen = $state(false);
   const STAGE: Record<string, string> = { queued: '排队中', working: 'AI 处理中', failed: '没成功', proposed: '等你确认', done: '已处理' };
@@ -148,15 +151,15 @@
     <span class="recheck">{#if syncing}<span class="spin"></span>正在按最新数据重新检查，还剩 {syncing} 个站点{:else}{#if fleet.sync.last_at}数据截至 {ago(fleet.sync.last_at)} · {/if}<button class="link-btn rc-btn" onclick={() => syncAllData()} data-tip="把所有站点的 Search Console、GA4、Bing 数据重新拉一遍：已经好了的问题、不再满足条件的机会会自动收起，列表跟着刷新（每天早上 7 点也会自动做一次）"><Icon name="refresh" size={11} />按最新数据重新检查</button>{/if}</span>
   </p>
   </div>
-  {#if progress.length}
+  {#if batch.length}
     <div class="card tbl-card grp">
       <div class="gh">
-        <Icon name="wand" size={13} /><b>{active ? 'AI 处理进度' : 'AI 没处理成功的'}</b><span class="faint n">{active ? `${finished}/${progress.length}` : progress.length}</span>
+        <Icon name="wand" size={13} /><b>{active ? 'AI 处理进度' : 'AI 没处理成功的'}</b><span class="faint n">{active ? `${finished}/${batch.length}` : progress.length}</span>
         <small class="faint d">{#each Object.entries(STAGE) as [k, l] (k)}{#if counts[k]}<span class="cnt {k}">{l} {counts[k]}</span>{/if}{/each}</small>
         <span class="grow"></span>
         {#if counts.queued}<button class="btn tiny ghost" onclick={stopAcross} data-tip="还没开始的都不做了（回到列表），正在跑的不受影响">停止排队</button>{/if}
       </div>
-      {#if active}<div class="bar"><i style="width:{(finished / progress.length) * 100}%"></i></div>{/if}
+      {#if active}<div class="bar"><i style="width:{(finished / batch.length) * 100}%"></i></div>{#if counts.proposed}<p class="prop-note faint">其中 {counts.proposed} 条改好了等你确认，在上面「等你确认」里</p>{/if}{/if}
       <ul class="rows">{#each progOpen ? progress : progress.slice(0, SHOW) as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>
       {#if progress.length > SHOW}{@render more(progOpen, progress.length - SHOW, () => (progOpen = !progOpen))}{/if}
     </div>
@@ -201,6 +204,7 @@
 </div>
 
 <style>
+  .prop-note { margin: 0; padding: 6px 18px 0; font-size: 12px; }
   .pill.busy { border: 0; font: inherit; font-size: 11.5px; cursor: pointer; }
   .tt .also { flex: none; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--su-hover, #f3f2ee); font-size: 11px; color: var(--dim); }
   .recheck { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; }

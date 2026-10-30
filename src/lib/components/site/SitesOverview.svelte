@@ -35,7 +35,9 @@
 
   const proposedN = $derived(fleet.picks.length ? rows.reduce((n, r) => n + r.proposed, 0) : fleet.pendingCount);
   const oppN = $derived(fleet.picks.length ? rows.filter((r) => !r.plan || r.autonomy === 'stopped').reduce((n, r) => n + r.open, 0) : fleet.oppCount);
-  const pending = $derived(fleet.pending.filter((p) => inPicks(p.site_id)));
+  // 最近 24 小时 AI 没改成的，下面「运营机会 → AI 没处理成功的」里有（那里能重试、换模型），这里不再列一遍
+  const recentFailed = $derived(new Set((fleet.opps?.recent ?? []).filter((x) => x.item.status === 'failed').map((x) => x.item.id)));
+  const pending = $derived(fleet.pending.filter((p) => inPicks(p.site_id) && !recentFailed.has(p.item.id)));
   const n = num;
   // 有站点在记收益（连了 AdSense 或手动记过）才显示「本月收益」这一列
   const showRev = $derived(fleet.rows.some((r) => r.money?.tracked));
