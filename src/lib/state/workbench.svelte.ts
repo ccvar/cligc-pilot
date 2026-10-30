@@ -3,7 +3,7 @@
 import '@xterm/xterm/css/xterm.css';
 import { invoke, Channel } from '@tauri-apps/api/core';
 import { isMac, isWindows } from './env';
-import { app, say } from './app.svelte.js';
+import { app, say, confirmDialog } from './app.svelte.js';
 import { openSshCredentialRepair } from './ssh.svelte.js';
 
 // ---------- 远程工作台：终端为主区，底部对话 / 右侧文件按需开（VS Code 那套） ----------
@@ -412,6 +412,18 @@ export async function reconnectTerm(id: string = app.activeConnId) {
   slots.delete(id);
   if (host && host !== parking) mountTerm(id, host);
   else setTermState(id, { busy: false, on: false });
+}
+/** 断开这台机器：关掉 SSH 会话（终端和文件面板共用的那一条）。终端里会写「连接已关闭，按回车重新连接」，侧栏的绿点消失。
+ *  返回 true＝真的断开了（调用方顺手丢掉它的文件列表） */
+export async function disconnectTerm(id: string): Promise<boolean> {
+  const conn = app.conns.find((c) => c.id === id);
+  const name = conn ? (conn.remark?.trim() || conn.name || `${conn.ssh_user}@${conn.ssh_host}`) : '这台机器';
+  if (!(await confirmDialog(`断开和「${name}」的连接？\n终端里正在跑的命令会被中断（后台用 nohup / tmux 跑的不受影响），文件面板也会关掉。之后在终端里按回车或点这台机器的刷新按钮会重新连上。`, { title: '断开连接', kind: 'warning', confirmText: '断开' }))) return false;
+  try { await invoke('ssh_close', { connId: id }); } catch (e) { say(String(e), 'err'); return false; }
+  // 终端的流一般会自己收到「已关闭」；万一没收到，这边也把状态改成没连着
+  setTermState(id, { on: false, busy: false });
+  say(`已断开「${name}」`);
+  return true;
 }
 export function missingSshCredential(error: string): boolean {
   return error.includes('钥匙串里没有这个连接的密码');

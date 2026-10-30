@@ -75,6 +75,8 @@ class SftpState {
   // 每台机器的文件面板（连接 id → 面板）；sftpConnId 是「现在在操作哪一个」：
   // 默认是当前机器，在哪个窗格的文件面板里点、右键、拖文件进来，就切到那一个。下面那些操作都作用在它上面
   views = $state<Record<string, SftpView>>({});
+  // 手动断开了的机器：文件面板不自动连回去，等你点「重新连接」或终端重新连上
+  closed = $state(new Set<string>());
   sftpConnId = $state('');
   get cur(): SftpView | undefined { return this.views[this.sftpConnId]; }
   get sftpPath() { return this.cur?.sftpPath ?? ''; }
@@ -301,10 +303,23 @@ export async function sftpGo(path: string, v: SftpView | undefined = sftp.cur) {
   } catch (e) { v.sftpErr = friendly(e); }
   finally { v.sftpBusy = false; }
 }
+/** 断开连接后丢掉这台的文件列表：下次打开再重新读（不然一刷新又把连接悄悄连回去） */
+export function forgetSftpView(connId: string) {
+  sftp.closed = new Set(sftp.closed).add(connId);
+  if (!sftp.views[connId]) return;
+  const { [connId]: _gone, ...rest } = sftp.views;
+  sftp.views = rest;
+}
+/** 断开过的重新打开文件面板（会重新连上） */
+export function reopenSftpView(connId: string) {
+  if (!sftp.closed.has(connId)) return;
+  const n = new Set(sftp.closed); n.delete(connId); sftp.closed = n;
+  ensureSftpView(connId);
+}
 /** 某个窗格要显示这台机器的文件：第一次就建一个面板、回到上次打开的目录（没有或已经不在了就从 home 起步）；
  *  建过的直接显示，后台悄悄刷新一次（SFTP 连接本身后端一直留着）。 */
 export function ensureSftpView(connId: string) {
-  if (!connId) return;
+  if (!connId || sftp.closed.has(connId)) return;
   const had = sftp.views[connId];
   if (had) { void sftpRefresh(had); return; }
   const v = new SftpView(connId);

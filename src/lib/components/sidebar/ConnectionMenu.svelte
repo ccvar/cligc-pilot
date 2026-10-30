@@ -1,6 +1,7 @@
 <script lang="ts">
   import { connections, openConnWindow, selectConn, openConnRemark, removeConn } from '$lib/state/connections.svelte.js';
-  import { openRemote } from '$lib/state/workbench.svelte.js';
+  import { openRemote, workbench, disconnectTerm } from '$lib/state/workbench.svelte.js';
+  import { forgetSftpView } from '$lib/state/sftp.svelte.js';
   import { openSshEdit } from '$lib/state/ssh.svelte.js';
   import { openCfUpdate } from '$lib/state/cloudflare.svelte.js';
   import { openGhUpdate } from '$lib/state/github.svelte.js';
@@ -20,6 +21,9 @@
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; selectConn(c.id); openRemote(); }}>远程终端</button>
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => { connections.switcherOpen = false; openSshEdit(c); }}>编辑连接…</button>
+      {#if workbench.termState[c.id]?.on || workbench.termState[c.id]?.busy}
+        <button class="ctx-item" role="menuitem" onclick={() => { connections.connCtx = null; void disconnectTerm(c.id).then((ok) => { if (ok) forgetSftpView(c.id); }); }}>断开连接…</button>
+      {/if}
     {:else if c.kind === 'cloudflare'}
       <div class="ctx-div"></div>
       <button class="ctx-item" role="menuitem" onclick={() => openConnRemark(c)}>{c.remark?.trim() ? '修改备注…' : '设置备注…'}</button>
