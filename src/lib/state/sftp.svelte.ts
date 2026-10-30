@@ -255,6 +255,13 @@ export async function loadDir(path: string, force = false, quiet = false): Promi
     sftp.sftpLoading = { ...sftp.sftpLoading, [path]: false };
   }
 }
+// 每个连接上次打开的目录（存在本机）：切换连接、重开应用后回到那里，不再每次从 home 起步
+const LAST_KEY = 'cligc.pilot.sftpLastDir';
+function lastDirs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(LAST_KEY) || '{}') || {}; } catch { return {}; } }
+export function lastDir(connId: string): string { return lastDirs()[connId] ?? ''; }
+function rememberDir(connId: string, path: string) {
+  try { localStorage.setItem(LAST_KEY, JSON.stringify({ ...lastDirs(), [connId]: path })); } catch { /* */ }
+}
 /** 换树根（path 为空＝去 home）。 */
 export async function sftpGo(path: string) {
   const id = sftp.sftpConnId;
@@ -264,7 +271,7 @@ export async function sftpGo(path: string) {
     if (sftp.sftpConnId !== id) return;
     sftp.sftpPath = p; sftp.sftpPathDraft = p; sftp.sftpSel = '';
     sftp.sftpOpenDirs = new Set();
-    await loadDir(p, true);
+    if (await loadDir(p, true)) rememberDir(id, p);
   } catch (e) { sftp.sftpErr = friendly(e); }
   finally { sftp.sftpBusy = false; }
 }
@@ -693,14 +700,15 @@ export function initSftp() {
       discardSftpLocalDrop();
     };
   });
-  // 首次开文件面板或换了连接 → 从 home 起步；关了再开则保留原目录。
+  // 首次开文件面板或换了连接 → 回到这个连接上次打开的目录（没有或已经不在了就从 home 起步）；关了再开则保留原目录。
   $effect(() => {
     const id = app.activeConnId;
     if (app.view !== 'remote' || !app.isSshConn || !workbench.wb.files || !id) return;
     if (sftp.sftpConnId === id) return;
     sftp.sftpConnId = id; sftp.sftpPath = ''; sftp.sftpPathDraft = ''; sftp.sftpErr = '';
     sftp.sftpKids = {}; sftp.sftpOpenDirs = new Set(); sftp.sftpSel = '';
-    void sftpGo('');
+    const last = lastDir(id);
+    void sftpGo(last).then(() => { if (last && sftp.sftpErr && sftp.sftpConnId === id) void sftpGo(''); });
   });
   $effect(() => { if (sftp.sftpPathEdit && sftp.sftpPathEl) { sftp.sftpPathEl.focus(); sftp.sftpPathEl.select(); } });
   // 路径深了就把尾巴（当前目录）滚进视野——面包屑是从左往右长的。
