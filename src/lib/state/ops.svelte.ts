@@ -51,6 +51,8 @@ class OpsState {
   reports = $state<Record<string, { name: string; modified: number }[]>>({});
   report = $state<{ site: string; name: string; text: string } | null>(null);
   diff = $state<{ item: OpsItem; text: string } | null>(null);
+  /** 每个站点这一批交给 AI 的条目（按顺序）：任务队列里还没轮到的写「排队中 · 第 k/N 条」 */
+  batch = $state<Record<string, string[]>>({});
 }
 
 export const ops = new OpsState();
@@ -191,7 +193,10 @@ export async function dismissItem(site: Site, item: OpsItem) {
 export async function workItems(siteId: string, ids: string[], model = '', effort = '') {
   if (!ids.length) return;
   const [b, ...m] = model.split('::');
-  try { await invoke('queue_work_many', { id: siteId, itemIds: ids, model: model ? [b, m.join('::')] : null, effort: model && effort ? effort : null }); }
+  try {
+    await invoke('queue_work_many', { id: siteId, itemIds: ids, model: model ? [b, m.join('::')] : null, effort: model && effort ? effort : null });
+    ops.batch = { ...ops.batch, [siteId]: ids };
+  }
   catch (e) { say(String(e), 'err'); }
 }
 /** 批量驳回：只问一次。 */

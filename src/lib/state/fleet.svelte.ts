@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { SiteRow, PendingItem, Site, OppItem, OppOverview, DataSync } from '$lib/types';
 import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
+import { ops } from './ops.svelte.js';
 import { brainLabel, brainTitle, modelIcon } from './models.js';
 import { launcher } from './launcher.svelte.js';
 import { effortLabel } from '$lib/effortStops';
@@ -304,6 +305,7 @@ export async function workOpps(items: OppItem[], ask = true, model?: string, eff
   try {
     const [b, ...m] = pick.split('::');
     await invoke('work_across_sites', { batches: [...by.entries()], model: [b, m.join('::')], effort: eff || null });
+    ops.batch = { ...ops.batch, ...Object.fromEntries(by) };
     say(n > 3 ? `已交给 ${name}：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 ${name}：${items.length} 条`);
     void loadOpps();
   } catch (e) { say(String(e), 'err'); }
