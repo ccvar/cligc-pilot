@@ -50,11 +50,11 @@ pub struct HealthTask {
 /// 放进待处理后马上让 AI 处理；这几类改动都要你确认后才上线（见 site_runner::effective_level）。
 #[tauri::command]
 pub fn health_to_ai(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, what: String, url: Option<String>) -> Result<HealthTask, String> {
-    state.sites.get(&id)?;
+    let site = state.sites.get(&id)?;
     let dir = state.sites.data_dir(&id);
     let opps = match what.as_str() {
         "speed" => crate::speed::task(&dir, url.as_deref()).into_iter().collect(),
-        "audit" => crate::page_audit::tasks(&dir),
+        "audit" => site_ops::with_full_pages(crate::page_audit::tasks(&dir), &site.domain),
         _ => return Err("未知的检查项".into()),
     };
     if opps.is_empty() {

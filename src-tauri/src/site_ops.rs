@@ -77,6 +77,17 @@ pub fn path_of(url: &str) -> String {
 }
 
 /// 从缓存算出机会列表（按 score 降序，每类最多 10 条）。没有数据就是空列表。
+/// 页面体检记的是构建产物里的路径（/es-ar/xxx/）：补上站点域名，界面上才能在浏览器打开
+pub fn with_full_pages(mut opps: Vec<Opportunity>, domain: &str) -> Vec<Opportunity> {
+    let d = domain.trim().trim_end_matches('/');
+    if !d.is_empty() {
+        for o in opps.iter_mut().filter(|o| o.page.starts_with('/')) {
+            o.page = format!("https://{d}{}", o.page);
+        }
+    }
+    opps
+}
+
 /// 网址是不是本站域名下的（含 www；站点没填域名就都算）
 fn own_host(url: &str, domain: &str) -> bool {
     let d = domain.trim().trim_end_matches('/').to_ascii_lowercase();
@@ -287,7 +298,7 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
     // 收益、速度、页面体检、竞品（各自的模块按自己的缓存算）
     let money = crate::revenue::opportunities(site_dir);
     let speed = crate::speed::opportunities(site_dir);
-    let audit = crate::page_audit::opportunities(site_dir);
+    let audit = with_full_pages(crate::page_audit::opportunities(site_dir), &site.domain);
     let serp = crate::serp::opportunities(site, site_dir);
 
     for mut group in [low, striking, declining, gap, tech, cannibal, money, speed, audit, serp] {

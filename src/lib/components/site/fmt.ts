@@ -58,3 +58,11 @@ export function delta(cur: number, prev: number): { text: string; dir: -1 | 0 | 
   if (p === 0) return { text: '持平', dir: 0 };
   return { text: `${r > 0 ? '↑' : '↓'}${p}%`, dir: r > 0 ? 1 : -1 };
 }
+
+/** 机会里的页面可能只记了路径（页面体检记的是 /es-ar/xxx/）：补上站点域名，变成能在浏览器打开的完整网址；补不上返回空 */
+export function pageUrl(page: string | undefined, domain: string | undefined): string {
+  const p = (page ?? '').trim();
+  if (/^https?:\/\//i.test(p)) return p;
+  const d = (domain ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return p.startsWith('/') && d ? `https://${d}${p}` : '';
+}

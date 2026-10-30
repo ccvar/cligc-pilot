@@ -9,7 +9,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { showDiff, rollbackItem, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
-  import { ago, full } from './fmt';
+  import { ago, full, pageUrl } from './fmt';
   import { modelName } from '$lib/state/fleet.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
@@ -88,13 +88,14 @@
         {@const site = siteOf(x.site_id)}
         {@const isOpen = open.has(i.id)}
         {@const ef = effect(x)}
+        {@const url = pageUrl(i.opp.page, site?.domain)}
         <li class:open={isOpen}>
           <div class="row">
             <button class="main" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
               <span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>
               <span class="tt" class:gone={i.status === 'rolled_back' || i.status === 'dismissed'} data-tip={i.opp.title}>{i.opp.title}</span>
             </button>
-            {#if i.opp.page}<button class="url mono" onclick={() => openUrl(i.opp.page)} data-tip={`在浏览器打开：${i.opp.page}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
+            {#if url}<button class="url mono" onclick={() => openUrl(url)} data-tip={`在浏览器打开：${url}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
             <span class="acts">
               {#if site && i.head_sha}<button class="ic-btn ic-sm" onclick={() => showDiff(site.id, i)} aria-label="看改动" data-tip="看改动"><Icon name="diff" size={13} /></button>{/if}
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}

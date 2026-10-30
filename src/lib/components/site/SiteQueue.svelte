@@ -9,7 +9,7 @@
   import ModelMenu from './ModelMenu.svelte';
   import OpsErrorHint from './OpsErrorHint.svelte';
   import BrainIcon from '$lib/BrainIcon.svelte';
-  import { clock, full as fullTime } from './fmt';
+  import { clock, full as fullTime, pageUrl } from './fmt';
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
@@ -126,7 +126,8 @@
   let openEv = $state<Set<string>>(new Set());
   const flipEv = (id: string) => { const n = new Set(openEv); if (n.has(id)) n.delete(id); else n.add(id); openEv = n; };
   // 标题后面的目标页面：改已有页面就是那个页面，新写的页面用 AI 报上来的新网址；都没有就不显示
-  const targetOf = (i: OpsItem) => (i.opp.page?.startsWith('http') ? i.opp.page : (i.new_pages ?? [])[0] ?? '');
+  // 页面只记了路径的（页面体检那几类）补上站点域名，才能在浏览器打开
+  const targetOf = (i: OpsItem) => pageUrl(i.opp.page, site.domain) || ((i.new_pages ?? [])[0] ?? '');
   // 网址不在站点主域名下（www、别的子域名）就带上域名，免得只看到 /sitemap.xml 分不清是哪个
   const shortPath = (u: string) => { try { const x = new URL(u); const p = x.pathname + x.search || '/'; return x.host.toLowerCase() === site.domain.trim().toLowerCase() ? p : x.host + p; } catch { return u; } };
   // 待处理的条目写明是按哪天的数据发现的（数据会变，动手前还会再确认一次）；其它状态照旧写最后更新的时间
