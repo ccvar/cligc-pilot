@@ -7,7 +7,7 @@
   import WhyChips from './WhyChips.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
-  import { acceptItem, dismissItem, workItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
+  import { acceptItem, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
@@ -57,6 +57,16 @@
   const shown = $derived(sel ? needs.filter((x) => x.site_id === sel) : needs);
   const groups = $derived(GROUPS.map((g) => ({ ...g, items: shown.filter((x) => kindOf(x.item) === g.k) })).filter((g) => g.items.length));
 
+  // 待你确认的条目里合不进主分支的（和站点任务队列同一个判断：本地来源的站点在内存里试合并，不动文件夹）
+  let conflicts = $state<Set<string>>(new Set());
+  $effect(() => {
+    const ps = needs.filter((x) => x.item.status === 'proposed' && x.item.branch && siteOf(x.site_id)?.source === 'local');
+    const key = ps.map((x) => x.item.id + x.item.head_sha).join();
+    if (!key) { conflicts = new Set(); return; }
+    const ids = [...new Set(ps.map((x) => x.site_id))];
+    Promise.all(ids.map((id) => invoke<string[]>('queue_conflicts', { id }).catch(() => [] as string[])))
+      .then((r) => { if (key === needs.filter((x) => x.item.status === 'proposed' && x.item.branch && siteOf(x.site_id)?.source === 'local').map((x) => x.item.id + x.item.head_sha).join()) conflicts = new Set(r.flat()); });
+  });
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
   const siteOf = (id: string) => sites.list.find((s) => s.id === id);
@@ -118,18 +128,21 @@
                   <button class="row" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
                     {#if !sel}<span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>{/if}
                     <span class="tt">{i.opp.title}</span>
+                    {#if conflicts.has(i.id)}<span class="pill warn cf" data-tip="和主分支有冲突，要让 AI 在最新代码上重改">有冲突</span>{/if}
                     <svg class="chev" class:up={isOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
                   {#if isOpen}
                     <div class="more">
-                      {#if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
+                      {#if conflicts.has(i.id)}<p class="why">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。让 AI 在最新代码上重改一遍就行。</p>
+                      {:else if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page}<span class="mono url">{i.opp.page}</span>{/if}
                       <div class="acts">
                         {#if site}
                           {#if i.status === 'proposed'}
                             {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />看改动</button>{/if}
-                            <button class="btn tiny primary" onclick={() => acceptItem(site, i)}><Icon name={i.branch ? 'rocket' : 'check'} size={11} />{i.branch ? '上线' : '标记已处理'}</button>
+                            {#if conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} data-tip="丢掉这一版，让 AI 在最新的主分支上重新改；改好后照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
+                            {:else}<button class="btn tiny primary" onclick={() => acceptItem(site, i)}><Icon name={i.branch ? 'rocket' : 'check'} size={11} />{i.branch ? '上线' : '标记已处理'}</button>{/if}
                           {:else if i.status === 'failed'}
                             {#if i.branch && i.head_sha}<button class="btn tiny primary" onclick={() => recheckItem(site.id, i)} data-tip="改动还在分支上：重新构建、检查，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
                             <button class="btn tiny" onclick={() => workItem(site.id, i)}><Icon name="sparkles" size={11} />让 AI 重新改</button>
@@ -159,6 +172,7 @@
 <DiffModal />
 
 <style>
+  .row .cf { flex: none; font-size: 11px; }
   .stucks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .stuck { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 8px 6px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; }
   .stuck > :global(svg) { flex: none; }
