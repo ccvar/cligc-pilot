@@ -79,6 +79,8 @@
   let readyOpen = $state(false);
   let expanded = $state<string[]>([]);
   const SHOW = 8;
+  // 「AI 能直接处理」默认只列前几条
+  const READY_SHOW = 3;
   // 这块里用更直白的说法（说清 AI 要做什么）
   const READY_LABEL: Record<string, string> = { low_ctr: '改标题和描述', stale_year: '更新标题年份', sitemap_error: 'sitemap 报错', crawl_issue: '抓取出错', img_audit: '图片问题', schema: '结构化数据' };
   const busy = (i: OppItem) => !!o?.running.includes(i.site_id);
@@ -158,10 +160,10 @@
       </div>
       <div class="kinds">
         {#each readyKinds as [k, n] (k)}<span>{READY_LABEL[k] ?? KIND_LABEL[k] ?? k}<b>{n}</b></span>{/each}
-        <span class="grow"></span>
-        <button class="link-btn" onclick={() => (readyOpen = !readyOpen)}>{readyOpen ? '收起' : '看看是哪些'}</button>
       </div>
-      {#if readyOpen}<ul class="rows sep">{#each ready as i (i.item.id)}{@render row(i)}{/each}</ul>{/if}
+      <!-- 先列前 3 条，其余点「展开其余 N 条」 -->
+      <ul class="rows sep">{#each readyOpen ? ready : ready.slice(0, READY_SHOW) as i (i.item.id)}{@render row(i)}{/each}</ul>
+      {#if ready.length > READY_SHOW}<button class="more link-btn" onclick={() => (readyOpen = !readyOpen)}>{readyOpen ? '收起' : `展开其余 ${ready.length - READY_SHOW} 条`}</button>{/if}
     </div>
     {#if groups.length}<h4 class="sec">要你拿主意的</h4>{/if}
   {/if}
@@ -207,7 +209,6 @@
   .sec { margin: 4px 2px 0; font-size: 12.5px; font-weight: 600; color: var(--dim); }
   .kinds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 16px; font-size: 12.5px; color: var(--dim); }
   .kinds b { margin-left: 5px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
-  .kinds .link-btn { font-size: 12px; }
   .rows.sep { border-top: 1px solid var(--border); }
   /* 深色按钮上的模型图标垫一个小白底，单色图标（OpenAI、Grok）也看得清 */
   .bi-w { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 4px; background: #fff; color: #26241f; }
