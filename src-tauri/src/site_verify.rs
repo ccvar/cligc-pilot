@@ -112,11 +112,16 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let waits: &[u64] = if patient { &[0, 30, 60, 120, 120] } else { &[0, 30] };
     let mut got: Vec<Option<Fetched>> = urls.iter().map(|_| None).collect();
     let mut last: Vec<String> = urls.iter().map(|_| String::new()).collect();
-    let mut snippets_ok = spec.snippets.is_empty();
+    // 早先记下的文字可能带着 %s 这类占位（代码里的格式化字符串），线上不会原样出现：切开只用字面的几段
+    let snippets: Vec<String> = spec.snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| x.trim().to_string()).filter(|x| x.chars().count() >= 4).collect();
+    let mut snippets_ok = snippets.is_empty();
     for (n, w) in waits.iter().enumerate() {
         if *w > 0 {
             let pending = got.iter().filter(|g| g.is_none()).count();
-            job.line(&format!("线上验收：{}{} 秒后再查一次（第 {}/{} 次）", if pending > 0 { format!("还有 {pending} 个页面没打开正常，") } else { "新内容还没在线上出现，".into() }, w, n + 1, waits.len()));
+            let why = if pending > 0 { format!("还有 {pending} 个页面没打开正常，") } else { "新内容还没在线上出现，".into() };
+            job.line(&format!("线上验收：{why}{w} 秒后再查一次（第 {}/{} 次）", n + 1, waits.len()));
+            // 步骤条下面也写上，不然看起来像卡住了
+            job.step("verify", "running", &format!("{why}等 {w} 秒再查（第 {}/{} 次，最多等 {} 分钟）", n + 1, waits.len(), waits.iter().sum::<u64>().div_ceil(60)));
             for _ in 0..*w {
                 if job.canceled() {
                     return rep;
@@ -136,7 +141,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         }
         if !snippets_ok {
             let text: String = got.iter().skip(1).flatten().map(|f| visible_text(&f.body)).collect::<Vec<_>>().join("\n");
-            snippets_ok = spec.snippets.iter().any(|s| text.contains(s.as_str()));
+            snippets_ok = snippets.iter().any(|s| text.contains(s.as_str()));
         }
         if got.iter().all(|g| g.is_some()) && snippets_ok {
             break;
@@ -158,8 +163,8 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         }
     }
     // 新内容已生效
-    if !spec.snippets.is_empty() {
-        let s = spec.snippets.first().cloned().unwrap_or_default();
+    if !snippets.is_empty() {
+        let s = snippets.first().cloned().unwrap_or_default();
         rep.checks.push(Check {
             label: "新内容已生效".into(),
             ok: snippets_ok,
@@ -407,7 +412,8 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         } else {
             vec![visible_text(added)]
         };
-        for t in texts {
+        // 代码里的格式化字符串（Go 的 fmt.Sprintf、printf）：%s / %d 这些占位线上会换成别的字，按占位切开，只拿字面的几段
+        for t in texts.iter().flat_map(|t| split_placeholders(t)) {
             let t = t.trim();
             if t.contains("://") || t.contains('{') || t.contains('<') || t.starts_with('#') {
                 continue;
@@ -428,6 +434,43 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         if let Some(c) = cands.get(i) {
             if !out.contains(c) {
                 out.push(c.clone());
+            }
+        }
+    }
+    out
+}
+
+/// 按 printf 风格的占位（%s、%d、%v、%5.2f、%-10s…）把字符串切成几段字面文字；%% 是字面的百分号。
+fn split_placeholders(t: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut it = t.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '%' {
+            out.last_mut().unwrap().push(c);
+            continue;
+        }
+        if it.peek() == Some(&'%') {
+            it.next();
+            out.last_mut().unwrap().push('%');
+            continue;
+        }
+        let mut spec = String::new();
+        while let Some(&d) = it.peek() {
+            if (d.is_ascii_digit() || "+-#.".contains(d)) && spec.len() < 6 {
+                spec.push(d);
+                it.next();
+            } else {
+                break;
+            }
+        }
+        match it.peek() {
+            Some(&v) if "sdvqfxXegtcboTp".contains(v) => {
+                it.next();
+                out.push(String::new());
+            }
+            _ => {
+                out.last_mut().unwrap().push('%');
+                out.last_mut().unwrap().push_str(&spec);
             }
         }
     }
@@ -493,6 +536,15 @@ mod tests {
         let text = visible_text(html);
         assert!(text.contains("遮挡转场要让前景物体") && !text.contains("TODO"), "{text}");
         assert_eq!(internal_links(html, "iosur.com"), vec!["https://iosur.com/zh/posts/b/".to_string(), "https://www.iosur.com/en/".to_string()]);
+    }
+
+    #[test]
+    fn format_placeholders_are_not_part_of_snippets() {
+        let d = "+++ b/internal/site/build.go\n+\t\tdesc = fmt.Sprintf(\"想查某个小币在 %s 有没有上线、能不能交易？这里列出 %s 的 %s 个币种\", ex.Name)\n";
+        let s = snippets_from_diff(d);
+        assert!(!s.is_empty() && s.iter().all(|x| !x.contains('%')), "{s:?}");
+        assert!(s.iter().any(|x| x == "有没有上线、能不能交易"), "{s:?}");
+        assert_eq!(split_placeholders("涨了 100% 的币 %d 个 %-5.2f 元"), vec!["涨了 100% 的币 ", " 个 ", " 元"]);
     }
 
     #[test]

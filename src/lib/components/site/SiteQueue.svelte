@@ -297,7 +297,7 @@
                 {/each}
               </div>
             {/if}
-            {#if i.note}<p class="verdict">{i.note}</p>{#if i.status === 'failed' || i.status === 'merged'}<OpsErrorHint text={i.note} siteId={site.id} />{/if}{/if}
+            {#if i.note && !(conflicts.has(i.id) && i.status === 'proposed' && i.note.includes('冲突'))}<p class="verdict">{i.note}</p>{#if i.status === 'failed' || i.status === 'merged'}<OpsErrorHint text={i.note} siteId={site.id} />{/if}{/if}
             {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
             {#if i.checks?.length}
               {@const bad = i.checks.filter((c) => !c.ok).length}
