@@ -236,6 +236,36 @@ pub fn build_env(site: &Site, code: &Path, job: &Job) -> Vec<(String, String)> {
     env
 }
 
+/// 本机安装 / 构建 / 检查用的环境：配置变量里指向服务器上文件的路径（VPS 站点的 DB_PATH=/opt/xxx/data/xxx.db 这类）不传，
+/// 本机没有那个目录，程序会打不开（比如 SQLite 报 unable to open database file），让它用代码里的默认值。
+/// 只认名字像路径的变量（带 PATH / DIR / FILE / DB / DATA / ROOT / STORAGE / FOLDER），免得把 /api/v1 这类网址前缀也去掉。
+/// 发布命令和同步到服务器的配置照旧用完整的值。
+fn local_env(site: &Site, code: &Path, job: &Job) -> Vec<(String, String)> {
+    let (keep, dropped) = drop_server_paths(build_env(site, code, job), |p| p.is_dir());
+    if !dropped.is_empty() {
+        job.line(&format!("{} 是服务器上的路径，本机构建和检查不用它（用代码里的默认值）", dropped.join("、")));
+    }
+    keep
+}
+
+fn drop_server_paths(env: Vec<(String, String)>, dir_exists: impl Fn(&Path) -> bool) -> (Vec<(String, String)>, Vec<String>) {
+    const WORDS: [&str; 8] = ["PATH", "DIR", "FILE", "DB", "DATA", "ROOT", "STORAGE", "FOLDER"];
+    let mut dropped = Vec::new();
+    let keep = env
+        .into_iter()
+        .filter(|(k, v)| {
+            let u = k.to_ascii_uppercase();
+            let p = Path::new(v.trim());
+            let server = WORDS.iter().any(|w| u.contains(w)) && p.is_absolute() && p.parent().is_some_and(|d| !dir_exists(d));
+            if server {
+                dropped.push(k.clone());
+            }
+            !server
+        })
+        .collect();
+    (keep, dropped)
+}
+
 /// GitHub 来源：保证主检出存在并取最新，再把部署工作树切到 `origin/<分支>`。返回构建目录。
 pub async fn prepare_github(site: &Site, gh: &Connection, site_dir: &Path, job: &Job) -> Result<PathBuf, String> {
     let token = crate::keychain::get_key(&gh.id)?;
@@ -261,7 +291,7 @@ pub async fn build_and_check(site: &Site, code: &Path, stamp: Option<&Path>, job
     // 站点在子目录里时，安装 / 构建 / 检查 / 上传都在子目录执行
     let app = site.app_dir(code);
     let dir = app.as_path();
-    let env = build_env(site, code, job);
+    let env = local_env(site, code, job);
     // 安装
     if !site.build.install.trim().is_empty() && needs_install(dir, stamp) {
         job.step("install", "running", &site.build.install);
@@ -839,6 +869,21 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn local_env_drops_server_only_paths() {
+        let env = vec![
+            ("DB_PATH".to_string(), "/opt/oaneo/data/oaneo.db".to_string()),
+            ("DATA_DIR".to_string(), "/tmp/here".to_string()),
+            ("API_PREFIX".to_string(), "/api/v1".to_string()),
+            ("BASE_URL".to_string(), "https://oaneo.com".to_string()),
+            ("UPLOAD_DIR".to_string(), "uploads".to_string()),
+        ];
+        // 本机只有 /tmp 这一层
+        let (keep, dropped) = drop_server_paths(env, |p| p == Path::new("/") || p == Path::new("/tmp"));
+        assert_eq!(dropped, vec!["DB_PATH"]);
+        assert_eq!(keep.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), vec!["DATA_DIR", "API_PREFIX", "BASE_URL", "UPLOAD_DIR"]);
+    }
 
     #[test]
     fn html_paths_map_to_pages_urls() {
