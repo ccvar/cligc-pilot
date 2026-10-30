@@ -5,6 +5,9 @@
   import type { SiteJob } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { cancelSiteJob } from '$lib/state/sites.svelte.js';
+  import ModelMenu from './ModelMenu.svelte';
+  import { ops, loadQueue, workItem } from '$lib/state/ops.svelte.js';
+  import { opsErrorHint } from '$lib/friendlyError';
 
   // bare：外层卡片已经有同名标题时不再重复显示作业名。
   let { job, compact = false, bare = false, logOpen = false }: { job: SiteJob; compact?: boolean; bare?: boolean; logOpen?: boolean } = $props();
@@ -17,6 +20,12 @@
   const focus = $derived(job.steps.find((s) => s.status === 'failed') ?? job.steps.find((s) => s.status === 'running'));
   $effect(() => { void job.log.length; if (showLog && logEl) logEl.scrollTop = logEl.scrollHeight; });
   $effect(() => { if (job.status === 'failed') showLog = true; });
+  // AI 改动因为模型这边的原因没成（余额、密钥、模型用不了、限流…）：直接在这里换个模型重试那一条。
+  // 作业记录里没有条目 id：找这个作业开始后变成「失败」的那一条
+  const modelErr = $derived(job.status === 'failed' && ['ops:work', 'ops:batch', 'ops:cycle'].includes(job.kind) && !!opsErrorHint(job.error));
+  $effect(() => { if (modelErr && !ops.queue[job.site_id]) void loadQueue(job.site_id); });
+  const failedItem = $derived(modelErr ? (ops.queue[job.site_id] ?? []).filter((i) => i.status === 'failed' && i.updated_at >= job.started_at).sort((a, b) => b.updated_at - a.updated_at)[0] : undefined);
+  let mAt = $state<{ left: number; top: number; bottom: number; right: number } | null>(null);
 </script>
 
 <div class="su job">
@@ -39,11 +48,16 @@
     </div>
     {#if focus?.detail}<div class="step-detail mono" title={focus.detail}>{focus.label} · {focus.detail}</div>{/if}
   {/if}
-  {#if job.error}<div class="err-note">{job.error}</div><OpsErrorHint text={job.error} />{/if}
+  {#if job.error}<div class="err-note">{job.error}</div><OpsErrorHint text={job.error} />
+    {#if failedItem}<div class="retry-row"><button class="btn tiny primary" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); mAt = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }}><Icon name="refresh" size={11} />换个模型重试「{failedItem.opp.title}」<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></div>{/if}
+  {/if}
+  {#if mAt && failedItem}<ModelMenu at={mAt} current="" note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const it = failedItem; mAt = null; if (it) void workItem(job.site_id, it, m); }} onclose={() => (mAt = null)} />{/if}
   {#if showLog}<pre class="log" bind:this={logEl}>{job.log.join('\n') || '（还没有输出）'}</pre>{/if}
 </div>
 
 <style>
+  .retry-row { display: flex; margin-top: 2px; }
+  .retry-row .btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .job { display: flex; flex-direction: column; gap: 10px; }
   .job-head { min-height: 24px; }
   .job-head b { font-size: 13.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
