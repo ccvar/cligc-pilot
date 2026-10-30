@@ -390,6 +390,8 @@ export interface OpsItem {
   files?: string[];
   id: string;
   opp: Opportunity;
+  /** 同一个页面上并进来一起改的其它机会 */
+  also?: Opportunity[];
   /** open | working | proposed | merged | deployed | dismissed | rolled_back | failed */
   status: string;
   created_at: number;

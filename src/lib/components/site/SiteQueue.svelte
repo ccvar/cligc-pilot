@@ -233,6 +233,7 @@
               {#if foldable}<button class="it-title as-btn" title={i.opp.title} onclick={() => flipFold(i.id)}>{i.opp.title}</button>{:else}<b class="it-title" title={i.opp.title}>{i.opp.title}</b>{/if}
               {#if targetOf(i)}<button class="it-url mono" onclick={() => openUrl(targetOf(i))} data-tip={`在浏览器打开：${targetOf(i)}`}><span>{shortPath(targetOf(i))}</span><Icon name="external" size={11} /></button>{/if}
               <span class="grow"></span>
+ {#if i.also?.length}<span class="pill line also" data-tip={`同一个页面还有：${i.also.map((o) => o.title).join('；')}\n交给 AI 时一起改`}>+ {i.also.map((o) => KIND_LABEL[o.kind] ?? o.kind).join('、')}</span>{/if}
               {#if i.status === 'open'}<span class="it-meta" data-tip={foundTip(i)}>{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {Date.now() / 1000 - i.created_at > DAY ? `${when(i.created_at)} 的数据` : when(i.created_at)}</span>
               {:else}<span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>{/if}
             </div>

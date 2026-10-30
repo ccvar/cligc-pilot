@@ -561,7 +561,8 @@ async fn gone_already(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Op
         let out = crate::syndicate::built_out(&ctx.state(), site).ok()?;
         opps.extend(site_ops::stale_opportunities(site, &site_dir, &crate::site_make::page_facts(&out), chrono::Local::now().date_naive()));
     }
-    if crate::site_data::live_opportunities(&opps, &site_dir).iter().any(|o| o.key == item.opp.key) {
+    let live = crate::site_data::live_opportunities(&opps, &site_dir);
+    if live.iter().any(|o| o.key == item.opp.key || item.also.iter().any(|a| a.key == o.key)) {
         return None;
     }
     job.line(&format!("「{}」：按最新数据看，这个问题已经没有了，不交给 AI", item.opp.title));
@@ -722,20 +723,23 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
 
 /// 某个机会实际可用的最高档位：新内容、技术问题、被复盘降档的类型最多到第 3 档；只分析档不处理。
 pub fn effective_level(site: &Site, item: &QueueItem) -> u8 {
+    // 并进来的同页面机会（also）一起算：哪一项要你确认，这一条就要你确认
+    let opps: Vec<&Opportunity> = std::iter::once(&item.opp).chain(item.also.iter()).collect();
     let mut level = site.ops.level;
     // 改事实（久未更新的页面）、合并或拉开页面（两个页面抢词）：不管什么档位都留给你确认
     // 收入偏低、页面太慢、页面体检、对比竞品：改动面大或要人判断，也都留给你确认
-    if matches!(item.opp.kind.as_str(), "stale" | "cannibal" | "low_rpm" | "slow" | "img_audit" | "schema" | "serp_gap") {
+    if opps.iter().any(|o| matches!(o.kind.as_str(), "stale" | "cannibal" | "low_rpm" | "slow" | "img_audit" | "schema" | "serp_gap")) {
         return level.min(3);
     }
+    let downgraded = |c: &str| site.ops.downgraded.iter().any(|d| d == c);
     if level >= 5 {
         // 全托管：技术问题、复盘降档的类型留给你确认；新内容是否自动发布在上线那一步按托管设置判断。
-        if item.opp.change == "technical" || site.ops.downgraded.iter().any(|d| d == &item.opp.change) {
+        if opps.iter().any(|o| o.change == "technical" || downgraded(&o.change)) {
             return 3;
         }
         return 5;
     }
-    if matches!(item.opp.change.as_str(), "new_content" | "technical") || site.ops.downgraded.iter().any(|d| d == &item.opp.change) {
+    if opps.iter().any(|o| matches!(o.change.as_str(), "new_content" | "technical") || downgraded(&o.change)) {
         level = level.min(3);
     }
     level
@@ -875,6 +879,15 @@ fn path_of(url: &str) -> String {
     url.split_once("://")
         .map(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_else(|| "/".into()))
         .unwrap_or_else(|| url.to_string())
+}
+
+/// 交给 AI 的依据：这一条 + 并进来的同页面机会（一起改，不要分开改两遍）
+fn evidence_all(item: &QueueItem) -> String {
+    let mut s = evidence_block(&item.opp);
+    for o in &item.also {
+        s.push_str(&format!("\n同一个页面还有这个问题，这次一起处理：{}\n{}改动方向：{}\n", o.title, evidence_block(o), guidance(o)));
+    }
+    s
 }
 
 fn evidence_block(o: &Opportunity) -> String {
@@ -1075,7 +1088,7 @@ async fn propose(ctx: &Ctx, site: &Site, item: &QueueItem) -> Result<String, Str
 改动方向：{guide}\n\
 这一轮只出方案，不要修改文件。我确认后会在这条会话里让你动手。\n{lang}",
         title = item.opp.title,
-        ev = evidence_block(&item.opp),
+        ev = evidence_all(item),
         guide = guidance(&item.opp),
         lang = REPORT_IN_CHINESE,
     );
@@ -1170,7 +1183,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
 改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
         title = item.opp.title,
-        ev = evidence_block(&item.opp),
+        ev = evidence_all(item),
         base = site.default_branch,
         guide = guidance(&item.opp),
         lang = REPORT_IN_CHINESE,

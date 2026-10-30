@@ -506,6 +506,10 @@ pub struct QueueItem {
     /// 待处理期间，连续几次拉数据都不再满足条件（点击率偏低、排名 8–20 这类数据会上下波动，连续两次才收起）
     #[serde(default, skip_serializing_if = "is_zero")]
     pub missing: u8,
+    /// 同一个页面上的其它机会（比如「点击率偏低」和「排名 8–20」都指向同一页）：并进这一条，交给 AI 时一起改，
+    /// 免得分开改两遍、后改的和先改的冲突。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<Opportunity>,
     /// 处理它的会话。
     #[serde(default)]
     pub conv_id: String,
@@ -679,7 +683,7 @@ pub fn update_item(site_dir: &Path, id: &str, now: u64, f: impl FnOnce(&mut Queu
 /// 被驳回的永远不再提（除非你在队列里把它恢复）。
 pub fn should_enqueue(q: &[QueueItem], key: &str, now: u64, cooldown: u64) -> bool {
     !q.iter().any(|i| {
-        i.opp.key == key
+        (i.opp.key == key || i.also.iter().any(|o| o.key == key))
             && (matches!(i.status.as_str(), "open" | "working" | "proposed" | "merged" | "dismissed")
                 || now.saturating_sub(i.updated_at) < cooldown)
     })
@@ -701,6 +705,7 @@ pub const DATA_DRIVEN: [&str; 7] = ["low_ctr", "striking", "declining", "content
 pub fn close_resolved(site_dir: &Path, live: &[Opportunity], now: u64, source_ok: impl Fn(&str) -> bool) -> Result<usize, String> {
     let live: std::collections::HashSet<&str> = live.iter().map(|o| o.key.as_str()).collect();
     with_queue(site_dir, |q| {
+        merge_same_page(q);
         let mut n = 0;
         for i in q.iter_mut().filter(|i| i.status == "open" && source_ok(&i.opp.kind)) {
             let kind = i.opp.kind.as_str();
@@ -708,7 +713,8 @@ pub fn close_resolved(site_dir: &Path, live: &[Opportunity], now: u64, source_ok
             if !self_check && !data {
                 continue;
             }
-            if live.contains(i.opp.key.as_str()) {
+            // 并进来的同页面机会里还有成立的，这条就还要做
+            if live.contains(i.opp.key.as_str()) || i.also.iter().any(|o| live.contains(o.key.as_str())) {
                 i.missing = 0;
                 continue;
             }
@@ -724,12 +730,57 @@ pub fn close_resolved(site_dir: &Path, live: &[Opportunity], now: u64, source_ok
     })
 }
 
+/// 能并到同一条里一起改的机会：都落在某一个已有页面上的（两个页面抢词、新写页面这类不并）。
+const SAME_PAGE: [&str; 8] = ["low_ctr", "striking", "declining", "stale", "stale_year", "slow", "serp_gap", "low_rpm"];
+
+fn page_key(o: &Opportunity) -> Option<String> {
+    if !SAME_PAGE.contains(&o.kind.as_str()) || o.page.trim().is_empty() {
+        return None;
+    }
+    let p = o.page.trim().trim_end_matches('/').to_ascii_lowercase();
+    Some(p.split_once("://").map(|(_, r)| r.to_string()).unwrap_or(p))
+}
+
+/// 待处理里同一个页面有好几条：并到分数最高的那条（其余的作为 also 一起改），返回并掉了几条
+pub fn merge_same_page(q: &mut Vec<QueueItem>) -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while i < q.len() {
+        let Some(pk) = (q[i].status == "open").then(|| page_key(&q[i].opp)).flatten() else { i += 1; continue };
+        if let Some(j) = (0..i).find(|&j| q[j].status == "open" && page_key(&q[j].opp).as_deref() == Some(&pk)) {
+            let (keep, gone) = if q[j].opp.score >= q[i].opp.score { (j, i) } else { (i, j) };
+            let mut moved = std::mem::take(&mut q[gone].also);
+            moved.insert(0, q[gone].opp.clone());
+            for o in moved {
+                if o.key != q[keep].opp.key && !q[keep].also.iter().any(|x| x.key == o.key) {
+                    q[keep].also.push(o);
+                }
+            }
+            q.remove(gone);
+            n += 1;
+            i = 0;
+            continue;
+        }
+        i += 1;
+    }
+    n
+}
+
 pub fn enqueue(site_dir: &Path, opps: &[Opportunity], now: u64, cooldown: u64) -> Result<Vec<QueueItem>, String> {
     with_queue(site_dir, |q| {
+        merge_same_page(q);
         let mut added = Vec::new();
         for o in opps {
             if !should_enqueue(q, &o.key, now, cooldown) {
                 continue;
+            }
+            // 同一个页面已经有一条待处理：并进去一起改，不另开一条
+            if let Some(pk) = page_key(o) {
+                if let Some(it) = q.iter_mut().find(|i| i.status == "open" && page_key(&i.opp).as_deref() == Some(&pk)) {
+                    it.also.push(o.clone());
+                    it.updated_at = now;
+                    continue;
+                }
             }
             let item = QueueItem {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -966,6 +1017,27 @@ pub fn kind_label(k: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_page_opportunities_merge_into_one() {
+        let dir = std::env::temp_dir().join(format!("same-page-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let o = |k: &str, kind: &str, page: &str, score: f64| Opportunity { key: k.into(), kind: kind.into(), page: page.into(), score, ..Default::default() };
+        // 同一页（结尾斜杠不同也算）：点击率偏低 + 排名 8–20 并成一条，分数高的当主条
+        enqueue(&dir, &[o("low_ctr:p", "low_ctr", "https://a.com/x/", 30.0), o("striking:p", "striking", "https://a.com/x", 10.0), o("gap:q", "content_gap", "", 5.0)], 1, 0).unwrap();
+        let q = load_queue(&dir);
+        assert_eq!(q.len(), 2);
+        let main = q.iter().find(|i| i.opp.key == "low_ctr:p").unwrap();
+        assert_eq!(main.also.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(), vec!["striking:p"]);
+        // 再扫描一次，并进去的那条不会再单独入队
+        enqueue(&dir, &[o("striking:p", "striking", "https://a.com/x", 10.0)], 2, 0).unwrap();
+        assert_eq!(load_queue(&dir).len(), 2);
+        // 主条的问题没了、并进来的还在：这条留着
+        close_resolved(&dir, &[o("striking:p", "striking", "https://a.com/x", 10.0)], 3, |_| true).unwrap();
+        close_resolved(&dir, &[o("striking:p", "striking", "https://a.com/x", 10.0)], 4, |_| true).unwrap();
+        assert_eq!(load_queue(&dir).iter().find(|i| i.opp.key == "low_ctr:p").unwrap().status, "open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn resolved_problems_close_only_when_safe() {
