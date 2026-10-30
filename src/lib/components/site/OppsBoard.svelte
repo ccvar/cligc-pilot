@@ -45,6 +45,10 @@
   const counts = $derived(batch.reduce((m, i) => ({ ...m, [stage(i)]: (m[stage(i)] ?? 0) + 1 }), {} as Record<string, number>));
   const finished = $derived((counts.done ?? 0) + (counts.proposed ?? 0) + (counts.failed ?? 0));
   let progOpen = $state(false);
+  // 已处理的默认收起：列表里先看处理中、排队、没成功的，已处理的点「已处理 N 条」再看
+  let doneOpen = $state(false);
+  const pending = $derived(progress.filter((i) => stage(i) !== 'done'));
+  const doneRows = $derived(progress.filter((i) => stage(i) === 'done'));
   const STAGE: Record<string, string> = { queued: '排队中', working: 'AI 处理中', failed: '没成功', proposed: '等你确认', done: '已处理' };
   // 默认交给哪个模型（设置里改；没设过用这些站点用得最多的），按钮上写它的名字
   const pick = $derived(batchPick());
@@ -124,8 +128,8 @@
 {/snippet}
 
 <!-- 列表底部的展开 / 收起：文字后面跟一个箭头，展开后箭头朝上 -->
-{#snippet more(open: boolean, rest: number, toggle: () => void)}
-  <button class="more" onclick={toggle} aria-expanded={open}>{open ? '收起' : `展开其余 ${rest} 条`}<svg class="more-chev" class:up={open} width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+{#snippet more(open: boolean, rest: number, toggle: () => void, label = '')}
+  <button class="more" onclick={toggle} aria-expanded={open}>{open ? '收起' : label || `展开其余 ${rest} 条`}<svg class="more-chev" class:up={open} width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
 {/snippet}
 
 {#snippet who(t: { icon: string; name: string })}{#if t.icon}<span class="bi-w"><BrainIcon brain={t.icon} size={12} /></span>{:else}<Icon name="wand" size={11} />{/if}{/snippet}
@@ -167,8 +171,12 @@
         {#if counts.queued}<button class="btn tiny ghost" onclick={stopAcross} data-tip="还没开始的都不做了（回到列表），正在跑的不受影响">停止排队</button>{/if}
       </div>
       {#if active}<div class="bar"><i style="width:{(finished / batch.length) * 100}%"></i></div>{#if counts.proposed}<p class="prop-note faint">其中 {counts.proposed} 条改好了等你确认，在上面「等你确认」里</p>{/if}{/if}
-      <ul class="rows">{#each progOpen ? progress : progress.slice(0, SHOW) as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>
-      {#if progress.length > SHOW}{@render more(progOpen, progress.length - SHOW, () => (progOpen = !progOpen))}{/if}
+      {#if pending.length}<ul class="rows">{#each progOpen ? pending : pending.slice(0, SHOW) as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>
+        {#if pending.length > SHOW}{@render more(progOpen, pending.length - SHOW, () => (progOpen = !progOpen))}{/if}{/if}
+      {#if doneRows.length}
+        {#if doneOpen}<ul class="rows">{#each doneRows as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>{/if}
+        {@render more(doneOpen, doneRows.length, () => (doneOpen = !doneOpen), `已处理 ${doneRows.length} 条`)}
+      {/if}
     </div>
   {/if}
   {#if ready.length}
