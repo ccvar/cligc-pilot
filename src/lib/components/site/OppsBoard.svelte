@@ -117,7 +117,8 @@
     <span class="st {st}" data-tip={i.item.note || null}>{#if st === 'working' || st === 'queued'}<span class="spin"></span>{/if}{STAGE[st]}{#if st === 'working' && i.step} · {i.step}{/if}{#if usedModel(i)}<span class="um"> · {usedModel(i)}</span>{/if}</span>
     <span class="acts">
       {#if st === 'working'}<button class="ic-btn ic-sm" onclick={() => stopJob(i)} aria-label="停止" data-tip="停止这个站点正在跑的作业"><Icon name="stop" size={13} /></button>
-      {:else if st === 'failed'}<button class="ic-btn ic-sm" onclick={() => workOpps([i], false)} disabled={busy(i)} aria-label="再交给 AI" data-tip="再交给 AI 改一次"><Icon name="refresh" size={13} /></button>
+      {:else if st === 'failed'}<!-- 没成功的常常是模型的问题：重试旁边直接给 ▾ 换个模型（右键重试按钮也行） -->
+        <button class="ic-btn ic-sm retry" onclick={() => workOpps([i], false)} oncontextmenu={(e) => openMenu(e, [i], false)} disabled={busy(i)} aria-label={`再交给 ${target.name}`} data-tip={`再交给 ${target.name} 改一次${usedModel(i) ? `（上次用的 ${usedModel(i)}）` : ''}\n右边 ▾ 可以换个模型`}><Icon name="refresh" size={13} /></button><button class="ic-btn ic-sm retry-caret" onclick={(e) => openMenu(e, [i], false)} disabled={busy(i)} aria-label="换个模型再试" data-tip="换个模型再试一次"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
       {:else if st === 'proposed'}<button class="ic-btn ic-sm" onclick={() => openSite(i.site_id, 'queue', '', i.item.id)} aria-label="去确认" data-tip="去看改动、确认或驳回"><Icon name="arrow" size={13} /></button>{/if}
     </span>
   </li>
@@ -213,6 +214,9 @@
   /* 拆分按钮：左边用默认模型交出去，右边 ▾ 换个模型 */
   .split { display: inline-flex; align-items: stretch; }
   .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  /* 重试 + ▾ 挨在一起：小图标按钮自带的负右边距会让两个叠住，重试那个去掉 */
+  .acts .ic-btn.retry { margin-right: 0; }
+  .acts .ic-btn.retry-caret { width: 18px; }
   .split .caret { padding: 0 6px; margin-left: -1px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   .split.primary .caret { margin-left: 0; border-left: 1px solid rgba(255, 255, 255, 0.22); }
   .um { color: var(--faint); }
