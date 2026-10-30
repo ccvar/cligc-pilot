@@ -144,7 +144,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 201 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
 
-  <!-- 顶部工具：折叠侧栏 + 搜索会话（窗口模式紧挨红绿灯右侧；全屏时无红绿灯，与左栏菜单左对齐） -->
+  <!-- 顶部工具：折叠侧栏 + 后退 / 前进 + 搜索会话（窗口模式紧挨红绿灯右侧；全屏时无红绿灯，与左栏菜单左对齐） -->
   <div class="win-tools" class:fs={ui.isFullscreen} class:win={isWindows}>
     <button class="wt" onclick={toggleRail} title={ui.railCollapsed ? '展开侧栏' : '折叠侧栏'} aria-label="折叠侧栏">
       <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
@@ -153,18 +153,19 @@
         <rect x="3.4" y="4.4" width="2.7" height="9.2" rx="1" fill="currentColor" opacity=".28" />
       </svg>
     </button>
-    <button class="wt" onclick={openSearch} disabled={!app.activeConn} title="搜索会话" aria-label="搜索会话">
-      <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
-        <circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.4" />
-        <path d="M11.7 11.7L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-      </svg>
-    </button>
     <!-- 后退 / 前进：在去过的页面之间来回（⌘[ / ⌘]） -->
     <button class="wt" onclick={goBack} disabled={!nav.back.length} title="后退（⌘[）" aria-label="后退">
       <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path d="M11 4L6 9l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
     </button>
     <button class="wt" onclick={goForward} disabled={!nav.fwd.length} title="前进（⌘]）" aria-label="前进">
       <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path d="M7 4l5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </button>
+    <!-- 搜索放在前进后退后面：侧栏开关和前进后退都是「在页面间走」，挨在一起；搜索是另一件事 -->
+    <button class="wt" onclick={openSearch} disabled={!app.activeConn} title="搜索会话" aria-label="搜索会话">
+      <svg width="16" height="16" viewBox="0 0 18 18" fill="none">
+        <circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.4" />
+        <path d="M11.7 11.7L15 15" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+      </svg>
     </button>
     {#if phone.ready.length || phone.pending.length}
       <!-- 连着安卓手机时显示：AI 可以在对话里操作手机、截图 -->
