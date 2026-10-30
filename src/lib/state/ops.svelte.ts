@@ -129,9 +129,11 @@ export async function dismissItem(site: Site, item: OpsItem) {
   catch (e) { say(String(e), 'err'); }
 }
 /** 批量：选中的未处理机会按顺序让 AI 改（一个作业里一条一条做）。 */
-export async function workItems(siteId: string, ids: string[]) {
+/** model：这一批临时换的模型（"brain::model"），不改站点和托管方案的设置 */
+export async function workItems(siteId: string, ids: string[], model = '') {
   if (!ids.length) return;
-  try { await invoke('queue_work_many', { id: siteId, itemIds: ids }); }
+  const [b, ...m] = model.split('::');
+  try { await invoke('queue_work_many', { id: siteId, itemIds: ids, model: model ? [b, m.join('::')] : null }); }
   catch (e) { say(String(e), 'err'); }
 }
 /** 批量驳回：只问一次。 */

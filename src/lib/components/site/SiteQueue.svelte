@@ -155,11 +155,13 @@
   $effect(() => { void filter; picked = new Set(); });
   function togglePick(id: string) { const n = new Set(picked); if (n.has(id)) n.delete(id); else n.add(id); picked = n; }
   function pickAll() { picked = allPicked ? new Set() : new Set(pickable.map((i) => i.id)); }
-  async function batchWork() {
+  async function batchWork(model = '') {
     const ids = pickedItems.map((i) => i.id);
     picked = new Set();
-    await workItems(site.id, ids);
+    await workItems(site.id, ids, model);
   }
+  // 批量的 ▾：换个模型改这几条（只用这一次）
+  let bMenu = $state<{ left: number; top: number; bottom: number; right: number } | null>(null);
   async function batchDismiss() {
     const items = pickedItems;
     await dismissItems(site, items);
@@ -216,7 +218,7 @@
           {#if shown.length > 1}<label class="ck"><input type="checkbox" checked={allPicked} indeterminate={pickedItems.length > 0 && !allPicked} onchange={pickAll} />{pickedItems.length ? `已选 ${pickedItems.length} 条` : '全选'}</label>{/if}
           {#if pickedItems.length}
             <span class="grow"></span>
-            <button class="btn tiny primary" onclick={batchWork} disabled={busy} data-tip="一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下"><Icon name="sparkles" size={11} />让 AI 改 {pickedItems.length} 条</button>
+            <span class="split"><button class="btn tiny primary" onclick={() => batchWork()} disabled={busy} data-tip={`用 ${mt.name} 一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} 改 {pickedItems.length} 条</button><button class="btn tiny primary caret" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); bMenu = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }} disabled={busy} aria-label="换个模型改这几条" data-tip="换个模型改这几条（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>
             <button class="btn tiny quiet" onclick={batchDismiss} disabled={busy}><Icon name="x" size={11} />驳回 {pickedItems.length} 条</button>
           {:else}
             <span class="faint lh-hint">{myPlan && myPlan.autonomy !== 'suggest' ? `托管每轮按优先级处理排在前面的几条，其余的排着等下一轮；想现在做，勾选后点「让 AI 改」或用单条的按钮。` : '勾选几条，可以一起让 AI 改或驳回。'}</span>
@@ -329,6 +331,7 @@
   </div>
 {/if}
 
+{#if bMenu}<ModelMenu at={bMenu} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { bMenu = null; void batchWork(m); }} onclose={() => (bMenu = null)} />{/if}
 {#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
@@ -370,6 +373,7 @@
   .split { display: inline-flex; }
   .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .split .caret { padding: 0 6px; margin-left: -1px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .split .primary.caret { margin-left: 0; border-left: 1px solid rgba(255, 255, 255, .22); }
   .bi-w { display: inline-flex; }
   .items { padding-top: 0; padding-bottom: 0; }
   /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */

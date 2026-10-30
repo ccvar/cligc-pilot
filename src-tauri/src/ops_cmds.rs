@@ -100,11 +100,12 @@ pub fn site_ops_model(state: tauri::State<'_, AppState>, id: String) -> Result<(
 
 /// 批量让 AI 改（按顺序处理选中的条目）。
 #[tauri::command]
-pub fn queue_work_many(app: tauri::AppHandle, id: String, item_ids: Vec<String>) -> Result<String, String> {
+pub fn queue_work_many(app: tauri::AppHandle, id: String, item_ids: Vec<String>, model: Option<(String, String)>) -> Result<String, String> {
     if item_ids.iter().any(|x| x.contains(',')) {
         return Err("条目 id 不合法".into());
     }
-    site_runner::start(ctx(&app), &id, "batch", "manual", Some(item_ids.join(",")))
+    // model：这一批临时换的模型，不改站点和托管方案的设置
+    site_runner::start_with_model(ctx(&app), &id, "batch", "manual", Some(item_ids.join(",")), model)
 }
 
 /// 失败的改动重新构建、检查并按规则上线（不再让 AI 改一遍）。
