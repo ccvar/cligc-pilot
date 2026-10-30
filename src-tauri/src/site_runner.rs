@@ -687,10 +687,20 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
         return Err("只有失败或等你确认的条目可以重新检查".into());
     }
     let wt = crate::sites::build_root(&site_dir).join("work").join(&item.id);
-    if item.branch.is_empty() || item.base_sha.is_empty() || !wt.is_dir() {
+    if item.branch.is_empty() || item.base_sha.is_empty() {
         return Err("这条的改动分支已经不在了，只能让 AI 重新改".into());
     }
     let cb = code_base(ctx, site, job).await?;
+    // 工作树不在了（挪过构建目录、被清理过）但分支还在：从分支重新检出一份，接着检查
+    if !wt.is_dir() {
+        let has = crate::site_git::git(&cb.main, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", item.branch)], "").await.map(|o| o.ok).unwrap_or(false);
+        if !has {
+            return Err("这条的改动分支已经不在了，只能让 AI 重新改".into());
+        }
+        crate::site_git::reattach_worktree(&cb.main, &wt, &item.branch).await?;
+        job.line("工作目录挪到了新的构建目录，接着用分支上的改动");
+        crate::site_git::share_node_modules(&cb.main, &wt);
+    }
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
         i.note.clear();

@@ -134,11 +134,50 @@ pub async fn worktree_at(repo: &Path, path: &Path, rev: &str, branch: Option<&st
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建工作目录失败：{e}"))?;
     }
+    if let Some(b) = branch {
+        release_branch(repo, b, path).await;
+    }
     match branch {
         Some(b) => git_ok(repo, &["worktree", "add", "--force", "-B", b, &path_s, rev], "").await?,
         None => git_ok(repo, &["worktree", "add", "--force", "--detach", &path_s, rev], "").await?,
     };
     Ok(())
+}
+
+/// 这个分支还检出在别的工作树里（构建目录挪过位置后留在旧目录的那份）：拿掉那份，-B 才能重建分支。
+/// 只拿 Pilot 自己的工作树（路径里有 /work/ 或 /deploy/），用户自己开的不动。
+async fn release_branch(repo: &Path, branch: &str, keep: &Path) {
+    let list = git(repo, &["worktree", "list", "--porcelain"], "").await.map(|o| o.stdout).unwrap_or_default();
+    let want = format!("branch refs/heads/{branch}");
+    for block in list.split("\n\n").filter(|b| b.lines().any(|l| l == want)) {
+        let Some(p) = block.lines().find_map(|l| l.strip_prefix("worktree ")) else { continue };
+        let ours = p.contains("/work/") || p.contains("/deploy");
+        if Path::new(p) != keep && ours {
+            if !git(repo, &["worktree", "remove", "--force", p], "").await.map(|r| r.ok).unwrap_or(false) {
+                let _ = std::fs::remove_dir_all(p);
+                let _ = git(repo, &["worktree", "prune"], "").await;
+            }
+        }
+    }
+}
+
+/// 分支还在、但工作树不在 `path`（构建目录挪过位置）：分支原来的工作树还在就整个挪过来（git worktree move，
+/// 改动和状态都保留），不在了就在 `path` 重新检出这个分支。不用 -B：分支还检出在别处时 git 不让强制改它。
+pub async fn reattach_worktree(repo: &Path, path: &Path, branch: &str) -> Result<(), String> {
+    let _ = git(repo, &["worktree", "prune"], "").await;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建工作目录失败：{e}"))?;
+    }
+    let list = git(repo, &["worktree", "list", "--porcelain"], "").await.map(|o| o.stdout).unwrap_or_default();
+    let want = format!("branch refs/heads/{branch}");
+    let old = list.split("\n\n").find(|b| b.lines().any(|l| l == want)).and_then(|b| b.lines().find_map(|l| l.strip_prefix("worktree ")).map(PathBuf::from));
+    if let Some(old) = old.filter(|o| o.is_dir() && o != path) {
+        let (o, p) = (old.to_string_lossy().to_string(), path.to_string_lossy().to_string());
+        if git(repo, &["worktree", "move", &o, &p], "").await.map(|r| r.ok).unwrap_or(false) {
+            return Ok(());
+        }
+    }
+    git_ok(repo, &["worktree", "add", "--force", &path.to_string_lossy(), branch], "").await.map(|_| ())
 }
 
 pub async fn remove_worktree(repo: &Path, path: &Path) {
@@ -228,6 +267,34 @@ pub fn code_dir(site: &crate::sites::Site, gh: Option<&crate::conns::Connection>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reattach_moves_the_old_worktree_with_spaces() {
+        let root = std::env::temp_dir().join(format!("reattach-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let run = |d: &Path, a: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(d).args(a).status().unwrap().success());
+        run(&repo, &["init", "-q", "-b", "main"]);
+        run(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        // AI 的工作树在带空格的旧目录里，分支上有一次提交
+        let old = root.join("Application Support/work/i1");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        run(&repo, &["worktree", "add", "-q", "-b", "pilot/ops-x", &old.to_string_lossy()]);
+        std::fs::write(old.join("f.txt"), "ai").unwrap();
+        run(&old, &["add", "f.txt"]);
+        run(&old, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "ai"]);
+        // 构建目录挪了：在新位置接上
+        let new = root.join("Caches/work/i1");
+        reattach_worktree(&repo, &new, "pilot/ops-x").await.unwrap();
+        assert_eq!(std::fs::read_to_string(new.join("f.txt")).unwrap(), "ai");
+        assert_eq!(current_branch(&new).await, "pilot/ops-x");
+        assert!(!old.exists());
+        // 让 AI 重新改：在另一个新位置用 -B 重建同名分支，旧的那份（这里是刚挪过去的 new）要先让出来
+        let again = root.join("Caches/work/i1-again");
+        worktree_at(&repo, &again, "main", Some("pilot/ops-x")).await.unwrap();
+        assert_eq!(current_branch(&again).await, "pilot/ops-x");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn branch_names_are_restricted() {
