@@ -635,7 +635,7 @@
   .md :global(h2) { font-size: 14px; margin: 16px 0 6px; }
   .md :global(ul) { padding-left: 18px; margin: 6px 0; }
   /* 和旁边「新增方案」小按钮一样高 */
-  .page-head .more-wrap > .ic-btn { width: 26px; height: 26px; border-radius: 7px; }
+  .page-head .more-wrap > .ic-btn { width: 24px; height: 24px; border-radius: 7px; } /* 和页头的 24px 按钮同高 */
   .set-toggle { flex: 1; width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .set-toggle .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
   .set-toggle .chev.up { transform: rotate(180deg); }
