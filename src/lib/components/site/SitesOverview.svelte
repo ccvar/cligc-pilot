@@ -123,7 +123,7 @@
 {/snippet}
 
 <!-- 找站点走顶部的全局搜索（名称 / 域名 / 仓库 / #标签，直接跳转），这里只留筛选。 -->
-<div class="su page ov">
+<div class="su page ov" class:wide={fleet.tab === 'sites'}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <header class="page-head" data-tauri-drag-region onmousedown={startDrag}>
     <div class="ttl">
@@ -312,10 +312,13 @@
 <style>
   .iss-wrap { position: relative; }
   /* tab 行右边放统计时间段和 ⋯；tab 自己会横向滚动（会裁掉弹出层），所以工具放在外面 */
-  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: 28px; flex: none; }
+  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); flex: none; }
+  /* 右边和下面的内容对齐：站点表格铺满，待处理 / 近期动态最宽 1180px */
+  .su.ov .page-head, .su.ov .tabs-bar { padding-right: max(28px, calc(100% - 28px - 1180px)); }
+  .su.ov.wide .page-head, .su.ov.wide .tabs-bar { padding-right: 28px; }
   .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
   @container page (max-width: 640px) {
-    .tabs-bar { padding-right: 16px; }
+    .su.ov .page-head, .su.ov .tabs-bar, .su.ov.wide .page-head, .su.ov.wide .tabs-bar { padding-right: 16px; }
   }
   .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
   .pop-wrap { position: relative; display: inline-flex; }

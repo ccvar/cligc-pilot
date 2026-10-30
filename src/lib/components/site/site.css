@@ -147,6 +147,8 @@
 .su .page-head { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 22px 28px 8px; flex-wrap: wrap; min-height: 34px; }
 .su .page-head h1 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; letter-spacing: -.005em; display: flex; align-items: center; gap: 8px; }
 .su .page-head .hint { margin: 0; }
+/* 内容最宽 1080px、靠左：宽屏时标题行右边的按钮也停在内容右边的正上方（标题行本身仍铺满，整行都能拖动窗口） */
+.su .page-head { padding-right: max(28px, calc(100% - 28px - 1080px)); }
 .su .page-head .ttl { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; min-width: 0; }
 .su .page-head .ttl .hint { font-size: 12px; }
 .su .tabs { display: flex; gap: 2px; padding: 0 20px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; flex: none; }
