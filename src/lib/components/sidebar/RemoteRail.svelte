@@ -26,7 +26,8 @@
       role="button" tabindex="0" title="{c.ssh_user}@{c.ssh_host}{c.ssh_port && c.ssh_port !== 22 ? ':' + c.ssh_port : ''}"
       onpointerdown={(e) => startRemoteDrag(e, c.id)} onclick={() => selectConn(c.id)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void selectConn(c.id); } }} oncontextmenu={(e) => openConnCtx(e, c)}>
       <span class="ic"><DistroMark id={distroOf(c)} size={14} /></span>
-      <span class="main"><b><span class="nm">{mask(connectionDisplayName(c))}</span>{#if t?.on}<i class="st on" title="终端已连接（切到别的机器也不断开）" aria-label="已连接"></i>{:else if t?.busy}<i class="st wait" title="正在连接…" aria-label="正在连接"></i>{:else if t?.err}<i class="st err" title="连接断开或失败：{t.err}" aria-label="连接失败"></i>{/if}</b><small>{mask(sshSub(c))}</small></span>
+      <span class="main"><b><span class="nm">{mask(connectionDisplayName(c))}</span></b><small>{mask(sshSub(c))}</small></span>
+      {#if t?.on}<i class="st on" title="终端已连接（切到别的机器也不断开）" aria-label="已连接"></i>{:else if t?.busy}<i class="st wait" title="正在连接…" aria-label="正在连接"></i>{:else if t?.err}<i class="st err" title="连接断开或失败：{t.err}" aria-label="连接失败"></i>{/if}
       {#if busy.has(c.id)}<span class="run" title="有对话正在进行"></span>{/if}
     </div>
     {#if on}
@@ -46,7 +47,7 @@
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
   .main b { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; font-weight: 600; }
   .main .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .st { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+  .st { flex: none; width: 7px; height: 7px; margin-right: 2px; border-radius: 50%; }
   .st.on { background: var(--ok, #2f9e5b); }
   .st.wait { background: var(--faint); animation: pulse 1.1s infinite; }
   .st.err { background: var(--err, #d14343); }

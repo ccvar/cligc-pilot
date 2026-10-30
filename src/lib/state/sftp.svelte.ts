@@ -255,6 +255,8 @@ export async function loadDir(path: string, force = false, quiet = false): Promi
     sftp.sftpLoading = { ...sftp.sftpLoading, [path]: false };
   }
 }
+// 切走的连接的文件列表（只在内存里）：切回来直接显示
+const views = new Map<string, { path: string; kids: Record<string, SftpEntry[]>; open: Set<string>; sel: string }>();
 // 每个连接上次打开的目录（存在本机）：切换连接、重开应用后回到那里，不再每次从 home 起步
 const LAST_KEY = 'cligc.pilot.sftpLastDir';
 function lastDirs(): Record<string, string> { try { return JSON.parse(localStorage.getItem(LAST_KEY) || '{}') || {}; } catch { return {}; } }
@@ -705,7 +707,16 @@ export function initSftp() {
     const id = app.activeConnId;
     if (app.view !== 'remote' || !app.isSshConn || !workbench.wb.files || !id) return;
     if (sftp.sftpConnId === id) return;
-    sftp.sftpConnId = id; sftp.sftpPath = ''; sftp.sftpPathDraft = ''; sftp.sftpErr = '';
+    // 先把离开的这台的列表留在内存里：切回来直接显示，不用重新读一遍（SFTP 连接本身后端一直留着）
+    if (sftp.sftpConnId && sftp.sftpPath) views.set(sftp.sftpConnId, { path: sftp.sftpPath, kids: sftp.sftpKids, open: sftp.sftpOpenDirs, sel: sftp.sftpSel });
+    sftp.sftpConnId = id; sftp.sftpErr = '';
+    const v = views.get(id);
+    if (v) {
+      sftp.sftpPath = v.path; sftp.sftpPathDraft = v.path; sftp.sftpKids = v.kids; sftp.sftpOpenDirs = v.open; sftp.sftpSel = v.sel;
+      void sftpRefresh(); // 后台悄悄刷新一下，列表不清空
+      return;
+    }
+    sftp.sftpPath = ''; sftp.sftpPathDraft = '';
     sftp.sftpKids = {}; sftp.sftpOpenDirs = new Set(); sftp.sftpSel = '';
     const last = lastDir(id);
     void sftpGo(last).then(() => { if (last && sftp.sftpErr && sftp.sftpConnId === id) void sftpGo(''); });
