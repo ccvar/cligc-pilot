@@ -13,6 +13,7 @@
   import { synd } from '$lib/state/syndication.svelte.js';
   import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
+  import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
   import { modelName } from '$lib/state/fleet.svelte.js';
@@ -214,7 +215,8 @@
                 <div class="how">
                   {#if i.ai_summary}
                     {@const zh = i.ai_summary_zh && !showOrig.has(i.id)}
-                    <p>{zh ? i.ai_summary_zh : i.ai_summary}</p>
+                    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                    <div class="sum" onclick={(e) => mdClick(e, null)}>{@html mdRender((zh ? i.ai_summary_zh : i.ai_summary) ?? '')}</div>
                     {#if i.ai_summary_zh}<button class="link-btn tr" onclick={() => flipOrig(i.id)}>{zh ? '看原文' : '看中文'}</button>
                     {:else if foreign(i.ai_summary)}<button class="link-btn tr" onclick={() => translate(i)} disabled={translating === i.id}>{#if translating === i.id}<span class="spin"></span>翻译中…{:else}翻成中文{/if}</button>{/if}
                   {/if}
@@ -349,6 +351,15 @@
   .how-t.open svg { transform: rotate(90deg); }
   .how { padding: 8px 12px; border-left: 2px solid var(--border2); margin-left: 4px; font-size: 12.5px; color: var(--dim); }
   .how p { margin: 0 0 6px; line-height: 1.65; white-space: pre-wrap; }
+  /* AI 的说明是 Markdown：渲染出来（加粗、列表、代码），和「近期动态」里一样 */
+  .how .sum { line-height: 1.7; color: var(--text); margin-bottom: 6px; }
+  .how .sum :global(p) { margin: 0 0 6px; }
+  .how .sum :global(p:last-child), .how .sum :global(ul:last-child), .how .sum :global(ol:last-child) { margin-bottom: 0; }
+  .how .sum :global(ul), .how .sum :global(ol) { margin: 2px 0 6px; padding-left: 18px; }
+  .how .sum :global(li) { margin: 3px 0; }
+  .how .sum :global(strong) { font-weight: 600; }
+  .how .sum :global(code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); overflow-wrap: anywhere; }
+  .how .sum :global(a) { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
   .files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--faint); }
   .it-expect { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--dim); }
   /* 依据 / 做法两行：左边小标签，右边正文默认最多两行，展开看全文 */

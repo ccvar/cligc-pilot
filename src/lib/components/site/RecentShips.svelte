@@ -12,6 +12,7 @@
   import { ago, full } from './fmt';
   import { modelName } from '$lib/state/fleet.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
+  import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import type { ShipItem, OpsItem, GscRow } from '$lib/types';
 
   let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。' }: { items: ShipItem[]; limit?: number; empty?: string } = $props();
@@ -20,6 +21,10 @@
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
   const shown = $derived(all ? items : items.slice(0, LIMIT));
+  // 「AI 怎么改的」是 Markdown（加粗、列表、代码）：渲染出来看；长的先收成几行，点「展开全文」看完整的
+  let fullSum = $state<Set<string>>(new Set());
+  function flipSum(id: string) { const n = new Set(fullSum); if (n.has(id)) n.delete(id); else n.add(id); fullSum = n; }
+  const LONG = 220;
   const siteOf = (id: string) => sites.list.find((s) => s.id === id);
 
   function shipState(i: OpsItem) {
@@ -101,16 +106,29 @@
             <span class="t faint" data-tip={full(i.deployed_at || i.updated_at)}>{ago(i.deployed_at || i.updated_at)}</span>
           </div>
           {#if isOpen}
+            {@const sum = i.ai_summary_zh || i.ai_summary}
             <div class="more">
-              {#if CHANGE_LABEL[i.opp.change]}<span class="tag">{CHANGE_LABEL[i.opp.change]}</span>{/if}
+              <!-- 一行小字：改动类型、模型和用量、线上验收 -->
+              <div class="meta">
+                {#if CHANGE_LABEL[i.opp.change]}<span class="tag">{CHANGE_LABEL[i.opp.change]}</span>{/if}
+                {#if i.model_used || x.cost?.turns}<span>{#if i.model_used}{modelName(i.model_used) || i.model_used}{/if}{#if x.cost?.turns}{i.model_used ? ' · ' : ''}{kTok(x.cost.tokens)} token{#if x.cost.usd >= 0.01}（API 约 ${x.cost.usd.toFixed(2)}）{/if}{#if x.cost.sub_tokens}{` · 订阅额度内 ${kTok(x.cost.sub_tokens)}`}{/if}{/if}</span>{/if}
+                {#if i.checks?.length}
+                  {@const bad = i.checks.filter((c) => !c.ok)}
+                  <span>线上验收 {i.checks.length - bad.length} 项通过{#if bad.length}，<span class="warn-text">{bad.length} 项没过（{bad.map((c) => c.label).join('、')}）</span>{/if}</span>
+                {/if}
+              </div>
               {#if i.attention}<p class="warn-text">要你核对：{i.attention}</p>{/if}
-              {#if ef.tip}<p class="eff-d">{ef.tip}</p>{/if}
               {#if i.status === 'failed' && i.note}<p class="err-t">没成功：{i.note}</p>{/if}
-              {#if i.ai_summary}<p>{i.ai_summary_zh || i.ai_summary}</p>{/if}
-              {#if i.model_used || x.cost?.turns}<p class="faint">{#if i.model_used}模型：{modelName(i.model_used) || i.model_used}{/if}{#if x.cost?.turns}{i.model_used ? ' · ' : ''}这一条用了 {kTok(x.cost.tokens)} token{#if x.cost.usd >= 0.01}，API 约 ${x.cost.usd.toFixed(2)}{/if}{#if x.cost.sub_tokens} · 订阅额度内 {kTok(x.cost.sub_tokens)}{/if}{/if}</p>{/if}
-              {#if i.checks?.length}
-                {@const bad = i.checks.filter((c) => !c.ok)}
-                <p class="faint">线上验收：{i.checks.length - bad.length} 项通过{#if bad.length}，<span class="warn-text">{bad.length} 项没过（{bad.map((c) => c.label).join('、')}）</span>{/if}</p>
+              {#if ef.tip}<div class="blk"><span class="lb">效果</span><p class="eff-d">{ef.tip}</p></div>{/if}
+              {#if sum}
+                <div class="blk">
+                  <span class="lb">AI 怎么改的</span>
+                  <div>
+                    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                    <div class="sum" class:clamp={sum.length > LONG && !fullSum.has(i.id)} onclick={(e) => mdClick(e, null)}>{@html mdRender(sum)}</div>
+                    {#if sum.length > LONG}<button class="link-btn more-t" onclick={() => flipSum(i.id)}>{fullSum.has(i.id) ? '收起' : '展开全文'}</button>{/if}
+                  </div>
+                </div>
               {/if}
             </div>
           {/if}
@@ -131,7 +149,8 @@
   .sn { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 150px; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt { min-width: 0; font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt.gone { color: var(--faint); text-decoration: line-through; }
-  li.open .tt { white-space: normal; }
+  /* 展开后标题完整显示；按空格和标点断行，不把「8–20」这种拆到两行 */
+  li.open .tt { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
   /* 路径太长时只截路径文字，后面的 ↗ 图标一直露着 */
   .url { flex: 0 1 auto; min-width: 0; max-width: 260px; display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; font-size: 11px; color: var(--faint); cursor: pointer; white-space: nowrap; }
   .url .up { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -151,8 +170,22 @@
   .how { flex: none; width: 52px; text-align: right; font-size: 11px; white-space: nowrap; }
   .row > .pill { flex: none; min-width: 74px; justify-content: center; }
   .t { flex: none; width: 64px; text-align: right; font-size: 11.5px; white-space: nowrap; }
-  .more { padding: 0 18px 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .more { padding: 2px 18px 14px; display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
   .more p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--dim); }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 11.5px; color: var(--faint); }
+  /* 左边一列小标签、右边内容，几块上下对齐 */
+  .blk { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; align-items: baseline; }
+  .lb { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+  .sum { font-size: 12.5px; line-height: 1.7; color: var(--text); max-width: 760px; }
+  .sum.clamp { max-height: 8.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+  .sum :global(p) { margin: 0 0 6px; color: inherit; }
+  .sum :global(p:last-child), .sum :global(ul:last-child), .sum :global(ol:last-child) { margin-bottom: 0; }
+  .sum :global(ul), .sum :global(ol) { margin: 2px 0 6px; padding-left: 18px; }
+  .sum :global(li) { margin: 3px 0; }
+  .sum :global(strong) { font-weight: 600; }
+  .sum :global(code) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); overflow-wrap: anywhere; }
+  .sum :global(a) { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+  .more-t { margin-top: 4px; font-size: 12px; }
   .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--accent-soft); font-size: 11px; color: var(--dim); }
   .all { display: block; width: calc(100% + 36px); margin: 0 -18px -16px; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); border-radius: 0 0 12px 12px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
   .all:hover { color: var(--text); background: #fcfbf9; }
