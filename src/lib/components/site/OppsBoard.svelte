@@ -142,7 +142,7 @@
   <p class="sum faint">
     {#if o.items.length}{sitesN} 个站点有 {o.items.length} 个机会没处理{:else}暂时没有新机会{/if}{#if o.managed_open} · 托管中站点的 {o.managed_open} 个由 AI 自动处理{/if}{#if o.waiting} · <span class="run">还有 {o.waiting} 个站点排着等 AI</span>{/if}{#if !active && doneToday} · <button class="okt link-btn" onclick={() => (fleet.tab = 'history')} data-tip="去「近期动态」看">今天 AI 处理完 {doneToday} 个</button>{/if}
     <!-- 机会是按某次拉到的数据算的：写明数据什么时候的，点一下把所有站点的数据重新拉一遍，已经不成立的自动收起 -->
-    <span class="recheck">{#if syncing}<span class="spin"></span>正在按最新数据重新检查，还剩 {syncing} 个站点{:else}{#if fleet.sync.last_at}数据截至 {ago(fleet.sync.last_at)} · {/if}<button class="link-btn" onclick={() => syncAllData()} data-tip="把所有站点的 Search Console、GA4、Bing 数据重新拉一遍：已经好了的问题、不再满足条件的机会会自动收起，列表跟着刷新（每天早上 7 点也会自动做一次）">按最新数据重新检查</button>{/if}</span>
+    <span class="recheck">{#if syncing}<span class="spin"></span>正在按最新数据重新检查，还剩 {syncing} 个站点{:else}{#if fleet.sync.last_at}数据截至 {ago(fleet.sync.last_at)} · {/if}<button class="link-btn rc-btn" onclick={() => syncAllData()} data-tip="把所有站点的 Search Console、GA4、Bing 数据重新拉一遍：已经好了的问题、不再满足条件的机会会自动收起，列表跟着刷新（每天早上 7 点也会自动做一次）"><Icon name="refresh" size={11} />按最新数据重新检查</button>{/if}</span>
   </p>
   </div>
   {#if progress.length}
@@ -203,6 +203,7 @@
   .recheck::before { content: '·'; margin-right: 4px; }
   .recheck .spin { width: 10px; height: 10px; }
   .recheck .link-btn { font-size: inherit; }
+  .recheck .rc-btn { display: inline-flex; align-items: center; gap: 4px; }
   /* 说明一行、各组卡片之间统一 12px（不再叠加外层间距） */
   .ob { display: flex; flex-direction: column; gap: 12px; }
   /* 卡片自己不留内边距：分隔线顶到卡片两边，标题和每行各自留 16px */
