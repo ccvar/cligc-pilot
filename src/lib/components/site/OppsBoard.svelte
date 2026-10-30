@@ -10,7 +10,7 @@
   import { fleet, inPicks, loadOpps, workOpps, dismissOpps, stopAcross, batchPick, setBatchModel, modelTarget, modelName } from '$lib/state/fleet.svelte.js';
   import ModelMenu from './ModelMenu.svelte';
   import BrainIcon from '$lib/BrainIcon.svelte';
-  import { confirmDialog } from '$lib/state/app.svelte.js';
+  import { confirmDialog, say } from '$lib/state/app.svelte.js';
   import { KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { openSite, cancelSiteJob } from '$lib/state/sites.svelte.js';
   import { num } from './fmt';
@@ -45,16 +45,18 @@
   const pick = $derived(batchPick());
   const target = $derived(modelTarget(pick));
   // 换个模型处理这一次的菜单：锚在 ▾ 按钮下面，或右键的位置
-  let menu = $state<{ at: { left: number; top: number; bottom: number; right: number }; items: OppItem[]; ask: boolean } | null>(null);
-  function openMenu(e: MouseEvent, items: OppItem[], ask: boolean) {
+  // pick：批量按钮的 ▾，只换按钮用的模型（存成默认），不马上开始；单条的右键 / 重试 ▾ 选了就用它处理那一条
+  let menu = $state<{ at: { left: number; top: number; bottom: number; right: number }; items: OppItem[]; ask: boolean; pick?: boolean } | null>(null);
+  function openMenu(e: MouseEvent, items: OppItem[], ask: boolean, pick = false) {
     e.preventDefault();
     const r = e.type === 'contextmenu' ? { left: e.clientX, right: e.clientX + 260, top: e.clientY, bottom: e.clientY } : (e.currentTarget as HTMLElement).getBoundingClientRect();
-    menu = { at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, items, ask };
+    menu = { at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, items, ask, pick };
   }
   function pickFromMenu(model: string, makeDefault: boolean) {
     const m = menu;
     menu = null;
     if (!m) return;
+    if (m.pick) { setBatchModel(model); say(`之后交给 ${modelTarget(model).name}，点按钮开始`); return; }
     if (makeDefault) setBatchModel(model);
     void workOpps(m.items, m.ask, model);
   }
@@ -101,7 +103,7 @@
 
 {#snippet hand(items: OppItem[], verb: string, primary: boolean)}
   <span class="split" class:primary>
-    <button class="btn tiny" class:primary onclick={() => workOpps(items)} data-tip={`${verb} ${target.name}：每个站点一个作业，同时最多 3 个；改好、检查通过后留给你确认`}>{@render who(target)}{verb} {target.name}</button><button class="btn tiny caret" class:primary onclick={(e) => openMenu(e, items, true)} aria-label="换个模型处理" data-tip="换个模型处理这一批"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    <button class="btn tiny" class:primary onclick={() => workOpps(items)} data-tip={`${verb} ${target.name}：每个站点一个作业，同时最多 3 个；改好、检查通过后留给你确认`}>{@render who(target)}{verb} {target.name}</button><button class="btn tiny caret" class:primary onclick={(e) => openMenu(e, items, true, true)} aria-label="换个模型" data-tip="换个模型：只换按钮上的模型，点按钮才开始"><svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
   </span>
 {/snippet}
 
@@ -182,7 +184,7 @@
     </div>
   {/each}
 {/if}
-{#if menu}<ModelMenu at={menu.at} current={pick} onpick={pickFromMenu} onclose={() => (menu = null)} />{/if}
+{#if menu}<ModelMenu at={menu.at} current={pick} pickOnly={menu.pick} onpick={pickFromMenu} onclose={() => (menu = null)} />{/if}
 </div>
 
 <style>

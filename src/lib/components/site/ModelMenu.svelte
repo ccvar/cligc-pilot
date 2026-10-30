@@ -4,13 +4,15 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { batchOptions } from '$lib/state/fleet.svelte.js';
 
-  let { at, current, onpick, onclose }: {
+  let { at, current, onpick, onclose, pickOnly = false }: {
     /** 锚点：按钮的矩形，或右键时的鼠标位置 */
     at: { left: number; top: number; bottom: number; right: number };
     /** 默认模型（打勾） */
     current: string;
     onpick: (model: string, makeDefault: boolean) => void;
     onclose: () => void;
+    /** 只换按钮用的模型、不马上开始（批量按钮的 ▾）：不显示「同时设为默认」，选了就是新的默认 */
+    pickOnly?: boolean;
   } = $props();
 
   const opts = $derived(batchOptions());
@@ -52,10 +54,10 @@
 </script>
 
 <div class="mm" bind:this={el} {style} role="menu">
-  <input class="mm-q" bind:this={searchEl} bind:value={query} placeholder="换个模型处理…" aria-label="搜索模型" />
+  <input class="mm-q" bind:this={searchEl} bind:value={query} placeholder={pickOnly ? '交给哪个模型…' : '换个模型处理…'} aria-label="搜索模型" />
   <div class="mm-list">
     {#each shown as o (o.value)}
-      <button class="mopt" disabled={o.disabled} role="menuitem" onclick={() => onpick(o.value, makeDefault)}>
+      <button class="mopt" disabled={o.disabled} role="menuitem" onclick={() => onpick(o.value, pickOnly || makeDefault)}>
         {#if o.icon}<BrainIcon brain={o.icon} size={15} />{/if}
         <span class="mm-t"><b>{o.short}{#if o.short !== o.label}<em> · {o.label}</em>{/if}</b>{#if o.sub}<small>{o.sub}</small>{/if}</span>
         {#if o.value === current}<span class="mm-def">默认</span>{/if}
@@ -63,7 +65,8 @@
     {/each}
     {#if !shown.length}<p class="mm-none">没有匹配的模型</p>{/if}
   </div>
-  <label class="mm-foot"><input type="checkbox" bind:checked={makeDefault} />同时设为默认模型</label>
+  {#if pickOnly}<p class="mm-foot">只换按钮上的模型，点按钮才开始</p>
+  {:else}<label class="mm-foot"><input type="checkbox" bind:checked={makeDefault} />同时设为默认模型</label>{/if}
 </div>
 
 <style>
@@ -82,5 +85,6 @@
   .mm-def { flex: none; font-size: 10.5px; color: var(--dim, #6f6b62); padding: 1px 6px; border-radius: 6px; background: #f1efe9; }
   .mm-none { margin: 8px; color: var(--faint, #a29d93); }
   .mm-foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; padding: 7px 8px 4px; border-top: 1px solid var(--border, #ecebe6); color: var(--dim, #6f6b62); cursor: pointer; }
+  p.mm-foot { margin-bottom: 0; cursor: default; font-size: 11.5px; color: var(--faint, #a29d93); }
   .mm-foot input { margin: 0; accent-color: var(--accent, #33302a); }
 </style>
