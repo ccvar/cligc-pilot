@@ -5156,6 +5156,7 @@ pub fn run() {
             ops_cmds::queue_ack,
             ops_cmds::queue_accept,
             ops_cmds::queue_accept_many,
+            ops_cmds::site_content_code,
             ops_cmds::queue_rollback,
             ops_cmds::queue_dismiss,
             ops_cmds::queue_translate_summary,

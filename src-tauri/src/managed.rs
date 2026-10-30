@@ -569,6 +569,29 @@ pub fn hard_forbidden(path: &str) -> bool {
         || ["py", "sh", "rs", "go", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}")))
 }
 
+/// 放进站点「算网站内容的代码文件」清单也不放行的：依赖、锁文件、构建 / 部署 / CI 配置、密钥配置、
+/// 数据库迁移、脚本。剩下被 `hard_forbidden` 拦的（比如 Go 站把页面写在 internal/site/build.go 里）可以按站点放行。
+pub fn never_allow(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    hard_forbidden(p)
+        && (matches!(
+            name,
+            "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json" | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_redirects" | "_worker.js" | "tsconfig.json"
+                | "go.mod" | "go.sum" | "Makefile" | "Dockerfile" | "Cargo.toml" | "Cargo.lock" | "requirements.txt" | "pyproject.toml"
+        ) || name.starts_with(".env")
+            || ["astro.config", "vite.config", "next.config", "svelte.config", "tailwind.config"].iter().any(|x| name.starts_with(x))
+            || matches!(first, ".github" | "node_modules" | "deploy" | "migrations" | "scripts" | "bin")
+            || ["sh", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}"))))
+}
+
+/// 文件在不在站点的「算网站内容的代码文件」清单里：写完整路径，或以 / 结尾的目录。
+pub fn listed(path: &str, list: &[String]) -> bool {
+    let p = path.trim_start_matches("./");
+    list.iter().map(|x| x.trim().trim_start_matches("./")).filter(|x| !x.is_empty()).any(|x| if x.ends_with('/') { p.starts_with(x) } else { p == x })
+}
+
 /// 站点代码（模板、组件、样式、前端脚本）：按方案的「代码改动」设置决定能不能自动上线。
 fn site_code_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -599,6 +622,19 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
         ("dangerouslySetInnerHTML", "直接插入 HTML"),
         ("set:html", "直接插入 HTML"),
         ("<script src=\"http", "引入外部脚本"),
+        // Go / Python 站点的页面代码（按站点放行的文件）
+        ("os.Getenv", "读环境变量"),
+        ("os.LookupEnv", "读环境变量"),
+        ("os.environ", "读环境变量"),
+        ("exec.Command", "执行命令"),
+        ("\"os/exec\"", "执行命令"),
+        ("subprocess", "执行命令"),
+        ("http.Get(", "请求外部服务"),
+        ("http.Post(", "请求外部服务"),
+        ("http.NewRequest", "请求外部服务"),
+        ("requests.get(", "请求外部服务"),
+        ("requests.post(", "请求外部服务"),
+        ("os.Remove", "删除文件"),
     ] {
         if t.contains(pat) {
             return Some(why);
@@ -889,7 +925,8 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 
 /// `min_page`：新页面正文下限（字，0＝不检查），见 ManagedGroup.min_page_chars。
 /// `code`：方案的「代码改动」设置（review / small / all），见 ManagedGroup.code_changes。
-pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str) -> Vec<String> {
+/// `content_code`：站点放行的「算网站内容的代码文件」（见 `listed`），按 `code` 判断，不再一律拦。
+pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
@@ -898,8 +935,10 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
         let file = &f.file;
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本
-        let is_code = !data && !hard_forbidden(file) && (data_file(file) || site_code_file(file));
-        if hard_forbidden(file) {
+        let allowed = hard_forbidden(file) && !never_allow(file) && listed(file, content_code);
+        let forbidden = hard_forbidden(file) && !allowed;
+        let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file));
+        if forbidden {
             reasons.push(format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改"));
         } else if is_code {
             code_files += 1;
@@ -1114,14 +1153,14 @@ mod group_tests {
     #[test]
     fn thin_new_pages_and_leaked_internal_notes_are_not_auto_shipped() {
         let thin = "diff --git a/src/content/a.md b/src/content/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/a.md\n@@ -0,0 +1,4 @@\n+---\n+title: 很短的页面\n+---\n+只有一句话。\n";
-        let r = managed_verdict(thin, true, 1500, "review");
+        let r = managed_verdict(thin, true, 1500, "review", &[]);
         assert!(r.iter().any(|x| x.contains("低于这个方案的下限")), "{r:?}");
-        assert!(managed_verdict(thin, true, 0, "review").is_empty(), "下限 0＝不检查");
+        assert!(managed_verdict(thin, true, 0, "review", &[]).is_empty(), "下限 0＝不检查");
         let body: String = "这是一段足够长的正文，讲清楚了具体步骤、注意事项和常见错误。".repeat(60);
         let full = format!("diff --git a/src/content/b.md b/src/content/b.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/b.md\n@@ -0,0 +1,4 @@\n+---\n+title: 完整的页面\n+---\n+{body}\n");
-        assert!(managed_verdict(&full, true, 1500, "review").is_empty(), "{:?}", managed_verdict(&full, true, 1500, "review"));
+        assert!(managed_verdict(&full, true, 1500, "review", &[]).is_empty(), "{:?}", managed_verdict(&full, true, 1500, "review", &[]));
         let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
-        assert!(managed_verdict(leak, true, 1500, "review").iter().any(|x| x.contains("待补图")));
+        assert!(managed_verdict(leak, true, 1500, "review", &[]).iter().any(|x| x.contains("待补图")));
         assert_eq!(text_units("Gate KYC 认证"), 4);
     }
 
@@ -1232,24 +1271,24 @@ mod tests {
     #[test]
     fn verdict_blocks_code_config_money_and_optionally_new_pages() {
         let ok = "diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -3 +3,2 @@\n-旧段落\n+新段落，补充了水温的说明。\n+还加了一段。\n";
-        assert!(managed_verdict(ok, false, 1500, "review").is_empty());
+        assert!(managed_verdict(ok, false, 1500, "review", &[]).is_empty());
         let code = "diff --git a/worker/index.ts b/worker/index.ts\n--- a/worker/index.ts\n+++ b/worker/index.ts\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(code, true, 1500, "review").is_empty());
+        assert!(!managed_verdict(code, true, 1500, "review", &[]).is_empty());
         let cfg = "diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-a\n+b\n";
-        assert!(!managed_verdict(cfg, true, 1500, "review").is_empty());
+        assert!(!managed_verdict(cfg, true, 1500, "review", &[]).is_empty());
         let money = "diff --git a/src/pages/a.astro b/src/pages/a.astro\n--- a/src/pages/a.astro\n+++ b/src/pages/a.astro\n@@ -9 +9 @@\n-<a href=\"/go/gate\">邀请码 ABC</a>\n+<a href=\"/go/gate\">邀请码 XYZ</a>\n";
-        assert!(managed_verdict(money, true, 1500, "review").iter().any(|r| r.contains("推荐")));
+        assert!(managed_verdict(money, true, 1500, "review", &[]).iter().any(|r| r.contains("推荐")));
         let newpage = "diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+# 新页面\n";
-        assert!(managed_verdict(newpage, false, 1500, "review").iter().any(|r| r.contains("新内容")));
+        assert!(managed_verdict(newpage, false, 1500, "review", &[]).iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
-        assert!(managed_verdict(newpage, true, 1500, "review").iter().all(|r| r.contains("低于这个方案的下限")));
+        assert!(managed_verdict(newpage, true, 1500, "review", &[]).iter().all(|r| r.contains("低于这个方案的下限")));
     }
 
     #[test]
     fn data_files_with_only_text_count_as_content() {
         // 已有数据文件：加导入、加一段文字、加一个 slug、展开一个数组
         let edit = "diff --git a/src/data/articles.ts b/src/data/articles.ts\n--- a/src/data/articles.ts\n+++ b/src/data/articles.ts\n@@ -5 +5,2 @@\n+import { transitionArticles } from './articles-transitions';\n+    'ai-video-transition-prompts',\n+          '想把两个镜头接起来（遮挡、甩镜），可以看本页末尾的转场指南。',\n+  ...transitionArticles,\n";
-        assert!(managed_verdict(edit, false, 1500, "review").is_empty(), "{:?}", managed_verdict(edit, false, 1500, "review"));
+        assert!(managed_verdict(edit, false, 1500, "review", &[]).is_empty(), "{:?}", managed_verdict(edit, false, 1500, "review", &[]));
         assert!(data_line("const viduSources = [") && data_line("    sources: viduSources,"));
         assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
         assert!(data_line("  seoTitle?: string;") && data_line("  kind: 'a' | 'b';") && data_line("  links?: { label: string; href: string }[];"));
@@ -1263,34 +1302,55 @@ mod tests {
         // 新的数据文件：按新内容规则和正文下限判断
         let body: String = (0..40).map(|_| "+      '遮挡转场要让前景物体把画面整个挡住，再在被挡住的那一帧切到下一段素材，两段的运动方向要一致。',\n").collect();
         let newfile = format!("diff --git a/src/data/articles-x.ts b/src/data/articles-x.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/data/articles-x.ts\n@@ -0,0 +1,50 @@\n+import type {{ ArticleSeed }} from './article-types';\n+export const xArticles: ArticleSeed[] = [\n+  {{\n+    slug: 'x',\n+    datePublished: '2026-10-22',\n+    body: [\n{body}+    ],\n+  }},\n+];\n");
-        assert!(managed_verdict(&newfile, true, 1500, "review").is_empty(), "{:?}", managed_verdict(&newfile, true, 1500, "review"));
-        assert!(managed_verdict(&newfile, false, 1500, "review").iter().any(|r| r.contains("新内容")));
+        assert!(managed_verdict(&newfile, true, 1500, "review", &[]).is_empty(), "{:?}", managed_verdict(&newfile, true, 1500, "review", &[]));
+        assert!(managed_verdict(&newfile, false, 1500, "review", &[]).iter().any(|r| r.contains("新内容")));
         // 数据文件里混了代码：函数、模板字符串插值、外部导入
         for bad in ["+export function pick(a) { return a; }", "+  title: `${name} 指南`,", "+import fs from 'node:fs';", "+  run: () => fetch('/x'),", "+const x = process.env.TOKEN;"] {
             let d = format!("diff --git a/src/data/a.ts b/src/data/a.ts\n--- a/src/data/a.ts\n+++ b/src/data/a.ts\n@@ -1 +1 @@\n{bad}\n");
-            assert!(managed_verdict(&d, true, 0, "review").iter().any(|r| r.contains("改了代码")), "{bad}");
+            assert!(managed_verdict(&d, true, 0, "review", &[]).iter().any(|r| r.contains("改了代码")), "{bad}");
         }
         // 不在 data / content 目录下的 .ts 仍然是代码
         let code = "diff --git a/src/lib/seo.ts b/src/lib/seo.ts\n--- a/src/lib/seo.ts\n+++ b/src/lib/seo.ts\n@@ -1 +1 @@\n+  title: 'x',\n";
-        assert!(managed_verdict(code, true, 0, "review").iter().any(|r| r.contains("改了代码")));
+        assert!(managed_verdict(code, true, 0, "review", &[]).iter().any(|r| r.contains("改了代码")));
     }
 
     #[test]
     fn code_changes_follow_the_plan_setting() {
         let lines = |n: usize| (0..n).map(|i| format!("+  const a{i} = {i};\n")).collect::<String>();
         let lib = |n: usize| format!("diff --git a/src/lib/types.ts b/src/lib/types.ts\n--- a/src/lib/types.ts\n+++ b/src/lib/types.ts\n@@ -1 +1 @@\n{}", lines(n));
-        assert!(managed_verdict(&lib(10), true, 0, "review").iter().any(|r| r.contains("留给你确认")));
-        assert!(managed_verdict(&lib(10), true, 0, "small").is_empty(), "{:?}", managed_verdict(&lib(10), true, 0, "small"));
-        assert!(managed_verdict(&lib(100), true, 0, "small").iter().any(|r| r.contains("小改动")));
-        assert!(managed_verdict(&lib(100), true, 0, "all").is_empty());
+        assert!(managed_verdict(&lib(10), true, 0, "review", &[]).iter().any(|r| r.contains("留给你确认")));
+        assert!(managed_verdict(&lib(10), true, 0, "small", &[]).is_empty(), "{:?}", managed_verdict(&lib(10), true, 0, "small", &[]));
+        assert!(managed_verdict(&lib(100), true, 0, "small", &[]).iter().any(|r| r.contains("小改动")));
+        assert!(managed_verdict(&lib(100), true, 0, "all", &[]).is_empty());
         // 任何一档都拦：依赖 / 配置、服务端、读环境变量、外部请求、新的外部包
         for (path, line) in [("package.json", "+  \"x\": \"1\""), ("astro.config.mjs", "+  site: 'x',"), ("src/pages/api/hook.ts", "+export const a = 1;"), ("src/lib/a.ts", "+const k = process.env.KEY;"), ("src/components/A.astro", "+const r = await fetch('https://x.com');"), ("src/lib/a.ts", "+import lodash from 'lodash';")] {
             let d = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n{line}\n");
-            assert!(!managed_verdict(&d, true, 0, "all").is_empty(), "{path} {line}");
+            assert!(!managed_verdict(&d, true, 0, "all", &[]).is_empty(), "{path} {line}");
         }
         // 本地文件的导入、样式文件，小改动可以自动上线
         let ok = "diff --git a/src/components/A.astro b/src/components/A.astro\n--- a/src/components/A.astro\n+++ b/src/components/A.astro\n@@ -1 +1 @@\n+import Links from './Links.astro';\n+<Links items={block.links} />\ndiff --git a/src/styles/a.css b/src/styles/a.css\n--- a/src/styles/a.css\n+++ b/src/styles/a.css\n@@ -1 +1 @@\n+.links { margin: 0; }\n";
-        assert!(managed_verdict(ok, true, 0, "small").is_empty(), "{:?}", managed_verdict(ok, true, 0, "small"));
+        assert!(managed_verdict(ok, true, 0, "small", &[]).is_empty(), "{:?}", managed_verdict(ok, true, 0, "small", &[]));
+    }
+
+    #[test]
+    fn site_listed_code_files_follow_the_plan_setting() {
+        let go = "diff --git a/internal/site/build.go b/internal/site/build.go\n--- a/internal/site/build.go\n+++ b/internal/site/build.go\n@@ -1 +1 @@\n-\tTitle: \"MEXC fees\",\n+\tTitle: \"MEXC fees 2026: maker, taker and withdrawal\",\n";
+        let list = vec!["internal/site/build.go".to_string()];
+        assert!(managed_verdict(go, true, 0, "small", &[]).iter().any(|r| r.contains("服务端代码不自动改")));
+        assert!(managed_verdict(go, true, 0, "small", &list).is_empty(), "{:?}", managed_verdict(go, true, 0, "small", &list));
+        assert!(managed_verdict(go, true, 0, "review", &list).iter().any(|r| r.contains("改了代码")));
+        // 目录也行
+        assert!(managed_verdict(go, true, 0, "all", &["internal/site/".to_string()]).is_empty());
+        // 放行的文件里照样查危险写法
+        let env = go.replace("+\tTitle", "+\tk := os.Getenv(\"KEY\")\n+\tTitle");
+        assert!(managed_verdict(&env, true, 0, "all", &list).iter().any(|r| r.contains("读环境变量")));
+        // 依赖、配置、脚本永远不放行
+        for p in ["go.mod", "package.json", ".github/workflows/x.yml", "scripts/deploy.sh", "wrangler.toml", "migrations/1.sql"] {
+            assert!(never_allow(p), "{p}");
+            let d = format!("diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n+x\n");
+            assert!(!managed_verdict(&d, true, 0, "all", &[p.to_string()]).is_empty(), "{p}");
+        }
+        assert!(!never_allow("internal/site/build.go") && !never_allow("cmd/site/main.go") && !never_allow("server/pages.py"));
     }
 
     #[test]

@@ -208,6 +208,32 @@ pub fn queue_redo(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: 
     site_runner::start(ctx(&app), &id, "work", "manual", Some(item_id))
 }
 
+/// 站点的「算网站内容的代码文件」：加上（on）或去掉一个路径。返回新的清单。
+/// 只收被一律拦着、又不属于依赖 / 构建 / 部署配置的文件（比如 Go 站的 internal/site/build.go）。
+#[tauri::command]
+pub fn site_content_code(state: tauri::State<'_, AppState>, id: String, path: String, on: bool) -> Result<Vec<String>, String> {
+    let p = path.trim().trim_start_matches("./").to_string();
+    if p.is_empty() || p.starts_with('/') || p.split('/').any(|s| s == "..") {
+        return Err("请填站点代码里的相对路径，比如 internal/site/build.go，或以 / 结尾的目录".into());
+    }
+    if on {
+        if crate::managed::never_allow(&p) {
+            return Err(format!("{p} 是依赖、构建 / 部署配置或脚本，不能放行"));
+        }
+        if !p.ends_with('/') && !crate::managed::hard_forbidden(&p) {
+            return Err(format!("{p} 本来就按托管方案的「代码改动」设置判断，不用放行"));
+        }
+    }
+    let site = state.sites.update(&id, crate::now_secs(), |s| {
+        s.ops.content_code.retain(|x| x.trim().trim_start_matches("./") != p);
+        if on {
+            s.ops.content_code.push(p.clone());
+        }
+        Ok(())
+    })?;
+    Ok(site.ops.content_code)
+}
+
 #[tauri::command]
 pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);

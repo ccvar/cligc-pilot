@@ -14,7 +14,7 @@
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { synd } from '$lib/state/syndication.svelte.js';
-  import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, acceptItems, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, acceptItems, blockedCode, setContentCode, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
@@ -285,6 +285,7 @@
               <p class="verdict">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。让 AI 在最新代码上重改一遍就行。</p>
             {:else if i.verdict && i.status === 'proposed'}
               <p class="verdict" class:ok={i.verdict === 'auto'}>{i.verdict === 'auto' ? '整份改动都在白名单内，检查已通过。' : `不能自动上线：${i.verdict}`}</p>
+              {#if myPlan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, myPlan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「代码改动」设置判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}
             {/if}
             {#if i.quality?.length}
               <!-- 判断模型（Jev）的内容质检：每页一行分数，没过的标出原因 -->
@@ -348,6 +349,7 @@
   .checks li { line-height: 1.55; }
   .checks .ck-i { display: inline-block; width: 16px; color: var(--ok); }
   .checks li.bad .ck-i { color: var(--warn); }
+  .link-btn.allow { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; margin-top: -2px; }
   .list-head { display: flex; align-items: center; gap: 12px; margin: 0 -18px; padding: 9px 18px; min-height: 42px; border-bottom: 1px solid var(--border); border-radius: 12px 12px 0 0; font-size: 12.5px; }
   .list-head.on { background: var(--su-run-soft); }
   .list-head .ck { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; flex: none; font-weight: 500; }

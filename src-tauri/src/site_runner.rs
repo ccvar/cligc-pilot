@@ -1198,6 +1198,9 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
     let mut plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
+    if !site.ops.content_code.is_empty() {
+        plan_brief.push_str(&format!("【页面写在代码里】这个站点的页面内容（标题、描述、文章）写在这些代码文件里，需要时可以直接改，按上面的代码改动规则来：{}。新加的代码不要读环境变量、执行命令、请求外部服务。\n\n", site.ops.content_code.join("、")));
+    }
     if !item.retry_note.is_empty() {
         plan_brief.push_str(&format!("【上次的问题】这条改动上次上线后，线上验收没通过，已经回滚：{}。这次先找到原因再改；改完确认构建结果里有对应页面、网址和你写的一致。\n", item.retry_note));
     }
@@ -1279,7 +1282,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let mut reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes) } else { cls.reasons.clone() };
+    let mut reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes, &site.ops.content_code) } else { cls.reasons.clone() };
     // 新页面要有别的页面链到它，不然上线就是孤立页（搜索引擎很难发现）：AI 漏加了就不自动上线
     if built.is_ok() && !item.new_pages.is_empty() {
         let inbound = crate::site_make::inbound_links(&out_dir);

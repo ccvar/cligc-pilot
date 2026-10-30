@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { OpsItem, Opportunity, Site } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
 import { launcher } from './launcher.svelte.js';
-import { SITE_PREFIX } from './sites.svelte.js';
+import { SITE_PREFIX, refreshSites } from './sites.svelte.js';
 import { selectConn } from './connections.svelte.js';
 
 /** 一条改动的来源（为什么做它）。 */
@@ -115,6 +115,45 @@ export async function acceptItem(site: Site, item: OpsItem) {
   if (!(await confirmDialog(`确认这条改动：${what}${then}？`, { title: '确认改动', kind: 'info', confirmText: '确认' }))) return;
   try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
+}
+// ---- 算网站内容的代码文件（站点级放行清单）----
+// 和后端 managed::never_allow 同一套：依赖、锁文件、构建 / 部署 / CI 配置、密钥配置、迁移、脚本永远不放行（后端加的时候会再查一遍）
+const NEVER_NAMES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'wrangler.toml', 'wrangler.json', 'wrangler.jsonc', 'pilot.json', '.env', '.dev.vars', '_headers', '_redirects', '_worker.js', 'tsconfig.json', 'go.mod', 'go.sum', 'Makefile', 'Dockerfile', 'Cargo.toml', 'Cargo.lock', 'requirements.txt', 'pyproject.toml']);
+function neverAllow(path: string) {
+  const p = path.replace(/^\.\//, '');
+  const name = p.split('/').pop() ?? p;
+  const first = p.split('/')[0];
+  return NEVER_NAMES.has(name) || name.startsWith('.env')
+    || ['astro.config', 'vite.config', 'next.config', 'svelte.config', 'tailwind.config'].some((x) => name.startsWith(x))
+    || ['.github', 'node_modules', 'deploy', 'migrations', 'scripts', 'bin'].includes(first)
+    || /\.(sh|toml|ya?ml|sql)$/.test(name);
+}
+function listedIn(path: string, list: string[]) {
+  return list.some((x) => { const v = x.trim().replace(/^\.\//, ''); return !!v && (v.endsWith('/') ? path.startsWith(v) : path === v); });
+}
+/** 「不能自动上线」的原因里一律拦着、但可以按站点放行的代码文件（比如 Go 站把页面写在 internal/site/build.go 里） */
+export function blockedCode(verdict: string, list: string[] = []): string[] {
+  const out: string[] = [];
+  for (const m of (verdict || '').matchAll(/(?:^|；)([^；：]+)：依赖、构建 \/ 部署配置、服务端代码不自动改/g)) {
+    const f = m[1].trim();
+    if (f && !neverAllow(f) && !listedIn(f, list) && !out.includes(f)) out.push(f);
+  }
+  return out;
+}
+const CODE_RULE: Record<string, string> = { review: '代码改动留给你确认', small: '小的代码改动自动上线', all: '代码改动自动上线' };
+/** 把一个代码文件加进 / 移出站点的「算网站内容的代码文件」。plan：站点所在的托管方案（说明按什么规则判断） */
+export async function setContentCode(site: Site, path: string, on: boolean, plan?: { name: string; autonomy: string; code_changes?: string }) {
+  const rule = plan ? (plan.autonomy === 'auto' ? `「${plan.name}」现在是${CODE_RULE[plan.code_changes ?? 'all'] ?? ''}` : `「${plan.name}」现在是改好等你确认，放行后仍要你确认；方案改成全自动时才会自动上线`) : '';
+  const msg = on
+    ? `以后 AI 改 ${path} 时，不再一律留给你确认，改成按托管方案的「代码改动」设置判断${rule ? `（${rule}）` : ''}。\n\n只放行这个文件：新加的代码里读环境变量、执行命令、请求外部服务的照样拦；依赖和构建 / 部署配置不受影响。确定这个文件里是页面内容（标题、描述、文章）再放行。`
+    : `把 ${path} 移出清单？之后 AI 改到它，又会一律留给你确认。`;
+  if (!(await confirmDialog(msg, { title: on ? '算作网站内容' : '移出清单', kind: on ? 'info' : 'warning', confirmText: on ? '放行' : '移出' }))) return false;
+  try {
+    await invoke<string[]>('site_content_code', { id: site.id, path, on });
+    await refreshSites();
+    say(on ? `已放行 ${path}。等你确认的改动点「重新检查」就按新规则判断` : `已把 ${path} 移出清单`);
+    return true;
+  } catch (e) { say(String(e), 'err'); return false; }
 }
 /** 一起合并上线：几条待确认的改动按顺序合并进主分支，合完只构建上线一次；合不进去的跳过、留在待确认里。 */
 export async function acceptItems(site: Site, items: OpsItem[]) {

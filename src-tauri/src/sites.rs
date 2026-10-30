@@ -195,6 +195,10 @@ pub struct OpsConfig {
     /// 托管运营用的站点阶段：空＝按数据自动判断；new / growing / established＝运营人员手动指定。
     #[serde(default)]
     pub stage: String,
+    /// 算网站内容的代码文件（完整路径或以 / 结尾的目录）：比如 Go 站的页面写在 internal/site/build.go 里。
+    /// 这些文件不再一律不自动上线，改成按托管方案的「代码改动」设置判断；依赖和构建 / 部署配置照样拦（见 managed::never_allow）。
+    #[serde(default)]
+    pub content_code: Vec<String>,
 }
 
 /// 新导入的站点默认自己运营（第 1 档）：照常同步数据、找机会、体检，不自动改代码；要自动运营就加入托管方案。
@@ -226,6 +230,7 @@ impl Default for OpsConfig {
             downgraded: Vec::new(),
             min_impressions: default_min_impressions(),
             stage: String::new(),
+            content_code: Vec::new(),
         }
     }
 }

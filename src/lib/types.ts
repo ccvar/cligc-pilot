@@ -207,6 +207,8 @@ export interface SiteOps {
   min_impressions: number;
   /** 托管用的站点阶段：空＝自动；new / growing / established＝手动指定 */
   stage: string;
+  /** 算网站内容的代码文件（完整路径或以 / 结尾的目录）：按方案的「代码改动」设置判断，不再一律不自动上线 */
+  content_code?: string[];
 }
 export interface Site {
   id: string;

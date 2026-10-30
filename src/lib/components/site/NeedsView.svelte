@@ -12,11 +12,11 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { modelTarget } from '$lib/state/fleet.svelte.js';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
-  import { acceptItem, acceptItems, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
+  import { acceptItem, acceptItems, blockedCode, setContentCode, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
-  import { loadManaged } from '$lib/state/managed.svelte.js';
+  import { loadManaged, managed } from '$lib/state/managed.svelte.js';
   import type { PendingItem, OpsItem } from '$lib/types';
 
   type Stuck = { id: string; name: string; queued: number; why: string; fix: string; kind: string; group: string; hasPlan: boolean };
@@ -164,6 +164,7 @@
                       {#if conflicts.has(i.id)}<p class="why">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。让 AI 在最新代码上重改一遍就行。</p>
                       {:else if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
                       {#if g.k === 'failed' && w}<OpsErrorHint text={w} />{/if}
+                      {#if g.k === 'proposed' && site && !conflicts.has(i.id)}{@const plan = managed.overview?.groups.find((p) => p.sites.includes(site.id))}{#if plan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, plan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「代码改动」设置判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page}<span class="mono url">{i.opp.page}</span>{/if}
                       <div class="acts">
@@ -247,6 +248,7 @@
   .hd .title { font-size: 14px; font-weight: 600; }
   .hd .sub { font-size: 12px; color: var(--faint); }
   .grow { flex: 1; }
+  .link-btn.allow { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; font-size: 12px; }
 
   .grp h4 { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text); }
   .gdot { width: 7px; height: 7px; border-radius: 50%; }

@@ -7,7 +7,7 @@
   import type { Site, SiteStageView } from '$lib/types';
   import { say } from '$lib/state/app.svelte.js';
   import { refreshSites } from '$lib/state/sites.svelte.js';
-  import { STAGE_LABEL, STAGE_FOCUS } from '$lib/state/ops.svelte.js';
+  import { STAGE_LABEL, STAGE_FOCUS, setContentCode } from '$lib/state/ops.svelte.js';
   import { managed, loadManaged, openManaged, editGroup, newGroup, setManagedSites, setSiteActive, AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { clock } from './fmt';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
@@ -45,6 +45,16 @@
       say(text.trim() ? '站点定位已保存，AI 之后按它来' : '已交还给 AI，下次制定计划时重新归纳');
     } catch (e) { say(String(e), 'err'); }
     finally { saving = false; }
+  }
+
+  // 算网站内容的代码文件：页面写在代码里的站点（比如 Go 站的 internal/site/build.go），这些文件按方案的代码规则判断
+  const codeList = $derived(site.ops.content_code ?? []);
+  let addingCode = $state(false);
+  let codeDraft = $state('');
+  async function addCode() {
+    const p = codeDraft.trim();
+    if (!p || !g) return;
+    if (await setContentCode(site, p, true, g)) { codeDraft = ''; addingCode = false; }
   }
 
   let joining = $state(false);
@@ -105,6 +115,19 @@
         {/if}
       </div>
     </div>
+    <div class="ccode">
+      <div class="pos-head"><span class="lbl">算网站内容的代码文件</span>
+        <span class="grow"></span>
+        {#if !addingCode}<button class="link-btn sm" onclick={() => (addingCode = true)}>添加</button>{/if}
+      </div>
+      {#if codeList.length}
+        <ul class="cc-list">{#each codeList as f (f)}<li><span class="mono">{f}</span><button class="icon-x" onclick={() => setContentCode(site, f, false)} aria-label="移出清单" data-tip="移出清单"><Icon name="x" size={11} /></button></li>{/each}</ul>
+      {/if}
+      {#if addingCode}
+        <div class="cc-add"><input class="tin mono" bind:value={codeDraft} placeholder="internal/site/build.go 或 internal/site/" onkeydown={(e) => { if (e.key === 'Enter') void addCode(); if (e.key === 'Escape') addingCode = false; }} /><button class="btn small ghost" onclick={() => { addingCode = false; codeDraft = ''; }}>取消</button><button class="btn small primary" onclick={addCode} disabled={!codeDraft.trim()}>放行</button></div>
+      {/if}
+      <small class="faint">{codeList.length ? '这些文件不再一律留给你确认，按方案的「代码改动」设置判断；依赖和构建 / 部署配置照样拦。' : '服务端代码（比如 internal/、.go 文件）默认一律留给你确认。这个站点的页面标题、文章写在代码里的话，可以把那个文件加进来，按方案的「代码改动」设置判断。'}</small>
+    </div>
   {:else if joining}
     <div class="join">
       <span>加入</span>
@@ -134,6 +157,14 @@
   .link-btn.sm { font-size: 12px; }
   .pos { margin: 2px 0 0; font-size: 12.5px; color: var(--dim); line-height: 1.65; }
   .tin.plain { font-family: inherit; font-size: 13px; line-height: 1.6; }
+  .ccode { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+  .cc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .cc-list li { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 6px; background: var(--su-soft, #f3f2ee); font-size: 12px; }
+  .icon-x { display: inline-flex; padding: 2px; border: 0; background: none; color: var(--faint); cursor: pointer; border-radius: 4px; }
+  .icon-x:hover { color: var(--text); background: rgba(0, 0, 0, .05); }
+  .cc-add { display: flex; gap: 8px; align-items: center; }
+  .cc-add .tin { flex: 1; max-width: 360px; font-size: 12.5px; }
+  .ccode small { line-height: 1.6; font-size: 12px; }
   .join { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--dim); }
   .join .dd { min-width: 200px; }
   .join .grow { flex: 1; }
