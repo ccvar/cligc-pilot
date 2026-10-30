@@ -23,6 +23,8 @@ pub struct SiteRow {
     pub autonomy: String,
     pub deploy_mode: String,
     pub has_data: bool,
+    /// 接了 Search Console（没数据时提示「Google 还没出数据」）
+    pub has_gsc: bool,
     pub summary: crate::site_data::Summary,
     /// 待你确认 / 失败 / 未处理的条数。
     pub proposed: usize,
@@ -87,6 +89,7 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 cost_month_usd: crate::usage::site_cost(&dir, month).usd,
                 active_at: s.updated_at.max(last_ts).max(last_conv.get(&s.id).copied().unwrap_or(0)),
                 has_data: !s.data.gsc_site.is_empty() || !s.data.ga4_property.is_empty() || !s.data.bing_site.is_empty(),
+                has_gsc: !s.data.gsc_site.is_empty(),
                 summary: crate::site_data::summary(&dir),
                 proposed: count("proposed"),
                 failed: count("failed"),

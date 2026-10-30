@@ -445,7 +445,13 @@ export interface SiteSummary {
   google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
   /** AI 搜索 / 聊天带来的会话：近 28 天、前 28 天 */
   ai_sessions?: number; ai_sessions_prev?: number;
+  /** 近 7 天（和前 7 天）的用户、搜索点击、展示 */
+  w7?: { users: number; users_prev: number; clicks: number; clicks_prev: number; impressions: number };
+  /** 各数据源按天数据的最新一天（YYYY-MM-DD）；Search Console 有几天的数据 */
+  ga4_end?: string; gsc_end?: string; bing_end?: string; gsc_days?: number;
 }
+/** 全部站点：正在拉数据 / 排队的站点、上次全部同步的时间、批量健康检查在不在跑 */
+export interface DataSync { running: string[]; queued: string[]; health: boolean; last_at: number }
 /** Search Console 一行（页面或查询词）近 28 天的合计 */
 export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
 /** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
@@ -476,7 +482,7 @@ export interface SiteRow {
   /** 所在托管方案名（没托管为空） */
   plan: string;
   /** suggest / review / auto；方案暂停或站点停止时为 stopped；没托管为空 */
-  autonomy: string; deploy_mode: string; has_data: boolean; summary: SiteSummary;
+  autonomy: string; deploy_mode: string; has_data: boolean; has_gsc?: boolean; summary: SiteSummary;
   proposed: number; failed: number; open: number; job: string;
   last_deploy_ts: number; last_deploy_ok: boolean | null; active_at: number;
   /** 收益（本月 / 上月，美元）和本月能估出的 AI 花费 */

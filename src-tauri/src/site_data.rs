@@ -286,12 +286,88 @@ async fn fetch_bing(key: &str, site: &str, dir: &Path) -> Result<(String, String
     Ok((from, latest))
 }
 
+/// 正在拉数据和排队等着拉的站点、批量健康检查在不在跑（全部站点列表上显示「同步中」，变了发 site-data-sync 事件）。
+#[derive(Serialize, Clone, Default, Debug)]
+pub struct SyncState {
+    pub running: Vec<String>,
+    pub queued: Vec<String>,
+    pub health: bool,
+}
+
+static SYNC: std::sync::Mutex<SyncState> = std::sync::Mutex::new(SyncState { running: Vec::new(), queued: Vec::new(), health: false });
+
+pub fn sync_state() -> SyncState {
+    SYNC.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+fn update_sync(f: impl FnOnce(&mut SyncState)) {
+    let snap = match SYNC.lock() {
+        Ok(mut s) => {
+            f(&mut s);
+            s.clone()
+        }
+        Err(_) => return,
+    };
+    if let Some(app) = crate::APP.get() {
+        use tauri::Emitter;
+        let _ = app.emit("site-data-sync", snap);
+    }
+}
+
+/// 批量同步开始前把要拉的站点都标成「排队中」
+pub fn mark_queued(ids: &[String]) {
+    update_sync(|s| {
+        for id in ids {
+            if !s.queued.contains(id) && !s.running.contains(id) {
+                s.queued.push(id.clone());
+            }
+        }
+    });
+}
+
+/// 排了队但最后没拉（站点被删了之类）
+pub fn unqueue(id: &str) {
+    update_sync(|s| s.queued.retain(|x| x != id));
+}
+
+pub fn set_health_running(on: bool) {
+    update_sync(|s| s.health = on);
+}
+
+/// 拉数据期间站点算「同步中」，拉完（包括出错、中途返回）自动去掉
+struct Syncing(String);
+impl Syncing {
+    fn start(id: &str) -> Self {
+        update_sync(|s| {
+            s.queued.retain(|x| x != id);
+            s.running.push(id.to_string());
+        });
+        Syncing(id.to_string())
+    }
+}
+impl Drop for Syncing {
+    fn drop(&mut self) {
+        let id = self.0.clone();
+        update_sync(|s| {
+            if let Some(i) = s.running.iter().position(|x| *x == id) {
+                s.running.remove(i);
+            }
+        });
+    }
+}
+
 /// 拉取站点配置的全部数据源（各自独立，一个失败不影响其它）。`force=false` 时跳过 6 小时内拉过的源。
 pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: bool) -> CacheMeta {
     let dir = cache_dir(site_dir);
     let mut meta = load_meta(site_dir);
     let due = |m: &SourceMeta| force || !m.error.is_empty() || now().saturating_sub(m.fetched_at) > STALE_SECS;
     let d = &site.data;
+    // 真要联网拉才算「同步中」（缓存还新的话一闪而过，不显示）
+    let any_due = (!d.ga4_property.is_empty() && due(&meta.ga4)) || (!d.gsc_site.is_empty() && due(&meta.gsc)) || (!d.bing_site.is_empty() && due(&meta.bing));
+    let _syncing = any_due.then(|| Syncing::start(&site.id));
+    if !any_due {
+        unqueue(&site.id);
+    }
     // GA4 和 Search Console 各用各的连接（可能是两个 Google 账号）；同一条连接时令牌有缓存，不会重复换取。
     if !d.google_conn_id.is_empty() && !d.ga4_property.is_empty() && due(&meta.ga4) {
         meta.ga4 = match google_token(conns, &d.google_conn_id, &google::read_scopes()).await {
@@ -384,9 +460,32 @@ pub struct Summary {
     pub ai_sessions: f64,
     #[serde(default)]
     pub ai_sessions_prev: f64,
+    /// 近 7 天（和前 7 天）：全部站点列表可以切换统计时间段
+    #[serde(default)]
+    pub w7: Win,
+    /// 各数据源按天数据的最新一天（YYYY-MM-DD；近 N 天就从这天往前算）
+    #[serde(default)]
+    pub ga4_end: String,
+    #[serde(default)]
+    pub gsc_end: String,
+    #[serde(default)]
+    pub bing_end: String,
+    /// Search Console 有几天的数据（新验证的站要等几天才有）
+    #[serde(default)]
+    pub gsc_days: usize,
 }
 
-pub const SUMMARY_V: u32 = 3;
+/// 一个时间段的用户、搜索点击、展示（和前一段同样长的时间比）
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+pub struct Win {
+    pub users: f64,
+    pub users_prev: f64,
+    pub clicks: f64,
+    pub clicks_prev: f64,
+    pub impressions: f64,
+}
+
+pub const SUMMARY_V: u32 = 4;
 
 /// 按日期的行里，以最新一天为终点的近 days 天和再往前 days 天的合计
 fn windows<T>(rows: &[T], date: impl Fn(&T) -> &str, val: impl Fn(&T) -> f64, days: i64) -> (f64, f64, Vec<(String, f64)>) {
@@ -463,6 +562,14 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
         bing_indexed: read_json::<serde_json::Value>(&dir, "bing_index.json")["in_index"].as_f64().unwrap_or(0.0),
         ai_sessions: ai.0,
         ai_sessions_prev: ai.1,
+        w7: {
+            let (u, g, b, gi, bi) = (windows(&gad, |r| &r.key, |r| r.users, 7), windows(&gsd, |r| &r.key, |r| r.clicks, 7), windows(&bsd, |r| &r.key, |r| r.clicks, 7), windows(&gsd, |r| &r.key, |r| r.impressions, 7), windows(&bsd, |r| &r.key, |r| r.impressions, 7));
+            Win { users: u.0, users_prev: u.1, clicks: g.0 + b.0, clicks_prev: g.1 + b.1, impressions: gi.0 + bi.0 }
+        },
+        ga4_end: gad.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
+        gsc_end: gsd.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
+        bing_end: bsd.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
+        gsc_days: gsd.len(),
     }
 }
 
@@ -660,6 +767,9 @@ mod tests {
         let (cur, prev, series) = windows(&rows, |r| &r.0, |r| r.1, 28);
         assert_eq!((cur, prev, series.len()), (28.0, 28.0, 28));
         assert_eq!(series.last().unwrap().0, "2026-10-30");
+        // 近 7 天：从同一个最新日往前 7 天，前一段再往前 7 天
+        let (cur, prev, series) = windows(&rows, |r| &r.0, |r| r.1, 7);
+        assert_eq!((cur, prev, series.len(), series[0].0.as_str()), (7.0, 7.0, 7, "2026-10-24"));
         assert_eq!(windows(&Vec::<(String, f64)>::new(), |r| &r.0, |r| r.1, 28).0, 0.0);
     }
 

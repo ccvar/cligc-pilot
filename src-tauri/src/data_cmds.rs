@@ -138,10 +138,14 @@ pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State
     let ids: Vec<String> = filled.iter().map(|(id, _)| id.clone()).collect();
     if !ids.is_empty() {
         let app2 = app.clone();
+        crate::site_data::mark_queued(&ids);
         tauri::async_runtime::spawn(async move {
             let st = app2.state::<AppState>();
             for id in ids {
-                let Ok(site) = st.sites.get(&id) else { continue };
+                let Ok(site) = st.sites.get(&id) else {
+                    crate::site_data::unqueue(&id);
+                    continue;
+                };
                 crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&id), true).await;
                 let _ = app2.emit("site-data", serde_json::json!({ "site_id": id }));
             }
@@ -151,6 +155,69 @@ pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State
 }
 
 /// 拉取站点数据（force=false 时只拉 6 小时内没拉过的源）。
+#[derive(serde::Serialize)]
+pub struct DataSyncView {
+    #[serde(flatten)]
+    pub state: crate::site_data::SyncState,
+    /// 上次同步所有站点数据的时间（秒）
+    pub last_at: u64,
+}
+
+/// 全部站点列表：哪些站点正在拉数据 / 排队、上次全部同步的时间、批量健康检查在不在跑
+#[tauri::command]
+pub fn site_data_sync_state(state: tauri::State<'_, AppState>) -> DataSyncView {
+    DataSyncView { state: crate::site_data::sync_state(), last_at: crate::site_runner::last_data_sync_at(&state.data_dir) }
+}
+
+/// 「⋯ → 立即同步所有站点数据」：后台一个一个拉，进度看 site-data-sync 事件
+#[tauri::command]
+pub fn sync_all_site_data(app: tauri::AppHandle) -> Result<(), String> {
+    if crate::site_runner::data_syncing() {
+        return Err("正在同步，等这一轮拉完再试".into());
+    }
+    tauri::async_runtime::spawn(async move {
+        crate::site_runner::sync_all_data(app).await;
+    });
+    Ok(())
+}
+
+static HEALTH_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 「⋯ → 全部站点重新检查健康」：在线、证书、域名、安全标记、推广链接，一个站点一个站点查；返回要查的站点数
+#[tauri::command]
+pub fn check_all_sites_health(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<usize, String> {
+    use std::sync::atomic::Ordering;
+    let list: Vec<_> = state.sites.list().into_iter().filter(|s| !s.domain.trim().is_empty()).collect();
+    if list.is_empty() {
+        return Err("还没有设置了域名的站点".into());
+    }
+    if HEALTH_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("正在检查，等这一轮查完再试".into());
+    }
+    let n = list.len();
+    crate::site_data::set_health_running(true);
+    tauri::async_runtime::spawn(async move {
+        use tauri::{Emitter, Manager};
+        let st = app.state::<AppState>();
+        let mut alerts = Vec::new();
+        for site in list {
+            let dir = st.sites.data_dir(&site.id);
+            alerts.extend(crate::monitor::check_site(&site, &dir, true).await.1);
+            alerts.extend(crate::safety::check_site(&site, &dir, true).await.1);
+            let out = crate::syndicate::built_out(&st, &site).ok();
+            let _ = crate::link_check::check_site(&site, &dir, out).await;
+            let _ = app.emit("monitor-checked", ());
+            let _ = app.emit("links-checked", ());
+        }
+        HEALTH_RUNNING.store(false, Ordering::SeqCst);
+        crate::site_data::set_health_running(false);
+        for (title, body) in alerts.into_iter().take(5) {
+            crate::push::notify(&app, &title, &body);
+        }
+    });
+    Ok(n)
+}
+
 #[tauri::command]
 pub async fn refresh_site_data(state: tauri::State<'_, AppState>, id: String, force: bool) -> Result<crate::site_data::CacheMeta, String> {
     let site = state.sites.get(&id)?;

@@ -2610,20 +2610,45 @@ fn set_last_data_sync(data_dir: &Path, date: &str) {
     let _ = std::fs::write(data_sync_path(data_dir), serde_json::json!({ "date": date, "at": now() }).to_string());
 }
 
-/// 一个一个站点拉取数据（不占站点作业，不和构建、运营任务抢）；每个站点拉完发 site-data 事件，开着的看板会刷新。
+/// 上次同步所有站点数据的时间（秒；没同步过为 0）
+pub fn last_data_sync_at(data_dir: &Path) -> u64 {
+    std::fs::read(data_sync_path(data_dir)).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()).and_then(|v| v["at"].as_u64()).unwrap_or(0)
+}
+
+static DATA_SYNCING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn data_syncing() -> bool {
+    DATA_SYNCING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 async fn daily_data_sync(ctx: Ctx) {
-    let st = ctx.state();
+    sync_all_data(ctx.app.clone()).await;
+}
+
+/// 一个一个站点拉取数据（不占站点作业，不和构建、运营任务抢）；每个站点拉完发 site-data 事件，开着的看板会刷新。
+/// 每天早上自动跑一次，「全部站点 → ⋯ → 立即同步数据」也走这里；已经在跑就直接返回 false。
+pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
+    use std::sync::atomic::Ordering;
+    if DATA_SYNCING.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    use tauri::Manager;
+    let st = app.state::<crate::AppState>();
     // 先把没接上的数据源按域名接上（新建的 GA4 / Search Console 资源第二天就能自动用上）
     let _ = crate::data_cmds::auto_bind_data(&st, false).await;
-    for site in st.sites.list() {
-        let d = &site.data;
-        if d.gsc_site.is_empty() && d.ga4_property.is_empty() && d.bing_site.is_empty() {
-            continue;
-        }
+    let list: Vec<_> = st.sites.list().into_iter().filter(|s| {
+        let d = &s.data;
+        !(d.gsc_site.is_empty() && d.ga4_property.is_empty() && d.bing_site.is_empty())
+    }).collect();
+    crate::site_data::mark_queued(&list.iter().map(|s| s.id.clone()).collect::<Vec<_>>());
+    for site in list {
         let meta = crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&site.id), true).await;
         let errors: Vec<String> = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)].iter().filter(|(_, e)| !e.is_empty()).map(|(l, e)| format!("{l}：{e}")).collect();
-        let _ = ctx.app.emit("site-data", serde_json::json!({ "site_id": site.id, "errors": errors }));
+        let _ = app.emit("site-data", serde_json::json!({ "site_id": site.id, "errors": errors }));
     }
+    set_last_data_sync(&st.data_dir, &today());
+    DATA_SYNCING.store(false, Ordering::SeqCst);
+    true
 }
 
 pub fn start_scheduler(app: tauri::AppHandle) {

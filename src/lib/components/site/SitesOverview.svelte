@@ -12,7 +12,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
@@ -49,6 +49,31 @@
     return lines.join('\n');
   }
   const when = ago;
+  // 统计时间段：近 7 / 28 天，截至各数据源最新的那天（各站一般相同，取最多的那个）
+  const D = $derived(fleet.days);
+  const commonEnd = (k: 'ga4_end' | 'gsc_end' | 'bing_end') => {
+    const c = new Map<string, number>();
+    for (const r of rows) { const e = r.summary[k]; if (e) c.set(e, (c.get(e) ?? 0) + 1); }
+    return [...c].sort((a, b) => b[1] - a[1] || b[0].localeCompare(a[0]))[0]?.[0] ?? '';
+  };
+  const ends = $derived({ ga4: commonEnd('ga4_end'), gsc: commonEnd('gsc_end'), bing: commonEnd('bing_end') });
+  const md = (d: string) => { const [, m, dd] = d.split('-'); return `${+m}月${+dd}日`; };
+  const endLabel = $derived([ends.ga4, ends.gsc].filter(Boolean).sort().pop() ?? '');
+  const endsTip = $derived([ends.ga4 && `GA4 到 ${md(ends.ga4)}`, ends.gsc && `Google 到 ${md(ends.gsc)}`, ends.bing && `Bing 到 ${md(ends.bing)}`].filter(Boolean).join(' · '));
+  let rangeOpen = $state(false);
+  let moreOpen = $state(false);
+  $effect(() => {
+    if (!rangeOpen && !moreOpen) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { rangeOpen = false; moreOpen = false; } };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  });
+  // 正在拉数据 / 排队的站点（导入后、每天早上 7 点、⋯ 里立即同步）
+  const syncRun = $derived(new Set(fleet.sync.running));
+  const syncQ = $derived(new Set(fleet.sync.queued));
+  const syncLeft = $derived(new Set([...fleet.sync.running, ...fleet.sync.queued]).size);
+  const RUN_TIP = '正在拉 GA4、Search Console、Bing 的数据，拉完自动刷新';
+  const Q_TIP = '排队中：等前面的站点拉完就拉它';
   const MODE: Record<string, string> = { direct: 'Cloudflare Pages', workers: 'Cloudflare Workers', vps: 'VPS', pages_git: 'Pages · Git 自动构建', none: '未配置部署' };
   function sortBy(k: SiteSort) { if (fleet.sort === k) fleet.desc = !fleet.desc; else { fleet.sort = k; fleet.desc = false; } }
   const arrow = (k: SiteSort) => (fleet.sort === k ? (fleet.desc ? ' ↑' : ' ↓') : '');
@@ -78,7 +103,7 @@
 </script>
 
 {#snippet delta(cur: number, prev: number)}
-  <!-- 前 28 天是 0 算不出变化，就不显示 -->
+  <!-- 前一段是 0 算不出变化，就不显示 -->
   {@const d = change(cur, prev)}
   {#if typeof d === 'number' && Math.abs(d) >= 0.005}<span class="dl" class:up={d > 0} class:down={d < 0}>{d > 0 ? '↑' : '↓'}{Math.abs(d * 100) >= 100 ? Math.round(Math.abs(d * 100)) : Math.abs(d * 100).toFixed(1)}%</span>{/if}
 {/snippet}
@@ -89,7 +114,7 @@
     {@const H = 24}
     {@const top = Math.max(...vals)}
     {@const pts = vals.map((v, i) => `${((i / (vals.length - 1)) * W).toFixed(1)},${(H - 2 - (v / top) * (H - 4)).toFixed(1)}`)}
-    <svg class="spark" width={W} height={H} viewBox="0 0 {W} {H}" aria-label="近 28 天会话趋势" data-tip={`近 28 天会话 ${num(vals.reduce((a, b) => a + b, 0))}，最多一天 ${num(top)}`}>
+    <svg class="spark" width={W} height={H} viewBox="0 0 {W} {H}" aria-label="近 {D} 天会话趋势" data-tip={`近 ${D} 天会话 ${num(vals.reduce((a, b) => a + b, 0))}，最多一天 ${num(top)}`}>
       <polygon points="0,{H} {pts.join(' ')} {W},{H}" fill="rgba(60, 54, 44, .05)" />
       <polyline points={pts.join(' ')} fill="none" stroke="var(--dim)" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round" />
     </svg>
@@ -136,10 +161,51 @@
     </div>
   </header>
 
+  <div class="tabs-bar">
   <div class="tabs">
     <button class:on={fleet.tab === 'sites'} onclick={() => (fleet.tab = 'sites')}><Icon name="globe" size={13} />站点</button>
     <button class:on={fleet.tab === 'pending'} onclick={() => (fleet.tab = 'pending')}><Icon name="inbox" size={13} />待处理{#if proposedN}<span class="cnt" data-tip="{proposedN} 条改动等你确认">{proposedN}</span>{/if}{#if oppN}<span class="cnt soft" data-tip="{oppN} 个运营机会没处理（自己运营的、托管停着的站点）">{oppN}</span>{/if}</button>
     <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />近期动态</button>
+  </div>
+  <div class="tab-tools">
+    {#if fleet.tab === 'sites' && endLabel}
+      <!-- 统计时间段：放在看得见的地方，改了之后表格里每个数字的意思都变了 -->
+      <span class="pop-wrap">
+        <button class="range" class:on={rangeOpen} onclick={() => (rangeOpen = !rangeOpen)} aria-haspopup="menu" aria-expanded={rangeOpen} data-tip={rangeOpen ? null : `${endsTip}\n从各家最新的一天往前算 ${D} 天，下面的涨跌是和再往前 ${D} 天比`}>
+          近 {D} 天<span class="faint"> · 截至 {md(endLabel)}</span>
+          <svg class="chev" class:open={rangeOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        </button>
+        {#if rangeOpen}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <span class="pop-mask" onclick={() => (rangeOpen = false)}></span>
+          <span class="pop" role="menu">
+            {#each [7, 28] as d (d)}
+              <button role="menuitemradio" aria-checked={D === d} class:cur={D === d} onclick={() => { setDays(d as 7 | 28); rangeOpen = false; }}>
+                <span><b>近 {d} 天</b><small>和再往前 {d} 天比</small></span>{#if D === d}<Icon name="check" size={13} />{/if}
+              </button>
+            {/each}
+            <span class="pop-foot">{endsTip}。各家数据出得有早有晚，Google 最近一两天的数字过后还会补上来。「已编入」不随时间段变。</span>
+          </span>
+        {/if}
+      </span>
+    {/if}
+    <!-- 不常用的批量操作：立即同步数据、重新检查健康 -->
+    <span class="pop-wrap">
+      <button class="ic-btn ic-more" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="更多操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '立即同步数据、重新检查健康'}>{#if syncLeft || fleet.sync.health}<span class="spin"></span>{:else}<Icon name="more" size={16} />{/if}</button>
+      {#if moreOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <span class="pop-mask" onclick={() => (moreOpen = false)}></span>
+        <span class="pop more" role="menu">
+          <button role="menuitem" disabled={syncLeft > 0} onclick={() => { moreOpen = false; void syncAllData(); }}>
+            <Icon name="refresh" size={14} /><span><b>立即同步所有站点数据</b><small>{syncLeft ? `正在同步，还剩 ${syncLeft} 个站点` : `${fleet.sync.last_at ? `上次 ${ago(fleet.sync.last_at)}；` : ''}每天早上 7 点会自动同步`}</small></span>
+          </button>
+          <button role="menuitem" disabled={fleet.sync.health} onclick={() => { moreOpen = false; void checkAllHealth(); }}>
+            <Icon name="activity" size={14} /><span><b>全部站点重新检查健康</b><small>{fleet.sync.health ? '正在检查…' : '在线情况、证书、域名、安全标记、推广链接'}</small></span>
+          </button>
+        </span>
+      {/if}
+    </span>
+  </div>
   </div>
 
   <div class="page-body">
@@ -160,10 +226,10 @@
             <thead><tr>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
               <th class="c-lvl">托管</th>
-              <th class="num"><button class="th" onclick={() => sortBy('users')} data-tip="GA4 近 28 天用户（按天加总），下面是和前 28 天比"><GaMark size={11} />用户{arrow('users')}</button></th>
-              <th class="num"><button class="th" onclick={() => sortBy('clicks')} data-tip="Google + Bing 近 28 天搜索点击，下面是和前 28 天比"><GscMark size={11} /><BingMark size={11} />搜索点击{arrow('clicks')}</button></th>
-              <th class="num c-impr"><button class="th" onclick={() => sortBy('impr')} data-tip="Google + Bing 近 28 天展示"><GscMark size={11} /><BingMark size={11} />展示{arrow('impr')}</button></th>
-              <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 28 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
+              <th class="num"><button class="th" onclick={() => sortBy('users')} data-tip="GA4 近 {D} 天用户（按天加总），下面是和前 {D} 天比"><GaMark size={11} />用户{arrow('users')}</button></th>
+              <th class="num"><button class="th" onclick={() => sortBy('clicks')} data-tip="Google + Bing 近 {D} 天搜索点击，下面是和前 {D} 天比"><GscMark size={11} /><BingMark size={11} />搜索点击{arrow('clicks')}</button></th>
+              <th class="num c-impr"><button class="th" onclick={() => sortBy('impr')} data-tip="Google + Bing 近 {D} 天展示"><GscMark size={11} /><BingMark size={11} />展示{arrow('impr')}</button></th>
+              <th class="num c-impr"><button class="th" onclick={() => sortBy('ctr')} data-tip="Google + Bing 近 {D} 天点击率"><GscMark size={11} /><BingMark size={11} />点击率{arrow('ctr')}</button></th>
               <th class="num c-idx"><button class="th" onclick={() => sortBy('indexed')} data-tip={'Google：近 28 天有展示的页面 / 站点地图提交的网址（Search Console 接口不再给收录数，用有展示的页面近似）\nBing：索引里的网址数'}><GscMark size={11} /><BingMark size={11} />已编入{arrow('indexed')}</button></th>
               <th class="c-trend"><span class="th-l"><GaMark size={11} />会话趋势</span></th>
               {#if showRev}<th class="num c-rev"><button class="th" onclick={() => sortBy('revenue')} data-tip="这个月的收益（AdSense + 手动记的，美元），下面是本月 AI 花费">本月收益{arrow('revenue')}</button></th>{/if}
@@ -174,20 +240,32 @@
                 {@const st = status(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={st.t === '被标记为危险' ? `${r.unsafe_by} 把这个站标记成了危险网站，访客会看到警告页或打不开；自动上线已暂停（站点概览 → 站点健康 → 安全标记）` : st.t === '数据源出错' ? r.summary.errors.join('\n') : st.t === '打不开' ? `${r.down_err || '首页打不开'}（连续两次检查都没打开）` : st.t === '证书有问题' ? r.cert_err : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if syncRun.has(r.id)}<span class="sync" data-tip={RUN_TIP} aria-label={RUN_TIP}><span class="spin"></span></span>{:else if syncQ.has(r.id)}<span class="sync q" data-tip={Q_TIP} aria-label={Q_TIP}><Icon name="clock" size={11} /></span>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={st.t === '被标记为危险' ? `${r.unsafe_by} 把这个站标记成了危险网站，访客会看到警告页或打不开；自动上线已暂停（站点概览 → 站点健康 → 安全标记）` : st.t === '数据源出错' ? r.summary.errors.join('\n') : st.t === '打不开' ? `${r.down_err || '首页打不开'}（连续两次检查都没打开）` : st.t === '证书有问题' ? r.cert_err : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
                     <small><span class="dm"><DeployMark mode={r.deploy_mode} size={11} />{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#if r.channels?.length}<span class="chs">{#each r.channels as c, i (i)}<button class="ch" class:off={!c.enabled} class:bad={c.failed > 0} onclick={(e) => { e.stopPropagation(); openSite(r.id, 'distribute'); }} aria-label={chTip(c)} data-tip={chTip(c)}><ConnectionMark kind={c.kind} size={12} /></button>{/each}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" data-tip={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
-                  {#if r.has_data}
+                  {#if r.has_data && r.summary.fetched_at}
                     {@const sm = r.summary}
-                    <td class="num">{#if sm.fetched_at}<span class="v">{n(sm.users ?? 0)}</span>{@render delta(sm.users ?? 0, sm.users_prev ?? 0)}{:else}—{/if}</td>
-                    <td class="num"><span class="v">{n(sm.search_clicks ?? sm.gsc_clicks)}</span>{@render delta(sm.search_clicks ?? sm.gsc_clicks, sm.search_clicks_prev ?? sm.gsc_clicks_prev)}</td>
-                    <td class="num c-impr"><span class="v">{n(sm.search_impressions ?? sm.gsc_impressions)}</span></td>
-                    <td class="num c-impr"><span class="v">{(sm.search_impressions ?? 0) > 0 ? `${(searchCtr(r) * 100).toFixed(1)}%` : '—'}</span></td>
+                    {@const w = win(r)}
+                    <td class="num"><span class="v">{n(w.users)}</span>{@render delta(w.users, w.users_prev)}</td>
+                    {#if r.has_gsc && !sm.gsc_days && !w.clicks && !w.impr}
+                      <!-- 接了 Search Console 但一天数据都没有：多半是新验证的站，Google 还没出数据 -->
+                      <td class="num nodata" data-tip="Search Console 还没出数据：新验证的站一般要等几天才有">Google 还没数据</td><td class="num c-impr nodata">—</td><td class="num c-impr nodata">—</td>
+                    {:else}
+                      <td class="num"><span class="v">{n(w.clicks)}</span>{@render delta(w.clicks, w.clicks_prev)}</td>
+                      <td class="num c-impr"><span class="v">{n(w.impr)}</span></td>
+                      <td class="num c-impr"><span class="v">{w.impr > 0 ? `${(searchCtr(r) * 100).toFixed(1)}%` : '—'}</span></td>
+                    {/if}
                     <td class="num c-idx"><span class="v">{sm.google_pages ?? 0}{#if sm.sitemap_urls}<span class="of">/{n(sm.sitemap_urls)}</span>{/if}</span>{#if sm.bing_indexed}<small class="bi"><BingMark size={10} />{n(sm.bing_indexed)}</small>{/if}</td>
-                    <td class="c-trend">{@render spark(sm.sessions_trend ?? [])}</td>
+                    <td class="c-trend">{@render spark(w.trend)}</td>
                   {:else}
-                    <td class="num nodata" colspan="2">未接数据</td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
+                    <!-- 没有数据的三种情况分开说：正在拉 / 还没接数据源 / 接了但还没拉到 -->
+                    <td class="num nodata" colspan="2">
+                      {#if syncRun.has(r.id) || syncQ.has(r.id)}<span class="pulling"><span class="spin"></span>{syncRun.has(r.id) ? '正在拉数据…' : '排队拉数据…'}</span>
+                      {:else if !r.has_data}<button class="link-btn" onclick={(e) => { e.stopPropagation(); openSite(r.id, 'settings'); }} data-tip="在站点设置里接上 GA4、Search Console、Bing">还没接数据源</button>
+                      {:else if r.summary.errors.length}<span class="err-t" data-tip={r.summary.errors.join('\n')}>没拉到数据</span>
+                      {:else}<span data-tip="每天早上 7 点自动同步，也可以点右上角 ⋯ 立即同步">还没拉到数据</span>{/if}
+                    </td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
                   {#if showRev}<td class="num c-rev">{#if r.money?.tracked}<span class="v" data-tip={revTip(r)}>{usd(r.money.month)}</span>{#if (r.cost_month_usd ?? 0) >= 0.01}<small class="ai">AI {usd(r.cost_month_usd ?? 0)}</small>{/if}{:else}<span class="faint">—</span>{/if}</td>{/if}
                   <td class="faint when c-when"><span data-tip={full(r.active_at)}>{when(r.active_at)}</span></td>
@@ -244,6 +322,37 @@
 
 <style>
   .iss-wrap { position: relative; }
+  /* tab 行右边放统计时间段和 ⋯；tab 自己会横向滚动（会裁掉弹出层），所以工具放在外面 */
+  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: 20px; flex: none; }
+  .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
+  .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
+  .pop-wrap { position: relative; display: inline-flex; }
+  .range { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px; border: none; border-radius: 8px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .range:hover, .range.on { background: var(--su-hover); color: var(--text); }
+  .range .chev { margin-left: 2px; transition: transform .15s; }
+  .range .chev.open { transform: rotate(180deg); }
+  .ic-more { width: 28px; height: 28px; }
+  .ic-more.on { background: var(--su-hover); color: var(--text); }
+  .pop-mask { position: fixed; inset: 0; z-index: 30; }
+  .pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; min-width: 200px; max-width: 280px; box-sizing: border-box; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
+  .pop button { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px 7px 8px; border: none; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--text); cursor: pointer; }
+  .pop button:hover:not(:disabled) { background: var(--su-hover); }
+  .pop button:disabled { cursor: default; opacity: .6; }
+  .pop button > :global(svg) { flex: none; margin-top: 2px; color: var(--dim); }
+  .pop button > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .pop button.cur { background: var(--su-hover); }
+  .pop b { font-size: 13px; font-weight: 500; }
+  .pop small { font-size: 11px; color: var(--faint); line-height: 1.4; }
+  .pop:not(.more) button { padding-left: 10px; }
+  .pop:not(.more) button > :global(svg) { color: var(--accent); }
+  .pop-foot { padding: 6px 10px 6px; margin-top: 2px; border-top: 1px solid var(--border); font-size: 11px; line-height: 1.5; color: var(--faint); }
+  /* 域名后面：正在拉数据转圈、排队用小钟 */
+  .sync { flex: none; display: inline-flex; align-items: center; color: var(--dim); font-weight: 400; }
+  .sync .spin { width: 10px; height: 10px; }
+  .sync.q { color: var(--faint); }
+  .pulling { display: inline-flex; align-items: center; gap: 6px; }
+  .pulling .spin { width: 10px; height: 10px; }
+  .err-t { color: var(--err); }
   /* 和后面的小按钮（.btn.small，26px、8px 圆角）一样高、一样的圆角 */
   .iss { display: inline-flex; align-items: center; gap: 6px; height: 26px; box-sizing: border-box; padding: 0 10px; border: none; border-radius: 8px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12px; line-height: 1; font-weight: 550; cursor: pointer; }
   .iss .chev { transition: transform .15s; }

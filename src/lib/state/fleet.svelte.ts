@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { SiteRow, PendingItem, Site, OppItem, OppOverview } from '$lib/types';
+import type { SiteRow, PendingItem, Site, OppItem, OppOverview, DataSync } from '$lib/types';
 import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 import { brainLabel, brainTitle, modelIcon } from './models.js';
@@ -13,10 +13,16 @@ export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'us
 export function trafficDown(r: SiteRow): boolean {
   return r.has_data && r.summary.gsc_clicks_prev >= 20 && r.summary.gsc_clicks < r.summary.gsc_clicks_prev * 0.8;
 }
+/** 站点列表按选的统计时间段（近 7 / 28 天）取数：用户、搜索点击（Google + Bing）、展示、和前一段比、每天会话 */
+export function win(r: SiteRow) {
+  const s = r.summary;
+  if (fleet.days === 7 && s.w7) return { users: s.w7.users, users_prev: s.w7.users_prev, clicks: s.w7.clicks, clicks_prev: s.w7.clicks_prev, impr: s.w7.impressions, trend: (s.sessions_trend ?? []).slice(-7) };
+  return { users: s.users ?? 0, users_prev: s.users_prev ?? 0, clicks: s.search_clicks ?? s.gsc_clicks, clicks_prev: s.search_clicks_prev ?? s.gsc_clicks_prev, impr: s.search_impressions ?? s.gsc_impressions, trend: s.sessions_trend ?? [] };
+}
 /** 站点列表：Google + Bing 搜索点击率 */
 export function searchCtr(r: SiteRow): number {
-  const i = r.summary.search_impressions ?? 0;
-  return i > 0 ? (r.summary.search_clicks ?? 0) / i : 0;
+  const w = win(r);
+  return w.impr > 0 ? w.clicks / w.impr : 0;
 }
 /** 和前 28 天比的变化：null＝前后都没有，'new'＝之前没有、现在有 */
 export function change(cur: number, prev: number): number | 'new' | null {
@@ -42,6 +48,15 @@ function readBatchModel(): string {
   try { return localStorage.getItem(BATCH_MODEL_KEY) ?? ''; } catch { return ''; }
 }
 
+const DAYS_KEY = 'cligc.pilot.statDays';
+function readDays(): 7 | 28 {
+  try { return localStorage.getItem(DAYS_KEY) === '7' ? 7 : 28; } catch { return 28; }
+}
+export function setDays(d: 7 | 28) {
+  fleet.days = d;
+  try { localStorage.setItem(DAYS_KEY, String(d)); } catch { /* */ }
+}
+
 class FleetState {
   rows = $state<SiteRow[]>([]);
   loaded = $state(false);
@@ -60,6 +75,10 @@ class FleetState {
   tab = $state<'sites' | 'pending' | 'history'>('sites');
   /** 标题旁下拉里勾选的站点：只看这几个（站点列表、待处理、近期动态都按它筛）；空＝全部 */
   picks = $state<string[]>([]);
+  /** 站点列表的统计时间段：近 7 / 28 天（记在本机） */
+  days = $state<7 | 28>(readDays());
+  /** 正在拉数据 / 排队的站点、上次全部同步的时间、批量健康检查在不在跑 */
+  sync = $state<DataSync>({ running: [], queued: [], health: false, last_at: 0 });
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
@@ -141,10 +160,10 @@ export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRo
   const key = (r: SiteRow): number | string =>
     sort === 'name' ? r.name.toLowerCase()
       : sort === 'active' ? -r.active_at
-        : sort === 'clicks' ? -(r.summary.search_clicks ?? r.summary.gsc_clicks)
+        : sort === 'clicks' ? -win(r).clicks
           : sort === 'change' ? clicksChange(r)
-            : sort === 'users' ? -(r.summary.users ?? 0)
-              : sort === 'impr' ? -(r.summary.search_impressions ?? 0)
+            : sort === 'users' ? -win(r).users
+              : sort === 'impr' ? -win(r).impr
                 : sort === 'ctr' ? -searchCtr(r)
                   : sort === 'indexed' ? -(r.summary.google_pages ?? 0)
                     : sort === 'revenue' ? -(r.money?.month ?? 0)
@@ -307,6 +326,24 @@ export async function setTags(id: string, tags: string[]) {
   } catch (e) { say(String(e), 'err'); return false; }
 }
 
+export async function loadSync() {
+  try { fleet.sync = await invoke<DataSync>('site_data_sync_state'); } catch { /* */ }
+}
+/** 「⋯ → 立即同步所有站点数据」 */
+export async function syncAllData() {
+  try {
+    await invoke('sync_all_site_data');
+    say('开始同步，一个站点一个站点拉，拉完的会先更新');
+  } catch (e) { say(String(e), 'err'); }
+}
+/** 「⋯ → 全部站点重新检查健康」 */
+export async function checkAllHealth() {
+  try {
+    const n = await invoke<number>('check_all_sites_health');
+    say(`开始检查 ${n} 个站点的在线情况、证书、安全标记和推广链接，查完列表会自动更新`);
+  } catch (e) { say(String(e), 'err'); }
+}
+
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** 作业 / 队列事件很密：合并成一次刷新。 */
 function soon() {
@@ -328,10 +365,19 @@ export function initFleet() {
     const un4 = listen('monitor-checked', soon);
     // 跨站点批量排队变了（交给 AI、开始一个站点、停止排队）
     const un5 = listen('across-changed', soon);
+    // 某个站点的数据拉完了（导入后、每天早上、⋯ 里立即同步）：列表上的数字跟着更新
+    const un6 = listen('site-data', soon);
+    const un7 = listen<Omit<DataSync, 'last_at'>>('site-data-sync', (e) => {
+      const was = fleet.sync.queued.length + fleet.sync.running.length;
+      fleet.sync = { ...fleet.sync, ...e.payload };
+      // 一轮拉完：重新读一下上次同步时间
+      if (was && !e.payload.queued.length && !e.payload.running.length) void loadSync();
+    });
+    void loadSync();
     // 去终端 / Cloudflare 后台部署完切回来，顺手再找一次没配置的部署
     const onFocus = () => { if (fleet.loaded) void recheckDeploys(); };
     window.addEventListener('focus', onFocus);
-    return () => { for (const u of [un1, un2, un3, un4, un5]) void u.then((f) => f()); window.removeEventListener('focus', onFocus); };
+    return () => { for (const u of [un1, un2, un3, un4, un5, un6, un7]) void u.then((f) => f()); window.removeEventListener('focus', onFocus); };
   });
 }
 
