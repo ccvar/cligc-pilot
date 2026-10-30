@@ -24,6 +24,17 @@
     catch (e) { say(String(e), 'err'); }
   }
 
+  // 排着没动的那一块可以收起（多半是你自己停着的站点，天天看着占地方）：默认收起，记在本机
+  const STUCK_KEY = 'cligc.pilot.stuckOpen';
+  let stuckOpen = $state((() => { try { return localStorage.getItem(STUCK_KEY) === '1'; } catch { return false; } })());
+  function toggleStuck() { stuckOpen = !stuckOpen; try { localStorage.setItem(STUCK_KEY, stuckOpen ? '1' : '0'); } catch { /* */ } }
+  const stuckTotal = $derived(stuck.reduce((n, x) => n + x.queued, 0));
+  /** 收起时的一句话：按原因数站点，比如「12 个托管暂停着 · 1 个本周额度用完」 */
+  const stuckWhy = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const x of stuck) m.set(x.why, (m.get(x.why) ?? 0) + 1);
+    return [...m].sort((a, b) => b[1] - a[1]).map(([w, n]) => `${n} 个${w.replace(/^这个站点的?/, '')}`).join(' · ');
+  });
   const kindOf = (i: OpsItem) => (i.status === 'proposed' ? 'proposed' : i.status === 'failed' ? 'failed' : 'attention');
   const GROUPS = [
     { k: 'proposed', l: '待你确认', c: 'warn', tip: '判定不能自动上线的改动：新页面待审、改到推荐 / 邀请内容、超出每日上限等。看过改动后上线或驳回。' },
@@ -53,7 +64,12 @@
 
 {#if stuck.length}
   <div class="stucks">
-    {#each stuck as x (x.id)}
+    <button class="stuck st-head" onclick={toggleStuck} aria-expanded={stuckOpen} data-tip={stuckOpen ? '收起' : '展开看是哪些站点'}>
+      <Icon name="pause" size={12} />
+      <span class="st-t"><b>{stuck.length} 个站点的任务排着没动</b><span>共 {stuckTotal} 条</span>{#if stuckWhy}<span class="st-why">{stuckWhy}</span>{/if}</span>
+      <svg class="st-chev" class:open={stuckOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+    </button>
+    {#if stuckOpen}{#each stuck as x (x.id)}
       <!-- 一行：站点 · 几条排着 · 为什么（悬停看怎么恢复），右边查看、一个主要动作、清除计划 -->
       <div class="stuck">
         <Icon name="pause" size={12} />
@@ -67,7 +83,7 @@
         {#if x.kind === 'budget' && x.group}<button class="btn tiny" onclick={() => onbudget(x.group)}><Icon name="gauge" size={11} />调整额度</button>{/if}
         {#if x.hasPlan}<button class="ic-btn ic-sm st-x" onclick={() => clearStuck(x)} aria-label="清除计划" data-tip="清除计划：拿掉这些还没开始的任务"><Icon name="x" size={13} /></button>{/if}
       </div>
-    {/each}
+    {/each}{/if}
   </div>
 {/if}
 
@@ -155,6 +171,12 @@
   .stuck .st-see:hover { background: rgba(0, 0, 0, .05); }
   .stuck .st-x { color: var(--su-warn-ink); opacity: .6; margin: 0; }
   .stuck .st-x:hover { opacity: 1; background: rgba(0, 0, 0, .05); }
+  /* 汇总那一行：整行可点，展开后下面是每个站点一行 */
+  .st-head { width: 100%; border: 0; font: inherit; text-align: left; cursor: pointer; padding-right: 14px; }
+  .st-head:hover { filter: brightness(.98); }
+  .st-head b { font-weight: 600; }
+  .st-chev { flex: none; transition: transform .15s; }
+  .st-chev.open { transform: rotate(180deg); }
 
   .nvc { padding: 0; overflow: clip; container-type: inline-size; }
   .empty { display: flex; align-items: center; gap: 8px; padding: 16px 18px; font-size: 13px; color: var(--dim); }
