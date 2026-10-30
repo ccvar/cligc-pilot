@@ -151,11 +151,11 @@
 <style>
   :global(.app.win) .rail { border-right: none; }
   /* ---- 左栏 ---- */
-  .rail { position: relative; width: 240px; flex: none; display: flex; flex-direction: column; background: var(--rail); border-right: .5px solid rgba(30, 25, 15, .1); padding-top: 30px; }
+  .rail { position: relative; width: 240px; flex: none; display: flex; flex-direction: column; background: var(--rail); border-right: .5px solid rgba(30, 25, 15, .1); padding-top: 40px; }
   .rail.collapsed { display: none; }
   /* 右缘拖拽把手：改侧栏宽度。 */
   /* 只用 col-resize 光标提示，不画任何指示线（避免拖动时多出一条竖线）。 */
-  .rail-resize { position: absolute; top: 30px; right: -3px; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; }
+  .rail-resize { position: absolute; top: 40px; right: -3px; bottom: 0; width: 7px; cursor: col-resize; z-index: 5; }
   .rail-head { padding: 8px 8px 2px; display: flex; flex-direction: column; gap: 2px; }
   .newchat { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px;
     background: none; color: var(--text); border: none; border-radius: 9px; font-size: 13.5px; font-weight: 550; cursor: pointer; text-align: left; }

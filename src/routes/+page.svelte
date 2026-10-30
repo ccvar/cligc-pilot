@@ -139,10 +139,10 @@
   onkeydown={(e) => { if (editor.edOpen) { onEditKey(e); return; } if (e.key === 'Escape') { if (ui.lightbox) ui.lightbox = ''; } }}
 />
 <!-- --tools-w：侧栏收起时左上角红绿灯 + 浮动按钮占的宽度（有更新、连着手机各多一个按钮），页头按它往右让位 -->
-<main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible} style="--tools-w: {(ui.isFullscreen || isWindows ? 154 : 194) + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0)}px">
+<main class="app" class:win={isWindows} class:fs={ui.isFullscreen} class:rail-collapsed={ui.railCollapsed} class:top-update-visible={updater.topUpdateVisible} style="--tools-w: {(ui.isFullscreen || isWindows ? 154 : 201) + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0)}px">
   <!-- 融合式标题栏：透明拖拽条铺满顶部，红绿灯与工具按钮浮在其上（macOS Overlay） -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 194 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
+  <div class="titlebar" data-tauri-drag-region aria-hidden="true" onmousedown={startDrag} style="width:{ui.railCollapsed ? 201 + (updater.topUpdateVisible ? 27 : 0) + (phone.ready.length || phone.pending.length ? 27 : 0) : ui.railWidth}px"></div>
 
   <!-- 顶部工具：折叠侧栏 + 搜索会话（窗口模式紧挨红绿灯右侧；全屏时无红绿灯，与左栏菜单左对齐） -->
   <div class="win-tools" class:fs={ui.isFullscreen} class:win={isWindows}>
@@ -394,9 +394,10 @@
   /* 融合标题栏：全宽透明拖拽条，红绿灯浮在其上，两列各自的底色透出来 */
   /* 拖拽条只盖住左栏顶部（红绿灯+工具区）；主区域顶部改由各页头/启动页自身承担拖拽，
      这样内容能贴近顶部又不被拖拽条挡住按钮。 */
-  .titlebar { position: fixed; top: 0; left: 0; height: 30px; z-index: 6; }
+  /* 顶部那一行 40px 高：红绿灯中心离顶边约 20px（tauri.conf trafficLightPosition），页头和按钮都按这一行居中 */
+  .titlebar { position: fixed; top: 0; left: 0; height: 40px; z-index: 6; }
   /* 顶部工具按钮：浮在拖拽条之上、紧挨红绿灯右侧。 */
-  .win-tools { position: fixed; top: 0; left: 80px; height: 30px; display: flex; align-items: center; gap: 1px; z-index: 8; }
+  .win-tools { position: fixed; top: 0; left: 87px; height: 40px; display: flex; align-items: center; gap: 1px; z-index: 8; }
   /* 全屏无红绿灯：左移到与左栏菜单图标同一左边界（rail-head 8px + 按钮 padding 让开）。 */
   .win-tools.fs { left: 12px; }
   /* Windows 无红绿灯：靠左边缘，不飘在中间。 */

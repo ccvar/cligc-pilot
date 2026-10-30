@@ -226,8 +226,8 @@
 /* 页头放在窗口最上面那一行（和红绿灯、展开侧栏 / 搜索按钮同一行，和对话页一样），收起 / 展开侧栏时标题不上下跳。
    侧栏收起时红绿灯和浮动按钮压在内容区左上，页头往右让出 --tools-w（+page.svelte 按有没有更新、手机按钮算）。
    写在最后、选择器更具体，窄屏的 padding 简写盖不掉 */
-.app .su .page-head { padding-top: 2px; min-height: 28px; }
-.app.rail-collapsed .su .page-head { padding-left: var(--tools-w, 194px); }
+.app .su .page-head { padding-top: 6px; min-height: 28px; }
+.app.rail-collapsed .su .page-head { padding-left: var(--tools-w, 201px); }
 /* 页头那一行只有 30px 高：按钮、下拉、标签选择收到 24px，上下不顶着窗口边 */
 .app .su .page-head .btn.small { height: 24px; padding-top: 0; padding-bottom: 0; box-sizing: border-box; }
 .app .su .page-head .tin, .app .su .page-head .iss { height: 24px; box-sizing: border-box; }

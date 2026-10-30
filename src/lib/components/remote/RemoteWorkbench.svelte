@@ -297,7 +297,7 @@
         滚到顶时页头底下是**空的**，那时打阴影＝给不存在的遮挡关系编故事
         （同 .term-wrap.with-chat 那条「独占/无对话时不加，保持齐边」的分寸）。
      z-index：阴影得压在 .thread 之上 —— .thread 是后面的兄弟，默认会盖住它。 */
-  .thread-head { flex: none; padding: 5px 24px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .thread-head { flex: none; padding: 10px 24px 5px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   /* ★ 阴影用伪元素而不是 box-shadow：box-shadow 天然四周都有 —— `0 6px 12px -6px` 水平方向是
      「收缩 6 再模糊 6」，**正好到边**，于是左右两端各留一段 6px 渐弱，看着就是两个圆头戳在窗沿上。
      负 spread 再加也没用：加到不露头，朝下的阴影也就没了。
@@ -312,7 +312,7 @@
   .thread-head:global(.elevated)::after { opacity: 1; }
   /* 侧栏收起：红绿灯 + 悬浮的折叠/搜索钮压在内容区左上，页头统一左让位（全部视图受益）。
      发现更新时顶部临时增加更新入口，页头再让出一个按钮宽度，避免压住页面标题图标。 */
-  :global(.app.rail-collapsed) .thread-head { padding-left: var(--tools-w, 194px); } /* --tools-w 见 +page.svelte：红绿灯 + 浮动按钮（有更新、连着手机各多一个） */
+  :global(.app.rail-collapsed) .thread-head { padding-left: var(--tools-w, 201px); } /* --tools-w 见 +page.svelte：红绿灯 + 浮动按钮（有更新、连着手机各多一个） */
   /* 分屏里：左右内边距和旁边窗格的标题（RemotePane .rp-head：12px / 8px）一致，× 和图标才在同一位置。
      侧栏收起时上面那几条（给红绿灯让位）分数更高，照样生效。 */
   .thread-head.in-pane { padding-left: 12px; padding-right: 8px; }

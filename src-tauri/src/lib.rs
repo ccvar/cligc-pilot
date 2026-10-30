@@ -2276,7 +2276,9 @@ async fn open_conn_window(
     {
         b = b
             .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true);
+            .hidden_title(true)
+            // 和 tauri.conf 主窗口一致：红绿灯中心离顶边约 20px，顶部那一行 40px 高（见 +page.svelte .titlebar）
+            .traffic_light_position(tauri::LogicalPosition::new(14.0, 18.0));
     }
     let w = b.build().map_err(|e| format!("打开新窗口失败: {e}"))?;
     #[cfg(target_os = "windows")]
