@@ -146,7 +146,10 @@ export async function dismissItems(site: Site, items: OpsItem[]) {
   say(failed ? `驳回了 ${items.length - failed} 条，${failed} 条没成功` : `已驳回 ${items.length} 条`, failed ? 'err' : undefined);
 }
 /** 上线后验收的待核对问题看过了。 */
+/** 上线后验收有几项没过，你看过、确认没问题：先二次确认（点了就不再提醒这几项） */
 export async function ackItem(siteId: string, item: OpsItem) {
+  const ok = await confirmDialog(`确认「${item.opp.title}」上线后没问题？\n\n要你核对的：${item.attention || '线上验收没过的几项'}\n\n确认后这几项就不再提醒，改动保留在线上。有问题的话点「回滚」，不要点这个。`, { title: '已核对', kind: 'info', confirmText: '没问题，已核对' });
+  if (!ok) return;
   try { await invoke('queue_ack', { id: siteId, itemId: item.id }); await loadQueue(siteId); }
   catch (e) { say(String(e), 'err'); }
 }
