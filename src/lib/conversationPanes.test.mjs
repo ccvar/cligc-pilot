@@ -108,7 +108,7 @@ test('conversation header keeps model and site identity on one compact row',()=>
   assert.match(source,/\.conversation-head-model\{[^}]*line-height:0\}/);
   assert.doesNotMatch(source,/\.conversation-head-model\{[^}]*transform:/);
   assert.match(source,/\.conversation-site-link\{max-width:52%;min-width:0;flex:none\}/);
-  assert.match(source,/\.thread-head\.conversation-thread-head\s*\{[^}]*height: 30px; min-height: 30px;[^}]*align-items: center/);
+  assert.match(source,/\.thread-head\.conversation-thread-head\s*\{[^}]*height: 40px; min-height: 40px;[^}]*align-items: center/);
 });
 
 test('split canvas always fits its viewport instead of creating page-level scrollbars',()=>{

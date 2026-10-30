@@ -172,13 +172,13 @@
   /* 工作台头部：单行，比常规 thread-head 矮一截。
      ★ margin-top:0 是必须的 —— `.th-info small` 那 2px 是给它上面那行标题留的空隙，
      而这里标题已经去掉了，留着就是净偏移，文字会比右边的图标低 2px（对不上一条水平线）。 */
-  /* 高度对齐左上角那排工具图标：`.win-tools` 是 fixed/top:0/height:30px，中心在 15px。
-     这里最高的子元素是 24px 的面板开关 → 上下各留 3px 正好 30px，中心也落在 15px，
+  /* 高度对齐左上角那排工具图标：`.win-tools` 是 fixed/top:0/height:40px，中心在 20px。
+     这里最高的子元素是 24px 的面板开关 → 上下各留 8px 正好 40px，中心也落在 20px，
      于是「地址行 / 刷新键 / 三枚开关 / 折叠侧栏 / 搜索」全在同一条水平线上。 */
   /* 这条**必须自己写回 align-items:center**：上面 .thread-head 改成了 flex-start（为了让标题行
-     对齐 15px 的图标带），而 slim 是靠 center 把「地址行 / 刷新键 / 三枚开关」这些不等高的子元素
-     一起压到 15px 那条线上的 —— 被 flex-start 带走就全顶到 3px 去了。 */
-  .thread-head.slim { padding-top: 3px; padding-bottom: 3px; align-items: center; container-type: inline-size; }
+     对齐 20px 的图标带），而 slim 是靠 center 把「地址行 / 刷新键 / 三枚开关」这些不等高的子元素
+     一起压到 20px 那条线上的 —— 被 flex-start 带走就全顶到 8px 去了。 */
+  .thread-head.slim { padding-top: 8px; padding-bottom: 8px; align-items: center; container-type: inline-size; }
   /* 选择器要带上 .th-info small，否则压不过 `.th-info small` 那条（它带元素选择器，分更高）——
      实测：只写 .rhead-line 的话 margin-top 仍是 2px，文字比图标低 1px。 */
   .th-info small.rhead-line { display: flex; align-items: center; gap: 5px; margin-top: 0; }
@@ -281,10 +281,10 @@
   .composer.compact textarea { padding-left: 6px !important; }
   /* ---- 线程 ---- */
   /* ★ 标题要和左上角那排工具图标在同一条水平线上。
-     `.win-tools` 是 fixed / top:0 / height:30px + align-items:center → **图标中心恒在 15px**
-     （和 .thread-head.slim 那条注释是同一个基准）。标题行高 20.3 → 上内边距取 5px，
-     标题中心落在 15.15，对上。原来 13px 时中心在 23.1 —— **每个页面都低 8px**。
-     ★ 上边距被「对齐那条 fixed 图标带」锁死＝5px，所以**下边距只能跟着收成 5px**，
+     `.win-tools` 是 fixed / top:0 / height:40px + align-items:center → **图标中心恒在 20px**（红绿灯中心也在 20px，见 tauri.conf trafficLightPosition）
+     （和 .thread-head.slim 那条注释是同一个基准）。标题行高 20.3 → 上内边距取 10px，
+     标题中心落在 20.15，对上。原来 13px 时中心在 23.1 —— **每个页面都低 8px**。
+     ★ 上边距被「对齐那条 fixed 图标带」锁死＝10px，所以**下边距也取 10px**，
      不然上下就不对称（原来 5/13，下面明显空一截）。头因此比以前矮 8px，这是这条对齐的代价。
      ★ align-items 必须 flex-start，不能用 center：th-info 比右侧按钮（28px）矮时
      （例如只有标题、没有副标题的头），center 会让 th-info 跟着按钮居中，标题又掉到 26.8。 */
@@ -297,7 +297,7 @@
         滚到顶时页头底下是**空的**，那时打阴影＝给不存在的遮挡关系编故事
         （同 .term-wrap.with-chat 那条「独占/无对话时不加，保持齐边」的分寸）。
      z-index：阴影得压在 .thread 之上 —— .thread 是后面的兄弟，默认会盖住它。 */
-  .thread-head { flex: none; padding: 10px 24px 5px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .thread-head { flex: none; padding: 10px 24px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   /* ★ 阴影用伪元素而不是 box-shadow：box-shadow 天然四周都有 —— `0 6px 12px -6px` 水平方向是
      「收缩 6 再模糊 6」，**正好到边**，于是左右两端各留一段 6px 渐弱，看着就是两个圆头戳在窗沿上。
      负 spread 再加也没用：加到不露头，朝下的阴影也就没了。

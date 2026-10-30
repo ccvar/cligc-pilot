@@ -38,10 +38,10 @@
   :global(.pane) .thread{min-height:0;overscroll-behavior:contain}
   /* ---- 线程 ---- */
   /* ★ 标题要和左上角那排工具图标在同一条水平线上。
-     `.win-tools` 是 fixed / top:0 / height:30px + align-items:center → **图标中心恒在 15px**
-     （和 .thread-head.slim 那条注释是同一个基准）。标题行高 20.3 → 上内边距取 5px，
-     标题中心落在 15.15，对上。原来 13px 时中心在 23.1 —— **每个页面都低 8px**。
-     ★ 上边距被「对齐那条 fixed 图标带」锁死＝5px，所以**下边距只能跟着收成 5px**，
+     `.win-tools` 是 fixed / top:0 / height:40px + align-items:center → **图标中心恒在 20px**（红绿灯中心也在 20px，见 tauri.conf trafficLightPosition）
+     （和 .thread-head.slim 那条注释是同一个基准）。标题行高 20.3 → 上内边距取 10px，
+     标题中心落在 20.15，对上。原来 13px 时中心在 23.1 —— **每个页面都低 8px**。
+     ★ 上边距被「对齐那条 fixed 图标带」锁死＝10px，所以**下边距也取 10px**，
      不然上下就不对称（原来 5/13，下面明显空一截）。头因此比以前矮 8px，这是这条对齐的代价。
      ★ align-items 必须 flex-start，不能用 center：th-info 比右侧按钮（28px）矮时
      （例如只有标题、没有副标题的头），center 会让 th-info 跟着按钮居中，标题又掉到 26.8。 */
@@ -54,7 +54,7 @@
         滚到顶时页头底下是**空的**，那时打阴影＝给不存在的遮挡关系编故事
         （同 .term-wrap.with-chat 那条「独占/无对话时不加，保持齐边」的分寸）。
      z-index：阴影得压在 .thread 之上 —— .thread 是后面的兄弟，默认会盖住它。 */
-  .thread-head { flex: none; padding: 10px 24px 5px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .thread-head { flex: none; padding: 10px 24px; border-bottom: 1px solid rgba(30, 25, 15, .05); position: relative; z-index: 1; transition: border-bottom-color .18s ease; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   /* ★ 阴影用伪元素而不是 box-shadow：box-shadow 天然四周都有 —— `0 6px 12px -6px` 水平方向是
      「收缩 6 再模糊 6」，**正好到边**，于是左右两端各留一段 6px 渐弱，看着就是两个圆头戳在窗沿上。
      负 spread 再加也没用：加到不露头，朝下的阴影也就没了。
