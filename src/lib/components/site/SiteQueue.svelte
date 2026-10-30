@@ -31,6 +31,11 @@
   // 上线了但验收有待核对问题的，也放进「需要你处理」
   const inGroup = (i: OpsItem, k: keyof typeof groups) => (groups[k] as readonly string[]).includes(i.status) || (k === 'todo' && i.status === 'deployed' && !!i.attention);
   const shown = $derived(all.filter((i) => inGroup(i, filter)));
+  // 这一栏空了，但刚处理的条目只是挪到了别的栏（交给 AI 后去了「需要你处理」、已经好了自动关掉去了「已上线」…）：
+  // 空白处列出最近 15 分钟动过的，写明现在在哪、点一下过去
+  const TAB_LABEL: Record<keyof typeof groups, string> = { todo: '需要你处理', open: '未处理的机会', live: '已上线', closed: '已驳回 / 回滚' };
+  const tabOf = (i: OpsItem) => (Object.keys(groups) as (keyof typeof groups)[]).find((k) => inGroup(i, k)) ?? 'todo';
+  const moved = $derived(all.filter((i) => !inGroup(i, filter) && Date.now() / 1000 - i.updated_at < 900).sort((a, b) => b.updated_at - a.updated_at).slice(0, 3));
   const counts = $derived(Object.fromEntries((Object.keys(groups) as (keyof typeof groups)[]).map((k) => [k, all.filter((i) => inGroup(i, k)).length])) as Record<string, number>);
   // 进来时选哪一栏：别处指定了就用它；否则「需要你处理」是空的、有未处理的机会，就直接看机会
   let picked0 = '';
@@ -175,7 +180,20 @@
   {#if !shown.length}
     <div class="card empty">
       <p>{filter === 'todo' ? '没有需要你确认的事项' : filter === 'open' ? '队列里没有未处理的机会' : '暂无记录'}</p>
-      <p class="hint">{filter === 'open' ? '可以「立即扫描」，或在「数据」页把机会加进来。' : filter === 'todo' ? 'AI 改好的提案、失败的任务会出现在这里。' : ''}</p>
+      {#if moved.length}
+        <p class="hint">刚才处理的在这里：</p>
+        <ul class="moved">
+          {#each moved as i (i.id)}
+            <li>
+              <span class="pill {tone(i.status)}">{#if i.status === 'working'}<span class="spin"></span>{/if}{STATUS_LABEL[i.status] ?? i.status}</span>
+              <span class="mv-t" data-tip={i.note || i.opp.title}>{i.opp.title}</span>
+              <button class="btn tiny" onclick={() => (sites.queueItem = i.id)}>去「{TAB_LABEL[tabOf(i)]}」看</button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="hint">{filter === 'open' ? '可以「立即扫描」，或在「数据」页把机会加进来。' : filter === 'todo' ? 'AI 改好的提案、失败的任务会出现在这里。' : ''}</p>
+      {/if}
     </div>
   {:else}
     <div class="card items">
@@ -325,6 +343,11 @@
   .lvl:hover { color: var(--text); }
   .empty { text-align: center; padding: 28px 18px; }
   .empty p:first-child { margin: 0 0 2px; font-size: 13px; font-weight: 550; }
+  .moved { list-style: none; margin: 10px auto 0; padding: 0; max-width: 560px; display: flex; flex-direction: column; gap: 6px; text-align: left; }
+  .moved li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px; font-size: 12.5px; }
+  .moved .pill { flex: none; }
+  .mv-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .moved .btn { flex: none; }
   .items { padding-top: 0; padding-bottom: 0; }
   /* 全局 .su .card > .list:last-child 会把列表往下拉 8px（压出卡片底边）：这张卡片的列表贴着卡片底部，不往外伸 */
   .card.items > .list:last-child { margin-bottom: 0; }
