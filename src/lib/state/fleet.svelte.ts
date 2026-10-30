@@ -5,6 +5,7 @@ import { say, confirmDialog } from './app.svelte.js';
 import { sites, refreshSites } from './sites.svelte.js';
 import { brainLabel, brainTitle, modelIcon } from './models.js';
 import { launcher } from './launcher.svelte.js';
+import { effortLabel } from '$lib/effortStops';
 
 export type SiteFilter = 'all' | 'attention' | 'unsafe' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
@@ -46,6 +47,10 @@ export function needsAttention(r: SiteRow): boolean {
 
 // 「待处理」交给 AI 时选的模型记在本机
 const BATCH_MODEL_KEY = 'cligc.pilot.batchModel';
+const BATCH_EFFORT_KEY = 'cligc.pilot.batchEffort';
+function readBatchEffort(): string {
+  try { return localStorage.getItem(BATCH_EFFORT_KEY) ?? ''; } catch { return ''; }
+}
 function readBatchModel(): string {
   try { return localStorage.getItem(BATCH_MODEL_KEY) ?? ''; } catch { return ''; }
 }
@@ -70,6 +75,8 @@ class FleetState {
   opps = $state<OppOverview | null>(null);
   /** 「待处理」交给 AI 的默认模型（"<brain>::<model>"，记在本机，设置里改）；空＝还没设过，用 batchPick 的推断 */
   batchModel = $state(readBatchModel());
+  /** 默认模型一起选的推理强度（空＝跟随模型默认） */
+  batchEffort = $state(readBatchEffort());
   // 总览
   query = $state('');
   filter = $state<SiteFilter>('all');
@@ -263,9 +270,10 @@ export function batchPick(): string {
   const common = [...n.entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v).find(ok);
   return common ?? launcher.comboOpts.find((o) => !o.disabled)?.value ?? '';
 }
-export function setBatchModel(v: string) {
+export function setBatchModel(v: string, effort = '') {
   fleet.batchModel = v;
-  try { localStorage.setItem(BATCH_MODEL_KEY, v); } catch { /* 存不了就只在这次有效 */ }
+  fleet.batchEffort = effort;
+  try { localStorage.setItem(BATCH_MODEL_KEY, v); localStorage.setItem(BATCH_EFFORT_KEY, effort); } catch { /* 存不了就只在这次有效 */ }
 }
 /** 模型的图标和短名字，如 { icon: 'claude', name: 'Opus 5.5' } */
 export function modelTarget(pick: string): { icon: string; name: string } {
@@ -279,12 +287,15 @@ export function modelName(v: string): string {
 }
 /** 让 AI 改：按站点分组，每个站点一个作业，同时最多 3 个，其余排着。
  *  model 不传就用默认模型；都只管这一批，不改站点和托管方案里设置的模型。 */
-export async function workOpps(items: OppItem[], ask = true, model?: string) {
+export async function workOpps(items: OppItem[], ask = true, model?: string, effort?: string) {
   if (!items.length) return;
   const n = siteCount(items);
   const pick = model || batchPick();
   if (!pick) { say('没有能用的模型：先在设置里登录 Claude / Codex，或连上 API 服务', 'err'); return; }
-  const name = modelTarget(pick).name;
+  // 推理强度：临时选了模型就用一起选的那档；用默认模型就用默认存的那档（默认模型换过了就不带）
+  const eff = model ? effort ?? '' : pick === fleet.batchModel ? fleet.batchEffort : '';
+  const lab = effortLabel(pick, eff, launcher.comboOpts.find((o) => o.value === pick)?.apiProtocol);
+  const name = modelTarget(pick).name + (lab ? ` · ${lab}` : '');
   const sitemap = items.some((i) => i.item.opp.kind === 'sitemap_error') ? '\nsitemap 报错先由程序检查：只是提交的地址不对或要重新提交的，直接处理好，不用 AI 改代码。' : '';
   const msg = `交给 ${name} 处理这 ${items.length} 条机会（${n} 个站点）？\n每个站点一个作业、一条一条改，同时最多 3 个站点在跑，其余排着等。改好、检查通过后留在「等你确认」里，你确认了才上线。${sitemap}\n\n只是这批用 ${name}${model && model !== batchPick() ? `（默认是 ${modelTarget(batchPick()).name}，不变）` : ''}，不改站点和托管方案里设置的模型。`;
   if (ask && items.length > 1 && !(await confirmDialog(msg, { title: `交给 ${name}`, kind: 'info', confirmText: `开始处理 ${items.length} 条` }))) return;
@@ -292,7 +303,7 @@ export async function workOpps(items: OppItem[], ask = true, model?: string) {
   for (const i of items) by.set(i.site_id, [...(by.get(i.site_id) ?? []), i.item.id]);
   try {
     const [b, ...m] = pick.split('::');
-    await invoke('work_across_sites', { batches: [...by.entries()], model: [b, m.join('::')] });
+    await invoke('work_across_sites', { batches: [...by.entries()], model: [b, m.join('::')], effort: eff || null });
     say(n > 3 ? `已交给 ${name}：${items.length} 条，先开始 3 个站点，其余排着` : `已交给 ${name}：${items.length} 条`);
     void loadOpps();
   } catch (e) { say(String(e), 'err'); }

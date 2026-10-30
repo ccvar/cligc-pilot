@@ -9,6 +9,11 @@ import { appSource, asScript, read } from './testing/appSource.mjs';
 const page=appSource();
 const models=read('lib/state/models.ts');
 const fx=fs.readFileSync(new URL('./ModelFx.svelte',import.meta.url),'utf8');
+// 档位表在 effortStops.ts（对话框的模型面板和站点运营的模型菜单共用）
+const es=read('lib/effortStops.ts');
+const stopsOf=(value,protocol)=>{ const [brain,...m]=value.split('::');
+  return JSON.parse(evaluate(es,'export type Stop','/** 档位存的值','stopsFor(brain,model,protocol).map(s=>({v:s.v,l:s.l}))',
+    {brain,model:m.join('::'),protocol,apiReasoningLevels})); };
 function evaluate(source,start,end,expression,context={}) {
   const from=source.indexOf(start),to=source.indexOf(end,from);
   assert.ok(from>=0&&to>from);
@@ -37,8 +42,7 @@ test('Grok 4.7 is selectable without changing existing or default models',()=>{
 test('GPT-6 Codex effort levels follow subscription capabilities, Luna excludes ultra',()=>{
   for(const [model,expected] of [['gpt-6-sol',['','low','medium','high','xhigh','max','ultra']],
     ['gpt-6-luna',['','low','medium','high','xhigh','max']]]) {
-    const stops=JSON.parse(evaluate(fx,'  type Stop =','  let open =','stops.map(s=>s.v)',
-      {value:'codex::'+model,options:[],apiReasoningLevels,$derived:v=>v}));
+    const stops=stopsOf('codex::'+model).map(s=>s.v);
     assert.deepEqual(stops,expected);
   }
 });
@@ -58,16 +62,14 @@ test('Luna displays max for a retained Sol ultra setting instead of falsely show
 test('API controls use protocol metadata rather than copying CLI effort tiers',()=>{
   for(const model of ['claude-opus-5-5','claude-fable-5-1','claude-sonnet-5-5']) {
     const value='api:claude-test::'+model;
-    const stops=JSON.parse(evaluate(fx,'  type Stop =','  let open =','stops.map(s=>({v:s.v,l:s.l}))',
-      {value,options:[{value,apiProtocol:'anthropic_messages'}],apiReasoningLevels,$derived:v=>v}));
+    const stops=stopsOf(value,'anthropic_messages');
     assert.deepEqual(stops.map(s=>s.v),['','low','medium','high','xhigh','max']);
     assert.equal(stops[0].l,'默认');
     assert.equal(stops.at(-1).l,'最大');
   }
   for(const protocol of ['openai_chat','openai_responses']) {
     const value='api:openai-test::gpt-6-sol';
-    const stops=JSON.parse(evaluate(fx,'  type Stop =','  let open =','stops.map(s=>s.v)',
-      {value,options:[{value,apiProtocol:protocol}],apiReasoningLevels,$derived:v=>v}));
+    const stops=stopsOf(value,protocol).map(s=>s.v);
     assert.deepEqual(stops,['',...apiReasoningLevels(protocol,'gpt-6-sol')]);
     assert.ok(!stops.includes('ultra'));
   }

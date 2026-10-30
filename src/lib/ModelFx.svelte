@@ -4,6 +4,7 @@
   import BrainIcon from './BrainIcon.svelte';
   import { apiEffortValue, apiReasoningLevels, normalizeApiEffort } from './apiReasoning';
   import type { ModelOption } from './modelSelection';
+  import { apiStops, stopsFor } from './effortStops';
 
   type Opt = ModelOption;
   let {
@@ -25,44 +26,6 @@
   const FAST_OK = ['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8'];
   const fastable = $derived(!value.startsWith('api:') && FAST_OK.some((m) => value.endsWith('::' + m) || value === m));
 
-  type Stop = { v: string; l: string; d: string };
-  const BASE_STOPS: Stop[] = [
-    { v: '', l: '自动', d: '跟随模型默认' },
-    { v: 'low', l: '低', d: '更快更省' },
-    { v: 'medium', l: '中', d: '均衡' },
-    { v: 'high', l: '高', d: '深度推理' },
-  ];
-  /**
-   * 不同执行器的原生 effort 档位并不相同，滑杆必须按当前模型动态展示：
-   * Claude Code: low / medium / high / xhigh / max
-   * Grok CLI: none / minimal / low / medium / high / xhigh / max
-   * Codex 常规模型: low / medium / high
-   * GPT-6 Astra / Sol（Codex 通道）: low / medium / high / xhigh / max / ultra
-   * GPT-6 Luna（Codex 通道）: low / medium / high / xhigh / max
-   */
-  const CLAUDE_STOPS: Stop[] = [
-    ...BASE_STOPS,
-    { v: 'xhigh', l: '极高', d: '扩展推理' },
-    { v: 'max', l: '最高', d: '最大推理 · 最慢' },
-  ];
-  const GROK_STOPS: Stop[] = [
-    { v: '', l: '自动', d: '跟随模型默认' },
-    { v: 'none', l: '无', d: '不推理' },
-    { v: 'minimal', l: '极低', d: '最少推理' },
-    { v: 'low', l: '低', d: '更快更省' },
-    { v: 'medium', l: '中', d: '均衡' },
-    { v: 'high', l: '高', d: '深度推理' },
-    { v: 'xhigh', l: '极高', d: '扩展推理' },
-    { v: 'max', l: '最高', d: '最大推理 · 最慢' },
-  ];
-  const CODEX_ASTRA_STOPS: Stop[] = [
-    ...BASE_STOPS,
-    { v: 'xhigh', l: '极高', d: '扩展推理' },
-    { v: 'max', l: '最高', d: '最大推理' },
-    { v: 'ultra', l: '极致', d: '自动委派 · 最深推理' },
-  ];
-  // Codex subscription-channel capabilities (models_cache), not Responses API tiers.
-  const CODEX_LUNA_STOPS = CODEX_ASTRA_STOPS.filter((s) => s.v !== 'ultra');
   const brain = $derived(value.includes('::') ? value.slice(0, value.indexOf('::')) : '');
   const apiModel = $derived(brain.startsWith('api:'));
   const model = $derived(value.includes('::') ? value.slice(value.indexOf('::') + 2) : value);
@@ -71,17 +34,10 @@
   const apiLevels = $derived(apiReasoningLevels(apiProtocol, model));
   const limitedChatReasoning = $derived(apiModel && apiProtocol === 'openai_chat'
     && apiReasoningLevels('openai_responses', model).length > apiLevels.length);
-  const apiStops = $derived<Stop[]>([
-    { v: '', l: '默认', d: '跟随服务商默认' },
-    ...apiLevels.map(v => v === 'max'
-      ? { v, l: '最大', d: '最大推理' }
-      : GROK_STOPS.find(stop => stop.v === v) ?? { v, l: v, d: '' }),
-  ]);
+  const apiStopList = $derived(apiStops(apiProtocol, model));
   const brainName = $derived(apiModel ? (apiProtocol === 'anthropic_messages' ? 'Claude API' : 'API')
     : brain === 'claude' ? 'Claude' : brain === 'grok' ? 'Grok' : brain === 'codex' ? 'Codex' : '模型');
-  const stops = $derived(apiModel ? apiStops : brain === 'claude' ? CLAUDE_STOPS : brain === 'grok' ? GROK_STOPS
-    : brain === 'codex' && (model === 'gpt-6-astra' || model === 'gpt-6-sol') ? CODEX_ASTRA_STOPS
-    : brain === 'codex' && model === 'gpt-6-luna' ? CODEX_LUNA_STOPS : BASE_STOPS);
+  const stops = $derived(apiModel ? apiStopList : stopsFor(brain, model));
 
   let open = $state(false);
   let root = $state<HTMLElement>();

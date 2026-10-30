@@ -356,13 +356,34 @@ fn set_model_override(site_id: &str, m: Option<(String, String)>) {
     }
 }
 
+/// 临时换模型时一起选的推理强度（空＝跟随模型默认；API 模型带 api: 前缀，和对话里一样）。只对临时选的那个模型生效。
+static EFFORT_OVERRIDE: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+fn effort_override(site_id: &str) -> String {
+    EFFORT_OVERRIDE.lock().unwrap().iter().find(|(s, _)| s == site_id).map(|(_, e)| e.clone()).unwrap_or_default()
+}
+
+fn set_effort_override(site_id: &str, e: String) {
+    let mut v = EFFORT_OVERRIDE.lock().unwrap();
+    v.retain(|(s, _)| s != site_id);
+    if !e.is_empty() {
+        v.push((site_id.to_string(), e));
+    }
+}
+
 /// 同 start，可以给这个作业临时指定模型（「待处理」里每批交给 AI 时选的）。
 pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>, model: Option<(String, String)>) -> Result<String, String> {
+    start_with_pick(ctx, site_id, task, trigger, item_id, model.map(|(b, m)| (b, m, String::new())))
+}
+
+/// 同 start_with_model，再带上推理强度：（brain, model, effort）。
+pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>, pick: Option<(String, String, String)>) -> Result<String, String> {
     let st = ctx.state();
     let site = st.sites.get(site_id)?;
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
     // 一个站点同时只有一个作业，按站点记就够；没指定的作业也要清掉，免得用上一次的
-    set_model_override(site_id, model);
+    set_effort_override(site_id, pick.as_ref().map(|(_, _, e)| e.clone()).unwrap_or_default());
+    set_model_override(site_id, pick.map(|(b, m, _)| (b, m)));
     {
         let mut h = HOLD.lock().unwrap();
         h.retain(|s| s != site_id);
@@ -412,6 +433,7 @@ pub fn start_with_model(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item
         };
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         set_model_override(&site.id, None);
+        set_effort_override(&site.id, String::new());
         HOLD.lock().unwrap().retain(|s| s != &site.id);
         job.finish(&res);
         if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
@@ -1021,6 +1043,8 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
     }
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
+    // 推理强度只给临时选的那个模型（主模型失败换备用模型时不带过去）
+    let effort = if model_override(&site.id).as_ref() == Some(model) { effort_override(&site.id) } else { String::new() };
     let (brain, model) = model.clone();
     // 把这一轮的实时事件转给前端（ops-turn），打开这条会话就能看到 AI 正在做什么；
     // 第一条事件到达时刷新会话列表，会话一开始就出现在侧栏里，而不是跑完才出现。
@@ -1055,7 +1079,7 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
         brain,
         model,
         perm.into(),
-        String::new(),
+        effort,
         false,
         work_dir.into(),
         message,

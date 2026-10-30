@@ -283,12 +283,12 @@ pub fn opportunities_across_sites(state: tauri::State<'_, AppState>) -> OppOverv
     recent.sort_by(|a, b| b.item.worked_at.cmp(&a.item.worked_at));
     let across = ACROSS.lock().unwrap();
     let queued = across.iter().flat_map(|(_, ids, _)| ids.iter().cloned()).collect();
-    let queued_model = across.iter().filter_map(|(_, ids, m)| m.as_ref().map(|(b, m)| (ids, format!("{b}::{m}")))).flat_map(|(ids, m)| ids.iter().map(move |id| (id.clone(), m.clone()))).collect();
+    let queued_model = across.iter().filter_map(|(_, ids, m)| m.as_ref().map(|(b, m, _)| (ids, format!("{b}::{m}")))).flat_map(|(ids, m)| ids.iter().map(move |id| (id.clone(), m.clone()))).collect();
     OppOverview { items, managed_open, running, waiting: across.len(), queued, queued_model, recent }
 }
 
 /// 跨站点批量里还排着、没开始的（站点, 条目 id, 这批临时选的模型）
-type Model = Option<(String, String)>;
+type Model = Option<(String, String, String)>;
 static ACROSS: std::sync::Mutex<Vec<(String, Vec<String>, Model)>> = std::sync::Mutex::new(Vec::new());
 static ACROSS_LOOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -296,8 +296,10 @@ static ACROSS_LOOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// 立即返回；作业开始、结束会照常发 site-job / site-queue 事件。已经排着的条目不会重复排。
 /// `model`＝这批临时用的（brain, model），不传就按站点设置（托管方案里的用方案选的）。
 #[tauri::command]
-pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>, model: Option<(String, String)>) -> Result<usize, String> {
+pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String>)>, model: Option<(String, String)>, effort: Option<String>) -> Result<usize, String> {
     use std::sync::atomic::Ordering;
+    // 推理强度跟着临时选的模型走（brain, model, effort）
+    let model: Model = model.map(|(b, m)| (b, m, effort.unwrap_or_default()));
     use tauri::Manager;
     if batches.iter().any(|(_, ids)| ids.iter().any(|x| x.contains(','))) {
         return Err("条目 id 不合法".into());
@@ -340,7 +342,7 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
                     }
                     let ctx = crate::site_runner::Ctx { app: app.clone() };
                     let (task, arg) = if ids.len() == 1 { ("work", ids[0].clone()) } else { ("batch", ids.join(",")) };
-                    let r = crate::site_runner::start_with_model(ctx, site_id, task, "manual", Some(arg), model.clone());
+                    let r = crate::site_runner::start_with_pick(ctx, site_id, task, "manual", Some(arg), model.clone());
                     r.is_err()
                 });
                 if q.is_empty() {

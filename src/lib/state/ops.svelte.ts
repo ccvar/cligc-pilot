@@ -93,9 +93,9 @@ export async function runTask(siteId: string, task: string, hold = false) {
   catch (e) { say(String(e), 'err'); }
 }
 /** model：这一次临时换的模型（"brain::model"），不改站点和托管方案的设置 */
-export async function workItem(siteId: string, item: OpsItem, model = '') {
+export async function workItem(siteId: string, item: OpsItem, model = '', effort = '') {
   const [b, ...m] = model.split('::');
-  try { await invoke('queue_work', { id: siteId, itemId: item.id, model: model ? [b, m.join('::')] : null }); }
+  try { await invoke('queue_work', { id: siteId, itemId: item.id, model: model ? [b, m.join('::')] : null, effort: model && effort ? effort : null }); }
   catch (e) { say(String(e), 'err'); }
 }
 /** 待你确认的这一版合不进主分支：放回待处理，马上让 AI 在最新的主分支上重改 */
@@ -130,10 +130,10 @@ export async function dismissItem(site: Site, item: OpsItem) {
 }
 /** 批量：选中的未处理机会按顺序让 AI 改（一个作业里一条一条做）。 */
 /** model：这一批临时换的模型（"brain::model"），不改站点和托管方案的设置 */
-export async function workItems(siteId: string, ids: string[], model = '') {
+export async function workItems(siteId: string, ids: string[], model = '', effort = '') {
   if (!ids.length) return;
   const [b, ...m] = model.split('::');
-  try { await invoke('queue_work_many', { id: siteId, itemIds: ids, model: model ? [b, m.join('::')] : null }); }
+  try { await invoke('queue_work_many', { id: siteId, itemIds: ids, model: model ? [b, m.join('::')] : null, effort: model && effort ? effort : null }); }
   catch (e) { say(String(e), 'err'); }
 }
 /** 批量驳回：只问一次。 */

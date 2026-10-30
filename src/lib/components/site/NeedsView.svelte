@@ -193,7 +193,7 @@
 
 <DiffModal />
 
-{#if mMenu}<ModelMenu at={mMenu.at} current={siteModels[mMenu.siteId] ?? ''} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const x = mMenu; mMenu = null; if (x) void workItem(x.siteId, x.item, m); }} onclose={() => (mMenu = null)} />{/if}
+{#if mMenu}<ModelMenu at={mMenu.at} current={siteModels[mMenu.siteId] ?? ''} note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { const x = mMenu; mMenu = null; if (x) void workItem(x.siteId, x.item, m, e); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
   /* 「用 XX 重新改」+ ▾：两个按钮拼成一个 */

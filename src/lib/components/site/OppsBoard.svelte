@@ -9,6 +9,8 @@
   import SiteIcon from './SiteIcon.svelte';
   import { fleet, inPicks, loadOpps, syncAllData, workOpps, dismissOpps, stopAcross, batchPick, setBatchModel, modelTarget, modelName } from '$lib/state/fleet.svelte.js';
   import ModelMenu from './ModelMenu.svelte';
+  import { effortLabel } from '$lib/effortStops';
+  import { launcher } from '$lib/state/launcher.svelte.js';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
   import { KIND_LABEL } from '$lib/state/ops.svelte.js';
@@ -46,7 +48,12 @@
   const STAGE: Record<string, string> = { queued: '排队中', working: 'AI 处理中', failed: '没成功', proposed: '等你确认', done: '已处理' };
   // 默认交给哪个模型（设置里改；没设过用这些站点用得最多的），按钮上写它的名字
   const pick = $derived(batchPick());
-  const target = $derived(modelTarget(pick));
+  const target0 = $derived(modelTarget(pick));
+  // 按钮上带上默认模型一起选的推理强度（跟随默认就不写）
+  const target = $derived.by(() => {
+    const lab = pick === fleet.batchModel ? effortLabel(pick, fleet.batchEffort, launcher.comboOpts.find((o) => o.value === pick)?.apiProtocol) : '';
+    return { ...target0, name: target0.name + (lab ? ` · ${lab}` : '') };
+  });
   // 换个模型处理这一次的菜单：锚在 ▾ 按钮下面，或右键的位置
   // pick：批量按钮的 ▾，只换按钮用的模型（存成默认），不马上开始；单条的右键 / 重试 ▾ 选了就用它处理那一条
   let menu = $state<{ at: { left: number; top: number; bottom: number; right: number }; items: OppItem[]; ask: boolean; pick?: boolean } | null>(null);
@@ -55,13 +62,13 @@
     const r = e.type === 'contextmenu' ? { left: e.clientX, right: e.clientX + 260, top: e.clientY, bottom: e.clientY } : (e.currentTarget as HTMLElement).getBoundingClientRect();
     menu = { at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, items, ask, pick };
   }
-  function pickFromMenu(model: string, makeDefault: boolean) {
+  function pickFromMenu(model: string, makeDefault: boolean, effort = '') {
     const m = menu;
     menu = null;
     if (!m) return;
-    if (m.pick) { setBatchModel(model); say(`之后交给 ${modelTarget(model).name}，点按钮开始`); return; }
-    if (makeDefault) setBatchModel(model);
-    void workOpps(m.items, m.ask, model);
+    if (m.pick) { setBatchModel(model, effort); say(`之后交给 ${modelTarget(model).name}，点按钮开始`); return; }
+    if (makeDefault) setBatchModel(model, effort);
+    void workOpps(m.items, m.ask, model, effort);
   }
   // 处理进度里每条用的模型：排着的看这批选的，处理中 / 处理过的看实际用的
   const usedModel = (i: OppItem) => {
@@ -200,7 +207,7 @@
     </div>
   {/each}
 {/if}
-{#if menu}<ModelMenu at={menu.at} current={pick} pickOnly={menu.pick} onpick={pickFromMenu} onclose={() => (menu = null)} />{/if}
+{#if menu}<ModelMenu at={menu.at} current={pick} currentEffort={pick === fleet.batchModel ? fleet.batchEffort : ''} pickOnly={menu.pick} onpick={pickFromMenu} onclose={() => (menu = null)} />{/if}
 </div>
 
 <style>

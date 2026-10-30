@@ -51,7 +51,7 @@
   {#if job.error}<div class="err-note">{job.error}</div><OpsErrorHint text={job.error} />
     {#if failedItem}<div class="retry-row"><button class="btn tiny primary" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); mAt = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }}><Icon name="refresh" size={11} />换个模型重试「{failedItem.opp.title}」<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></div>{/if}
   {/if}
-  {#if mAt && failedItem}<ModelMenu at={mAt} current="" note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const it = failedItem; mAt = null; if (it) void workItem(job.site_id, it, m); }} onclose={() => (mAt = null)} />{/if}
+  {#if mAt && failedItem}<ModelMenu at={mAt} current="" note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { const it = failedItem; mAt = null; if (it) void workItem(job.site_id, it, m, e); }} onclose={() => (mAt = null)} />{/if}
   {#if showLog}<pre class="log" bind:this={logEl}>{job.log.join('\n') || '（还没有输出）'}</pre>{/if}
 </div>
 

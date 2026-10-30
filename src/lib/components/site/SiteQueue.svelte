@@ -155,10 +155,10 @@
   $effect(() => { void filter; picked = new Set(); });
   function togglePick(id: string) { const n = new Set(picked); if (n.has(id)) n.delete(id); else n.add(id); picked = n; }
   function pickAll() { picked = allPicked ? new Set() : new Set(pickable.map((i) => i.id)); }
-  async function batchWork(model = '') {
+  async function batchWork(model = '', effort = '') {
     const ids = pickedItems.map((i) => i.id);
     picked = new Set();
-    await workItems(site.id, ids, model);
+    await workItems(site.id, ids, model, effort);
   }
   // 批量的 ▾：换个模型改这几条（只用这一次）
   let bMenu = $state<{ left: number; top: number; bottom: number; right: number } | null>(null);
@@ -331,8 +331,8 @@
   </div>
 {/if}
 
-{#if bMenu}<ModelMenu at={bMenu} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { bMenu = null; void batchWork(m); }} onclose={() => (bMenu = null)} />{/if}
-{#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m); }} onclose={() => (mMenu = null)} />{/if}
+{#if bMenu}<ModelMenu at={bMenu} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { bMenu = null; void batchWork(m, e); }} onclose={() => (bMenu = null)} />{/if}
+{#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m, e); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
   .checks { list-style: none; margin: 2px 0 4px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }

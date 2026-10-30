@@ -87,8 +87,8 @@ pub fn run_ops_task(app: tauri::AppHandle, id: String, task: String, hold: Optio
 
 /// 立即按站点档位处理队列里的一条机会。`model`：这一次临时换的模型（brain, model），不改站点和托管方案的设置。
 #[tauri::command]
-pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String, model: Option<(String, String)>) -> Result<String, String> {
-    site_runner::start_with_model(ctx(&app), &id, "work", "manual", Some(item_id), model)
+pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String, model: Option<(String, String)>, effort: Option<String>) -> Result<String, String> {
+    site_runner::start_with_pick(ctx(&app), &id, "work", "manual", Some(item_id), model.map(|(b, m)| (b, m, effort.unwrap_or_default())))
 }
 
 /// 这个站点让 AI 改时默认用的模型（brain, model）：托管站点用方案里的主模型，否则用站点运营设置的；没设好返回空。
@@ -100,12 +100,12 @@ pub fn site_ops_model(state: tauri::State<'_, AppState>, id: String) -> Result<(
 
 /// 批量让 AI 改（按顺序处理选中的条目）。
 #[tauri::command]
-pub fn queue_work_many(app: tauri::AppHandle, id: String, item_ids: Vec<String>, model: Option<(String, String)>) -> Result<String, String> {
+pub fn queue_work_many(app: tauri::AppHandle, id: String, item_ids: Vec<String>, model: Option<(String, String)>, effort: Option<String>) -> Result<String, String> {
     if item_ids.iter().any(|x| x.contains(',')) {
         return Err("条目 id 不合法".into());
     }
     // model：这一批临时换的模型，不改站点和托管方案的设置
-    site_runner::start_with_model(ctx(&app), &id, "batch", "manual", Some(item_ids.join(",")), model)
+    site_runner::start_with_pick(ctx(&app), &id, "batch", "manual", Some(item_ids.join(",")), model.map(|(b, m)| (b, m, effort.unwrap_or_default())))
 }
 
 /// 失败的改动重新构建、检查并按规则上线（不再让 AI 改一遍）。
