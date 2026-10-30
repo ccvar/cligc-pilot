@@ -85,6 +85,9 @@
   // 这块里用更直白的说法（说清 AI 要做什么）
   const READY_LABEL: Record<string, string> = { low_ctr: '改标题和描述', stale_year: '更新标题年份', sitemap_error: 'sitemap 报错', crawl_issue: '抓取出错', img_audit: '图片问题', schema: '结构化数据' };
   const busy = (i: OppItem) => !!o?.running.includes(i.site_id);
+  // 站点正在做的事，接在「正在」后面读得通：作业名有的是名词（运营任务、机会扫描），换成动作
+  const DOING: Record<string, string> = { 运营任务: '让 AI 改', 机会扫描: '扫描机会', 站点体检: '体检', 周报: '写周报', 效果复盘: '做效果复盘', 立即执行一轮: '执行一轮运营', 批量让AI改: '让 AI 改', '批量让 AI 改': '让 AI 改', 上线后检查: '做上线后检查' };
+  const doing = (siteId: string) => { const j = fleet.byId.get(siteId)?.job ?? ''; return DOING[j] ?? (j || '处理别的事'); };
 </script>
 
 {#snippet row(i: OppItem)}
@@ -95,7 +98,7 @@
     </button>
     <span class="gain faint">{i.gain >= 1 ? `约 +${num(Math.round(i.gain))} 次点击/月` : ''}</span>
     <span class="acts">
-      {#if busy(i)}<span class="pill" data-tip="这个站点正在跑别的作业，等它跑完再交给 AI"><span class="spin"></span>站点忙</span>
+      {#if busy(i)}<button class="pill busy" onclick={() => openSite(i.site_id, 'overview')} data-tip={`${i.domain || i.site_name} 正在${doing(i.site_id)}，一个站点同一时间只做一件事。做完就能交给 AI，点一下看进度`}><span class="spin"></span>正在{doing(i.site_id)}</button>
       {:else}
         <button class="ic-btn ic-sm" onclick={() => workOpps([i], false)} oncontextmenu={(e) => openMenu(e, [i], false)} aria-label={`交给 ${target.name}`} data-tip={`交给 ${target.name} 改：改好、检查通过后留给你确认\n右键换个模型`}><Icon name="wand" size={13} /></button>
         <button class="ic-btn ic-sm" onclick={() => dismissOpps([i])} aria-label="驳回" data-tip="驳回：之后不再提这个机会"><Icon name="x" size={13} /></button>
@@ -198,6 +201,7 @@
 </div>
 
 <style>
+  .pill.busy { border: 0; font: inherit; font-size: 11.5px; cursor: pointer; }
   .tt .also { flex: none; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--su-hover, #f3f2ee); font-size: 11px; color: var(--dim); }
   .recheck { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; }
   .recheck::before { content: '·'; margin-right: 4px; }
