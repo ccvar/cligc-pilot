@@ -13,10 +13,11 @@ export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'us
 export function trafficDown(r: SiteRow): boolean {
   return r.has_data && r.summary.gsc_clicks_prev >= 20 && r.summary.gsc_clicks < r.summary.gsc_clicks_prev * 0.8;
 }
-/** 站点列表按选的统计时间段（近 7 / 28 天）取数：用户、搜索点击（Google + Bing）、展示、和前一段比、每天会话 */
+/** 站点列表按选的统计时间段（近 7 / 14 / 28 / 90 天）取数：用户、搜索点击（Google + Bing）、展示、和前一段比、每天会话 */
 export function win(r: SiteRow) {
   const s = r.summary;
-  if (fleet.days === 7 && s.w7) return { users: s.w7.users, users_prev: s.w7.users_prev, clicks: s.w7.clicks, clicks_prev: s.w7.clicks_prev, impr: s.w7.impressions, trend: (s.sessions_trend ?? []).slice(-7) };
+  const w = s.wins?.[fleet.days];
+  if (w) return { users: w.users, users_prev: w.users_prev, clicks: w.clicks, clicks_prev: w.clicks_prev, impr: w.impressions, trend: w.trend };
   return { users: s.users ?? 0, users_prev: s.users_prev ?? 0, clicks: s.search_clicks ?? s.gsc_clicks, clicks_prev: s.search_clicks_prev ?? s.gsc_clicks_prev, impr: s.search_impressions ?? s.gsc_impressions, trend: s.sessions_trend ?? [] };
 }
 /** 站点列表：Google + Bing 搜索点击率 */
@@ -49,10 +50,13 @@ function readBatchModel(): string {
 }
 
 const DAYS_KEY = 'cligc.pilot.statDays';
-function readDays(): 7 | 28 {
-  try { return localStorage.getItem(DAYS_KEY) === '7' ? 7 : 28; } catch { return 28; }
+/** 能选的统计时间段（和后端 site_data::WIN_DAYS 一致） */
+export const STAT_DAYS = [7, 14, 28, 90] as const;
+export type StatDays = (typeof STAT_DAYS)[number];
+function readDays(): StatDays {
+  try { const d = Number(localStorage.getItem(DAYS_KEY)); return (STAT_DAYS as readonly number[]).includes(d) ? (d as StatDays) : 28; } catch { return 28; }
 }
-export function setDays(d: 7 | 28) {
+export function setDays(d: StatDays) {
   fleet.days = d;
   try { localStorage.setItem(DAYS_KEY, String(d)); } catch { /* */ }
 }
@@ -75,8 +79,8 @@ class FleetState {
   tab = $state<'sites' | 'pending' | 'history'>('sites');
   /** 标题旁下拉里勾选的站点：只看这几个（站点列表、待处理、近期动态都按它筛）；空＝全部 */
   picks = $state<string[]>([]);
-  /** 站点列表的统计时间段：近 7 / 28 天（记在本机） */
-  days = $state<7 | 28>(readDays());
+  /** 站点列表的统计时间段：近 7 / 14 / 28 / 90 天（记在本机） */
+  days = $state<StatDays>(readDays());
   /** 正在拉数据 / 排队的站点、上次全部同步的时间、批量健康检查在不在跑 */
   sync = $state<DataSync>({ running: [], queued: [], health: false, last_at: 0 });
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));

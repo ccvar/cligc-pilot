@@ -134,9 +134,10 @@ pub async fn google_token(conns: &ConnStore, conn_id: &str, scopes: &[&str]) -> 
 /// 算「AI 带来的访问」的来源（GA4 的 sessionSource，部分匹配、不分大小写）
 pub const AI_SOURCES: &str = "chatgpt|openai|perplexity|gemini\\.google|bard\\.google|copilot|claude\\.ai|deepseek|kimi|moonshot|doubao|yuanbao|tongyi|qianwen|metaso|you\\.com|phind|poe\\.com|meta\\.ai|grok|mistral";
 
-/// GA4：近 90 天按天、近 28 天（和前 28 天）按页面、来源、事件。
+/// GA4：近 180 天按天（全部站点列表要算近 90 天和前 90 天）、近 28 天（和前 28 天）按页面、来源、事件。
 async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, String), String> {
     let (start90, end) = (day(90), day(1));
+    let start180 = day(180);
     let (start28, prev_start, prev_end) = (day(28), day(56), day(29));
     let gm = ["sessions", "totalUsers", "screenPageViews", "engagedSessions"];
     let to_ga = |rows: Vec<(Vec<String>, Vec<f64>)>| -> Vec<GaRow> {
@@ -151,7 +152,7 @@ async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, S
             })
             .collect()
     };
-    let mut daily = to_ga(google::ga4_report(token, property, &start90, &end, &["date"], &gm, 400, None).await?);
+    let mut daily = to_ga(google::ga4_report(token, property, &start180, &end, &["date"], &gm, 400, None).await?);
     for r in daily.iter_mut() {
         // GA4 的 date 是 YYYYMMDD
         if r.key.len() == 8 {
@@ -217,9 +218,9 @@ async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, S
     Ok((start90, end))
 }
 
-/// Search Console：近 90 天按天；近 28 天与前 28 天的查询词、页面；查询词×页面；sitemap。
+/// Search Console：近 180 天按天（全部站点列表要算近 90 天和前 90 天）；近 28 天与前 28 天的查询词、页面；查询词×页面；sitemap。
 async fn fetch_gsc(token: &str, site: &str, dir: &Path) -> Result<(String, String), String> {
-    let daily = search_rows(google::gsc_query(token, site, &day(93), &day(1), &["date"], 1000).await?);
+    let daily = search_rows(google::gsc_query(token, site, &day(183), &day(1), &["date"], 1000).await?);
     // 以最近一天有数据的日期为截止日（通常比今天晚 2–3 天）。
     let end = daily.iter().map(|r| r.key.clone()).max().unwrap_or_else(|| day(3));
     let end_d = chrono::NaiveDate::parse_from_str(&end, "%Y-%m-%d").unwrap_or_else(|_| chrono::Utc::now().date_naive());
@@ -460,9 +461,9 @@ pub struct Summary {
     pub ai_sessions: f64,
     #[serde(default)]
     pub ai_sessions_prev: f64,
-    /// 近 7 天（和前 7 天）：全部站点列表可以切换统计时间段
+    /// 近 7 / 14 / 28 / 90 天（和前一段同样长的时间比）：全部站点列表可以切换统计时间段
     #[serde(default)]
-    pub w7: Win,
+    pub wins: std::collections::BTreeMap<u32, Win>,
     /// 各数据源按天数据的最新一天（YYYY-MM-DD；近 N 天就从这天往前算）
     #[serde(default)]
     pub ga4_end: String,
@@ -475,7 +476,7 @@ pub struct Summary {
     pub gsc_days: usize,
 }
 
-/// 一个时间段的用户、搜索点击、展示（和前一段同样长的时间比）
+/// 一个时间段的用户、搜索点击、展示、每天会话（和前一段同样长的时间比；按天数据不够覆盖前一段时前一段记 0，界面上就不显示涨跌）
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Win {
     pub users: f64,
@@ -483,9 +484,23 @@ pub struct Win {
     pub clicks: f64,
     pub clicks_prev: f64,
     pub impressions: f64,
+    #[serde(default)]
+    pub trend: Vec<f64>,
 }
 
-pub const SUMMARY_V: u32 = 4;
+/// 全部站点列表能选的统计时间段（天）
+pub const WIN_DAYS: [u32; 4] = [7, 14, 28, 90];
+
+pub const SUMMARY_V: u32 = 5;
+
+/// 按天数据够不够覆盖「前一段」：最早一天要早于最新一天往前 2×days−1 天
+fn covers<T>(rows: &[T], date: impl Fn(&T) -> &str, days: i64) -> bool {
+    let ds: Vec<_> = rows.iter().filter_map(|r| chrono::NaiveDate::parse_from_str(date(r), "%Y-%m-%d").ok()).collect();
+    match (ds.iter().min(), ds.iter().max()) {
+        (Some(a), Some(b)) => (*b - *a).num_days() >= days * 2 - 1,
+        _ => false,
+    }
+}
 
 /// 按日期的行里，以最新一天为终点的近 days 天和再往前 days 天的合计
 fn windows<T>(rows: &[T], date: impl Fn(&T) -> &str, val: impl Fn(&T) -> f64, days: i64) -> (f64, f64, Vec<(String, f64)>) {
@@ -562,10 +577,27 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
         bing_indexed: read_json::<serde_json::Value>(&dir, "bing_index.json")["in_index"].as_f64().unwrap_or(0.0),
         ai_sessions: ai.0,
         ai_sessions_prev: ai.1,
-        w7: {
-            let (u, g, b, gi, bi) = (windows(&gad, |r| &r.key, |r| r.users, 7), windows(&gsd, |r| &r.key, |r| r.clicks, 7), windows(&bsd, |r| &r.key, |r| r.clicks, 7), windows(&gsd, |r| &r.key, |r| r.impressions, 7), windows(&bsd, |r| &r.key, |r| r.impressions, 7));
-            Win { users: u.0, users_prev: u.1, clicks: g.0 + b.0, clicks_prev: g.1 + b.1, impressions: gi.0 + bi.0 }
-        },
+        wins: WIN_DAYS
+            .iter()
+            .map(|&n| {
+                let d = n as i64;
+                let u = windows(&gad, |r| &r.key, |r| r.users, d);
+                let s = windows(&gad, |r| &r.key, |r| r.sessions, d);
+                let (g, b) = (windows(&gsd, |r| &r.key, |r| r.clicks, d), windows(&bsd, |r| &r.key, |r| r.clicks, d));
+                let (gi, bi) = (windows(&gsd, |r| &r.key, |r| r.impressions, d), windows(&bsd, |r| &r.key, |r| r.impressions, d));
+                // 前一段没被按天数据盖住（刚改成拉 180 天、Bing 只给了几个月）就不比，免得拿半截数据算出假涨跌
+                let search_full = (gsd.is_empty() || covers(&gsd, |r| &r.key, d)) && (bsd.is_empty() || covers(&bsd, |r| &r.key, d));
+                let w = Win {
+                    users: u.0,
+                    users_prev: if covers(&gad, |r| &r.key, d) { u.1 } else { 0.0 },
+                    clicks: g.0 + b.0,
+                    clicks_prev: if search_full { g.1 + b.1 } else { 0.0 },
+                    impressions: gi.0 + bi.0,
+                    trend: s.2.into_iter().map(|(_, v)| v).collect(),
+                };
+                (n, w)
+            })
+            .collect(),
         ga4_end: gad.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
         gsc_end: gsd.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
         bing_end: bsd.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
@@ -691,6 +723,12 @@ fn sort_rows(mut v: Vec<Row>) -> Vec<Row> {
     v
 }
 
+/// 站点数据页的图表只看近 90 天（按天数据存了 180 天，给全部站点列表算前 90 天用）
+fn last_days<T>(rows: Vec<T>, date: impl Fn(&T) -> &str, days: i64) -> Vec<T> {
+    let Some(end) = rows.iter().filter_map(|r| chrono::NaiveDate::parse_from_str(date(r), "%Y-%m-%d").ok()).max() else { return rows };
+    rows.into_iter().filter(|r| chrono::NaiveDate::parse_from_str(date(r), "%Y-%m-%d").map(|d| (end - d).num_days() < days).unwrap_or(true)).collect()
+}
+
 pub fn dashboard(site_dir: &Path) -> Dashboard {
     let dir = cache_dir(site_dir);
     let gq: Vec<Row> = read_json(&dir, "gsc_queries.json");
@@ -705,13 +743,13 @@ pub fn dashboard(site_dir: &Path) -> Dashboard {
     ga_pages_sorted.sort_by(|a, b| b.views.total_cmp(&a.views));
     Dashboard {
         meta: load_meta(site_dir),
-        gsc_daily: read_json(&dir, "gsc_daily.json"),
+        gsc_daily: last_days(read_json(&dir, "gsc_daily.json"), |r: &Row| &r.key, 93),
         gsc_totals: totals(&gq),
         gsc_prev_totals: totals(&gqp),
         gsc_queries: compare(sort_rows(gq), &gqp, 50),
         gsc_pages: compare(sort_rows(gp), &gpp, 50),
         gsc_sitemaps: read_json(&dir, "gsc_sitemaps.json"),
-        ga4_daily: read_json(&dir, "ga4_daily.json"),
+        ga4_daily: last_days(read_json(&dir, "ga4_daily.json"), |r: &GaRow| &r.key, 90),
         ga4_totals: ga_totals(&ga_pages),
         ga4_prev_views: ga_prev.iter().map(|r| r.views).sum(),
         ga4_pages: ga_pages_sorted.into_iter().take(50).collect(),
@@ -767,6 +805,8 @@ mod tests {
         let (cur, prev, series) = windows(&rows, |r| &r.0, |r| r.1, 28);
         assert_eq!((cur, prev, series.len()), (28.0, 28.0, 28));
         assert_eq!(series.last().unwrap().0, "2026-10-30");
+        // 60 天的数据够比 28 天，不够比 90 天
+        assert!(covers(&rows, |r| &r.0, 28) && !covers(&rows, |r| &r.0, 90));
         // 近 7 天：从同一个最新日往前 7 天，前一段再往前 7 天
         let (cur, prev, series) = windows(&rows, |r| &r.0, |r| r.1, 7);
         assert_eq!((cur, prev, series.len(), series[0].0.as_str()), (7.0, 7.0, 7, "2026-10-24"));

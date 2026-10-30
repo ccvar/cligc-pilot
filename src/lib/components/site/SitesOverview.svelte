@@ -12,7 +12,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, STAT_DAYS, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
@@ -49,7 +49,7 @@
     return lines.join('\n');
   }
   const when = ago;
-  // 统计时间段：近 7 / 28 天，截至各数据源最新的那天（各站一般相同，取最多的那个）
+  // 统计时间段：近 7 / 14 / 28 / 90 天，截至各数据源最新的那天（各站一般相同，取最多的那个）
   const D = $derived(fleet.days);
   const commonEnd = (k: 'ga4_end' | 'gsc_end' | 'bing_end') => {
     const c = new Map<string, number>();
@@ -58,6 +58,8 @@
   };
   const ends = $derived({ ga4: commonEnd('ga4_end'), gsc: commonEnd('gsc_end'), bing: commonEnd('bing_end') });
   const md = (d: string) => { const [, m, dd] = d.split('-'); return `${+m}月${+dd}日`; };
+  // 前一段按天数据不全（比如刚开始拉 180 天，90 天要等下次同步）：后端把 *_prev 记成 0，这里提示一句
+  const partialPrev = $derived(rows.some((r) => { const w = r.summary.wins?.[D]; return !!w && w.users > 0 && !w.users_prev; }));
   const endLabel = $derived([ends.ga4, ends.gsc].filter(Boolean).sort().pop() ?? '');
   const endsTip = $derived([ends.ga4 && `GA4 到 ${md(ends.ga4)}`, ends.gsc && `Google 到 ${md(ends.gsc)}`, ends.bing && `Bing 到 ${md(ends.bing)}`].filter(Boolean).join(' · '));
   let moreOpen = $state(false);
@@ -178,9 +180,9 @@
             <span class="range-sec">
               <span class="range-h"><Icon name="calendar" size={13} />统计时间段</span>
               <span class="rseg" role="radiogroup" aria-label="统计时间段">
-                {#each [7, 28] as d (d)}<button role="radio" aria-checked={D === d} class:on={D === d} onclick={() => setDays(d as 7 | 28)}>近 {d} 天</button>{/each}
+                {#each STAT_DAYS as d (d)}<button role="radio" aria-checked={D === d} class:on={D === d} onclick={() => setDays(d)}>{d} 天</button>{/each}
               </span>
-              <small data-tip={`${endsTip}\n各家数据出得有早有晚，Google 最近一两天的数字过后还会补上来；「已编入」不随时间段变`}>截至 {md(endLabel)}，涨跌和再往前 {D} 天比</small>
+              <small data-tip={`${endsTip}\n各家数据出得有早有晚，Google 最近一两天的数字过后还会补上来；「已编入」不随时间段变`}>截至 {md(endLabel)}，涨跌和再往前 {D} 天比{#if partialPrev}；有的站再往前的数据不全，就先不显示涨跌{/if}</small>
             </span>
           {/if}
           <button role="menuitem" disabled={syncLeft > 0} onclick={() => { moreOpen = false; void syncAllData(); }}>

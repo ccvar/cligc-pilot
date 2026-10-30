@@ -445,8 +445,8 @@ export interface SiteSummary {
   google_pages?: number; sitemap_urls?: number; bing_indexed?: number;
   /** AI 搜索 / 聊天带来的会话：近 28 天、前 28 天 */
   ai_sessions?: number; ai_sessions_prev?: number;
-  /** 近 7 天（和前 7 天）的用户、搜索点击、展示 */
-  w7?: { users: number; users_prev: number; clicks: number; clicks_prev: number; impressions: number };
+  /** 近 7 / 14 / 28 / 90 天（和前一段比）的用户、搜索点击、展示、每天会话；前一段数据不够时 *_prev 为 0 */
+  wins?: Record<string, { users: number; users_prev: number; clicks: number; clicks_prev: number; impressions: number; trend: number[] }>;
   /** 各数据源按天数据的最新一天（YYYY-MM-DD）；Search Console 有几天的数据 */
   ga4_end?: string; gsc_end?: string; bing_end?: string; gsc_days?: number;
 }
