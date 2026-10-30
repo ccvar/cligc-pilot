@@ -210,8 +210,8 @@
       {:else if !all.length}
         <div class="card"><p class="hint">还没有站点。导入一个已有的站点，或到「站点制作」让 AI 从零做一个；做好并配置上线后会出现在这里。</p></div>
       {:else}
-        <div class="card tbl-card">
-          <table class="tbl">
+        <div class="card tbl-card sticky-card">
+          <table class="tbl sticky-head">
             <thead><tr>
               <th><button class="th" onclick={() => sortBy('name')}>站点{arrow('name')}</button></th>
               <th class="c-lvl">托管</th>
@@ -377,6 +377,10 @@
   .ov .page-body > .pane.wide { max-width: none; }
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
+  /* 站点表格：往下滚时表头吸在顶部。卡片不能是滚动容器（overflow-x: auto 会让 sticky 失效），改成 clip；top 量出来 -20px 正好贴紧内容区顶边（抵掉上内边距等）；
+     窄屏靠容器查询收起列，不需要横向滚动。合并边框时边框不跟着 sticky 走，表头下面那条线用阴影画 */
+  .sticky-card { overflow: visible; overflow-x: clip; }
+  .sticky-card .sticky-head thead th { position: sticky; top: -20px; z-index: 3; background: var(--card); border-bottom: none; box-shadow: inset 0 -1px var(--border); }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
   .th { display: inline-flex; align-items: center; gap: 2px; border: none; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; white-space: nowrap; transition: color .12s; }
   .th:hover { color: var(--text); }
