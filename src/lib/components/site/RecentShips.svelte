@@ -92,7 +92,7 @@
           <div class="row">
             <button class="main" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
               <span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>
-              <span class="tt" class:gone={i.status === 'rolled_back' || i.status === 'dismissed'}>{i.opp.title}</span>
+              <span class="tt" class:gone={i.status === 'rolled_back' || i.status === 'dismissed'} data-tip={i.opp.title}>{i.opp.title}</span>
             </button>
             {#if i.opp.page}<button class="url mono" onclick={() => openUrl(i.opp.page)} data-tip={`在浏览器打开：${i.opp.page}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
             <span class="acts">
@@ -149,8 +149,6 @@
   .sn { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 150px; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt { min-width: 0; font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt.gone { color: var(--faint); text-decoration: line-through; }
-  /* 展开后标题完整显示；按空格和标点断行，不把「8–20」这种拆到两行 */
-  li.open .tt { white-space: normal; word-break: keep-all; overflow-wrap: anywhere; }
   /* 路径太长时只截路径文字，后面的 ↗ 图标一直露着 */
   .url { flex: 0 1 auto; min-width: 0; max-width: 260px; display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; padding: 0; font-size: 11px; color: var(--faint); cursor: pointer; white-space: nowrap; }
   .url .up { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
