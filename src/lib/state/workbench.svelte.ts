@@ -31,6 +31,7 @@ type SshStats = { cpu_total: number; cpu_idle: number; mem_total_kb: number; mem
 
 const WB_FLAGS_DEF: WbFlags = { term: true, chat: false, files: false };
 const WB_BY_CONV = 'cligc.pilot.wb.byConv';
+const PANE_FILES = 'cligc.pilot.paneFiles';
 
 class WorkbenchState {
   wbStartEl = $state<HTMLTextAreaElement | null>(null); // 起点输入框（新对话后把光标送进去）
@@ -41,6 +42,8 @@ class WorkbenchState {
     filesW: loadWbSize('filesW', 380, 240, 900),
   });
   wbKeyCur = '';
+  // 远程连接的文件面板开没开：按机器记（聚焦的工作台和分屏里的其它窗格用同一个），没记过就跟着对话的布局
+  paneFiles = $state<Record<string, boolean>>(loadPaneFiles());
   // 文件栏单开：终端和对话都关了，只剩文件 —— 这时让它撑满主区（.wb-main 空了就收起来）。
   wbFilesSolo = $derived(this.wb.files && !this.wb.term && !this.wb.chat);
   statPrev: Record<string, SshStats> = {};
@@ -104,8 +107,20 @@ function saveWbByConv() {
 }
 function saveWbSize(k: 'chatH' | 'filesW', v: number) { try { localStorage.setItem('cligc.pilot.wb.' + k, String(v)); } catch { /* */ } }
 /** 拨一下：只改**当前这条对话**的开关，绝不碰别的对话、也不写全局默认。 */
+function loadPaneFiles(): Record<string, boolean> { try { return JSON.parse(localStorage.getItem(PANE_FILES) || '{}') || {}; } catch { return {}; } }
+/** 这台机器的文件面板开着没（分屏里没聚焦的窗格用；聚焦的工作台看 wb.files，两者同步） */
+export function filesOn(connId: string): boolean { return workbench.paneFiles[connId] ?? workbench.wbByConv['new:' + connId]?.files ?? WB_FLAGS_DEF.files; }
+export function setFilesOn(connId: string, on: boolean) {
+  workbench.paneFiles = { ...workbench.paneFiles, [connId]: on };
+  try { localStorage.setItem(PANE_FILES, JSON.stringify(workbench.paneFiles)); } catch { /* */ }
+  if (connId === app.activeConnId && workbench.wb.files !== on) setWbFlags({ files: on });
+}
 export function setWbFlags(patch: Partial<WbFlags>) {
   workbench.wb = { ...workbench.wb, ...patch };
+  if (patch.files !== undefined && app.isSshConn && app.activeConnId && workbench.paneFiles[app.activeConnId] !== patch.files) {
+    workbench.paneFiles = { ...workbench.paneFiles, [app.activeConnId]: patch.files };
+    try { localStorage.setItem(PANE_FILES, JSON.stringify(workbench.paneFiles)); } catch { /* */ }
+  }
   const key = workbench.wbKeyCur || wbKeyOf();
   if (key) {
     workbench.wbByConv[key] = { term: workbench.wb.term, chat: workbench.wb.chat, files: workbench.wb.files };
@@ -421,7 +436,9 @@ export function initWorkbench() {
       if (f) { workbench.wbByConv[key] = { ...f }; saveWbByConv(); }
     }
     f = f ?? WB_FLAGS_DEF;
-    workbench.wb = { ...workbench.wb, term: f.term, chat: f.chat, files: f.files };
+    // 文件面板按机器记：分屏里在别的窗格开关过，聚焦过来照样
+    const pf = app.isSshConn ? workbench.paneFiles[app.activeConnId] : undefined;
+    workbench.wb = { ...workbench.wb, term: f.term, chat: f.chat, files: pf ?? f.files };
   });
   // 只在看得见工作台时才轮询；换连接清掉上一台的数（否则会拿别的机器的样本算差）。
   $effect(() => {

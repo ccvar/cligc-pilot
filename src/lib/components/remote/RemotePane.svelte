@@ -4,22 +4,16 @@
   import TermHost from '$lib/components/remote/TermHost.svelte';
   import SftpPanel from '$lib/components/remote/SftpPanel.svelte';
   import { app } from '$lib/state/app.svelte.js';
-  import { workbench, startWbResize } from '$lib/state/workbench.svelte.js';
+  import { workbench, startWbResize, filesOn, setFilesOn } from '$lib/state/workbench.svelte.js';
   import { connectionDisplayName, distroOf } from '$lib/state/connections.svelte.js';
   import { closeRemotePane, startRemoteDrag } from '$lib/state/remotePanes.svelte.js';
 
   let { connId, paneId }: { connId: string; paneId: string } = $props();
   const conn = $derived(app.conns.find((c) => c.id === connId));
   const st = $derived(workbench.termState[connId]);
-  // 这个窗格开不开文件面板：按机器记在本机，默认开
-  const FILES_KEY = 'cligc.pilot.paneFiles';
-  const readFiles = (): Record<string, boolean> => { try { return JSON.parse(localStorage.getItem(FILES_KEY) || '{}') || {}; } catch { return {}; } };
-  let files = $state(true);
-  $effect(() => { files = readFiles()[connId] ?? true; });
-  function toggleFiles() {
-    files = !files;
-    try { localStorage.setItem(FILES_KEY, JSON.stringify({ ...readFiles(), [connId]: files })); } catch { /* */ }
-  }
+  // 这个窗格开不开文件面板：按机器记，和它聚焦时的工作台是同一个开关
+  const files = $derived(filesOn(connId));
+  const toggleFiles = () => setFilesOn(connId, !files);
 </script>
 
 <!-- 按住标题拖到别的窗格边上：重排 -->
