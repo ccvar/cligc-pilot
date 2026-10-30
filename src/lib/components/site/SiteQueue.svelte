@@ -14,7 +14,7 @@
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { synd } from '$lib/state/syndication.svelte.js';
-  import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, acceptItems, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import { invoke } from '@tauri-apps/api/core';
@@ -167,6 +167,8 @@
     await dismissItems(site, items);
     picked = new Set();
   }
+  // 「需要你处理」里改好、能合进主分支的待确认改动：两条以上时可以一起合并、只上线一次
+  const mergeable = $derived(filter === 'todo' ? shown.filter((i) => i.status === 'proposed' && i.branch && !conflicts.has(i.id)) : []);
   function toggleWhy(id: string) { const n = new Set(openWhy); if (n.has(id)) n.delete(id); else n.add(id); openWhy = n; }
 </script>
 
@@ -223,6 +225,13 @@
           {:else}
             <span class="faint lh-hint">{myPlan && myPlan.autonomy !== 'suggest' ? `托管每轮按优先级处理排在前面的几条，其余的排着等下一轮；想现在做，勾选后点「让 AI 改」或用单条的按钮。` : '勾选几条，可以一起让 AI 改或驳回。'}</span>
           {/if}
+        </div>
+      {/if}
+      {#if mergeable.length > 1}
+        <div class="list-head">
+          <span class="faint lh-hint">{mergeable.length} 条改好的可以一起合并，合完只{site.deploy.mode === 'none' ? '提交一次' : '上线一次'}。</span>
+          <span class="grow"></span>
+          <button class="btn tiny primary" onclick={() => acceptItems(site, mergeable)} disabled={busy} data-tip={`按顺序把这 ${mergeable.length} 条合并进主分支，合完只构建上线一次\n后面的和前面的改到同一处、合不进去的会跳过，留在这里\n上线后验收不通过会把这次合并的全部回退`}><Icon name="merge" size={11} />一起合并上线 {mergeable.length} 条</button>
         </div>
       {/if}
       <div class="list" bind:this={listEl}>

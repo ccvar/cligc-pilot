@@ -116,6 +116,17 @@ export async function acceptItem(site: Site, item: OpsItem) {
   try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 一起合并上线：几条待确认的改动按顺序合并进主分支，合完只构建上线一次；合不进去的跳过、留在待确认里。 */
+export async function acceptItems(site: Site, items: OpsItem[]) {
+  const list = items.filter((i) => i.status === 'proposed' && i.branch);
+  if (!list.length) return;
+  const how = site.source === 'github' ? `按顺序合并这 ${list.length} 个 PR` : `按顺序把这 ${list.length} 个分支压缩合并进 ${site.default_branch}`;
+  const then = site.deploy.mode === 'none' ? '' : site.deploy.mode === 'pages_git' ? '，合完 Cloudflare 构建上线一次' : '，合完构建并上线一次';
+  const names = list.map((i) => `· ${i.opp.title}`).join('\n');
+  if (!(await confirmDialog(`${how}${then}？\n\n${names}\n\n后面的如果和前面的改到了同一处、合不进去，会跳过、留在这里，可以让 AI 在最新代码上重改。上线后验收不通过会把这次合并的全部回退。`, { title: '一起合并上线', kind: 'info', confirmText: `合并上线 ${list.length} 条` }))) return;
+  try { await invoke('queue_accept_many', { id: site.id, itemIds: list.map((i) => i.id) }); }
+  catch (e) { say(String(e), 'err'); }
+}
 /** 已经合并、上线那一步失败的改动：不再合并，直接重新上线。 */
 export async function reshipItem(site: Site, item: OpsItem) {
   if (!(await confirmDialog(`「${item.opp.title}」已经合并进 ${site.default_branch}，上次上线没完成。现在重新构建并上线到 ${site.domain || site.name}？`, { title: '重新上线', kind: 'warning', confirmText: '重新上线' }))) return;

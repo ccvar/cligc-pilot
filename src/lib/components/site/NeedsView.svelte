@@ -12,7 +12,7 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { modelTarget } from '$lib/state/fleet.svelte.js';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
-  import { acceptItem, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
+  import { acceptItem, acceptItems, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
@@ -71,6 +71,13 @@
     const ids = [...new Set(ps.map((x) => x.site_id))];
     Promise.all(ids.map((id) => invoke<string[]>('queue_conflicts', { id }).catch(() => [] as string[])))
       .then((r) => { if (key === needs.filter((x) => x.item.status === 'proposed' && x.item.branch && siteOf(x.site_id)?.source === 'local').map((x) => x.item.id + x.item.head_sha).join()) conflicts = new Set(r.flat()); });
+  });
+  // 一起合并上线：显示的待确认改动里能合进主分支的都是同一个站点、两条以上时，「等你确认」标题旁给一个按钮
+  const mergeable = $derived.by(() => {
+    const ps = shown.filter((x) => x.item.status === 'proposed' && x.item.branch && !conflicts.has(x.item.id));
+    const ids = new Set(ps.map((x) => x.site_id));
+    const site = ids.size === 1 ? siteOf(ps[0].site_id) : undefined;
+    return site && ps.length > 1 ? { site, items: ps.map((x) => x.item) } : null;
   });
   // 「用 XX 重新改」：有失败条目的站点各自默认用的模型（托管站点是方案里的主模型）；▾ 换个模型只用这一次
   let siteModels = $state<Record<string, string>>({});
@@ -137,7 +144,8 @@
 
         {#each groups as g (g.k)}
           <div class="grp">
-            <h4><span class="gdot {g.c}"></span>{g.l}<span class="cnt">{g.items.length}</span><InfoTip text={g.tip} label="{g.l}说明" /></h4>
+            <h4><span class="gdot {g.c}"></span>{g.l}<span class="cnt">{g.items.length}</span><InfoTip text={g.tip} label="{g.l}说明" />
+              {#if g.k === 'proposed' && mergeable}{@const m = mergeable}<span class="grow"></span><button class="btn tiny primary" onclick={() => acceptItems(m.site, m.items)} data-tip={`按顺序把这 ${m.items.length} 条合并进 ${m.site.name} 的主分支，合完只构建上线一次\n合不进去的会跳过、留在这里；上线后验收不通过会把这次合并的全部回退`}><Icon name="merge" size={11} />一起合并上线 {m.items.length} 条</button>{/if}</h4>
             <ol class="items">
               {#each g.items as x (x.item.id)}
                 {@const i = x.item}

@@ -119,6 +119,15 @@ pub fn queue_accept(app: tauri::AppHandle, id: String, item_id: String) -> Resul
     site_runner::start(ctx(&app), &id, "accept", "manual", Some(item_id))
 }
 
+/// 一起合并上线：几条待确认的改动按顺序合并，合完只上线一次。
+#[tauri::command]
+pub fn queue_accept_many(app: tauri::AppHandle, id: String, item_ids: Vec<String>) -> Result<String, String> {
+    if item_ids.is_empty() {
+        return Err("没有选中改动".into());
+    }
+    site_runner::start(ctx(&app), &id, "accept_many", "manual", Some(item_ids.join(",")))
+}
+
 #[tauri::command]
 pub fn queue_rollback(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
     site_runner::start(ctx(&app), &id, "rollback", "manual", Some(item_id))

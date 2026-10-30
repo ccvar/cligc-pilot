@@ -219,6 +219,7 @@ pub fn task_label(task: &str) -> &'static str {
         "report" => "周报",
         "review" => "效果复盘",
         "accept" => "确认改动",
+        "accept_many" => "一起合并上线",
         "plan" => "AI 制定计划",
         "cycle" => "立即执行一轮",
         "watch" => "上线后检查",
@@ -312,7 +313,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "health" => &[("data", "拉取数据"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("report", "体检报告")],
         "report" => &[("data", "拉取数据"), ("report", "生成周报")],
         "review" => &[("data", "拉取数据"), ("review", "对比上线前后")],
-        "accept" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
+        "accept" | "accept_many" => &[("merge", "合并"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
@@ -414,6 +415,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
                     "cycle" => cycle(&ctx, &site, &job).await,
                     "watch" => watch(&ctx, &site, &job).await,
                     "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
+                    "accept_many" => accept_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     _ => Err("未知的运营任务".into()),
                 }
@@ -1738,8 +1740,37 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
         return Ok("已标记为处理完成".into());
     }
     job.step("merge", "running", &item.branch);
+    let merge_sha = match merge_item(ctx, site, job, &item).await {
+        Ok(sha) => sha,
+        Err(e) => {
+            job.step("merge", "failed", "");
+            return Err(e);
+        }
+    };
+    job.step("merge", "ok", merge_sha.get(..7).unwrap_or(""));
+    mark_merged(ctx, site, &item, &merge_sha, auto)?;
+    ctx.emit_queue(&site.id);
+    if site.deploy.mode == "none" {
+        return Ok("已合并（站点没有配置部署）".into());
+    }
+    let sh = match ship(ctx, site, job, spec_for(site, &item, false), &merge_sha, if auto { "ops" } else { "manual" }).await {
+        Ok(sh) => sh,
+        Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
+        Err(e) => return Err(e),
+    };
+    record_shipped(ctx, site, item_id, &sh)?;
+    if auto {
+        ctx.notify(&format!("{} · 已自动上线", site.name), &item.opp.title);
+    }
+    Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) })
+}
+
+/// 把一条改动合并进主分支：GitHub 合并 PR（squash），本地分支压缩合并进默认分支。返回合并提交。
+/// 本地合不进去（和主分支上的改动冲突）时把主分支恢复原样，分支和工作目录留着，可以让 AI 在最新代码上重改。
+async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
     let title = format!("ops: improve {}", path_of(&item.opp.page));
-    let merge_sha = match site.source.as_str() {
+    match site.source.as_str() {
         "github" => {
             let cb = code_base(ctx, site, job).await?;
             if item.pr_number == 0 {
@@ -1755,7 +1786,7 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
             };
             crate::site_git::remove_worktree(&cb.main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             let _ = crate::site_git::git(&cb.main, &["branch", "-D", &item.branch], "").await;
-            sha
+            Ok(sha)
         }
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
@@ -1763,38 +1794,131 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
             if cur != site.default_branch || !crate::site_git::is_clean(&main).await {
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再确认（Pilot 不会动你正在改的东西）", site.default_branch));
             }
-            crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
-            crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await?;
+            if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
+                // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
+                let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
+                return Err(if e.contains("CONFLICT") || e.contains("conflict") { "和主分支上的改动冲突了，合不进去".into() } else { e });
+            }
             crate::site_git::git_commit_ok(&main, &["commit", "-qm", &title]).await?;
+            crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
-            crate::site_git::head_sha(&main).await
+            Ok(crate::site_git::head_sha(&main).await)
         }
-    };
-    job.step("merge", "ok", merge_sha.get(..7).unwrap_or(""));
+    }
+}
+
+/// 合并完记下合并提交和上线前的数据快照（之后对比效果用）。
+fn mark_merged(ctx: &Ctx, site: &Site, item: &QueueItem, merge_sha: &str, auto: bool) -> Result<(), String> {
+    let site_dir = ctx.site_dir(&site.id);
     let before = page_snapshot(&site_dir, &item.opp.page);
     let (before_query, before_site) = (query_snapshot(&site_dir, &item.opp.expect_query, &item.opp.page), Some(site_snapshot(&site_dir)));
-    site_ops::update_item(&site_dir, item_id, now(), |i| {
+    site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "merged".into();
-        i.merge_sha = merge_sha.clone();
+        i.merge_sha = merge_sha.to_string();
         i.auto = auto;
         i.before = before.clone();
         i.before_query = before_query.clone();
         i.before_site = before_site.clone();
     })?;
-    ctx.emit_queue(&site.id);
+    Ok(())
+}
+
+/// 一起合并上线：按顺序把几条待确认的改动合并进主分支，合完只构建上线一次。
+/// 合不进去的（多半是和前面刚合的改到了同一处）跳过、留在待确认里，其余照常上线；
+/// 线上验收严重失败就把这次合并的全部回退，再上线一次。
+pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let queue = site_ops::load_queue(&site_dir);
+    let items: Vec<QueueItem> = ids.split(',').filter_map(|id| queue.iter().find(|i| i.id == id && i.status == "proposed" && !i.branch.is_empty()).cloned()).collect();
+    if items.is_empty() {
+        return Err("没有可以合并的改动（可能已经处理过了）".into());
+    }
+    let mut merged: Vec<(QueueItem, String)> = Vec::new();
+    let mut skipped: Vec<(QueueItem, String)> = Vec::new();
+    for (n, item) in items.iter().enumerate() {
+        if job.canceled() {
+            break;
+        }
+        job.step("merge", "running", &format!("{}/{} · {}", n + 1, items.len(), item.opp.title));
+        job.line(&format!("合并「{}」（{}）", item.opp.title, item.branch));
+        match merge_item(ctx, site, job, item).await {
+            Ok(sha) => {
+                mark_merged(ctx, site, item, &sha, false)?;
+                merged.push((item.clone(), sha));
+            }
+            Err(e) => {
+                job.line(&format!("「{}」没合并：{e}", item.opp.title));
+                let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.note = format!("一起合并上线时没合并：{e}。可以让 AI 在最新代码上重改"));
+                skipped.push((item.clone(), e));
+            }
+        }
+        ctx.emit_queue(&site.id);
+    }
+    if merged.is_empty() {
+        job.step("merge", "failed", "");
+        return Err(skipped.first().map(|(_, e)| e.clone()).unwrap_or_else(|| "已取消".into()));
+    }
+    let skip_note = if skipped.is_empty() { String::new() } else { format!("；{} 条没合进去，留在待确认里：{}", skipped.len(), skipped.iter().map(|(i, _)| format!("「{}」", i.opp.title)).collect::<Vec<_>>().join("")) };
+    job.step("merge", "ok", &format!("合并了 {} 条{}", merged.len(), if skipped.is_empty() { String::new() } else { format!("，{} 条没合进去", skipped.len()) }));
     if site.deploy.mode == "none" {
-        return Ok("已合并（站点没有配置部署）".into());
+        return Ok(format!("已合并 {} 条（站点没有配置部署）{skip_note}", merged.len()));
     }
-    let sh = match ship(ctx, site, job, spec_for(site, &item, false), &merge_sha, if auto { "ops" } else { "manual" }).await {
-        Ok(sh) => sh,
-        Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
-        Err(e) => return Err(e),
-    };
-    record_shipped(ctx, site, item_id, &sh)?;
-    if auto {
-        ctx.notify(&format!("{} · 已自动上线", site.name), &item.opp.title);
+    let spec = merged.iter().map(|(i, _)| spec_for(site, i, false)).reduce(join_specs).unwrap_or_default();
+    let last = merged.last().map(|(_, sha)| sha.clone()).unwrap_or_default();
+    match ship(ctx, site, job, spec, &last, "manual").await {
+        Ok(sh) => {
+            for (i, _) in &merged {
+                record_shipped(ctx, site, &i.id, &sh)?;
+            }
+            Ok(format!("{} 条已上线{}{skip_note}", merged.len(), if sh.url.is_empty() { String::new() } else { format!(" {}", sh.url) }))
+        }
+        Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => {
+            let why = e.trim_start_matches(crate::site_verify::HARD_PREFIX).to_string();
+            job.line(&format!("线上验收没通过（{why}），把这次合并的 {} 条全部回退", merged.len()));
+            let mut last_revert = String::new();
+            for (i, _) in merged.iter().rev() {
+                let cur = site_ops::load_queue(&site_dir).into_iter().find(|x| x.id == i.id).unwrap_or_else(|| i.clone());
+                match revert_item(ctx, site, job, &cur).await {
+                    Ok(sha) => last_revert = sha,
+                    Err(re) => {
+                        pause_site(ctx, site, &format!("自动回滚失败：{re}"));
+                        ctx.notify(&format!("{} · 回滚失败，已暂停托管", site.name), &i.opp.title);
+                        return Err(format!("{e}；自动回滚也失败了：{re}。已暂停这个站点的托管，请尽快检查线上"));
+                    }
+                }
+            }
+            let spec = merged.iter().map(|(i, _)| spec_for(site, i, true)).reduce(join_specs).unwrap_or_default();
+            if let Err(re) = ship(ctx, site, job, spec, &last_revert, "rollback").await {
+                pause_site(ctx, site, &format!("回退后重新上线失败：{re}"));
+                return Err(format!("{e}；回退后重新上线也失败了：{re}。已暂停这个站点的托管，请尽快检查线上"));
+            }
+            for (i, _) in &merged {
+                downgrade_if_repeated(ctx, site, &i.opp.change);
+                let _ = site_ops::update_item(&site_dir, &i.id, now(), |x| {
+                    x.status = "failed".into();
+                    x.verify_rollbacks += 1;
+                    x.retry_note = why.clone();
+                    x.note = format!("和其它 {} 条一起上线后验收没通过（{why}），已全部回退。可以「让 AI 重新改」，AI 会拿到失败原因；也可以一条一条单独上线，看是哪一条的问题。", merged.len() - 1);
+                });
+            }
+            ctx.emit_queue(&site.id);
+            ctx.notify(&format!("{} · 上线后验收没通过，已回滚", site.name), &format!("一起上线的 {} 条改动", merged.len()));
+            Err(format!("{e}。已把这次合并的 {} 条全部回退", merged.len()))
+        }
+        Err(e) => Err(e),
     }
-    Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) })
+}
+
+/// 几条改动一起上线：验收的页面、新页面、文字片段合在一起查。
+fn join_specs(mut a: crate::site_verify::Spec, b: crate::site_verify::Spec) -> crate::site_verify::Spec {
+    for (to, from) in [(&mut a.pages, b.pages), (&mut a.primary, b.primary), (&mut a.new_pages, b.new_pages), (&mut a.snippets, b.snippets)] {
+        for x in from {
+            if !to.contains(&x) {
+                to.push(x);
+            }
+        }
+    }
+    a
 }
 
 /// 驳回：关掉 PR / 删掉本地分支，并记住这个机会不再提。
@@ -1836,6 +1960,17 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
     if !matches!(item.status.as_str(), "merged" | "deployed") || item.merge_sha.is_empty() {
         return Err("只有已合并的改动可以回滚".into());
     }
+    let revert_sha = revert_item(ctx, site, job, &item).await?;
+    if site.deploy.mode != "none" {
+        ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await?;
+    }
+    Ok("已回滚并重新上线".into())
+}
+
+/// 回退一条已合并改动的合并提交（独立提交），标记为已回滚；不上线，调用方负责上线。
+async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let item_id = item.id.as_str();
     job.step("revert", "running", item.merge_sha.get(..7).unwrap_or(""));
     let revert_sha = match site.source.as_str() {
         "github" => {
@@ -1869,10 +2004,7 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
         i.note = format!("已回退（{}）", revert_sha.get(..7).unwrap_or(""));
     })?;
     ctx.emit_queue(&site.id);
-    if site.deploy.mode != "none" {
-        ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await?;
-    }
-    Ok("已回滚并重新上线".into())
+    Ok(revert_sha)
 }
 
 // ---------------------------------------------------------------------------
