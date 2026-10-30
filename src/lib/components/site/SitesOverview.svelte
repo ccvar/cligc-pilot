@@ -60,11 +60,10 @@
   const md = (d: string) => { const [, m, dd] = d.split('-'); return `${+m}月${+dd}日`; };
   const endLabel = $derived([ends.ga4, ends.gsc].filter(Boolean).sort().pop() ?? '');
   const endsTip = $derived([ends.ga4 && `GA4 到 ${md(ends.ga4)}`, ends.gsc && `Google 到 ${md(ends.gsc)}`, ends.bing && `Bing 到 ${md(ends.bing)}`].filter(Boolean).join(' · '));
-  let rangeOpen = $state(false);
   let moreOpen = $state(false);
   $effect(() => {
-    if (!rangeOpen && !moreOpen) return;
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { rangeOpen = false; moreOpen = false; } };
+    if (!moreOpen) return;
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') moreOpen = false; };
     document.addEventListener('keydown', esc);
     return () => document.removeEventListener('keydown', esc);
   });
@@ -168,34 +167,22 @@
     <button class:on={fleet.tab === 'history'} onclick={() => (fleet.tab = 'history')} data-tip="交给 AI 处理过的：已上线、已处理、没成功、回滚、你驳回的，按天看，已上线的能看效果"><Icon name="history" size={13} />近期动态</button>
   </div>
   <div class="tab-tools">
-    {#if fleet.tab === 'sites' && endLabel}
-      <!-- 统计时间段：放在看得见的地方，改了之后表格里每个数字的意思都变了 -->
-      <span class="pop-wrap">
-        <button class="range" class:on={rangeOpen} onclick={() => (rangeOpen = !rangeOpen)} aria-haspopup="menu" aria-expanded={rangeOpen} data-tip={rangeOpen ? null : `截至 ${md(endLabel)}（${endsTip}）\n从各家最新的一天往前算 ${D} 天，下面的涨跌是和再往前 ${D} 天比`}>
-          <Icon name="calendar" size={13} />近 {D} 天
-          <svg class="chev" class:open={rangeOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </button>
-        {#if rangeOpen}
-          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <span class="pop-mask" onclick={() => (rangeOpen = false)}></span>
-          <span class="pop" role="menu">
-            {#each [7, 28] as d (d)}
-              <button role="menuitemradio" aria-checked={D === d} class:cur={D === d} onclick={() => { setDays(d as 7 | 28); rangeOpen = false; }}>
-                <span><b>近 {d} 天</b><small>和再往前 {d} 天比</small></span>{#if D === d}<Icon name="check" size={13} />{/if}
-              </button>
-            {/each}
-            <span class="pop-foot">{endsTip}。各家数据出得有早有晚，Google 最近一两天的数字过后还会补上来。「已编入」不随时间段变。</span>
-          </span>
-        {/if}
-      </span>
-    {/if}
-    <!-- 不常用的批量操作：立即同步数据、重新检查健康 -->
+    <!-- 统计时间段和不常用的批量操作（立即同步数据、重新检查健康）都收在 ⋯ 里 -->
     <span class="pop-wrap">
-      <button class="ic-btn ic-more" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="更多操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : '立即同步数据、重新检查健康'}>{#if syncLeft || fleet.sync.health}<span class="spin"></span>{:else}<Icon name="more" size={16} />{/if}</button>
+      <button class="ic-btn ic-more" class:on={moreOpen} onclick={() => (moreOpen = !moreOpen)} aria-label="更多操作" aria-haspopup="menu" aria-expanded={moreOpen} data-tip={moreOpen ? null : `统计时间段（现在近 ${D} 天）、立即同步数据、重新检查健康`}>{#if syncLeft || fleet.sync.health}<span class="spin"></span>{:else}<Icon name="more" size={16} />{/if}</button>
       {#if moreOpen}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
         <span class="pop-mask" onclick={() => (moreOpen = false)}></span>
         <span class="pop more" role="menu">
+          {#if fleet.tab === 'sites' && endLabel}
+            <span class="range-sec">
+              <span class="range-h"><Icon name="calendar" size={13} />统计时间段</span>
+              <span class="rseg" role="radiogroup" aria-label="统计时间段">
+                {#each [7, 28] as d (d)}<button role="radio" aria-checked={D === d} class:on={D === d} onclick={() => setDays(d as 7 | 28)}>近 {d} 天</button>{/each}
+              </span>
+              <small data-tip={`${endsTip}\n各家数据出得有早有晚，Google 最近一两天的数字过后还会补上来；「已编入」不随时间段变`}>截至 {md(endLabel)}，涨跌和再往前 {D} 天比</small>
+            </span>
+          {/if}
           <button role="menuitem" disabled={syncLeft > 0} onclick={() => { moreOpen = false; void syncAllData(); }}>
             <Icon name="refresh" size={14} /><span><b>立即同步所有站点数据</b><small>{syncLeft ? `正在同步，还剩 ${syncLeft} 个站点` : `${fleet.sync.last_at ? `上次 ${ago(fleet.sync.last_at)}；` : ''}每天早上 7 点会自动同步`}</small></span>
           </button>
@@ -327,11 +314,15 @@
   .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
   .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
   .pop-wrap { position: relative; display: inline-flex; }
-  .range { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: none; border-radius: 8px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; white-space: nowrap; }
-  .range:hover, .range.on { background: var(--su-hover); color: var(--text); }
-  .range .chev { margin-left: 2px; transition: transform .15s; }
-  .range .chev.open { transform: rotate(180deg); }
   .ic-more { width: 28px; height: 28px; }
+  /* ⋯ 菜单顶部：统计时间段（两段切换）+ 截至哪天，下面一条线再接批量操作 */
+  .range-sec { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; margin-bottom: 2px; border-bottom: 1px solid var(--border); }
+  .range-h { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
+  .rseg { display: flex; padding: 2px; border-radius: 8px; background: var(--su-hover); }
+  .pop .rseg button { flex: 1; justify-content: center; align-items: center; padding: 4px 0; border-radius: 6px; font-size: 12px; line-height: 1.4; white-space: nowrap; color: var(--dim); }
+  .pop .rseg button:hover:not(.on) { background: none; color: var(--text); }
+  .pop .rseg button.on { background: var(--card); color: var(--text); font-weight: 550; box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+  .range-sec small { font-size: 11px; color: var(--faint); }
   .ic-more.on { background: var(--su-hover); color: var(--text); }
   .pop-mask { position: fixed; inset: 0; z-index: 30; }
   .pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; width: max-content; min-width: 200px; max-width: 280px; box-sizing: border-box; padding: 4px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); box-shadow: 0 12px 32px rgba(0, 0, 0, .12); display: flex; flex-direction: column; gap: 2px; }
@@ -340,12 +331,8 @@
   .pop button:disabled { cursor: default; opacity: .6; }
   .pop button > :global(svg) { flex: none; margin-top: 2px; color: var(--dim); }
   .pop button > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-  .pop button.cur { background: var(--su-hover); }
   .pop b { font-size: 13px; font-weight: 500; }
   .pop small { font-size: 11px; color: var(--faint); line-height: 1.4; }
-  .pop:not(.more) button { padding-left: 10px; }
-  .pop:not(.more) button > :global(svg) { color: var(--accent); }
-  .pop-foot { padding: 6px 10px 6px; margin-top: 2px; border-top: 1px solid var(--border); font-size: 11px; line-height: 1.5; color: var(--faint); }
   /* 域名后面：正在拉数据转圈、排队用小钟 */
   .sync { flex: none; display: inline-flex; align-items: center; color: var(--dim); font-weight: 400; }
   .sync .spin { width: 10px; height: 10px; }
