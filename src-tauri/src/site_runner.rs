@@ -1760,13 +1760,23 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     // 已经合并、上线那一步失败了：不用再合并，直接重新上线
     if item.status == "merged" && !item.merge_sha.is_empty() && site.deploy.mode != "none" {
         job.step("merge", "ok", "已合并过");
-        let sh = match ship(ctx, site, job, spec_for(site, &item, false), &item.merge_sha, if auto { "ops" } else { "manual" }).await {
+        let ride = riders(ctx, site, &[item_id], job);
+        // 本地文件夹上线的是主分支最新的代码（之后合并的也在里面），不是这一条当时的合并提交
+        let commit = if site.source == "local" { crate::site_git::code_dir(site, None).map(|d| d.to_path_buf()).ok() } else { None };
+        let commit = match commit {
+            Some(d) => crate::site_git::head_sha(&d).await,
+            None => item.merge_sha.clone(),
+        };
+        let sh = match ship(ctx, site, job, with_riders(site, spec_for(site, &item, false), &ride), &commit, if auto { "ops" } else { "manual" }).await {
             Ok(sh) => sh,
             Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
             Err(e) => return Err(e),
         };
         record_shipped(ctx, site, item_id, &sh)?;
-        return Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) });
+        for r in &ride {
+            record_shipped(ctx, site, &r.id, &sh)?;
+        }
+        return Ok(format!("{}{}", if sh.url.is_empty() { "已上线".to_string() } else { format!("已上线 {}", sh.url) }, ride_note(&ride)));
     }
     if item.status != "proposed" {
         return Err("只有待确认的改动可以确认".into());
@@ -1790,7 +1800,8 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     if site.deploy.mode == "none" {
         return Ok("已合并（站点没有配置部署）".into());
     }
-    let sh = match ship(ctx, site, job, spec_for(site, &item, false), &merge_sha, if auto { "ops" } else { "manual" }).await {
+    let ride = riders(ctx, site, &[item_id], job);
+    let sh = match ship(ctx, site, job, with_riders(site, spec_for(site, &item, false), &ride), &merge_sha, if auto { "ops" } else { "manual" }).await {
         Ok(sh) => sh,
         Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
         Err(e) => {
@@ -1800,10 +1811,34 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
         }
     };
     record_shipped(ctx, site, item_id, &sh)?;
+    for r in &ride {
+        record_shipped(ctx, site, &r.id, &sh)?;
+    }
     if auto {
         ctx.notify(&format!("{} · 已自动上线", site.name), &item.opp.title);
     }
-    Ok(if sh.url.is_empty() { "已上线".into() } else { format!("已上线 {}", sh.url) })
+    Ok(format!("{}{}", if sh.url.is_empty() { "已上线".to_string() } else { format!("已上线 {}", sh.url) }, ride_note(&ride)))
+}
+
+/// 之前合并了、上线没完成的其它改动：这次上线的是主分支上最新的代码，它们本来就在里面——
+/// 一起验收、一起记成已上线（不然明明线上已经是新的，这边还挂着「已合并」等你重新上线）。
+fn riders(ctx: &Ctx, site: &Site, except: &[&str], job: &Job) -> Vec<QueueItem> {
+    let ride: Vec<QueueItem> = site_ops::load_queue(&ctx.site_dir(&site.id))
+        .into_iter()
+        .filter(|i| i.status == "merged" && i.deployed_at == 0 && !i.merge_sha.is_empty() && !except.contains(&i.id.as_str()))
+        .collect();
+    if !ride.is_empty() {
+        job.line(&format!("之前合并了、还没上线的 {} 条也在这次的代码里，一起上线、一起验收：{}", ride.len(), ride.iter().map(|i| format!("「{}」", i.opp.title)).collect::<String>()));
+    }
+    ride
+}
+
+fn with_riders(site: &Site, spec: crate::site_verify::Spec, ride: &[QueueItem]) -> crate::site_verify::Spec {
+    ride.iter().fold(spec, |a, r| join_specs(a, spec_for(site, r, false)))
+}
+
+fn ride_note(ride: &[QueueItem]) -> String {
+    if ride.is_empty() { String::new() } else { format!("（之前合并没上线的 {} 条一起上线了）", ride.len()) }
 }
 
 /// 把一条改动合并进主分支：GitHub 合并 PR（squash），本地分支压缩合并进默认分支。返回合并提交。
@@ -1904,14 +1939,19 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
     if site.deploy.mode == "none" {
         return Ok(format!("已合并 {} 条（站点没有配置部署）{skip_note}", merged.len()));
     }
-    let spec = merged.iter().map(|(i, _)| spec_for(site, i, false)).reduce(join_specs).unwrap_or_default();
+    let ids_merged: Vec<&str> = merged.iter().map(|(i, _)| i.id.as_str()).collect();
+    let ride = riders(ctx, site, &ids_merged, job);
+    let spec = with_riders(site, merged.iter().map(|(i, _)| spec_for(site, i, false)).reduce(join_specs).unwrap_or_default(), &ride);
     let last = merged.last().map(|(_, sha)| sha.clone()).unwrap_or_default();
     match ship(ctx, site, job, spec, &last, "manual").await {
         Ok(sh) => {
             for (i, _) in &merged {
                 record_shipped(ctx, site, &i.id, &sh)?;
             }
-            Ok(format!("{} 条已上线{}{skip_note}", merged.len(), if sh.url.is_empty() { String::new() } else { format!(" {}", sh.url) }))
+            for r in &ride {
+                record_shipped(ctx, site, &r.id, &sh)?;
+            }
+            Ok(format!("{} 条已上线{}{}{skip_note}", merged.len(), if sh.url.is_empty() { String::new() } else { format!(" {}", sh.url) }, ride_note(&ride)))
         }
         Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => {
             let why = e.trim_start_matches(crate::site_verify::HARD_PREFIX).to_string();

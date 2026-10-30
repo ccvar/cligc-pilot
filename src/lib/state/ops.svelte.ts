@@ -173,7 +173,10 @@ export async function acceptItems(site: Site, items: OpsItem[]) {
 }
 /** 已经合并、上线那一步失败的改动：不再合并，直接重新上线。 */
 export async function reshipItem(site: Site, item: OpsItem) {
-  if (!(await confirmDialog(`「${item.opp.title}」已经合并进 ${site.default_branch}，上次上线没完成。现在重新构建并上线到 ${site.domain || site.name}？`, { title: '重新上线', kind: 'warning', confirmText: '重新上线' }))) return;
+  // 上线的是主分支最新的代码：别的已合并、没上线的改动也在里面，一起上线、一起验收
+  const others = (ops.queue[site.id] ?? []).filter((i) => i.id !== item.id && i.status === 'merged' && !i.deployed_at && i.merge_sha);
+  const also = others.length ? `\n\n另外 ${others.length} 条已合并、没上线的也会一起上线：\n${others.map((i) => `· ${i.opp.title}`).join('\n')}` : '';
+  if (!(await confirmDialog(`「${item.opp.title}」已经合并进 ${site.default_branch}，上次上线没完成。现在用 ${site.default_branch} 最新的代码重新构建并上线到 ${site.domain || site.name}？${also}`, { title: '重新上线', kind: 'warning', confirmText: others.length ? `上线 ${others.length + 1} 条` : '重新上线' }))) return;
   try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
