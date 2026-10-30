@@ -1014,6 +1014,11 @@ const STOPPED: &str = "这一轮 AI 被停止了，改到一半的不会上线�
 
 async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String, model: &(String, String)) -> Result<(String, crate::convo::Conversation), String> {
     let st = ctx.state();
+    // 指定了独立的工作目录（AI 改动的工作树），就必须真的在那里跑：认不出来时宁可不跑，也不能退回站点的代码目录
+    // （本地来源就是你自己的文件夹，AI 会直接改到你的主分支上）
+    if !work_dir.trim().is_empty() && crate::site_cmds::site_work_override(&st.sites, &site.id, work_dir).is_none() {
+        return Err(format!("AI 的工作目录不对（{work_dir}），为了不改到你自己的代码目录，这次没有交给 AI"));
+    }
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
     let (brain, model) = model.clone();

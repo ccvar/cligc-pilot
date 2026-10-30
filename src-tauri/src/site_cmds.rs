@@ -1082,9 +1082,10 @@ pub fn site_work_override(sites: &sites::SiteStore, site_id: &str, dir: &str) ->
     if dir.trim().is_empty() {
         return None;
     }
-    let root = std::fs::canonicalize(sites.data_dir(site_id)).ok()?;
+    // 站点的数据目录和构建目录（AI 改动的工作树在构建目录里，见 sites::build_root）都认
     let p = std::fs::canonicalize(dir.trim()).ok()?;
-    (p.starts_with(&root) && p.is_dir()).then(|| p.to_string_lossy().into_owned())
+    let ok = [sites.data_dir(site_id), sites.build_dir(site_id)].iter().filter_map(|r| std::fs::canonicalize(r).ok()).any(|root| p.starts_with(&root));
+    (ok && p.is_dir()).then(|| p.to_string_lossy().into_owned())
 }
 
 /// 站点会话的系统提示：站点概况 + 改代码的流程 + 上线交给 Pilot + 数据查询工具。
@@ -1228,5 +1229,27 @@ mod trash_tests {
         std::fs::create_dir_all(d.join("x")).unwrap();
         super::move_to_trash(&d).unwrap();
         assert!(!d.exists());
+    }
+}
+
+#[cfg(test)]
+mod work_dir_tests {
+    use super::*;
+
+    #[test]
+    fn work_override_accepts_build_dir_and_refuses_others() {
+        // 数据目录带空格（像 Application Support），构建目录就会挪到没空格的地方
+        let base = std::env::temp_dir().join(format!("wo {}", uuid::Uuid::new_v4()));
+        let store = sites::SiteStore::new(&base);
+        let wt = store.build_dir("s1").join("work").join("item");
+        std::fs::create_dir_all(&wt).unwrap();
+        assert!(site_work_override(&store, "s1", &wt.to_string_lossy()).is_some());
+        // 别的目录（比如用户自己的代码目录）不认，调用方就不会在那里跑
+        let elsewhere = std::env::temp_dir().join(format!("user-code-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert!(site_work_override(&store, "s1", &elsewhere.to_string_lossy()).is_none());
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        let _ = std::fs::remove_dir_all(store.build_dir("s1"));
     }
 }
