@@ -228,8 +228,8 @@
    写在最后、选择器更具体，窄屏的 padding 简写盖不掉 */
 .app .su .page-head { padding-top: 6px; min-height: 28px; }
 .app.rail-collapsed .su .page-head { padding-left: var(--tools-w, 201px); }
-/* 标题文字框居中在 20px，但中文字形在行框里偏上，看着比红绿灯、左上角图标高 1.5px 左右：只把标题往下挪，按钮不动 */
-.app .su .page-head .ttl, .app .su .page-head .wb-name { position: relative; top: 1.5px; }
+/* 标题文字框居中在 20px，但中文字形在行框里偏上，看着比红绿灯、左上角图标高：只把标题往下挪（1.5px 实测还是偏上，取 2.5px），按钮不动 */
+.app .su .page-head .ttl, .app .su .page-head .wb-name { position: relative; top: 2.5px; }
 /* 页头那一行只有 30px 高：按钮、下拉、标签选择收到 24px，上下不顶着窗口边 */
 .app .su .page-head .btn.small { height: 24px; padding-top: 0; padding-bottom: 0; box-sizing: border-box; }
 .app .su .page-head .tin, .app .su .page-head .iss { height: 24px; box-sizing: border-box; }
