@@ -164,6 +164,7 @@ let autodetected = false;
 /** 导入站点后也跑一次：刚导入的站点没配部署、没接数据源，马上去 Cloudflare / Google / Bing 里找（数据流不用缓存）。 */
 export async function autodetectDeploys(fresh = false) {
   autodetected = true;
+  deployCheckedAt = Date.now();
   try {
     const [deploys, data] = await Promise.all([
       fresh || fleet.rows.some((r) => r.deploy_mode === 'none') ? invoke<string[]>('autodetect_cf_deploys').catch(() => []) : Promise.resolve([] as string[]),
@@ -178,6 +179,17 @@ export async function autodetectDeploys(fresh = false) {
     }
   } catch { /* 识别不到不打扰 */ }
 }
+// 启动后才在 Cloudflare 上配好的站点（比如刚把域名切到 Pages 项目）：还有没配置部署的就隔一会儿再找一次，不用重启
+let deployCheckedAt = 0;
+async function recheckDeploys() {
+  if (!fleet.rows.some((r) => r.deploy_mode === 'none') || Date.now() - deployCheckedAt < 2 * 60_000) return;
+  deployCheckedAt = Date.now();
+  const deploys = await invoke<string[]>('autodetect_cf_deploys').catch(() => [] as string[]);
+  if (!deploys.length) return;
+  say(`在 Cloudflare 里认出了 ${deploys.length} 个站点的部署：${deploys.join('；')}`);
+  await refreshSites();
+  void loadFleet();
+}
 export async function loadFleet() {
   if (loading) { again = true; return; }
   loading = true;
@@ -186,6 +198,7 @@ export async function loadFleet() {
     fleet.rows = rows;
     fleet.loaded = true;
     if (!autodetected) void autodetectDeploys();
+    else void recheckDeploys();
   } catch (e) { say(String(e), 'err'); }
   finally {
     loading = false;
@@ -315,7 +328,10 @@ export function initFleet() {
     const un4 = listen('monitor-checked', soon);
     // 跨站点批量排队变了（交给 AI、开始一个站点、停止排队）
     const un5 = listen('across-changed', soon);
-    return () => { for (const u of [un1, un2, un3, un4, un5]) void u.then((f) => f()); };
+    // 去终端 / Cloudflare 后台部署完切回来，顺手再找一次没配置的部署
+    const onFocus = () => { if (fleet.loaded) void recheckDeploys(); };
+    window.addEventListener('focus', onFocus);
+    return () => { for (const u of [un1, un2, un3, un4, un5]) void u.then((f) => f()); window.removeEventListener('focus', onFocus); };
   });
 }
 
