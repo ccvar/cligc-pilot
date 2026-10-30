@@ -6,7 +6,7 @@
   import type { Site, OpsItem } from '$lib/types';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import SiteJobPanel from './SiteJobPanel.svelte';
-  import { clock } from './fmt';
+  import { clock, full as fullTime } from './fmt';
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
@@ -109,7 +109,11 @@
   const flipEv = (id: string) => { const n = new Set(openEv); if (n.has(id)) n.delete(id); else n.add(id); openEv = n; };
   // 标题后面的目标页面：改已有页面就是那个页面，新写的页面用 AI 报上来的新网址；都没有就不显示
   const targetOf = (i: OpsItem) => (i.opp.page?.startsWith('http') ? i.opp.page : (i.new_pages ?? [])[0] ?? '');
-  const shortPath = (u: string) => { try { const x = new URL(u); return x.pathname + x.search || '/'; } catch { return u; } };
+  // 网址不在站点主域名下（www、别的子域名）就带上域名，免得只看到 /sitemap.xml 分不清是哪个
+  const shortPath = (u: string) => { try { const x = new URL(u); const p = x.pathname + x.search || '/'; return x.host.toLowerCase() === site.domain.trim().toLowerCase() ? p : x.host + p; } catch { return u; } };
+  // 待处理的条目写明是按哪天的数据发现的（数据会变，动手前还会再确认一次）；其它状态照旧写最后更新的时间
+  const DAY = 86_400;
+  const foundTip = (i: OpsItem) => `${fullTime(i.created_at)} 按当时的数据发现。数据会变：拉数据时问题已经没有了会自动关掉，交给 AI 之前也会再按最新数据确认一次`;
   // 「AI 怎么改的」不是中文（英文站点容易这样）：可以翻成中文，译文存在条目上；翻过的默认看译文，能切回原文
   const foreign = (t: string) => !/[\u4e00-\u9fff]/.test(t.slice(0, 300));
   let translating = $state('');
@@ -197,7 +201,8 @@
               {#if foldable}<button class="it-title as-btn" title={i.opp.title} onclick={() => flipFold(i.id)}>{i.opp.title}</button>{:else}<b class="it-title" title={i.opp.title}>{i.opp.title}</b>{/if}
               {#if targetOf(i)}<button class="it-url mono" onclick={() => openUrl(targetOf(i))} data-tip={`在浏览器打开：${targetOf(i)}`}><span>{shortPath(targetOf(i))}</span><Icon name="external" size={11} /></button>{/if}
               <span class="grow"></span>
-              <span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>
+              {#if i.status === 'open'}<span class="it-meta" data-tip={foundTip(i)}>{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {Date.now() / 1000 - i.created_at > DAY ? `${when(i.created_at)} 的数据` : when(i.created_at)}</span>
+              {:else}<span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>{/if}
             </div>
             {#if !folded(i)}
             <div class="why-row"><WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} /></div>

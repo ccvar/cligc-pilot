@@ -492,6 +492,9 @@ pub struct QueueItem {
     pub status: String,
     pub created_at: u64,
     pub updated_at: u64,
+    /// 待处理期间，连续几次拉数据都不再满足条件（点击率偏低、排名 8–20 这类数据会上下波动，连续两次才收起）
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub missing: u8,
     /// 处理它的会话。
     #[serde(default)]
     pub conv_id: String,
@@ -672,19 +675,39 @@ pub fn should_enqueue(q: &[QueueItem], key: &str, now: u64, cooldown: u64) -> bo
 }
 
 /// 把新机会并入队列，返回新增的条目。
-/// 能自己确认「问题还在不在」的机会：sitemap 报错、抓取失败、页面太慢、页面体检。
-/// 还没交给 AI 的（待处理）在最新一次检查里不再出现，就自动关掉，不留着让你去处理一个已经好了的问题。
-/// `source_ok`：这一类的数据这次拉成功了没有（比如 Search Console 这次报错，就不凭旧数据关 sitemap 那几条）。
-pub fn close_resolved(site_dir: &Path, opps: &[Opportunity], now: u64, source_ok: impl Fn(&str) -> bool) -> Result<usize, String> {
-    const SELF_CHECKING: [&str; 5] = ["sitemap_error", "crawl_issue", "slow", "img_audit", "schema"];
-    let live: std::collections::HashSet<&str> = opps.iter().map(|o| o.key.as_str()).collect();
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// 能自己确认「问题还在不在」的机会：sitemap 报错、抓取失败、页面太慢、页面体检——不再出现就是好了，一次就关。
+pub const SELF_CHECKING: [&str; 5] = ["sitemap_error", "crawl_issue", "slow", "img_audit", "schema"];
+/// 按搜索 / 访问数据算出来的机会：数据会上下波动，连续两次拉数据都不再满足条件才收起。
+pub const DATA_DRIVEN: [&str; 7] = ["low_ctr", "striking", "declining", "content_gap", "cannibal", "low_rpm", "serp_gap"];
+
+/// 拉完数据后清理待处理：还没交给 AI 的条目，问题已经没有了（不在最新的机会里）就自动关掉，不留着让你去处理一个已经好了的问题。
+/// `live`：现在还成立的机会；`source_ok`：这一类的数据这次拉成功了没有（没拉成功的不凭旧数据关）。返回关掉了几条。
+/// 内容过时（要读构建产物）、AI 计划这两类这里不判断，交给动手前的确认（site_runner::gone_already）。
+pub fn close_resolved(site_dir: &Path, live: &[Opportunity], now: u64, source_ok: impl Fn(&str) -> bool) -> Result<usize, String> {
+    let live: std::collections::HashSet<&str> = live.iter().map(|o| o.key.as_str()).collect();
     with_queue(site_dir, |q| {
         let mut n = 0;
-        for i in q.iter_mut().filter(|i| i.status == "open" && SELF_CHECKING.contains(&i.opp.kind.as_str()) && !live.contains(i.opp.key.as_str()) && source_ok(&i.opp.kind)) {
-            i.status = "done".into();
-            i.note = "最新一次检查里已经没有这个问题了，自动关掉".into();
-            i.updated_at = now;
-            n += 1;
+        for i in q.iter_mut().filter(|i| i.status == "open" && source_ok(&i.opp.kind)) {
+            let kind = i.opp.kind.as_str();
+            let (self_check, data) = (SELF_CHECKING.contains(&kind), DATA_DRIVEN.contains(&kind));
+            if !self_check && !data {
+                continue;
+            }
+            if live.contains(i.opp.key.as_str()) {
+                i.missing = 0;
+                continue;
+            }
+            i.missing = i.missing.saturating_add(1);
+            if self_check || i.missing >= 2 {
+                i.status = "done".into();
+                i.note = if self_check { "最新一次检查里已经没有这个问题了，自动关掉".into() } else { "最新数据已经不满足条件（连续两次），自动收起".into() };
+                i.updated_at = now;
+                n += 1;
+            }
         }
         n
     })
@@ -938,15 +961,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("close-resolved-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let o = |k: &str, kind: &str| Opportunity { key: k.into(), kind: kind.into(), ..Default::default() };
-        enqueue(&dir, &[o("sitemap_error:a", "sitemap_error"), o("slow:x", "slow"), o("low_ctr:p", "low_ctr")], 1, 0).unwrap();
-        // Search Console 这次没拉成功：sitemap 那条不关
+        enqueue(&dir, &[o("sitemap_error:a", "sitemap_error"), o("slow:x", "slow"), o("low_ctr:p", "low_ctr"), o("plan:w:1", "plan")], 1, 0).unwrap();
+        let st = |k: &str| load_queue(&dir).into_iter().find(|i| i.opp.key == k).unwrap().status;
+        // Search Console 这次没拉成功：sitemap 那条不关；页面太慢不再报：一次就关；点击率偏低第一次不满足只记一次
         assert_eq!(close_resolved(&dir, &[], 2, |k| k != "sitemap_error").unwrap(), 1);
-        let q = load_queue(&dir);
-        let st = |k: &str| q.iter().find(|i| i.opp.key == k).unwrap().status.clone();
-        assert_eq!((st("sitemap_error:a").as_str(), st("slow:x").as_str(), st("low_ctr:p").as_str()), ("open", "done", "open"));
-        // 拉成功了、也不再报：关掉；点击率偏低这类不是自己能确认的，不动
-        assert_eq!(close_resolved(&dir, &[], 3, |_| true).unwrap(), 1);
-        assert_eq!(load_queue(&dir).iter().filter(|i| i.status == "open").count(), 1);
+        assert_eq!((st("sitemap_error:a"), st("slow:x"), st("low_ctr:p")), ("open".into(), "done".into(), "open".into()));
+        // 点击率偏低又满足了：计数清零；再连续两次不满足才收起
+        close_resolved(&dir, &[o("low_ctr:p", "low_ctr")], 3, |_| true).unwrap();
+        close_resolved(&dir, &[], 4, |k| k == "low_ctr").unwrap();
+        assert_eq!(st("low_ctr:p"), "open");
+        close_resolved(&dir, &[], 5, |_| true).unwrap();
+        assert_eq!((st("sitemap_error:a"), st("low_ctr:p")), ("done".into(), "done".into()));
+        // AI 计划这类不在这里判断
+        assert_eq!(st("plan:w:1"), "open");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

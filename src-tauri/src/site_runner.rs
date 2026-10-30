@@ -543,6 +543,31 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     (done, notes, stopped)
 }
 
+/// 动手前的确认：数据超过 6 小时先补拉一次（拉数据时会顺带重算机会），再看这条机会现在还成不成立。
+/// 已经不成立就返回说明（调用方把它关掉、跳过）。AI 计划不判断；内容过时要读构建产物，读不到就不判断；数据源这次没拉成功也不判断。
+async fn gone_already(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Option<String> {
+    let kind = item.opp.kind.as_str();
+    let stale = matches!(kind, "stale" | "stale_year");
+    if !(site_ops::SELF_CHECKING.contains(&kind) || site_ops::DATA_DRIVEN.contains(&kind) || stale) {
+        return None;
+    }
+    let site_dir = ctx.site_dir(&site.id);
+    let meta = crate::site_data::refresh(site, &ctx.state().conns, &site_dir, false).await;
+    if !crate::site_data::source_ok(kind, &meta) {
+        return None;
+    }
+    let mut opps: Vec<site_ops::Opportunity> = crate::site_data::read_json(&crate::site_data::cache_dir(&site_dir), "opportunities.json");
+    if stale {
+        let out = crate::syndicate::built_out(&ctx.state(), site).ok()?;
+        opps.extend(site_ops::stale_opportunities(site, &site_dir, &crate::site_make::page_facts(&out), chrono::Local::now().date_naive()));
+    }
+    if crate::site_data::live_opportunities(&opps, &site_dir).iter().any(|o| o.key == item.opp.key) {
+        return None;
+    }
+    job.line(&format!("「{}」：按最新数据看，这个问题已经没有了，不交给 AI", item.opp.title));
+    Some("动手前按最新数据确认了一下，这个问题已经没有了，没有交给 AI".into())
+}
+
 /// 立即执行一整轮（托管方案里「立即执行」）：制定本周计划 → 按方案处理排在前面的几条
 /// （全自动按发布规则自动上线，改好等你确认停在等你确认，只出建议只出计划）。
 /// 本周已经有计划、里面还有没做的就沿用，不再花一轮重新制定；本周用量已满就不开始。
@@ -748,6 +773,18 @@ pub fn source_of(o: &Opportunity) -> &str {
 
 async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
+    // 动手前先确认问题还在：机会是按某一天的数据算的，过了几天可能已经好了，就不让 AI 去改
+    if let Some(note) = gone_already(ctx, site, job, item).await {
+        if let Some(d) = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+            i.status = "done".into();
+            i.note = note.clone();
+        })? {
+            log_item(ctx, site, "fixed", &d, &note);
+        }
+        ctx.emit_queue(&site.id);
+        job.step("work", "ok", "问题已经没有了，没交给 AI");
+        return Ok(note);
+    }
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
         i.worked_at = now();

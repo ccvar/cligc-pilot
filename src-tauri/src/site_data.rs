@@ -287,6 +287,26 @@ async fn fetch_bing(key: &str, site: &str, dir: &Path) -> Result<(String, String
     Ok((from, latest))
 }
 
+/// 这一类机会依赖的数据源这次拉成功了没有（没拉成功的，不凭旧数据判断问题好没好）
+pub fn source_ok(kind: &str, meta: &CacheMeta) -> bool {
+    let ok = |m: &SourceMeta| m.fetched_at > 0 && m.error.is_empty();
+    match kind {
+        "sitemap_error" | "low_ctr" | "striking" | "declining" | "content_gap" | "cannibal" | "stale" | "stale_year" => ok(&meta.gsc),
+        "crawl_issue" => ok(&meta.bing),
+        "low_rpm" => ok(&meta.ga4),
+        _ => true,
+    }
+}
+
+/// 现在还成立的机会：自动算出来的 + 速度、体检报告里还有问题的（手动交给 AI 的不受「低于 50 分 / 问题够多」的门槛限制）
+pub fn live_opportunities(opps: &[crate::site_ops::Opportunity], site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
+    let mut live = opps.to_vec();
+    for key in crate::speed::live_keys(site_dir).into_iter().chain(crate::page_audit::tasks(site_dir).into_iter().map(|o| o.key)) {
+        live.push(crate::site_ops::Opportunity { key, ..Default::default() });
+    }
+    live
+}
+
 /// 正在拉数据和排队等着拉的站点、批量健康检查在不在跑（全部站点列表上显示「同步中」，变了发 site-data-sync 事件）。
 #[derive(Serialize, Clone, Default, Debug)]
 pub struct SyncState {
@@ -401,18 +421,8 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     // 机会列表跟着数据一起重算，模型的查询工具和看板读的是同一份。
     let opps = ranked_opportunities(site, site_dir).await;
     let _ = write_json(&dir, "opportunities.json", &opps);
-    // 已经好了的问题（sitemap 不报错了、页面不慢了…）还排在待处理里：自动关掉；这次没拉成功的数据源不算数
-    let ok = |m: &SourceMeta| m.fetched_at > 0 && m.error.is_empty();
-    // 速度、体检按报告本身看（手动交给 AI 的不受「低于 50 分 / 问题够多才算机会」的门槛限制）
-    let mut live = opps.clone();
-    for key in crate::speed::live_keys(site_dir).into_iter().chain(crate::page_audit::tasks(site_dir).into_iter().map(|o| o.key)) {
-        live.push(crate::site_ops::Opportunity { key, ..Default::default() });
-    }
-    let _ = crate::site_ops::close_resolved(site_dir, &live, now(), |kind| match kind {
-        "sitemap_error" => ok(&meta.gsc),
-        "crawl_issue" => ok(&meta.bing),
-        _ => true,
-    });
+    // 已经好了的问题（sitemap 不报错了、页面不慢了、点击率回来了…）还排在待处理里：自动关掉；这次没拉成功的数据源不算数
+    let _ = crate::site_ops::close_resolved(site_dir, &live_opportunities(&opps, site_dir), now(), |kind| source_ok(kind, &meta));
     let _ = write_json(&dir, "summary.json", &compute_summary(site_dir));
     meta
 }
