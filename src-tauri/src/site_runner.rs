@@ -1595,6 +1595,7 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
     let item = site_ops::update_item(&site_dir, item_id, now(), |i| {
         i.status = "deployed".into();
         i.deployed_at = now();
+        i.note.clear();
         i.checks = sh.checks.clone();
         i.attention = attention.clone();
         i.watch_due = now() + 3600;
@@ -1759,7 +1760,11 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     let sh = match ship(ctx, site, job, spec_for(site, &item, false), &merge_sha, if auto { "ops" } else { "manual" }).await {
         Ok(sh) => sh,
         Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
-        Err(e) => return Err(e),
+        Err(e) => {
+            let _ = site_ops::update_item(&site_dir, item_id, now(), |x| x.note = format!("已合并进主分支，上线没完成：{e}"));
+            ctx.emit_queue(&site.id);
+            return Err(e);
+        }
     };
     record_shipped(ctx, site, item_id, &sh)?;
     if auto {
@@ -1908,7 +1913,13 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
             ctx.notify(&format!("{} · 上线后验收没通过，已回滚", site.name), &format!("一起上线的 {} 条改动", merged.len()));
             Err(format!("{e}。已把这次合并的 {} 条全部回退", merged.len()))
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            for (i, _) in &merged {
+                let _ = site_ops::update_item(&site_dir, &i.id, now(), |x| x.note = format!("已合并进主分支，上线没完成：{e}"));
+            }
+            ctx.emit_queue(&site.id);
+            Err(e)
+        }
     }
 }
 

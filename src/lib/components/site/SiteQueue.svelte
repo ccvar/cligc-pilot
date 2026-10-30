@@ -32,7 +32,9 @@
     closed: ['dismissed', 'rolled_back'],
   } as const;
   // 上线了但验收有待核对问题的，也放进「需要你处理」
-  const inGroup = (i: OpsItem, k: keyof typeof groups) => (groups[k] as readonly string[]).includes(i.status) || (k === 'todo' && i.status === 'deployed' && !!i.attention);
+  // 合并了但上线没完成的也是：它还没上线，要你改好问题后「重新上线」
+  const unshipped = (i: OpsItem) => i.status === 'merged' && !i.deployed_at && site.deploy.mode !== 'none';
+  const inGroup = (i: OpsItem, k: keyof typeof groups) => unshipped(i) ? k === 'todo' : (groups[k] as readonly string[]).includes(i.status) || (k === 'todo' && i.status === 'deployed' && !!i.attention);
   const shown = $derived(all.filter((i) => inGroup(i, filter)));
   // 这一栏空了，但刚处理的条目只是挪到了别的栏（交给 AI 后去了「需要你处理」、已经好了自动关掉去了「已上线」…）：
   // 空白处列出最近 15 分钟动过的，写明现在在哪、点一下过去
@@ -295,7 +297,7 @@
                 {/each}
               </div>
             {/if}
-            {#if i.note}<p class="verdict">{i.note}</p>{#if i.status === 'failed'}<OpsErrorHint text={i.note} />{/if}{/if}
+            {#if i.note}<p class="verdict">{i.note}</p>{#if i.status === 'failed' || i.status === 'merged'}<OpsErrorHint text={i.note} siteId={site.id} />{/if}{/if}
             {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
             {#if i.checks?.length}
               {@const bad = i.checks.filter((c) => !c.ok).length}

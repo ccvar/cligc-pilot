@@ -849,7 +849,10 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     env.extend(crate::site_vps::deploy_env(&shim));
     job.shell(&site.deploy.command, &site.app_dir(&dir), &env, STEP_TIMEOUT).await.map_err(|e| {
         job.step("upload", "failed", "");
-        format!("发布失败：{e}")
+        match missing_args(&site.deploy.command, &e) {
+            Some(full) => format!("发布失败：发布命令少了参数。脚本的用法是「{full}」，现在设的是「{}」。改好发布命令再重新上线（脚本的完整输出见日志）", site.deploy.command.trim()),
+            None => format!("发布失败：{e}"),
+        }
     })?;
     drop(shim);
     job.step("upload", "ok", &site.domain);
@@ -860,8 +863,34 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     Ok(())
 }
 
+/// 发布脚本因为参数不对打印了用法：用法里有一行是「现在的命令 + 更多参数」，就把那一行当作该用的命令。
+/// 比如命令设成 `./scripts/publish-production.sh publish`，脚本要求 `publish --confirm cexqa.com`。
+fn missing_args(cmd: &str, out: &str) -> Option<String> {
+    let cmd = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cmd.is_empty() {
+        return None;
+    }
+    out.lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .find(|l| {
+            l.len() > cmd.len() && l.starts_with(&cmd) && l[cmd.len()..].starts_with(' ')
+                // 带占位参数的用法（RELEASE_ID、<file>、[options]）要人来填，不当成可以直接用的命令
+                && !l[cmd.len()..].split_whitespace().any(|t| t.contains(['<', '[']) || (t.len() > 1 && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')))
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_output_suggests_the_full_command() {
+        let out = "退出码 2\nUsage:\n  ./scripts/publish-production.sh prepare\n  ./scripts/publish-production.sh publish --confirm cexqa.com\n  ./scripts/publish-production.sh rollback RELEASE_ID --confirm cexqa.com\n";
+        assert_eq!(super::missing_args("./scripts/publish-production.sh publish", out).as_deref(), Some("./scripts/publish-production.sh publish --confirm cexqa.com"));
+        assert_eq!(super::missing_args("./scripts/publish-production.sh  publish ", out).as_deref(), Some("./scripts/publish-production.sh publish --confirm cexqa.com"));
+        // 占位参数（RELEASE_ID）那一行不算；别的失败不猜
+        assert_eq!(super::missing_args("./scripts/publish-production.sh rollback", out), None);
+        assert_eq!(super::missing_args("./deploy.sh", "退出码 1\nssh: connect to host x port 22: Connection refused"), None);
+    }
+
     #[test]
     fn noindex_rules_are_per_host_and_keep_existing_headers() {
         let h = super::with_noindex("/*\n  X-Frame-Options: DENY", &["new.example.com".into(), "proj.pages.dev".into()]);
