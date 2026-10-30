@@ -11,7 +11,7 @@
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { synd } from '$lib/state/syndication.svelte.js';
-  import { ops, loadQueue, runTask, workItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
+  import { ops, loadQueue, runTask, workItem, redoItem, recheckItem, reshipItem, acceptItem, workItems, dismissItems, ackItem, dismissItem, restoreItem, markDone, rollbackItem, showDiff, sourceOf, KIND_LABEL, CHANGE_LABEL, STATUS_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
@@ -75,6 +75,18 @@
   function toggleChecks(id: string) { const n = new Set(openChecks); if (n.has(id)) n.delete(id); else n.add(id); openChecks = n; }
   const job = $derived(sites.jobs[site.id]);
   const busy = $derived(job?.status === 'running');
+  // 上面那块作业记录：跑着的时候一直显示；跑完以后，针对某一条的作业（改、重新检查、批量改）结果已经写在那一条上了，
+  // 不再重复挂一块（同一句报错上下各一遍很乱）；扫描、制定计划这类整站作业跑完 5 分钟内还留着
+  const ITEM_JOBS = ['ops:work', 'ops:recheck', 'ops:batch'];
+  const showJob = $derived(!!job && job.kind.startsWith('ops:') && (job.status === 'running' || (!ITEM_JOBS.includes(job.kind) && job.finished_at > Date.now() / 1000 - 300)));
+  // 待你确认的条目里合不进主分支的（本地来源才查；队列一变就重查，不动站点文件夹）
+  let conflicts = $state<Set<string>>(new Set());
+  $effect(() => {
+    const id = site.id;
+    const n = all.filter((i) => i.status === 'proposed' && i.branch).map((i) => i.id + i.head_sha).join();
+    if (site.source !== 'local' || !n) { conflicts = new Set(); return; }
+    invoke<string[]>('queue_conflicts', { id }).then((v) => { if (id === site.id) conflicts = new Set(v); }).catch(() => (conflicts = new Set()));
+  });
   const when = clock;
   const tone = (s: string) => (s === 'proposed' ? 'warn' : s === 'deployed' || s === 'done' ? 'ok' : s === 'failed' ? 'err' : s === 'working' ? 'run' : '');
   const myPlan = $derived(managed.overview?.groups.find((g) => g.sites.includes(site.id)));
@@ -145,7 +157,7 @@
     <button class="btn small" onclick={() => runTask(site.id, 'scan')} disabled={busy}>{#if busy && job?.kind === 'ops:scan'}<span class="spin"></span>扫描中{:else}<Icon name="scan" size={12} />立即扫描{/if}</button>
   </div>
 
-  {#if job && job.kind.startsWith('ops:') && (job.status === 'running' || job.finished_at > Date.now() / 1000 - 300)}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
+  {#if showJob && job}<div class="card"><SiteJobPanel {job} compact /></div>{/if}
 
   {#if synd.pending[site.id]}
     <div class="qnote"><Icon name="share" size={13} /><span>分发：{synd.pending[site.id]} 篇文章的摘要已经写好，等你确认发布。</span><button class="link-btn" onclick={() => (sites.tab = 'distribute')}>去分发</button></div>
@@ -218,7 +230,9 @@
                 {#if i.pr_url}<button class="link-btn" onclick={() => openUrl(i.pr_url)}>PR #{i.pr_number} ↗</button>{/if}
               </div>
             {/if}
-            {#if i.verdict && i.status === 'proposed'}
+            {#if conflicts.has(i.id) && i.status === 'proposed'}
+              <p class="verdict">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。让 AI 在最新代码上重改一遍就行。</p>
+            {:else if i.verdict && i.status === 'proposed'}
               <p class="verdict" class:ok={i.verdict === 'auto'}>{i.verdict === 'auto' ? '整份改动都在白名单内，检查已通过。' : `不能自动上线：${i.verdict}`}</p>
             {/if}
             {#if i.quality?.length}
@@ -245,8 +259,9 @@
             {/if}
             {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
             <div class="row wrap acts">
-              {#if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
-              {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto')) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
+              {#if i.status === 'proposed' && conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} disabled={busy} data-tip="丢掉这一版，让 AI 在最新的主分支上重新改；改好后照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
+              {:else if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
+              {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto' && !conflicts.has(i.id))) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
               {#if canWork(i)}<button class="btn tiny" onclick={() => workItem(site.id, i)} disabled={busy}><Icon name="sparkles" size={11} />{i.status === 'failed' && i.head_sha ? '让 AI 重新改' : '让 AI 改'}</button>{/if}
               {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}

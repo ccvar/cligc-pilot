@@ -96,6 +96,11 @@ export async function workItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_work', { id: siteId, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 待你确认的这一版合不进主分支：放回待处理，马上让 AI 在最新的主分支上重改 */
+export async function redoItem(siteId: string, item: OpsItem) {
+  try { await invoke('queue_redo', { id: siteId, itemId: item.id }); say('已让 AI 在最新代码上重改，改好后照常检查'); }
+  catch (e) { say(String(e), 'err'); }
+}
 export async function recheckItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_recheck', { id: siteId, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }

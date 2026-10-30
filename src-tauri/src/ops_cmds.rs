@@ -156,6 +156,41 @@ pub async fn queue_translate_summary(state: tauri::State<'_, AppState>, id: Stri
 }
 
 /// 把驳回 / 失败的条目放回待处理。
+/// 待你确认的条目里，哪些合不进主分支（AI 改的时候主分支后来又有了改动、改到同几处）。
+/// 只看本地来源的站点：用 git merge-tree 在内存里试合并，不动文件夹；GitHub 来源由 PR 自己显示能不能合。
+#[tauri::command]
+pub async fn queue_conflicts(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<String>, String> {
+    let site = state.sites.get(&id)?;
+    if site.source != "local" {
+        return Ok(Vec::new());
+    }
+    let main = crate::site_git::code_dir(&site, None)?;
+    let mut out = Vec::new();
+    for i in site_ops::load_queue(&state.sites.data_dir(&id)).into_iter().filter(|i| i.status == "proposed" && !i.branch.is_empty()) {
+        // 退出码 1＝有冲突；其它错误（git 太旧、分支没了）不算冲突，照常让你确认
+        let r = crate::site_git::git(&main, &["merge-tree", "--write-tree", "--name-only", &site.default_branch, &i.branch], "").await?;
+        if !r.ok && r.stderr.is_empty() {
+            out.push(i.id);
+        }
+    }
+    Ok(out)
+}
+
+/// 「让 AI 在最新代码上重改」：待你确认的这一版合不进主分支，放回待处理并马上让 AI 在最新的主分支上重改一遍
+/// （工作分支会切到最新的主分支重建，原来那版丢掉）。
+#[tauri::command]
+pub fn queue_redo(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<String, String> {
+    let dir = state.sites.data_dir(&id);
+    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| {
+        if matches!(i.status.as_str(), "proposed" | "failed") {
+            i.status = "open".into();
+            i.note.clear();
+            i.verdict.clear();
+        }
+    })?;
+    site_runner::start(ctx(&app), &id, "work", "manual", Some(item_id))
+}
+
 #[tauri::command]
 pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
