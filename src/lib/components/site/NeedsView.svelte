@@ -1,11 +1,16 @@
 <script lang="ts">
   // 托管控制台「需要你」页：左边「全部」+ 有事的站点（带条数），右边按「待你确认 / 失败了 / 上线后待核对」分组，
   // 每条一行，点开看原因并直接处理（看改动、上线、驳回、重试、回滚…，动作和任务队列里的是同一套）。
+  import { untrack } from 'svelte';
   import DiffModal from './DiffModal.svelte';
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import WhyChips from './WhyChips.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
+  import ModelMenu from './ModelMenu.svelte';
+  import OpsErrorHint from './OpsErrorHint.svelte';
+  import BrainIcon from '$lib/BrainIcon.svelte';
+  import { modelTarget } from '$lib/state/fleet.svelte.js';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { acceptItem, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
@@ -67,6 +72,21 @@
     Promise.all(ids.map((id) => invoke<string[]>('queue_conflicts', { id }).catch(() => [] as string[])))
       .then((r) => { if (key === needs.filter((x) => x.item.status === 'proposed' && x.item.branch && siteOf(x.site_id)?.source === 'local').map((x) => x.item.id + x.item.head_sha).join()) conflicts = new Set(r.flat()); });
   });
+  // 「用 XX 重新改」：有失败条目的站点各自默认用的模型（托管站点是方案里的主模型）；▾ 换个模型只用这一次
+  let siteModels = $state<Record<string, string>>({});
+  $effect(() => {
+    const ids = [...new Set(needs.filter((x) => x.item.status === 'failed').map((x) => x.site_id))];
+    for (const id of ids) {
+      if (untrack(() => id in siteModels)) continue;
+      invoke<[string, string]>('site_ops_model', { id }).then(([b, m]) => (siteModels = { ...siteModels, [id]: b ? `${b}::${m}` : '' })).catch(() => {});
+    }
+  });
+  let mMenu = $state<{ at: { left: number; top: number; bottom: number; right: number }; siteId: string; item: OpsItem } | null>(null);
+  function openModelMenu(e: MouseEvent, siteId: string, item: OpsItem) {
+    e.preventDefault();
+    const r = e.type === 'contextmenu' ? { left: e.clientX, right: e.clientX + 260, top: e.clientY, bottom: e.clientY } : (e.currentTarget as HTMLElement).getBoundingClientRect();
+    mMenu = { at: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, siteId, item };
+  }
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
   const siteOf = (id: string) => sites.list.find((s) => s.id === id);
@@ -135,6 +155,7 @@
                     <div class="more">
                       {#if conflicts.has(i.id)}<p class="why">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。让 AI 在最新代码上重改一遍就行。</p>
                       {:else if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
+                      {#if g.k === 'failed' && w}<OpsErrorHint text={w} />{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page}<span class="mono url">{i.opp.page}</span>{/if}
                       <div class="acts">
@@ -145,7 +166,8 @@
                             {:else}<button class="btn tiny primary" onclick={() => acceptItem(site, i)}><Icon name={i.branch ? 'rocket' : 'check'} size={11} />{i.branch ? '上线' : '标记已处理'}</button>{/if}
                           {:else if i.status === 'failed'}
                             {#if i.branch && i.head_sha}<button class="btn tiny primary" onclick={() => recheckItem(site.id, i)} data-tip="改动还在分支上：重新构建、检查，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
-                            <button class="btn tiny" onclick={() => workItem(site.id, i)}><Icon name="sparkles" size={11} />让 AI 重新改</button>
+                            {@const mt = modelTarget(siteModels[site.id] ?? '')}
+                            <span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, site.id, i)} data-tip={`用 ${mt.name} 重新改一遍（这个站点默认的模型）\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} 重新改</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, site.id, i)} aria-label="换个模型重新改" data-tip="换个模型重新改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>
                             {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />看改动</button>{/if}
                           {:else}
                             <button class="btn tiny primary" onclick={() => ackItem(site.id, i)}><Icon name="check" size={11} />没问题</button>
@@ -171,7 +193,14 @@
 
 <DiffModal />
 
+{#if mMenu}<ModelMenu at={mMenu.at} current={siteModels[mMenu.siteId] ?? ''} note="只用这一次，站点和托管方案的模型不变" onpick={(m) => { const x = mMenu; mMenu = null; if (x) void workItem(x.siteId, x.item, m); }} onclose={() => (mMenu = null)} />{/if}
+
 <style>
+  /* 「用 XX 重新改」+ ▾：两个按钮拼成一个 */
+  .split { display: inline-flex; }
+  .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .split .caret { padding: 0 6px; margin-left: -1px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .bi-w { display: inline-flex; }
   .row .cf { flex: none; font-size: 11px; }
   .stucks { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
   .stuck { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 8px 6px 12px; border-radius: 9px; background: var(--su-warn-soft); color: var(--su-warn-ink); font-size: 12.5px; }
