@@ -220,6 +220,7 @@ pub fn task_label(task: &str) -> &'static str {
         "review" => "效果复盘",
         "accept" => "确认改动",
         "accept_many" => "一起合并上线",
+        "resolve" => "处理合不进去的改动",
         "plan" => "AI 制定计划",
         "cycle" => "立即执行一轮",
         "watch" => "上线后检查",
@@ -317,6 +318,7 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "rollback" => &[("revert", "回退提交"), ("prepare", "准备代码"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("upload", "上传"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
         "work" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "batch" => &[("work", "AI 改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
+        "resolve" => &[("rebase", "接到最新代码"), ("work", "AI 重做"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "recheck" => &[("work", "AI 的改动"), ("install", "安装依赖"), ("build", "构建"), ("check", "检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
         "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
@@ -416,6 +418,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
                     "watch" => watch(&ctx, &site, &job).await,
                     "accept" => accept(&ctx, &site, &job, item_id.as_deref().unwrap_or_default(), false).await,
                     "accept_many" => accept_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "resolve" => resolve(&ctx, &site, &job, item_id.as_deref()).await,
                     "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     _ => Err("未知的运营任务".into()),
                 }
@@ -459,6 +462,12 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
             }
         }
         ctx.emit_queue(&site.id);
+        // 这次有改动合进了主分支：剩下的待确认改动要是因此合不进去了，接着自动处理（见 resolve）
+        if r.is_ok() && matches!(task.as_str(), "accept" | "accept_many" | "cycle" | "work" | "batch" | "recheck" | "scan") && !conflicting(&site, &site_dir).await.is_empty() {
+            if let Err(e) = start(ctx.clone(), &site.id, "resolve", "auto", None) {
+                eprintln!("[ops] 处理冲突没启动：{e}");
+            }
+        }
     });
     Ok(id)
 }
@@ -528,6 +537,15 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     let rules = group_rules(ctx, site);
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
+    // 同一种页面的改标题 / 描述合成一条（同批量让 AI 改）
+    let ids: Vec<String> = picked.iter().map(|i| i.id.clone()).collect();
+    if let Ok((keep, n)) = site_ops::group_same_route(&site_dir, &ids) {
+        if n > 0 {
+            job.line(&format!("有 {n} 条和别的是同一种页面，合在一起交给 AI"));
+            let q = site_ops::load_queue(&site_dir);
+            picked = keep.iter().filter_map(|id| q.iter().find(|i| &i.id == id).cloned()).collect();
+        }
+    }
     // 每轮最多改几条：托管站点用方案的「每轮最多改」，自己运营的用站点设置
     picked.truncate(rules.as_ref().map(|g| g.per_round).unwrap_or(site.ops.budget.items_per_run).max(1) as usize);
     let mut done = 0;
@@ -668,9 +686,15 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
 /// 批量让 AI 改：按顺序一条一条处理（每条都按站点档位：改、检查、上线或等你确认），额度用完就停下。
 /// `ids` 用逗号分隔。
 async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<String, String> {
-    let ids: Vec<&str> = ids.split(',').map(str::trim).filter(|x| !x.is_empty()).collect();
+    let ids: Vec<String> = ids.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect();
     if ids.is_empty() {
         return Err("没有选中的条目".into());
+    }
+    // 同一种页面的改标题 / 描述合成一条：一个分支一起改，免得各改各的、先合的让后面的合不进去
+    let (ids, grouped) = site_ops::group_same_route(&ctx.site_dir(&site.id), &ids)?;
+    if grouped > 0 {
+        job.line(&format!("有 {grouped} 条和别的是同一种页面（多半是同一个模板生成的），合在一起交给 AI，一次改好"));
+        ctx.emit_queue(&site.id);
     }
     let (mut ok, mut failed, mut notes) = (0, 0, Vec::new());
     for (n, id) in ids.iter().enumerate() {
@@ -685,7 +709,7 @@ async fn work_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<Strin
             break;
         }
         job.line(&format!("—— 第 {}/{} 条 ——", n + 1, ids.len()));
-        match work_one(ctx, site, job, id).await {
+        match work_one(ctx, site, job, &id).await {
             Ok(m) => {
                 ok += 1;
                 job.line(&m);
@@ -909,7 +933,9 @@ fn path_of(url: &str) -> String {
 fn evidence_all(item: &QueueItem) -> String {
     let mut s = evidence_block(&item.opp);
     for o in &item.also {
-        s.push_str(&format!("\n同一个页面还有这个问题，这次一起处理：{}\n{}改动方向：{}\n", o.title, evidence_block(o), guidance(o)));
+        let same_page = o.page.trim().trim_end_matches('/') == item.opp.page.trim().trim_end_matches('/');
+        let head = if same_page { "同一个页面还有这个问题，这次一起处理" } else { "同一种页面还有这个问题，这次一起处理（这几页多半是同一个模板或同一段代码生成的：统一改法，别一页写一套，也别改坏其它同类页面）" };
+        s.push_str(&format!("\n{head}：{}\n{}改动方向：{}\n", o.title, evidence_block(o), guidance(o)));
     }
     s
 }
@@ -1195,9 +1221,13 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.branch = branch.clone();
         i.base_sha = base_sha.clone();
+        i.replay.clear();
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
     let mut plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
+    if !item.replay.is_empty() {
+        plan_brief.push_str(&format!("【上一版】这条你之前改过，但主分支后来也改了同一处（多半是同时改好的另一条先上线了），那一版合不进去。现在的工作区已经是最新的主分支：保留主分支上已有的改动，在它的基础上按上一版的意图重做，不要把别人刚改的改回去，也不要重复加。上一版的改动：\n```diff\n{}\n```\n\n", item.replay));
+    }
     if !site.ops.content_code.is_empty() {
         plan_brief.push_str(&format!("【页面写在代码里】这个站点的页面内容（标题、描述、文章）写在这些代码文件里，需要时可以直接改，按上面的代码改动规则来：{}。新加的代码不要读环境变量、执行命令、请求外部服务。\n\n", site.ops.content_code.join("、")));
     }
@@ -1208,7 +1238,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
 读站点要省：只看这次要改的页面、它的模板，以及准备互相链接的两三篇，不要逐篇通读；需要查询词等数据用站点数据工具查。\n\
 1. 找到这个页面对应的源文件，按上面的依据修改。改动方向：{guide}\n\
-2. 改动小而集中，只处理这一个机会；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
+2. 改动小而集中，{scope}；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
    {code_rule}\n\
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
@@ -1217,6 +1247,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
 改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
         title = item.opp.title,
+        scope = if item.also.is_empty() { "只处理这一个机会".to_string() } else { format!("只处理上面这 {} 条", item.also.len() + 1) },
         ev = evidence_all(item),
         base = site.default_branch,
         guide = guidance(&item.opp),
@@ -1499,10 +1530,12 @@ struct Shipped {
 /// 一条改动上线后要验收什么。回滚时只看首页和原来就有的页面（新页面回滚后本来就不该在了）。
 fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify::Spec {
     let mut spec = crate::site_verify::Spec { domain: site.domain.clone(), ..Default::default() };
-    let page = item.opp.page.trim();
-    if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) {
-        spec.pages.push(page.to_string());
-        spec.primary.push(page.to_string());
+    for o in std::iter::once(&item.opp).chain(&item.also) {
+        let page = o.page.trim();
+        if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) && !spec.pages.iter().any(|p| p == page) {
+            spec.pages.push(page.to_string());
+            spec.primary.push(page.to_string());
+        }
     }
     if !rollback {
         for p in &item.pages {
@@ -1933,6 +1966,141 @@ fn join_specs(mut a: crate::site_verify::Spec, b: crate::site_verify::Spec) -> c
         }
     }
     a
+}
+
+/// 待你确认的条目里，哪些合不进主分支（AI 改的时候主分支后来又有了改动、改到同几处）。
+/// 只看本地来源的站点：用 git merge-tree 在内存里试合并，不动文件夹；GitHub 来源由 PR 自己显示能不能合。
+pub async fn conflicting(site: &Site, site_dir: &Path) -> Vec<String> {
+    if site.source != "local" {
+        return Vec::new();
+    }
+    let Ok(main) = crate::site_git::code_dir(site, None) else { return Vec::new() };
+    let mut out = Vec::new();
+    for i in site_ops::load_queue(site_dir).into_iter().filter(|i| i.status == "proposed" && !i.branch.is_empty()) {
+        // 退出码 1＝有冲突；其它错误（git 太旧、分支没了）不算冲突，照常让你确认
+        if let Ok(r) = crate::site_git::git(&main, &["merge-tree", "--write-tree", "--name-only", &site.default_branch, &i.branch], "").await {
+            if !r.ok && r.stderr.is_empty() {
+                out.push(i.id);
+            }
+        }
+    }
+    out
+}
+
+/// 合并上线以后，处理剩下合不进主分支的待确认改动（不用你一条条点「让 AI 在最新代码上重改」）：
+/// 先试不花钱的——把这版改动用 git 接到最新的主分支上，接上了就重新检查；接不上再交给 AI，
+/// 带着上一版的改动在最新代码上重做（比整条从头改省）。处理完照常按规则上线或等你确认。
+/// 处理过程中又有改动上线、让别的条目冲突，会接着处理；每条一次作业里最多处理一次。
+/// `only`：你在某一条上点了「让 AI 在最新代码上重改」，只处理这一条。
+async fn resolve(ctx: &Ctx, site: &Site, job: &Job, only: Option<&str>) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let mut tried: Vec<String> = Vec::new();
+    let (mut rebased, mut redone, mut failed) = (0, 0, 0);
+    loop {
+        let ids: Vec<String> = match only {
+            Some(id) => vec![id.to_string()],
+            None => conflicting(site, &site_dir).await,
+        };
+        let Some(id) = ids.into_iter().find(|id| !tried.contains(id)) else { break };
+        tried.push(id.clone());
+        if job.canceled() {
+            break;
+        }
+        let Some(item) = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == id && matches!(i.status.as_str(), "proposed" | "failed") && !i.branch.is_empty()) else { continue };
+        job.line(&format!("—— 「{}」放到最新代码上 ——", item.opp.title));
+        job.step("rebase", "running", &item.opp.title);
+        match rebase_item(ctx, site, job, &item).await {
+            Ok(()) => {
+                job.step("rebase", "ok", "接上了，不用 AI");
+                job.line("用 git 接到最新代码上了，重新检查");
+                rebased += 1;
+                if let Err(e) = recheck(ctx, site, job, &id).await {
+                    job.line(&format!("重新检查没通过：{e}"));
+                    failed += 1;
+                }
+            }
+            Err(why) => {
+                job.step("rebase", "ok", "接不上，交给 AI");
+                job.line(&format!("git 接不上（{why}），交给 AI 在最新代码上重做"));
+                if let Some(b) = over_tokens(&budget(site, &site_dir, &ctx.state().convos)) {
+                    job.line(&format!("{b}，先不交给 AI，留着等你处理"));
+                    break;
+                }
+                let replay = item_diff(site, &item).await;
+                site_ops::update_item(&site_dir, &id, now(), |i| {
+                    i.status = "open".into();
+                    i.note.clear();
+                    i.verdict.clear();
+                    i.replay = replay.clone();
+                })?;
+                ctx.emit_queue(&site.id);
+                match work_one(ctx, site, job, &id).await {
+                    Ok(_) => redone += 1,
+                    Err(e) => {
+                        job.line(&format!("AI 重做没成功：{e}"));
+                        failed += 1;
+                    }
+                }
+            }
+        }
+        ctx.emit_queue(&site.id);
+    }
+    if tried.is_empty() {
+        return Ok("没有合不进去的改动".into());
+    }
+    let mut parts = Vec::new();
+    if rebased > 0 {
+        parts.push(format!("{rebased} 条直接接到了最新代码上"));
+    }
+    if redone > 0 {
+        parts.push(format!("{redone} 条让 AI 在最新代码上重做了"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} 条没处理成，留给你"));
+    }
+    if parts.is_empty() {
+        parts.push("没处理成，留给你".into());
+    }
+    Ok(format!("合不进主分支的改动：{}", parts.join("，")))
+}
+
+/// 用 git 把一条改动接到最新的主分支上（rebase）；接不上就恢复原样，返回原因。成功后更新基准提交。
+async fn rebase_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<(), String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let cb = code_base(ctx, site, job).await?;
+    let wt = crate::sites::build_root(&site_dir).join("work").join(&item.id);
+    if !wt.is_dir() {
+        crate::site_git::reattach_worktree(&cb.main, &wt, &item.branch).await?;
+    }
+    if !crate::site_git::is_clean(&wt).await {
+        return Err("工作目录里有没提交的改动".into());
+    }
+    let base = crate::site_git::git_ok(&cb.main, &["rev-parse", &site.default_branch], "").await?.trim().to_string();
+    let mut args: Vec<String> = crate::site_git::identity_flags(&wt).await;
+    args.extend(["rebase", "--quiet", base.as_str()].map(String::from));
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    if let Err(e) = crate::site_git::git_ok(&wt, &argv, "").await {
+        let _ = crate::site_git::git(&wt, &["rebase", "--abort"], "").await;
+        return Err(if e.contains("CONFLICT") || e.contains("conflict") { "改到了同一处".into() } else { e.lines().next().unwrap_or("").to_string() });
+    }
+    let head = crate::site_git::head_sha(&wt).await;
+    site_ops::update_item(&site_dir, &item.id, now(), |i| {
+        i.base_sha = base.clone();
+        i.head_sha = head.clone();
+    })?;
+    Ok(())
+}
+
+/// 一条改动相对它的基准提交的 diff（给 AI 重做时参考），太长就截断。
+async fn item_diff(site: &Site, item: &QueueItem) -> String {
+    let Ok(main) = crate::site_git::code_dir(site, None) else { return String::new() };
+    let base = if item.base_sha.is_empty() { site.default_branch.clone() } else { item.base_sha.clone() };
+    let d = crate::site_git::git_ok(&main, &["diff", "--unified=2", &base, &item.branch], "").await.unwrap_or_default();
+    if d.chars().count() > 8000 {
+        format!("{}\n…（后面还有，太长截断了）", d.chars().take(8000).collect::<String>())
+    } else {
+        d
+    }
 }
 
 /// 驳回：关掉 PR / 删掉本地分支，并记住这个机会不再提。

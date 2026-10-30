@@ -100,7 +100,7 @@ export async function workItem(siteId: string, item: OpsItem, model = '', effort
 }
 /** 待你确认的这一版合不进主分支：放回待处理，马上让 AI 在最新的主分支上重改 */
 export async function redoItem(siteId: string, item: OpsItem) {
-  try { await invoke('queue_redo', { id: siteId, itemId: item.id }); say('已让 AI 在最新代码上重改，改好后照常检查'); }
+  try { await invoke('queue_redo', { id: siteId, itemId: item.id }); say('先试着直接接到最新代码上，接不上再让 AI 照着这一版重做；好了照常检查'); }
   catch (e) { say(String(e), 'err'); }
 }
 export async function recheckItem(siteId: string, item: OpsItem) {
@@ -162,7 +162,12 @@ export async function acceptItems(site: Site, items: OpsItem[]) {
   const how = site.source === 'github' ? `按顺序合并这 ${list.length} 个 PR` : `按顺序把这 ${list.length} 个分支压缩合并进 ${site.default_branch}`;
   const then = site.deploy.mode === 'none' ? '' : site.deploy.mode === 'pages_git' ? '，合完 Cloudflare 构建上线一次' : '，合完构建并上线一次';
   const names = list.map((i) => `· ${i.opp.title}`).join('\n');
-  if (!(await confirmDialog(`${how}${then}？\n\n${names}\n\n后面的如果和前面的改到了同一处、合不进去，会跳过、留在这里，可以让 AI 在最新代码上重改。上线后验收不通过会把这次合并的全部回退。`, { title: '一起合并上线', kind: 'info', confirmText: `合并上线 ${list.length} 条` }))) return;
+  // 改到同一个文件的：后面的多半合不进去（会自动接到最新代码上，接不上再让 AI 重做）
+  const seen = new Map<string, number>();
+  for (const i of list) for (const f of new Set(i.files ?? [])) seen.set(f, (seen.get(f) ?? 0) + 1);
+  const shared = [...seen].filter(([, n]) => n > 1).map(([f]) => f);
+  const warn = shared.length ? `\n\n注意：有几条改了同一个文件（${shared.slice(0, 3).join('、')}${shared.length > 3 ? ' 等' : ''}），后面的可能合不进去。合不进去的会自动接到最新代码上，接不上再让 AI 在最新代码上重做，之后照常检查。` : '';
+  if (!(await confirmDialog(`${how}${then}？\n\n${names}\n\n合不进去的会跳过，之后自动接到最新代码上（接不上再让 AI 重做）。上线后验收不通过会把这次合并的全部回退。${warn}`, { title: '一起合并上线', kind: 'info', confirmText: `合并上线 ${list.length} 条` }))) return;
   try { await invoke('queue_accept_many', { id: site.id, itemIds: list.map((i) => i.id) }); }
   catch (e) { say(String(e), 'err'); }
 }

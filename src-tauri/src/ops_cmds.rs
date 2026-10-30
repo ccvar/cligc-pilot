@@ -178,34 +178,14 @@ pub async fn queue_translate_summary(state: tauri::State<'_, AppState>, id: Stri
 #[tauri::command]
 pub async fn queue_conflicts(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<String>, String> {
     let site = state.sites.get(&id)?;
-    if site.source != "local" {
-        return Ok(Vec::new());
-    }
-    let main = crate::site_git::code_dir(&site, None)?;
-    let mut out = Vec::new();
-    for i in site_ops::load_queue(&state.sites.data_dir(&id)).into_iter().filter(|i| i.status == "proposed" && !i.branch.is_empty()) {
-        // 退出码 1＝有冲突；其它错误（git 太旧、分支没了）不算冲突，照常让你确认
-        let r = crate::site_git::git(&main, &["merge-tree", "--write-tree", "--name-only", &site.default_branch, &i.branch], "").await?;
-        if !r.ok && r.stderr.is_empty() {
-            out.push(i.id);
-        }
-    }
-    Ok(out)
+    Ok(site_runner::conflicting(&site, &state.sites.data_dir(&id)).await)
 }
 
-/// 「让 AI 在最新代码上重改」：待你确认的这一版合不进主分支，放回待处理并马上让 AI 在最新的主分支上重改一遍
-/// （工作分支会切到最新的主分支重建，原来那版丢掉）。
+/// 「让 AI 在最新代码上重改」：待你确认的这一版合不进主分支。先试不花钱的——用 git 把这版接到最新的主分支上，
+/// 接上了就重新检查；接不上再让 AI 带着上一版的改动在最新代码上重做（见 site_runner::resolve）。
 #[tauri::command]
-pub fn queue_redo(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<String, String> {
-    let dir = state.sites.data_dir(&id);
-    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| {
-        if matches!(i.status.as_str(), "proposed" | "failed") {
-            i.status = "open".into();
-            i.note.clear();
-            i.verdict.clear();
-        }
-    })?;
-    site_runner::start(ctx(&app), &id, "work", "manual", Some(item_id))
+pub fn queue_redo(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
+    site_runner::start(ctx(&app), &id, "resolve", "manual", Some(item_id))
 }
 
 /// 站点的「算网站内容的代码文件」：加上（on）或去掉一个路径。返回新的清单。

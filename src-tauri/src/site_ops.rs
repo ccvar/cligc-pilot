@@ -510,6 +510,9 @@ pub struct QueueItem {
     /// 免得分开改两遍、后改的和先改的冲突。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<Opportunity>,
+    /// 上一版合不进主分支、交给 AI 在最新代码上重做时，上一版的改动（diff）：AI 照着它的意图重做，不用从头想。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub replay: String,
     /// 处理它的会话。
     #[serde(default)]
     pub conv_id: String,
@@ -766,6 +769,63 @@ pub fn merge_same_page(q: &mut Vec<QueueItem>) -> usize {
     n
 }
 
+/// 同一种页面的路由：`/exchange/mexc/` 和 `/exchange/kucoin/` 都是 `站点/exchange/*`。只看改标题 / 描述这类改动——
+/// 这种页面多半是同一个模板或同一段代码生成的，分开交给 AI 会各开一个分支改同一处，先合的那条会让后面的合不进去。
+fn route_key(o: &Opportunity) -> Option<String> {
+    if o.change != "meta" {
+        return None;
+    }
+    let p = o.page.trim().split(['?', '#']).next().unwrap_or("").trim_end_matches('/').to_ascii_lowercase();
+    let (host, path) = p.split_once("://")?.1.split_once('/').map(|(h, r)| (h.to_string(), r.to_string()))?;
+    let segs: Vec<&str> = path.split('/').filter(|x| !x.is_empty()).collect();
+    if segs.len() < 2 {
+        return None;
+    }
+    Some(format!("{host}/{}/*", segs[..segs.len() - 1].join("/")))
+}
+
+/// 一起交给 AI 的同一种页面最多合几条：再多改动就太大，容易超过「小改动」的上限
+pub const ROUTE_GROUP_MAX: usize = 5;
+
+/// 批量交给 AI 前：选中的待处理条目里，同一种页面（同一路由、都是改标题 / 描述）的合成一条（其余的作为 also 一起改），
+/// 一个分支、一次检查、一次确认。返回合并后要处理的条目 id（保持原来的顺序）和并掉了几条。
+pub fn group_same_route(site_dir: &Path, ids: &[String]) -> Result<(Vec<String>, usize), String> {
+    let mut merged = 0;
+    let out = with_queue(site_dir, |q| {
+        let mut keep: Vec<String> = Vec::new();
+        // 路由 → 这一组留下的那条
+        let mut groups: Vec<(String, String, usize)> = Vec::new();
+        for id in ids {
+            let Some(i) = q.iter().position(|x| &x.id == id) else { continue };
+            let key = (q[i].status == "open").then(|| route_key(&q[i].opp)).flatten();
+            let slot = key.as_ref().and_then(|k| groups.iter_mut().find(|(gk, _, n)| gk == k && *n < ROUTE_GROUP_MAX));
+            match slot {
+                Some((_, head, n)) => {
+                    let head = head.clone();
+                    *n += 1 + q[i].also.len();
+                    let gone = q.remove(i);
+                    if let Some(h) = q.iter_mut().find(|x| x.id == head) {
+                        for o in std::iter::once(gone.opp).chain(gone.also) {
+                            if o.key != h.opp.key && !h.also.iter().any(|x| x.key == o.key) {
+                                h.also.push(o);
+                            }
+                        }
+                    }
+                    merged += 1;
+                }
+                None => {
+                    if let Some(k) = key {
+                        groups.push((k, id.clone(), 1 + q[i].also.len()));
+                    }
+                    keep.push(id.clone());
+                }
+            }
+        }
+        keep
+    })?;
+    Ok((out, merged))
+}
+
 pub fn enqueue(site_dir: &Path, opps: &[Opportunity], now: u64, cooldown: u64) -> Result<Vec<QueueItem>, String> {
     with_queue(site_dir, |q| {
         merge_same_page(q);
@@ -1017,6 +1077,36 @@ pub fn kind_label(k: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_route_meta_changes_go_to_ai_together() {
+        let dir = std::env::temp_dir().join(format!("same-route-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let o = |k: &str, change: &str, page: &str| Opportunity { key: k.into(), kind: "low_ctr".into(), change: change.into(), page: page.into(), score: 1.0, ..Default::default() };
+        enqueue(&dir, &[
+            o("a", "meta", "https://cexqa.com/exchange/mexc/"),
+            o("b", "meta", "https://cexqa.com/exchange/kucoin/"),
+            o("c", "meta", "https://cexqa.com/coin/btc/"),
+            o("d", "content", "https://cexqa.com/exchange/gate/"),
+            o("e", "meta", "https://cexqa.com/about/"),
+            o("f", "meta", "https://cexqa.com/exchange/okx/"),
+        ], 1, 0).unwrap();
+        let q = load_queue(&dir);
+        let id = |k: &str| q.iter().find(|i| i.opp.key == k).unwrap().id.clone();
+        let ids: Vec<String> = ["a", "b", "c", "d", "e", "f"].iter().map(|k| id(k)).collect();
+        let (keep, n) = group_same_route(&dir, &ids).unwrap();
+        // /exchange/* 的三条改标题合成一条；别的路由、补内容、一级页面都不动
+        assert_eq!(n, 2);
+        assert_eq!(keep, vec![id("a"), id("c"), id("d"), id("e")]);
+        let q = load_queue(&dir);
+        let head = q.iter().find(|i| i.opp.key == "a").unwrap();
+        assert_eq!(head.also.iter().map(|o| o.key.as_str()).collect::<Vec<_>>(), vec!["b", "f"]);
+        assert_eq!(q.len(), 4);
+        // 并进去的不会再单独入队
+        enqueue(&dir, &[o("b", "meta", "https://cexqa.com/exchange/kucoin/")], 2, 0).unwrap();
+        assert_eq!(load_queue(&dir).len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn same_page_opportunities_merge_into_one() {
