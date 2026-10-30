@@ -140,7 +140,8 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             }
         }
         if !snippets_ok {
-            let text: String = got.iter().skip(1).flatten().map(|f| visible_text(&f.body)).collect::<Vec<_>>().join("\n");
+            // 改标题 / 描述的改动，新文字只在 <title> 和 meta description 里，正文里没有：一起找
+            let text: String = got.iter().skip(1).flatten().map(|f| format!("{}\n{}\n{}", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body))).collect::<Vec<_>>().join("\n");
             snippets_ok = snippets.iter().any(|s| text.contains(s.as_str()));
         }
         if got.iter().all(|g| g.is_some()) && snippets_ok {
@@ -536,6 +537,14 @@ mod tests {
         let text = visible_text(html);
         assert!(text.contains("遮挡转场要让前景物体") && !text.contains("TODO"), "{text}");
         assert_eq!(internal_links(html, "iosur.com"), vec!["https://iosur.com/zh/posts/b/".to_string(), "https://www.iosur.com/en/".to_string()]);
+    }
+
+    #[test]
+    fn snippets_are_found_in_title_and_description() {
+        let html = "<html><head><title>MEXC（抹茶）上线币种查询：小币交易对与充提网络 - CEXQA</title><meta name=\"description\" content=\"想查某个小币在 MEXC 有没有上线、能不能交易？\"></head><body><h1>MEXC</h1></body></html>";
+        let text = format!("{}\n{}\n{}", html_title(html), meta_content(html, "description"), visible_text(html));
+        assert!(text.contains("有没有上线、能不能交易"));
+        assert!(!visible_text(html).contains("有没有上线"), "正文里本来就没有，只能从 meta 里找");
     }
 
     #[test]
