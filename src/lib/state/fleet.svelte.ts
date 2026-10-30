@@ -17,8 +17,9 @@ export function trafficDown(r: SiteRow): boolean {
 export function win(r: SiteRow) {
   const s = r.summary;
   const w = s.wins?.[fleet.days];
-  if (w) return { users: w.users, users_prev: w.users_prev, clicks: w.clicks, clicks_prev: w.clicks_prev, impr: w.impressions, trend: w.trend };
-  return { users: s.users ?? 0, users_prev: s.users_prev ?? 0, clicks: s.search_clicks ?? s.gsc_clicks, clicks_prev: s.search_clicks_prev ?? s.gsc_clicks_prev, impr: s.search_impressions ?? s.gsc_impressions, trend: s.sessions_trend ?? [] };
+  // clicks_base：算涨跌用的本段点击（只算前一段也有数据的来源）
+  if (w) return { users: w.users, users_prev: w.users_prev, clicks: w.clicks, clicks_prev: w.clicks_prev, clicks_base: w.clicks_base ?? w.clicks, impr: w.impressions, trend: w.trend };
+  return { users: s.users ?? 0, users_prev: s.users_prev ?? 0, clicks: s.search_clicks ?? s.gsc_clicks, clicks_prev: s.search_clicks_prev ?? s.gsc_clicks_prev, clicks_base: s.search_clicks ?? s.gsc_clicks, impr: s.search_impressions ?? s.gsc_impressions, trend: s.sessions_trend ?? [] };
 }
 /** 站点列表：Google + Bing 搜索点击率 */
 export function searchCtr(r: SiteRow): number {

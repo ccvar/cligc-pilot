@@ -483,6 +483,9 @@ pub struct Win {
     pub users_prev: f64,
     pub clicks: f64,
     pub clicks_prev: f64,
+    /// 算涨跌用的本段点击：只算前一段也有数据的来源（Bing 只给一个多月的按天数据，比 28 / 90 天时只拿 Google 比）
+    #[serde(default)]
+    pub clicks_base: f64,
     pub impressions: f64,
     #[serde(default)]
     pub trend: Vec<f64>,
@@ -491,7 +494,7 @@ pub struct Win {
 /// 全部站点列表能选的统计时间段（天）
 pub const WIN_DAYS: [u32; 4] = [7, 14, 28, 90];
 
-pub const SUMMARY_V: u32 = 5;
+pub const SUMMARY_V: u32 = 6;
 
 /// 按天数据够不够覆盖「前一段」：最早一天要早于最新一天往前 2×days−1 天
 fn covers<T>(rows: &[T], date: impl Fn(&T) -> &str, days: i64) -> bool {
@@ -585,13 +588,15 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
                 let s = windows(&gad, |r| &r.key, |r| r.sessions, d);
                 let (g, b) = (windows(&gsd, |r| &r.key, |r| r.clicks, d), windows(&bsd, |r| &r.key, |r| r.clicks, d));
                 let (gi, bi) = (windows(&gsd, |r| &r.key, |r| r.impressions, d), windows(&bsd, |r| &r.key, |r| r.impressions, d));
-                // 前一段没被按天数据盖住（刚改成拉 180 天、Bing 只给了几个月）就不比，免得拿半截数据算出假涨跌
-                let search_full = (gsd.is_empty() || covers(&gsd, |r| &r.key, d)) && (bsd.is_empty() || covers(&bsd, |r| &r.key, d));
+                // 前一段没被按天数据盖住的来源不参与比较（刚改成拉 180 天、Bing 只给一个多月），免得拿半截数据算出假涨跌
+                let (gc, bc) = (covers(&gsd, |r| &r.key, d), covers(&bsd, |r| &r.key, d));
+                let (base, prev) = (if gc { g.0 } else { 0.0 } + if bc { b.0 } else { 0.0 }, if gc { g.1 } else { 0.0 } + if bc { b.1 } else { 0.0 });
                 let w = Win {
                     users: u.0,
                     users_prev: if covers(&gad, |r| &r.key, d) { u.1 } else { 0.0 },
                     clicks: g.0 + b.0,
-                    clicks_prev: if search_full { g.1 + b.1 } else { 0.0 },
+                    clicks_prev: prev,
+                    clicks_base: base,
                     impressions: gi.0 + bi.0,
                     trend: s.2.into_iter().map(|(_, v)| v).collect(),
                 };

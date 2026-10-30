@@ -199,7 +199,7 @@
 
   <div class="page-body">
    {#key fleet.tab}
-   <div class="pane">
+   <div class="pane" class:wide={fleet.tab === 'sites'}>
     {#if fleet.tab === 'sites'}
       <BackgroundNotice />
       {#if fleet.filter !== 'all' || fleet.tag}
@@ -241,7 +241,7 @@
                       <!-- 接了 Search Console 但一天数据都没有：多半是新验证的站，Google 还没出数据 -->
                       <td class="num nodata" data-tip="Search Console 还没出数据：新验证的站一般要等几天才有">Google 还没数据</td><td class="num c-impr nodata">—</td><td class="num c-impr nodata">—</td>
                     {:else}
-                      <td class="num"><span class="v">{n(w.clicks)}</span>{@render delta(w.clicks, w.clicks_prev)}</td>
+                      <td class="num"><span class="v">{n(w.clicks)}</span>{@render delta(w.clicks_base, w.clicks_prev)}</td>
                       <td class="num c-impr"><span class="v">{n(w.impr)}</span></td>
                       <td class="num c-impr"><span class="v">{w.impr > 0 ? `${(searchCtr(r) * 100).toFixed(1)}%` : '—'}</span></td>
                     {/if}
@@ -365,6 +365,8 @@
   .only { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
   .only .link-btn { margin-left: 6px; font-size: 12.5px; }
   .ov .page-body > .pane { max-width: 1180px; gap: 12px; }
+  /* 站点表格列多：宽屏铺满，不在右边空一大块（右上角的 ⋯ 也就和表格右边对齐了） */
+  .ov .page-body > .pane.wide { max-width: none; }
   .tagsel { width: auto; height: 26px; padding: 0 8px; font-size: 12px; }
   .tbl-card { padding: 2px 16px; overflow-x: auto; }
   .tbl-card table.tbl td { vertical-align: middle; padding-top: 9px; padding-bottom: 9px; }
