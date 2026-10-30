@@ -63,7 +63,7 @@
   const endLabel = $derived([ends.ga4, ends.gsc].filter(Boolean).sort().pop() ?? '');
   const endsTip = $derived([ends.ga4 && `GA4 到 ${md(ends.ga4)}`, ends.gsc && `Google 到 ${md(ends.gsc)}`, ends.bing && `Bing 到 ${md(ends.bing)}`].filter(Boolean).join(' · '));
   let moreOpen = $state(false);
-  // 下面内容区给滚动条留了位置（scrollbar-gutter），标题行和 tab 行的右边距也加上这一截，三行的右边才对齐
+  // 内容区给滚动条留了位置（scrollbar-gutter），把这一截从内容区的右边距里扣掉：左右都是 28px，和标题行、tab 行对齐
   let bodyEl = $state<HTMLElement>();
   let sb = $state(0);
   $effect(() => {
@@ -325,11 +325,12 @@
 <style>
   .iss-wrap { position: relative; }
   /* tab 行右边放统计时间段和 ⋯；tab 自己会横向滚动（会裁掉弹出层），所以工具放在外面 */
-  .su.ov .page-head { padding-right: calc(28px + var(--sb, 0px)); }
-  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: calc(28px + var(--sb, 0px)); flex: none; }
+  .su.ov .page-body { padding-right: max(4px, calc(28px - var(--sb, 0px))); }
+  .tabs-bar { display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: 28px; flex: none; }
   .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
   @container page (max-width: 640px) {
-    .su.ov .page-head, .tabs-bar { padding-right: calc(16px + var(--sb, 0px)); }
+    .su.ov .page-body { padding-right: max(4px, calc(16px - var(--sb, 0px))); }
+    .tabs-bar { padding-right: 16px; }
   }
   .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
   .pop-wrap { position: relative; display: inline-flex; }
