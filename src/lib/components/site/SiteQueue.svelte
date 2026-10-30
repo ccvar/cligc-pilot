@@ -350,7 +350,6 @@
   .how-t svg { transition: transform .16s var(--su-ease); }
   .how-t.open svg { transform: rotate(90deg); }
   .how { padding: 8px 12px; border-left: 2px solid var(--border2); margin-left: 4px; font-size: 12.5px; color: var(--dim); }
-  .how p { margin: 0 0 6px; line-height: 1.65; white-space: pre-wrap; }
   /* AI 的说明是 Markdown：渲染出来（加粗、列表、代码），和「近期动态」里一样 */
   .how .sum { line-height: 1.7; color: var(--text); margin-bottom: 6px; }
   .how .sum :global(p) { margin: 0 0 6px; }
