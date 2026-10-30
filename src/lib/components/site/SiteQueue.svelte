@@ -8,6 +8,7 @@
   import SiteJobPanel from './SiteJobPanel.svelte';
   import ModelMenu from './ModelMenu.svelte';
   import OpsErrorHint from './OpsErrorHint.svelte';
+  import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { clock, full as fullTime, pageUrl } from './fmt';
   import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
@@ -105,7 +106,13 @@
   const canWork = (i: OpsItem) => i.status === 'open' || i.status === 'failed';
   // 「用 XX 改」：按钮上写这个站点默认用的模型（托管站点是方案里的主模型）；▾ 换个模型只用这一次
   let siteModel = $state('');
-  $effect(() => { const id = site.id; invoke<[string, string]>('site_ops_model', { id }).then(([b, m]) => { if (id === site.id) siteModel = b ? `${b}::${m}` : ''; }).catch(() => (siteModel = '')); });
+  // 主模型这会儿用不了（余额不足这类）时，后端给的是备用模型，modelNote 写明原因
+  let modelNote = $state('');
+  $effect(() => {
+    const id = site.id;
+    void job?.status; // 作业跑完再取一次：中途可能刚发现主模型用不了
+    invoke<[string, string, string]>('site_ops_model', { id }).then(([b, m, n]) => { if (id === site.id) { siteModel = b ? `${b}::${m}` : ''; modelNote = n; } }).catch(() => { siteModel = ''; modelNote = ''; });
+  });
   const mt = $derived(modelTarget(siteModel));
   let mMenu = $state<{ at: { left: number; top: number; bottom: number; right: number }; item: OpsItem } | null>(null);
   function openModelMenu(e: MouseEvent, item: OpsItem) {
@@ -193,6 +200,10 @@
     <div class="qnote"><Icon name="share" size={13} /><span>分发：{synd.pending[site.id]} 篇文章的摘要已经写好，等你确认发布。</span><button class="link-btn" onclick={() => (sites.tab = 'distribute')}>去分发</button></div>
   {/if}
 
+  {#if modelNote}
+    <div class="qnote warn"><Icon name="info" size={13} /><span>{modelNote}。</span>{#if !modelNote.includes('没登录')}<button class="link-btn" onclick={(e) => openConnectionSetup(e)}>打开 API 设置</button>{/if}{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>换主模型</button>{/if}</div>
+  {/if}
+
   {#if full && counts.open && (filter === 'open' || filter === 'todo')}
     <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>
   {/if}
@@ -222,7 +233,7 @@
           {#if shown.length > 1}<label class="ck"><input type="checkbox" checked={allPicked} indeterminate={pickedItems.length > 0 && !allPicked} onchange={pickAll} />{pickedItems.length ? `已选 ${pickedItems.length} 条` : '全选'}</label>{/if}
           {#if pickedItems.length}
             <span class="grow"></span>
-            <span class="split"><button class="btn tiny primary" onclick={() => batchWork()} disabled={busy} data-tip={`用 ${mt.name} 一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} 改 {pickedItems.length} 条</button><button class="btn tiny primary caret" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); bMenu = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }} disabled={busy} aria-label="换个模型改这几条" data-tip="换个模型改这几条（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>
+            <span class="split"><button class="btn tiny primary" onclick={() => batchWork()} disabled={busy} data-tip={`用 ${mt.name} 一条一条按顺序处理：改、检查，再按方案规则上线或留给你确认；本周额度用完会停下${modelNote ? `\n${modelNote}` : ''}\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} 改 {pickedItems.length} 条</button><button class="btn tiny primary caret" onclick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); bMenu = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }} disabled={busy} aria-label="换个模型改这几条" data-tip="换个模型改这几条（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>
             <button class="btn tiny quiet" onclick={batchDismiss} disabled={busy}><Icon name="x" size={11} />驳回 {pickedItems.length} 条</button>
           {:else}
             <span class="faint lh-hint">{myPlan && myPlan.autonomy !== 'suggest' ? `托管每轮按优先级处理排在前面的几条，其余的排着等下一轮；想现在做，勾选后点「让 AI 改」或用单条的按钮。` : '勾选几条，可以一起让 AI 改或驳回。'}</span>
@@ -316,7 +327,7 @@
               {#if i.status === 'proposed' && conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} disabled={busy} data-tip="先试着用 git 把这一版直接接到最新的主分支上（不花钱）；接不上再让 AI 照着这一版在最新代码上重做。好了照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
               {:else if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
               {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto' && !conflicts.has(i.id))) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
-              {#if canWork(i)}<span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, i)} disabled={busy} data-tip={`用 ${mt.name} ${i.status === 'failed' && i.head_sha ? '重新改一遍' : '改'}：这个站点默认的模型${siteModel ? '' : '（还没设好，会提示你去设）'}\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} {i.status === 'failed' && i.head_sha ? '重新改' : '改'}</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, i)} disabled={busy} aria-label="换个模型改" data-tip="换个模型改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>{/if}
+              {#if canWork(i)}<span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, i)} disabled={busy} data-tip={`用 ${mt.name} ${i.status === 'failed' && i.head_sha ? '重新改一遍' : '改'}：${modelNote || `这个站点默认的模型${siteModel ? '' : '（还没设好，会提示你去设）'}`}\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} {i.status === 'failed' && i.head_sha ? '重新改' : '改'}</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, i)} disabled={busy} aria-label="换个模型改" data-tip="换个模型改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>{/if}
               {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
               {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
               {#if i.status === 'failed' && i.conv_id}<button class="btn tiny" onclick={() => markDone(site.id, i)}><Icon name="check" size={11} />我已手动处理</button>{/if}

@@ -107,6 +107,9 @@ pub struct Conversation {
     /// 会话由谁发起：空＝用户；ops＝站点运营任务（无人值守开出来的会话，侧栏单独分组）。
     #[serde(default)]
     pub origin: String,
+    /// 从侧栏收起：运营任务里主模型一上来就失败、什么都没做的那条（改用备用模型另开了一条）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folded: bool,
 }
 
 /// 活着的会话列表只在首次用到时从 conversations.json 读一次，之后常驻内存（写操作直写磁盘）。
@@ -590,6 +593,7 @@ mod tests {
             total_tokens: 0,
             billed_tokens: 0,
             origin: String::new(),
+            folded: false,
         }
     }
 

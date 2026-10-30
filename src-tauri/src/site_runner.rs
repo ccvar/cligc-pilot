@@ -362,6 +362,57 @@ fn set_model_override(site_id: &str, m: Option<(String, String)>) {
 /// 临时换模型时一起选的推理强度（空＝跟随模型默认；API 模型带 api: 前缀，和对话里一样）。只对临时选的那个模型生效。
 static EFFORT_OVERRIDE: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
+/// 主模型因为短时间好不了的原因失败（余额不足、密钥不对、客户端没登录、模型用不了）：记一段时间，
+/// 这期间同一个主模型直接用备用模型，不再每条任务都先失败一次、留一个空会话。充值 / 修好后最多这么久就恢复用它。
+static MODEL_DOWN: std::sync::Mutex<Vec<(String, u64, String)>> = std::sync::Mutex::new(Vec::new());
+const MODEL_DOWN_SECS: u64 = 30 * 60;
+
+fn model_key(m: &(String, String)) -> String {
+    format!("{}::{}", m.0, m.1)
+}
+
+/// 报错是不是短时间好不了的那种；是就返回一句说明（和前端 opsErrorHint 认的是同一类）。限流、服务商临时故障不算。
+pub fn persistent_failure(e: &str) -> Option<&'static str> {
+    let l = e.to_lowercase();
+    if ["credit balance is too low", "insufficient_quota", "insufficient quota", "insufficient balance", "insufficient funds", "余额不足", "账户余额", "payment required", "http 402"].iter().any(|k| l.contains(k)) {
+        return Some("余额不足");
+    }
+    if ["invalid api key", "invalid x-api-key", "invalid_api_key", "incorrect api key", "authentication_error", "authentication error", "http 401", "密钥无效", "密钥错误"].iter().any(|k| l.contains(k)) {
+        return Some("API 密钥无效");
+    }
+    if ["not logged in", "please run /login", "claude login", "未登录"].iter().any(|k| l.contains(k)) {
+        return Some("客户端没登录");
+    }
+    if ["unknown model", "模型不存在"].iter().any(|k| l.contains(k)) || (l.contains("model") && ["not found", "does not exist", "not available"].iter().any(|k| l.contains(k))) {
+        return Some("模型用不了");
+    }
+    None
+}
+
+/// 这个模型现在是不是记成用不了（返回原因）
+pub fn model_down(m: &(String, String)) -> Option<String> {
+    let k = model_key(m);
+    let mut v = MODEL_DOWN.lock().unwrap();
+    v.retain(|(_, until, _)| *until > now());
+    v.iter().find(|(x, _, _)| *x == k).map(|(_, _, why)| why.clone())
+}
+
+fn mark_down(m: &(String, String), why: &str) {
+    let k = model_key(m);
+    let mut v = MODEL_DOWN.lock().unwrap();
+    v.retain(|(x, _, _)| *x != k);
+    v.push((k, now() + MODEL_DOWN_SECS, why.to_string()));
+}
+
+fn clear_down(m: &(String, String)) {
+    let k = model_key(m);
+    MODEL_DOWN.lock().unwrap().retain(|(x, _, _)| *x != k);
+}
+
+fn model_label(m: &(String, String)) -> String {
+    if m.1.is_empty() { format!("{} · 默认模型", m.0) } else { format!("{} · {}", m.0, m.1) }
+}
+
 fn effort_override(site_id: &str) -> String {
     EFFORT_OVERRIDE.lock().unwrap().iter().find(|(s, _)| s == site_id).map(|(_, e)| e.clone()).unwrap_or_default()
 }
@@ -1034,14 +1085,28 @@ pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Opt
 async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String) -> Result<(String, crate::convo::Conversation), String> {
     let st = ctx.state();
     let (primary, fallback) = models_for(site, &st.data_dir)?;
+    // 主模型刚因为余额 / 密钥这类原因失败过：这段时间直接用备用模型
+    if let (Some(why), Some(fb)) = (model_down(&primary), fallback.as_ref()) {
+        st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 现在用不了（{why}），这次直接用备用模型 {}", model_label(&primary), model_label(fb)));
+        return run_conversation_with(ctx, site, perm, work_dir, message, fb).await;
+    }
     match run_conversation_with(ctx, site, perm, work_dir, message.clone(), &primary).await {
-        Ok(r) => Ok(r),
+        Ok(r) => {
+            clear_down(&primary);
+            Ok(r)
+        }
         // 作业被用户取消：这一轮是被停掉的，不是模型失败，不换备用模型重跑
         Err(_) if st.site_jobs.is_canceled(&site.id) => Err("已取消".into()),
         // 你在会话里点了停止：同样不换备用模型
         Err(e) if e.starts_with(STOPPED) => Err(e),
         Err(e) => {
+            if let Some(why) = persistent_failure(&e) {
+                mark_down(&primary, why);
+            }
             let Some(fb) = fallback else { return Err(e) };
+            if let Some(why) = persistent_failure(&e) {
+                st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 用不了（{why}），改用备用模型 {}；{} 分钟内这个站点和其它站点都直接用备用模型", model_label(&primary), model_label(&fb), MODEL_DOWN_SECS / 60));
+            }
             crate::managed::log(&st.data_dir, crate::managed::Activity {
                 ts: now(),
                 site_id: site.id.clone(),
@@ -1130,6 +1195,14 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
             return Err(STOPPED.into());
         }
         let e = if m.unfinished.is_empty() { &m.text } else { &m.unfinished };
+        // 一上来就失败、什么都没做的（余额不足、密钥不对这类）：会话从侧栏收起，失败原因在作业日志和下一条会话的开头
+        if persistent_failure(e).is_some() && conv.messages.iter().all(|m| m.tools.is_empty()) {
+            if let Some(mut c) = st.convos.get(&conv_id) {
+                c.folded = true;
+                let _ = st.convos.upsert(c);
+                let _ = ctx.app.emit("conversations-changed", ());
+            }
+        }
         return Err(format!("模型这一轮没有完成：{}", e.lines().next().unwrap_or("")));
     }
     Ok((conv_id, conv))
@@ -3184,6 +3257,24 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn persistent_model_failures_are_told_apart_from_transient_ones() {
+        use super::persistent_failure as p;
+        assert_eq!(p("模型这一轮没有完成：API HTTP 400：Your credit balance is too low to access the Anthropic API."), Some("余额不足"));
+        assert_eq!(p("HTTP 401 invalid x-api-key"), Some("API 密钥无效"));
+        assert_eq!(p("Not logged in · Please run /login"), Some("客户端没登录"));
+        assert_eq!(p("model: claude-x not found"), Some("模型用不了"));
+        // 限流、服务商临时故障：过一会儿就好，不记
+        assert_eq!(p("HTTP 429 rate_limit_error"), None);
+        assert_eq!(p("HTTP 529 overloaded_error"), None);
+        let m = ("api:x".to_string(), "claude-opus-5-5".to_string());
+        assert_eq!(super::model_down(&m), None);
+        super::mark_down(&m, "余额不足");
+        assert_eq!(super::model_down(&m).as_deref(), Some("余额不足"));
+        super::clear_down(&m);
+        assert_eq!(super::model_down(&m), None);
+    }
+
     use super::*;
     use crate::site_data::Row;
 

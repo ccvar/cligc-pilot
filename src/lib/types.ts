@@ -134,6 +134,8 @@ export interface Conversation {
   total_tokens?: number;
   /** 会话由谁发起：空＝用户；ops＝站点运营任务。 */
   origin?: string;
+  /** 从侧栏收起：运营任务里主模型一上来就失败、什么都没做的那条（改用备用模型另开了一条） */
+  folded?: boolean;
 }
 
 export type TurnEvent =

@@ -93,9 +93,15 @@ pub fn queue_work(app: tauri::AppHandle, id: String, item_id: String, model: Opt
 
 /// 这个站点让 AI 改时默认用的模型（brain, model）：托管站点用方案里的主模型，否则用站点运营设置的；没设好返回空。
 #[tauri::command]
-pub fn site_ops_model(state: tauri::State<'_, AppState>, id: String) -> Result<(String, String), String> {
+/// 返回（服务，模型，说明）：主模型刚因为余额 / 密钥这类原因失败过、有备用模型时，返回的是这会儿实际会用的备用模型，
+/// 说明里写主模型为什么用不了（按钮上照实写「用 XX 改」）。
+pub fn site_ops_model(state: tauri::State<'_, AppState>, id: String) -> Result<(String, String, String), String> {
     let site = state.sites.get(&id)?;
-    Ok(site_runner::models_for(&site, &state.data_dir).map(|(m, _)| m).unwrap_or_default())
+    let Ok((main, fb)) = site_runner::models_for(&site, &state.data_dir) else { return Ok(Default::default()) };
+    match (site_runner::model_down(&main), fb) {
+        (Some(why), Some(fb)) => Ok((fb.0, fb.1, format!("主模型 {} · {} 现在用不了（{why}），先用备用模型；充值或修好后最多 30 分钟自动换回", main.0, main.1))),
+        _ => Ok((main.0, main.1, String::new())),
+    }
 }
 
 /// 批量让 AI 改（按顺序处理选中的条目）。

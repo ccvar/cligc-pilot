@@ -41,7 +41,7 @@
   }
   /** 非当前站点：直接从对话列表里取，新的在前；运营任务开的对话只露最近几条 */
   function convsOf(id: string): Conversation[] {
-    const all = app.convos.filter((c) => c.conn_id === `site:${id}`).sort((a, b) => b.updated_at - a.updated_at);
+    const all = app.convos.filter((c) => c.conn_id === `site:${id}` && (!c.folded || c.id === app.activeConvId)).sort((a, b) => b.updated_at - a.updated_at);
     const ops = all.filter((c) => c.origin === 'ops');
     const keep = showOld.has(id) ? ops : ops.filter((c, i) => i < OPS_SHOWN || app.running[c.id] || c.id === app.activeConvId);
     return all.filter((c) => c.origin !== 'ops' || keep.includes(c));
@@ -97,7 +97,7 @@
     </div>
   {:else if s.id !== activeId && isOpen(s.id)}
     {@const cs = convsOf(s.id)}
-    {@const opsN = app.convos.filter((c) => c.conn_id === `site:${s.id}` && c.origin === 'ops').length}
+    {@const opsN = app.convos.filter((c) => c.conn_id === `site:${s.id}` && c.origin === 'ops' && !c.folded).length}
     <div class="convs">
       {#each cs as c (c.id)}{@render convRow(c)}{/each}
       {#if opsN > OPS_SHOWN}

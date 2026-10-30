@@ -181,6 +181,21 @@ impl Jobs {
     }
 
     /// 记下这个站点的作业当前交给了哪条 AI 会话（跑完传空串清掉）。
+    /// 往这个站点正在跑的作业日志里写一行（手上没有 Job 句柄的地方用，比如换备用模型时）。
+    pub fn line(&self, app: &tauri::AppHandle, site_id: &str, line: &str) {
+        let line: String = line.chars().take(2000).collect();
+        let job_id = {
+            let mut g = self.inner.lock().unwrap();
+            let Some(slot) = g.get_mut(site_id).filter(|s| s.state.status == "running") else { return };
+            slot.state.log.push_back(line.clone());
+            while slot.state.log.len() > LOG_TAIL {
+                slot.state.log.pop_front();
+            }
+            slot.state.id.clone()
+        };
+        let _ = app.emit("site-job-line", LineEvent { site_id, job_id: &job_id, line: &line });
+    }
+
     pub fn set_conversation(&self, site_id: &str, conv_id: &str) {
         let g = self.inner.lock().unwrap();
         if let Some(s) = g.get(site_id) {

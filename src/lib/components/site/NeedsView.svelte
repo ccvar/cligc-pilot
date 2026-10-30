@@ -85,7 +85,7 @@
     const ids = [...new Set(needs.filter((x) => x.item.status === 'failed').map((x) => x.site_id))];
     for (const id of ids) {
       if (untrack(() => id in siteModels)) continue;
-      invoke<[string, string]>('site_ops_model', { id }).then(([b, m]) => (siteModels = { ...siteModels, [id]: b ? `${b}::${m}` : '' })).catch(() => {});
+      invoke<[string, string, string]>('site_ops_model', { id }).then(([b, m]) => (siteModels = { ...siteModels, [id]: b ? `${b}::${m}` : '' })).catch(() => {});
     }
   });
   let mMenu = $state<{ at: { left: number; top: number; bottom: number; right: number }; siteId: string; item: OpsItem } | null>(null);

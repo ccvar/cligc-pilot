@@ -70,7 +70,7 @@
     managed.progress = n;
   }
   const opsConvOf = (id: string, since: number) =>
-    app.convos.filter((c) => c.conn_id === `site:${id}` && c.origin === 'ops' && c.updated_at >= since - 5).sort((a, b) => b.updated_at - a.updated_at)[0];
+    app.convos.filter((c) => c.conn_id === `site:${id}` && c.origin === 'ops' && !c.folded && c.updated_at >= since - 5).sort((a, b) => b.updated_at - a.updated_at)[0];
   // 托管方案页打开时取一下各站点正在跑的作业（之后由 site-job 事件实时更新）
   let jobsFor = '';
   $effect(() => {

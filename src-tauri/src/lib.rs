@@ -3788,6 +3788,7 @@ async fn create_conversation(
         total_tokens: 0,
         billed_tokens: 0,
         origin,
+        folded: false,
     };
     convos.upsert(conv)?;
 
