@@ -316,7 +316,9 @@
   .tabs-bar .tabs { border-bottom: none; flex: 1; min-width: 0; }
   .tab-tools { display: flex; align-items: center; gap: 4px; padding-bottom: 2px; }
   .pop-wrap { position: relative; display: inline-flex; }
-  .ic-more { width: 28px; height: 28px; }
+  /* 低频入口：平时淡一点，悬停 / 打开时再深 */
+  .tab-tools .ic-more { width: 28px; height: 28px; color: var(--faint); }
+  .tab-tools .ic-more:hover:not(:disabled), .tab-tools .ic-more.on { color: var(--text); }
   /* ⋯ 菜单顶部：统计时间段（两段切换）+ 截至哪天，下面一条线再接批量操作 */
   .range-sec { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; margin-bottom: 2px; border-bottom: 1px solid var(--border); }
   .range-h { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); }
