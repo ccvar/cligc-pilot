@@ -106,8 +106,8 @@
   .src-link { display: inline-flex; align-items: center; gap: 4px; vertical-align: -1px; }
   .wb.empty { align-items: center; justify-content: center; }
   /* 页头两行（站点名 + 域名），整体居中会让按钮掉到两行中间：改成顶对齐，站点名那一行和右边按钮的中心
-     都落在 20px，和红绿灯、左上角按钮同一条线（顶部那一行 40px，见 +page.svelte .titlebar） */
-  .page-head.wb-head { align-items: flex-start; padding-top: 8px; }
+     都落在 22px（和其他站点页面一样比 20px 中线低 2px，按钮上方留 10px；顶部那一行 40px，见 +page.svelte .titlebar） */
+  .page-head.wb-head { align-items: flex-start; padding-top: 10px; }
   .wb-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 160px; }
   .wb-ic { width: 30px; height: 30px; border-radius: 8px; background: var(--rail); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--dim); flex: none; }
   .wb-name { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
