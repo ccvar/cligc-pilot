@@ -672,6 +672,24 @@ pub fn should_enqueue(q: &[QueueItem], key: &str, now: u64, cooldown: u64) -> bo
 }
 
 /// 把新机会并入队列，返回新增的条目。
+/// 能自己确认「问题还在不在」的机会：sitemap 报错、抓取失败、页面太慢、页面体检。
+/// 还没交给 AI 的（待处理）在最新一次检查里不再出现，就自动关掉，不留着让你去处理一个已经好了的问题。
+/// `source_ok`：这一类的数据这次拉成功了没有（比如 Search Console 这次报错，就不凭旧数据关 sitemap 那几条）。
+pub fn close_resolved(site_dir: &Path, opps: &[Opportunity], now: u64, source_ok: impl Fn(&str) -> bool) -> Result<usize, String> {
+    const SELF_CHECKING: [&str; 5] = ["sitemap_error", "crawl_issue", "slow", "img_audit", "schema"];
+    let live: std::collections::HashSet<&str> = opps.iter().map(|o| o.key.as_str()).collect();
+    with_queue(site_dir, |q| {
+        let mut n = 0;
+        for i in q.iter_mut().filter(|i| i.status == "open" && SELF_CHECKING.contains(&i.opp.kind.as_str()) && !live.contains(i.opp.key.as_str()) && source_ok(&i.opp.kind)) {
+            i.status = "done".into();
+            i.note = "最新一次检查里已经没有这个问题了，自动关掉".into();
+            i.updated_at = now;
+            n += 1;
+        }
+        n
+    })
+}
+
 pub fn enqueue(site_dir: &Path, opps: &[Opportunity], now: u64, cooldown: u64) -> Result<Vec<QueueItem>, String> {
     with_queue(site_dir, |q| {
         let mut added = Vec::new();
@@ -914,6 +932,23 @@ pub fn kind_label(k: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolved_problems_close_only_when_safe() {
+        let dir = std::env::temp_dir().join(format!("close-resolved-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let o = |k: &str, kind: &str| Opportunity { key: k.into(), kind: kind.into(), ..Default::default() };
+        enqueue(&dir, &[o("sitemap_error:a", "sitemap_error"), o("slow:x", "slow"), o("low_ctr:p", "low_ctr")], 1, 0).unwrap();
+        // Search Console 这次没拉成功：sitemap 那条不关
+        assert_eq!(close_resolved(&dir, &[], 2, |k| k != "sitemap_error").unwrap(), 1);
+        let q = load_queue(&dir);
+        let st = |k: &str| q.iter().find(|i| i.opp.key == k).unwrap().status.clone();
+        assert_eq!((st("sitemap_error:a").as_str(), st("slow:x").as_str(), st("low_ctr:p").as_str()), ("open", "done", "open"));
+        // 拉成功了、也不再报：关掉；点击率偏低这类不是自己能确认的，不动
+        assert_eq!(close_resolved(&dir, &[], 3, |_| true).unwrap(), 1);
+        assert_eq!(load_queue(&dir).iter().filter(|i| i.status == "open").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn sitemap_errors_only_count_the_sites_own_host() {

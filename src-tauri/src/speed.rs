@@ -269,6 +269,17 @@ fn page_facts(p: &PageSpeed) -> String {
     )
 }
 
+/// 测出问题的页面还在的那些机会 key（自动的、手动交给 AI 的都算）：判断待处理里的「页面太慢」还要不要留着
+pub fn live_keys(site_dir: &Path) -> Vec<String> {
+    let rep = load(site_dir);
+    let pages: Vec<&PageSpeed> = rep.pages.iter().filter(|p| p.error.is_empty() && (!p.issues.is_empty() || p.slow())).collect();
+    let mut keys: Vec<String> = pages.iter().map(|p| format!("slow:{}", p.url)).collect();
+    if pages.len() > 1 {
+        keys.push("slow:pages".into());
+    }
+    keys
+}
+
 /// 站点概览「页面速度」里手动交给 AI：指定页面就只优化它；不指定就把测出问题的页面打包成一条
 /// （这几个页面多半共用模板，一次改共用的部分比拆开各改各的省事，也不会改出冲突）。不管分数多少。
 pub fn task(site_dir: &Path, url: Option<&str>) -> Option<crate::site_ops::Opportunity> {

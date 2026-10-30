@@ -401,6 +401,18 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     // 机会列表跟着数据一起重算，模型的查询工具和看板读的是同一份。
     let opps = ranked_opportunities(site, site_dir).await;
     let _ = write_json(&dir, "opportunities.json", &opps);
+    // 已经好了的问题（sitemap 不报错了、页面不慢了…）还排在待处理里：自动关掉；这次没拉成功的数据源不算数
+    let ok = |m: &SourceMeta| m.fetched_at > 0 && m.error.is_empty();
+    // 速度、体检按报告本身看（手动交给 AI 的不受「低于 50 分 / 问题够多才算机会」的门槛限制）
+    let mut live = opps.clone();
+    for key in crate::speed::live_keys(site_dir).into_iter().chain(crate::page_audit::tasks(site_dir).into_iter().map(|o| o.key)) {
+        live.push(crate::site_ops::Opportunity { key, ..Default::default() });
+    }
+    let _ = crate::site_ops::close_resolved(site_dir, &live, now(), |kind| match kind {
+        "sitemap_error" => ok(&meta.gsc),
+        "crawl_issue" => ok(&meta.bing),
+        _ => true,
+    });
     let _ = write_json(&dir, "summary.json", &compute_summary(site_dir));
     meta
 }
