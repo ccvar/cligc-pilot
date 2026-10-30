@@ -344,6 +344,11 @@ impl SiteStore {
         self.root.join(id)
     }
 
+    /// 这个站点的构建目录（AI 改动的工作树 work/、GitHub 来源的部署检出 deploy/），见 build_root。
+    pub fn build_dir(&self, id: &str) -> PathBuf {
+        build_root(&self.root.join(id))
+    }
+
     pub fn insert(&self, mut site: Site) -> Result<Site, String> {
         let _g = self.lock.lock().unwrap();
         let mut all = self.read();
@@ -393,8 +398,12 @@ impl SiteStore {
             return Err("站点不存在".into());
         }
         self.write(&all)?;
-        // 只删 Pilot 自己的数据目录；用户的代码（本地文件夹 / GitHub 检出）一律不动。
+        // 只删 Pilot 自己的数据目录和构建目录；用户的代码（本地文件夹 / GitHub 检出）一律不动。
+        let build = self.build_dir(id);
         let _ = fs::remove_dir_all(self.root.join(id));
+        if build != self.root.join(id) {
+            let _ = fs::remove_dir_all(build);
+        }
         Ok(())
     }
 }
@@ -1040,6 +1049,27 @@ fn env_account(site_id: &str) -> String {
     format!("site-env:{site_id}")
 }
 
+/// 站点的构建目录：AI 改动的工作树（work/）、GitHub 来源的部署检出（deploy/）都放这里。
+/// 数据目录在 macOS 上是 ~/Library/Application Support/…，路径里有空格，不少站点的构建脚本
+/// 遇到空格会出错（比如用 URL.pathname 取目录，空格变成 %20 就找不到文件夹）。路径里有空格就换到
+/// ~/Library/Caches/com.cligc.pilot/sites/<站点>（都是能重建的东西，放缓存目录合适），还有空格再试系统临时目录，
+/// 都不行就照旧用数据目录。路径里没有空格（多数 Windows / Linux）就不挪。
+pub fn build_root(site_dir: &Path) -> PathBuf {
+    let spaced = |p: &Path| p.to_string_lossy().chars().any(char::is_whitespace);
+    if !spaced(site_dir) {
+        return site_dir.to_path_buf();
+    }
+    let id = site_dir.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    let mut bases: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "macos") {
+        if let Some(home) = std::env::var_os("HOME") {
+            bases.push(PathBuf::from(home).join("Library/Caches/com.cligc.pilot"));
+        }
+    }
+    bases.push(std::env::temp_dir().join("cligc-pilot"));
+    bases.into_iter().map(|b| b.join("sites").join(&id)).find(|p| !spaced(p)).unwrap_or_else(|| site_dir.to_path_buf())
+}
+
 pub fn load_env(site_id: &str) -> Vec<(String, String)> {
     let Ok(raw) = crate::keychain::get_named_secret(&env_account(site_id)) else {
         return Vec::new();
@@ -1100,6 +1130,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn build_root_avoids_spaces() {
+        // 没空格：原样
+        let plain = Path::new("/data/sites/abc");
+        assert_eq!(build_root(plain), plain.to_path_buf());
+        // 有空格：换到没空格的地方，按站点 id 分开
+        let spaced = Path::new("/Users/x/Library/Application Support/com.cligc.pilot/sites/abc");
+        let b = build_root(spaced);
+        assert!(!b.to_string_lossy().contains(' ') || b == spaced.to_path_buf());
+        assert!(b.ends_with("sites/abc"));
+    }
 
     #[test]
     fn deploy_script_yields_env_out_project_and_branch() {

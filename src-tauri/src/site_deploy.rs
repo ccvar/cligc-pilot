@@ -275,7 +275,7 @@ pub async fn prepare_github(site: &Site, gh: &Connection, site_dir: &Path, job: 
     let branch = if site.deploy.branch.is_empty() { site.default_branch.as_str() } else { site.deploy.branch.as_str() };
     job.line(&format!("拉取 {}@{branch}", site.repo));
     crate::site_git::git_ok(&main, &["fetch", "--quiet", "origin", branch], &token).await?;
-    let dir = site_dir.join("deploy");
+    let dir = crate::sites::build_root(site_dir).join("deploy");
     crate::site_git::worktree_at(&main, &dir, &format!("origin/{branch}"), None).await?;
     crate::site_git::share_node_modules(&main, &dir);
     Ok(dir)
@@ -538,7 +538,7 @@ pub async fn live_build(site: &Site, site_dir: &Path) -> Result<(BuildOutcome, D
     if last.commit.is_empty() || last.dirty {
         return Err("上次上线的不是一个干净的提交".into());
     }
-    let code = if site.source == "github" { site_dir.join("deploy") } else { crate::site_git::code_dir(site, None)? };
+    let code = if site.source == "github" { crate::sites::build_root(site_dir).join("deploy") } else { crate::site_git::code_dir(site, None)? };
     if crate::site_git::head_sha(&code).await != last.commit {
         return Err("代码在上次上线后有新提交".into());
     }

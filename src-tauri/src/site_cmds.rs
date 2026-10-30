@@ -487,7 +487,7 @@ pub async fn site_make_state(state: tauri::State<'_, AppState>, id: String, full
     let code = crate::site_git::code_dir(&site, gh.as_ref())?;
     let app = site.app_dir(&code);
     // GitHub 来源的「构建并检查」在 <站点数据>/deploy 工作树里构建（见 site_deploy::prepare_github），产物在那里
-    let deploy = state.sites.data_dir(&id).join("deploy");
+    let deploy = state.sites.build_dir(&id).join("deploy");
     let built_app = if site.source == "github" && deploy.is_dir() { site.app_dir(&deploy) } else { app.clone() };
     let out = mk::out_dir(&built_app, &site.build.out_dir);
     let commits = if full.unwrap_or(true) && code.join(".git").exists() {
@@ -521,7 +521,7 @@ pub async fn site_continue_message(state: tauri::State<'_, AppState>, id: String
     let site = state.sites.get(&id)?;
     let code = crate::site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
     let commits = crate::site_git::git(&code, &["rev-list", "--count", "HEAD"], "").await.map(|o| o.stdout.trim().parse().unwrap_or(0)).unwrap_or(0);
-    let deploy = state.sites.data_dir(&id).join("deploy");
+    let deploy = state.sites.build_dir(&id).join("deploy");
     let built_app = if site.source == "github" && deploy.is_dir() { site.app_dir(&deploy) } else { site.app_dir(&code) };
     let steps = mk::progress(&site.app_dir(&code), &code, &built_app, &site.build.out_dir, commits);
     let pending: Vec<&str> = steps.iter().filter(|s| !s.done).map(|s| s.label).collect();

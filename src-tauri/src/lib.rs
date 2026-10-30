@@ -2446,7 +2446,7 @@ async fn site_preview_start(app: AppHandle, state: tauri::State<'_, AppState>, i
     let site = state.sites.get(&id)?;
     let code = site_git::code_dir(&site, state.conns.get(&site.gh_conn_id).ok().as_ref())?;
     // GitHub 来源在 <站点数据>/deploy 工作树里构建
-    let deploy = state.sites.data_dir(&id).join("deploy");
+    let deploy = state.sites.build_dir(&id).join("deploy");
     let root = if site.source == "github" && deploy.is_dir() { deploy } else { code };
     let out = site_make::out_dir(&site.app_dir(&root), &site.build.out_dir);
     if static_server::built_at(&out).is_none() {

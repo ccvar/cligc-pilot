@@ -280,7 +280,7 @@ pub async fn setup_indexnow(state: tauri::State<'_, AppState>, id: String) -> Re
             let token = crate::keychain::get_key(&gh.id)?;
             let main = crate::github::repo_dir(&gh.skill_dir, &site.repo)?;
             crate::github::ensure_checkout(&gh.skill_dir, &main.to_string_lossy(), &token, &gh.login, &gh.account_id).await?;
-            let wt = state.sites.data_dir(&id).join("work").join("indexnow");
+            let wt = state.sites.build_dir(&id).join("work").join("indexnow");
             crate::site_git::git_ok(&main, &["fetch", "--quiet", "origin", &site.default_branch], &token).await?;
             let branch = "pilot/indexnow-key";
             crate::site_git::worktree_at(&main, &wt, &format!("origin/{}", site.default_branch), Some(branch)).await?;

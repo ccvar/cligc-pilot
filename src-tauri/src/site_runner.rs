@@ -686,7 +686,7 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
     if !matches!(item.status.as_str(), "failed" | "proposed") {
         return Err("只有失败或等你确认的条目可以重新检查".into());
     }
-    let wt = site_dir.join("work").join(&item.id);
+    let wt = crate::sites::build_root(&site_dir).join("work").join(&item.id);
     if item.branch.is_empty() || item.base_sha.is_empty() || !wt.is_dir() {
         return Err("这条的改动分支已经不在了，只能让 AI 重新改".into());
     }
@@ -1134,10 +1134,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     if !crate::site_git::safe_branch(&branch) {
         return Err("分支名不合法".into());
     }
-    let wt = site_dir.join("work").join(&item.id);
+    let wt = crate::sites::build_root(&site_dir).join("work").join(&item.id);
     crate::site_git::worktree_at(&cb.main, &wt, &base_sha, Some(&branch)).await?;
     crate::site_git::share_node_modules(&cb.main, &wt);
-    crate::site_git::share_node_modules(&site_dir.join("deploy"), &wt);
+    crate::site_git::share_node_modules(&crate::sites::build_root(&site_dir).join("deploy"), &wt);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.branch = branch.clone();
         i.base_sha = base_sha.clone();
@@ -1701,7 +1701,7 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
             } else {
                 crate::site_github::merge_pr(&cb.token, &site.repo, item.pr_number, &title).await?
             };
-            crate::site_git::remove_worktree(&cb.main, &site_dir.join("work").join(&item.id)).await;
+            crate::site_git::remove_worktree(&cb.main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             let _ = crate::site_git::git(&cb.main, &["branch", "-D", &item.branch], "").await;
             sha
         }
@@ -1711,7 +1711,7 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
             if cur != site.default_branch || !crate::site_git::is_clean(&main).await {
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再确认（Pilot 不会动你正在改的东西）", site.default_branch));
             }
-            crate::site_git::remove_worktree(&main, &site_dir.join("work").join(&item.id)).await;
+            crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await?;
             crate::site_git::git_commit_ok(&main, &["commit", "-qm", &title]).await?;
             let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
@@ -1762,13 +1762,13 @@ pub async fn dismiss(ctx: &Ctx, site: &Site, item_id: &str) -> Result<(), String
                         let _ = crate::site_github::close_pr(&token, &site.repo, item.pr_number).await;
                     }
                     if let Ok(main) = crate::github::repo_dir(&gh.skill_dir, &site.repo) {
-                        crate::site_git::remove_worktree(&main, &site_dir.join("work").join(&item.id)).await;
+                        crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
                         let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
                     }
                 }
             }
         } else if let Ok(main) = crate::site_git::code_dir(site, None) {
-            crate::site_git::remove_worktree(&main, &site_dir.join("work").join(&item.id)).await;
+            crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
         }
     }
@@ -1790,7 +1790,7 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
             let cb = code_base(ctx, site, job).await?;
             let short: String = item.id.chars().take(6).collect();
             let branch = format!("pilot/revert-{short}");
-            let wt = site_dir.join("work").join(format!("revert-{short}"));
+            let wt = crate::sites::build_root(&site_dir).join("work").join(format!("revert-{short}"));
             crate::site_git::worktree_at(&cb.main, &wt, &cb.base_ref, Some(&branch)).await?;
             crate::site_git::git_commit_ok(&wt, &["revert", "--no-edit", &item.merge_sha]).await?;
             crate::site_git::git_ok(&wt, &["push", "--force", "-u", "origin", &branch], &cb.token).await?;
