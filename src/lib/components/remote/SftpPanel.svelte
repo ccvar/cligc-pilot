@@ -62,7 +62,11 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="files-list" role="tree" tabindex="-1" aria-label="远端文件" oncontextmenu={(e) => openFctx(e, null)}>
     {#if closed}
-      <div class="files-empty">已断开连接 · <button class="link-btn" onclick={() => reopenSftpView(connId)}>重新连接</button></div>
+      <div class="files-off">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.2 9.8 4.6 11.4a2.1 2.1 0 0 1-3-3L3.2 6.8M9.8 6.2l1.6-1.6a2.1 2.1 0 0 1 3 3l-1.6 1.6M5.6 2.2l.5 1.6M2.2 5.6l1.6.5M10.4 13.8l-.5-1.6M13.8 10.4l-1.6-.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" /></svg>
+        <span>已断开连接</span>
+        <button class="files-reconnect" onclick={() => reopenSftpView(connId)}>重新连接</button>
+      </div>
     {:else if v.sftpBusy && !v.sftpRows.length}
       <div class="files-empty">读取中…</div>
     {:else if !v.sftpRows.length}
@@ -184,6 +188,9 @@
   .fh-ar.desc { transform: rotate(180deg); }
   .files-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 6px 14px; }
   .files-empty { padding: 28px 0; text-align: center; color: var(--faint); font-size: 13px; }
+  .files-off { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 16px; color: var(--faint); font-size: 12.5px; }
+  .files-reconnect { margin-top: 2px; padding: 4px 12px; border: 1px solid var(--border2, #e1dfd8); border-radius: 7px; background: #fff; font: inherit; font-size: 12px; color: var(--text); cursor: pointer; transition: background-color .12s, border-color .12s; }
+  .files-reconnect:hover { background: #f5f4f1; border-color: var(--border2, #cfccc2); }
   .frow { display: flex; align-items: center; padding: 0 8px; border-radius: 6px; cursor: default; user-select: none; }
   .frow:hover { background: var(--rail); }
   .frow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
