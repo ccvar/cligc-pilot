@@ -171,8 +171,8 @@
     {#if fleet.tab === 'sites' && endLabel}
       <!-- 统计时间段：放在看得见的地方，改了之后表格里每个数字的意思都变了 -->
       <span class="pop-wrap">
-        <button class="range" class:on={rangeOpen} onclick={() => (rangeOpen = !rangeOpen)} aria-haspopup="menu" aria-expanded={rangeOpen} data-tip={rangeOpen ? null : `${endsTip}\n从各家最新的一天往前算 ${D} 天，下面的涨跌是和再往前 ${D} 天比`}>
-          近 {D} 天<span class="faint"> · 截至 {md(endLabel)}</span>
+        <button class="range" class:on={rangeOpen} onclick={() => (rangeOpen = !rangeOpen)} aria-haspopup="menu" aria-expanded={rangeOpen} data-tip={rangeOpen ? null : `截至 ${md(endLabel)}（${endsTip}）\n从各家最新的一天往前算 ${D} 天，下面的涨跌是和再往前 ${D} 天比`}>
+          近 {D} 天
           <svg class="chev" class:open={rangeOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
         </button>
         {#if rangeOpen}
