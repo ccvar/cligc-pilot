@@ -113,7 +113,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let mut got: Vec<Option<Fetched>> = urls.iter().map(|_| None).collect();
     let mut last: Vec<String> = urls.iter().map(|_| String::new()).collect();
     // 早先记下的文字可能带着 %s 这类占位（代码里的格式化字符串），线上不会原样出现：切开只用字面的几段
-    let snippets: Vec<String> = spec.snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| x.trim().to_string()).filter(|x| x.chars().count() >= 4).collect();
+    let snippets: Vec<String> = spec.snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| x.trim().to_string()).filter(|x| x.chars().count() >= 4 && !x.starts_with("//") && !x.starts_with("/*")).collect();
     let mut snippets_ok = snippets.is_empty();
     for (n, w) in waits.iter().enumerate() {
         if *w > 0 {
@@ -407,9 +407,16 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         if added.starts_with("++") {
             continue;
         }
-        // 字符串里的文字（数据文件），或去掉标签后的整行（页面文件）
+        // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上
+        let a = added.trim_start();
+        if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) {
+            continue;
+        }
+        // 字符串里的文字（数据文件），或去掉标签后的整行（页面文件）；没有引号又像代码的行（赋值、语句）不算正文
         let texts: Vec<String> = if added.contains('\'') || added.contains('"') {
             quoted(added)
+        } else if a.contains(" = ") || a.contains("=>") || a.trim_end().ends_with(';') {
+            continue;
         } else {
             vec![visible_text(added)]
         };
@@ -545,6 +552,15 @@ mod tests {
         let text = format!("{}\n{}\n{}", html_title(html), meta_content(html, "description"), visible_text(html));
         assert!(text.contains("有没有上线、能不能交易"));
         assert!(!visible_text(html).contains("有没有上线"), "正文里本来就没有，只能从 meta 里找");
+    }
+
+    #[test]
+    fn code_comments_are_not_snippets() {
+        let d = "+++ b/src/pages/[lang]/links/[slug]/index.astro\n+// 链接页没有发布 / 更新日期字段，所以这里不写 datePublished / dateModified\n+  /* 这里是给开发看的说明，页面上不会显示出来 */\n+<!-- 这一段是 HTML 注释，页面上也看不到的文字 -->\n+const note = 页面上看不到的一整句中文说明文字;\n";
+        assert!(snippets_from_diff(d).is_empty(), "{:?}", snippets_from_diff(d));
+        // 正文照旧
+        let ok = "+++ b/src/content/a.md\n+合约一张是多少要看交易所的面值规定，不同币种不一样\n";
+        assert_eq!(snippets_from_diff(ok), vec!["合约一张是多少要看交易所的面值规定"]);
     }
 
     #[test]
