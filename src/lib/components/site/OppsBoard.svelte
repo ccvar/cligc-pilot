@@ -109,6 +109,11 @@
   </span>
 {/snippet}
 
+<!-- 列表底部的展开 / 收起：文字后面跟一个箭头，展开后箭头朝上 -->
+{#snippet more(open: boolean, rest: number, toggle: () => void)}
+  <button class="more" onclick={toggle} aria-expanded={open}>{open ? '收起' : `展开其余 ${rest} 条`}<svg class="more-chev" class:up={open} width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+{/snippet}
+
 {#snippet who(t: { icon: string; name: string })}{#if t.icon}<span class="bi-w"><BrainIcon brain={t.icon} size={12} /></span>{:else}<Icon name="wand" size={11} />{/if}{/snippet}
 
 {#snippet prow(i: OppItem)}
@@ -147,7 +152,7 @@
       </div>
       {#if active}<div class="bar"><i style="width:{(finished / progress.length) * 100}%"></i></div>{/if}
       <ul class="rows">{#each progOpen ? progress : progress.slice(0, SHOW) as i (i.site_id + i.item.id)}{@render prow(i)}{/each}</ul>
-      {#if progress.length > SHOW}<button class="more link-btn" onclick={() => (progOpen = !progOpen)}>{progOpen ? '收起' : `展开其余 ${progress.length - SHOW} 条`}</button>{/if}
+      {#if progress.length > SHOW}{@render more(progOpen, progress.length - SHOW, () => (progOpen = !progOpen))}{/if}
     </div>
   {/if}
   {#if ready.length}
@@ -163,7 +168,7 @@
       </div>
       <!-- 先列前 3 条，其余点「展开其余 N 条」 -->
       <ul class="rows sep">{#each readyOpen ? ready : ready.slice(0, READY_SHOW) as i (i.item.id)}{@render row(i)}{/each}</ul>
-      {#if ready.length > READY_SHOW}<button class="more link-btn" onclick={() => (readyOpen = !readyOpen)}>{readyOpen ? '收起' : `展开其余 ${ready.length - READY_SHOW} 条`}</button>{/if}
+      {#if ready.length > READY_SHOW}{@render more(readyOpen, ready.length - READY_SHOW, () => (readyOpen = !readyOpen))}{/if}
     </div>
     {#if groups.length}<h4 class="sec">要你拿主意的</h4>{/if}
   {/if}
@@ -181,7 +186,7 @@
         {/each}
       </ul>
       {#if g.items.length > SHOW}
-        <button class="more link-btn" onclick={() => (expanded = open ? expanded.filter((k) => k !== g.k) : [...expanded, g.k])}>{open ? '收起' : `展开其余 ${g.items.length - SHOW} 条`}</button>
+        {@render more(open, g.items.length - SHOW, () => (expanded = open ? expanded.filter((k) => k !== g.k) : [...expanded, g.k]))}
       {/if}
     </div>
   {/each}
@@ -247,7 +252,10 @@
   .gain { flex: none; font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .acts { flex: none; display: inline-flex; align-items: center; gap: 2px; min-width: 60px; justify-content: flex-end; }
   .acts .pill { gap: 5px; }
-  .more { display: block; width: 100%; padding: 8px 0 10px; border-top: 1px solid var(--border); font-size: 12px; text-align: center; }
+  .more { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; padding: 8px 0 10px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .more:hover { color: var(--text); }
+  .more-chev { flex: none; transition: transform .15s; }
+  .more-chev.up { transform: rotate(180deg); }
   @container page (max-width: 760px) {
     .site { width: 120px; }
     .gain, .gh .d { display: none; }
