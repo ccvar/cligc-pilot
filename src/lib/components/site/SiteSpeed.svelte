@@ -1,7 +1,9 @@
 <script lang="ts">
   // 站点概览里的「页面速度」：每周用 PageSpeed Insights 测首页和搜索流量最多的几个页面（手机版）。
-  // 每个页面一行：性能分、LCP；点开看主要问题。慢的页面会变成「页面太慢」机会。
+  // 每个页面一行：性能分、LCP；点开看主要问题。慢的页面会变成「页面太慢」机会；
+  // 不够慢但测出问题的，也可以手动交给 AI（右上角打包所有有问题的页面，展开里只交这一页）。
   import Icon from './Icon.svelte';
+  import HealthAiButton from './HealthAiButton.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { say } from '$lib/state/app.svelte.js';
@@ -27,6 +29,7 @@
     } catch (e) { say(String(e), 'err'); }
     finally { busy = false; }
   }
+  const withIssues = $derived((rep?.pages ?? []).filter((p) => !p.error && p.issues.length).length);
   const isSlow = (p: PageSpeed) => !p.error && ((p.score > 0 && p.score < 50) || p.field === 'SLOW');
   const tone = (s: number) => (s >= 90 ? 'ok' : s >= 50 ? 'warn' : 'err');
   const path = (u: string) => { try { return new URL(u).pathname; } catch { return u; } };
@@ -51,7 +54,7 @@
   {#if embedded}<div class="ph">{@render head()}</div>
   {:else}<h3><Icon name="gauge" />页面速度{@render head()}</h3>{/if}
   {#if !rep?.checked_at}
-    <p class="hint">测首页和 Search Console 里点击最多的 3 个页面：性能分、最大内容渲染（LCP）和 PageSpeed 列出的主要问题。低于 50 分的会变成「页面太慢」机会交给 AI 优化。</p>
+    <p class="hint">测首页和 Search Console 里点击最多的 3 个页面：性能分、最大内容渲染（LCP）和 PageSpeed 列出的主要问题。低于 50 分的会自动变成「页面太慢」机会；其它测出问题的，可以点「交给 AI 优化」。</p>
   {:else}
     <ul class="rows">
       {#each rep.pages as p (p.url)}
@@ -69,7 +72,8 @@
             {#if p.issues.length}<button class="link-btn" onclick={() => (open = open === p.url ? '' : p.url)}>{open === p.url ? '收起' : `${p.issues.length} 个问题`}</button>{/if}
             {#if p.note}<p class="note">{p.note}</p>{/if}
             {#if open === p.url}
-              <ul class="iss">{#each p.issues as i (i.title)}<li>{i.title}<span class="faint">约省 {sec(i.savings_ms)}</span></li>{/each}</ul>
+              <ul class="iss">{#each p.issues as i (i.title)}<li>{i.title}<span class="faint">约省 {sec(i.savings_ms)}</span></li>{/each}
+                {#if withIssues > 1}<li class="iss-ai"><HealthAiButton siteId={site.id} what="speed" url={p.url} link match={(k) => k === `slow:${p.url}` || k === 'slow:pages'} label="只优化这一页" tip="只把这个页面交给 AI：按上面列的问题做最小的优化，不改内容和外观；改好后要你确认才上线" /></li>{/if}</ul>
             {/if}
           {/if}
         </li>
@@ -81,6 +85,7 @@
 {#snippet head()}
     <span class="sub">{#if !rep?.checked_at}每周用 PageSpeed 测一次（手机版）{:else}{#if avg}平均 <b class={tone(avg)}>{avg}</b> 分 · {/if}<span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}测</span>{/if}</span>
     <span class="grow"></span>
+    {#if withIssues}<HealthAiButton siteId={site.id} what="speed" match={(k) => k.startsWith('slow:')} label="交给 AI 优化" tip={withIssues > 1 ? `把测出问题的 ${withIssues} 个页面打包成一条交给 AI：多半是共用的模板（图片、字体、脚本）拖慢的，一起改；不改内容和外观，改好后要你确认才上线` : '交给 AI：按 PageSpeed 列的问题做最小的优化，不改内容和外观；改好后要你确认才上线'} />{/if}
     <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="用 Google PageSpeed Insights 测首页和搜索流量最多的几个页面，一个页面要半分钟左右">{#if busy}<span class="spin"></span>测速中…{:else}<Icon name="refresh" size={11} />立即测速{/if}</button>
 {/snippet}
 
@@ -107,4 +112,5 @@
   .iss { flex-basis: 100%; list-style: none; margin: 2px 0 0; padding: 0 0 0 40px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--dim); }
   .iss li { display: flex; gap: 8px; justify-content: space-between; }
   .iss .faint { flex: none; font-size: 11.5px; }
+  .iss li.iss-ai { justify-content: flex-start; margin-top: 2px; }
 </style>

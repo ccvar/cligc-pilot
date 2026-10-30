@@ -287,12 +287,22 @@ pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, out: PathBuf
 
 /// 机会：图片问题（缺 alt ≥ 3、坏图、大图 ≥ 2 任一）一条，结构化数据问题一条；按站点合并，交给 AI 一次改完
 pub fn opportunities(site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
-    let r = load(site_dir);
+    build(&load(site_dir), false)
+}
+
+/// 站点概览「页面体检」里手动交给 AI：有问题就算，不看自动变成机会的门槛
+pub fn tasks(site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
+    build(&load(site_dir), true)
+}
+
+/// any：手动交给 AI 时有一条问题就算；否则问题够多才变成机会（缺替代文字 3 张起、太大 2 张起、有破图）
+fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
     let mut out = Vec::new();
     if r.checked_at == 0 {
         return out;
     }
-    if r.no_alt.len() >= 3 || !r.broken.is_empty() || r.large.len() >= 2 {
+    let images = !r.no_alt.is_empty() || !r.broken.is_empty() || !r.large.is_empty();
+    if (any && images) || r.no_alt.len() >= 3 || !r.broken.is_empty() || r.large.len() >= 2 {
         let mut lines = Vec::new();
         for i in r.broken.iter().take(10) {
             lines.push(format!("图片不存在：{} 里的 {}", i.page, i.src));

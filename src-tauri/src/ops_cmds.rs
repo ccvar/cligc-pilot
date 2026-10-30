@@ -20,7 +20,11 @@ pub fn site_queue(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<Q
 #[tauri::command]
 pub fn queue_add(state: tauri::State<'_, AppState>, id: String, opp: Opportunity) -> Result<QueueItem, String> {
     state.sites.get(&id)?;
-    let dir = state.sites.data_dir(&id);
+    add_to_queue(&state.sites.data_dir(&id), opp)
+}
+
+/// 放进待处理：同一个机会已经在队列里（没上线、没处理完）就返回那一条，不重复建
+fn add_to_queue(dir: &std::path::Path, opp: Opportunity) -> Result<QueueItem, String> {
     let now = crate::now_secs();
     site_ops::with_queue(&dir, |q| {
         q.retain(|i| !(i.opp.key == opp.key && matches!(i.status.as_str(), "dismissed" | "failed")));
@@ -30,6 +34,44 @@ pub fn queue_add(state: tauri::State<'_, AppState>, id: String, opp: Opportunity
         let item = QueueItem { id: uuid::Uuid::new_v4().to_string(), opp, status: "open".into(), created_at: now, updated_at: now, ..Default::default() };
         q.insert(0, item.clone());
         item
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct HealthTask {
+    /// 放进待处理的条目（已经在队列里的就是原来那条）
+    pub items: Vec<QueueItem>,
+    /// 这次让 AI 开始处理了没有（站点正在跑别的作业、或者都已经在处理 / 等你确认，就没开始）
+    pub started: bool,
+    pub note: String,
+}
+
+/// 站点健康里「交给 AI 优化 / 修」：what = speed（页面速度，url 为空就把有问题的页面打包成一条）| audit（页面体检）。
+/// 放进待处理后马上让 AI 处理；这几类改动都要你确认后才上线（见 site_runner::effective_level）。
+#[tauri::command]
+pub fn health_to_ai(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, what: String, url: Option<String>) -> Result<HealthTask, String> {
+    state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let opps = match what.as_str() {
+        "speed" => crate::speed::task(&dir, url.as_deref()).into_iter().collect(),
+        "audit" => crate::page_audit::tasks(&dir),
+        _ => return Err("未知的检查项".into()),
+    };
+    if opps.is_empty() {
+        return Err("没有要处理的问题，先重新检查一下".into());
+    }
+    let items = opps.into_iter().map(|o| add_to_queue(&dir, o)).collect::<Result<Vec<_>, _>>()?;
+    let todo: Vec<String> = items.iter().filter(|i| i.status == "open").map(|i| i.id.clone()).collect();
+    if todo.is_empty() {
+        return Ok(HealthTask { items, started: false, note: "已经交给 AI 了，在待处理里".into() });
+    }
+    let started = match todo.as_slice() {
+        [one] => site_runner::start(ctx(&app), &id, "work", "manual", Some(one.clone())),
+        many => site_runner::start(ctx(&app), &id, "batch", "manual", Some(many.join(","))),
+    };
+    Ok(match started {
+        Ok(_) => HealthTask { items, started: true, note: String::new() },
+        Err(e) => HealthTask { items, started: false, note: format!("已放进待处理，{e}") },
     })
 }
 

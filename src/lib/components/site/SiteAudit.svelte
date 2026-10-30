@@ -2,6 +2,7 @@
   // 站点概览里的「页面体检」：每周把构建产物过一遍——图片（缺替代文字、文件不存在、太大）和结构化数据（写坏了、文章页缺 Article、缺字段），
   // 再告诉你 llms.txt 是站点自己的还是上线时 Pilot 生成的。问题多的会变成机会交给 AI 修。
   import Icon from './Icon.svelte';
+  import HealthAiButton from './HealthAiButton.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
   import { ago, full } from './fmt';
@@ -75,6 +76,7 @@
 {#snippet head()}
     <span class="sub">{#if !rep?.checked_at}每周检查一次构建产物{:else if !rep.pages}还没有构建产物 · {ago(rep.checked_at)}看过{:else}{rep.pages} 个页面 · {rep.images} 张图片 · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{/if}</span>
     <span class="grow"></span>
+    {#if groups.length}<HealthAiButton siteId={site.id} what="audit" match={(k) => k === 'img_audit:site' || k === 'schema:site'} label="交给 AI 修" tip="把查出来的图片和结构化数据问题交给 AI：补替代文字、压缩过大的图片、修好破图和结构化数据，不改正文；改好后要你确认才上线" />{/if}
     <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="把构建产物里的页面过一遍，只读本地文件">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
 {/snippet}
 

@@ -76,6 +76,17 @@ export async function addToQueue(siteId: string, opp: Opportunity) {
   try { await invoke('queue_add', { id: siteId, opp }); await loadQueue(siteId); say('已加入待处理'); }
   catch (e) { say(String(e), 'err'); }
 }
+/** 队列里还没了结的条目：排队、处理中、等你确认、已合并没上线、失败 */
+export const LIVE = new Set(['open', 'working', 'proposed', 'merged', 'failed']);
+/** 站点健康里「交给 AI 优化 / 修」：what = speed（url 为空就把有问题的页面打包成一条）| audit。
+ *  放进待处理并马上让 AI 处理；这几类改动都要你确认后才上线。 */
+export async function healthToAi(siteId: string, what: 'speed' | 'audit', url?: string) {
+  try {
+    const r = await invoke<{ items: OpsItem[]; started: boolean; note: string }>('health_to_ai', { id: siteId, what, url: url ?? null });
+    await loadQueue(siteId);
+    say(r.started ? '已交给 AI：改好后在「待处理」里等你确认，确认了才上线' : r.note);
+  } catch (e) { say(String(e), 'err'); }
+}
 /** hold：「执行但不上线」——这一轮改好的都留给你确认（只对 cycle 有用） */
 export async function runTask(siteId: string, task: string, hold = false) {
   try { await invoke('run_ops_task', { id: siteId, task, hold }); }

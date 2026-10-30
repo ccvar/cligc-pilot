@@ -239,32 +239,58 @@ pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, conns: &crat
 
 /// 机会：慢的页面（kind=slow，技术改动；要你确认后才上线）
 pub fn opportunities(site_dir: &Path) -> Vec<crate::site_ops::Opportunity> {
-    load(site_dir)
-        .pages
-        .into_iter()
-        .filter(|p| p.slow())
-        .map(|p| {
-            let field = if p.field_lcp_ms > 0.0 { format!("真实用户的 LCP 约 {:.1} 秒、INP 约 {:.0} 毫秒；", p.field_lcp_ms / 1000.0, p.field_inp_ms) } else { String::new() };
-            let issues = p.issues.iter().map(|i| format!("{}（约省 {:.1} 秒）", i.title, i.savings_ms / 1000.0)).collect::<Vec<_>>().join("；");
-            crate::site_ops::Opportunity {
-                key: format!("slow:{}", p.url),
-                kind: "slow".into(),
-                title: format!("{} 打开太慢", crate::site_ops::path_of(&p.url)),
-                page: p.url.clone(),
-                evidence: format!(
-                    "PageSpeed 手机版性能分 {:.0}，最大内容渲染（LCP）{:.1} 秒，主线程阻塞 {:.0} 毫秒，布局偏移 {:.2}。{field}页面慢会掉排名和跳出更多。{}",
-                    p.score,
-                    p.lcp_ms / 1000.0,
-                    p.tbt_ms,
-                    p.cls,
-                    if issues.is_empty() { String::new() } else { format!("主要问题：{issues}。") }
-                ),
-                score: (100.0 - p.score).max(10.0),
-                change: "technical".into(),
-                ..Default::default()
-            }
-        })
-        .collect()
+    load(site_dir).pages.iter().filter(|p| p.slow()).map(page_opp).collect()
+}
+
+/// 一个页面的「打开太慢」机会：分数、LCP 和 PageSpeed 列出的主要问题都写进依据
+fn page_opp(p: &PageSpeed) -> crate::site_ops::Opportunity {
+    crate::site_ops::Opportunity {
+        key: format!("slow:{}", p.url),
+        kind: "slow".into(),
+        title: format!("{} 打开太慢", crate::site_ops::path_of(&p.url)),
+        page: p.url.clone(),
+        evidence: format!("{}页面慢会掉排名和跳出更多。", page_facts(p)),
+        score: (100.0 - p.score).max(10.0),
+        change: "technical".into(),
+        ..Default::default()
+    }
+}
+
+fn page_facts(p: &PageSpeed) -> String {
+    let field = if p.field_lcp_ms > 0.0 { format!("真实用户的 LCP 约 {:.1} 秒、INP 约 {:.0} 毫秒；", p.field_lcp_ms / 1000.0, p.field_inp_ms) } else { String::new() };
+    let issues = p.issues.iter().map(|i| format!("{}（约省 {:.1} 秒）", i.title, i.savings_ms / 1000.0)).collect::<Vec<_>>().join("；");
+    format!(
+        "PageSpeed 手机版性能分 {:.0}，最大内容渲染（LCP）{:.1} 秒，主线程阻塞 {:.0} 毫秒，布局偏移 {:.2}。{field}{}",
+        p.score,
+        p.lcp_ms / 1000.0,
+        p.tbt_ms,
+        p.cls,
+        if issues.is_empty() { String::new() } else { format!("主要问题：{issues}。") }
+    )
+}
+
+/// 站点概览「页面速度」里手动交给 AI：指定页面就只优化它；不指定就把测出问题的页面打包成一条
+/// （这几个页面多半共用模板，一次改共用的部分比拆开各改各的省事，也不会改出冲突）。不管分数多少。
+pub fn task(site_dir: &Path, url: Option<&str>) -> Option<crate::site_ops::Opportunity> {
+    let rep = load(site_dir);
+    let pages: Vec<&PageSpeed> = rep.pages.iter().filter(|p| p.error.is_empty() && !p.issues.is_empty() && url.is_none_or(|u| p.url == u)).collect();
+    match pages.as_slice() {
+        [] => None,
+        [p] => Some(page_opp(p)),
+        many => Some(crate::site_ops::Opportunity {
+            key: "slow:pages".into(),
+            kind: "slow".into(),
+            title: format!("{} 个页面可以打开得更快", many.len()),
+            page: many[0].url.clone(),
+            evidence: format!(
+                "{}\n这几个页面多半共用同一套模板，先改共用的部分（图片、字体、脚本），再看单个页面。",
+                many.iter().map(|p| format!("{}：{}", crate::site_ops::path_of(&p.url), page_facts(p))).collect::<Vec<_>>().join("\n")
+            ),
+            score: many.iter().map(|p| (100.0 - p.score).max(10.0)).fold(0.0, f64::max),
+            change: "technical".into(),
+            ..Default::default()
+        }),
+    }
 }
 
 static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -304,6 +330,24 @@ pub async fn check_site_speed(state: tauri::State<'_, crate::AppState>, id: Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_task_bundles_pages_with_issues_or_picks_one() {
+        let dir = std::env::temp_dir().join(format!("speed-task-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let page = |u: &str, score: f64, issues: usize| PageSpeed { url: u.into(), score, lcp_ms: 3800.0, issues: (0..issues).map(|i| Issue { title: format!("问题{i}"), savings_ms: 500.0 }).collect(), ..Default::default() };
+        assert!(task(&dir, None).is_none());
+        save(&dir, &SpeedReport { checked_at: 1, pages: vec![page("https://a.com/", 83.0, 2), page("https://a.com/x/", 84.0, 5), page("https://a.com/y/", 95.0, 0)] });
+        // 83 分不算慢、不会自动变成机会，但手动交给 AI 可以
+        assert!(opportunities(&dir).is_empty());
+        let all = task(&dir, None).unwrap();
+        assert_eq!((all.key.as_str(), all.kind.as_str()), ("slow:pages", "slow"));
+        assert!(all.evidence.contains("/x/") && !all.evidence.contains("/y/"));
+        let one = task(&dir, Some("https://a.com/x/")).unwrap();
+        assert_eq!(one.key, "slow:https://a.com/x/");
+        assert!(task(&dir, Some("https://a.com/y/")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_lab_field_and_issues() {

@@ -5145,6 +5145,7 @@ pub fn run() {
             data_cmds::google_can_manage,
             ops_cmds::site_queue,
             ops_cmds::queue_add,
+            ops_cmds::health_to_ai,
             ops_cmds::run_ops_task,
             ops_cmds::queue_work,
             ops_cmds::queue_recheck,
