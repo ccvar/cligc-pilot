@@ -1123,13 +1123,19 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
 【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
 你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\
 用户要你上线时：有 `site_deploy` 工具就调用它（询问 / 自动档 Pilot 先请用户确认，全自动档直接执行；构建并上线、跑完把结果给你）；GitHub 来源先合并进默认分支（`github_merge` 传 deploy=true 可以合并完直接上线）；\
-没有这个工具时请用户在站点页点「构建并上线」。\n\
+没有这个工具时：{deploy_btn}\n\
 【干活的规矩】仓库里有 `.pilot/site.md`（站点约定：内容放哪、页面格式、新增一页要改哪些地方）就先读它并照着做，改了目录结构或页面格式时同步更新它；\
 再读 README、目录结构和相关页面，弄清现状再改；改动前用一两句话说明打算怎么改。\
 改完先跑构建（和检查命令）确认通过再交付。面向访客的文字遵循随消息附带的公开文案规范。\
 不要把流量、收入等运营数字写进代码、提交说明或 PR 描述（仓库可能是公开的）。{data}\n\
 用用户所用语言回复，简洁说明做了什么、结果如何、还需要用户确认什么。",
         name = site.name,
+        // 本地站点改完没上线时，对话输入框上方有「构建并上线」按钮（见前端 SiteDeployBar）
+        deploy_btn = if site.source != "github" && matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
+            "改完后对话输入框上方会出现「构建并上线」按钮，请用户点它（Pilot 会先确认一次）；不要说你没有上线工具、也不要让用户去站点页找。"
+        } else {
+            "请用户在站点页点「构建并上线」。"
+        },
         framework = if site.framework.is_empty() { "未知" } else { &site.framework },
         out = site.build.out_dir,
         root = if site.build.root.is_empty() { String::new() } else { format!("站点代码在仓库的 `{}/` 子目录里（构建、检查命令都在那里执行，页面和静态文件也在那里）；", site.build.root) },

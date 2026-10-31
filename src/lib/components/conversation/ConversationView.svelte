@@ -29,6 +29,7 @@
   import { workspaceFolderName } from '$lib/state/launcher.svelte.js';
   import WhyChips from '$lib/components/site/WhyChips.svelte';
   import { suggestionFor } from '$lib/state/suggest.svelte.js';
+  import SiteDeployBar from './SiteDeployBar.svelte';
 
   export { splitContent, convPane };
   // 很长的用户消息（比如 Pilot 发给 AI 的整段指令）默认只露前几行，像 Claude 客户端那样
@@ -421,6 +422,7 @@
         <span class="tipwrap" data-tip={cfReady ? '变成一个站点：接 GitHub、域名、GA4 / Search Console 数据，开始运营' : '先让 AI 建出页面'}><button class="cb-prev dim" onclick={()=>context && void importCfProject(context.conn_id, context.site_slug)} disabled={!cfReady || viewBusy}><svg width="12" height="12" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="6.6" stroke="currentColor" stroke-width="1.5" /><path d="M3.6 10h12.8M10 3.4c1.9 1.8 2.9 4.1 2.9 6.6s-1 4.8-2.9 6.6M10 3.4C8.1 5.2 7.1 7.5 7.1 10s1 4.8 2.9 6.6" stroke="currentColor" stroke-width="1.3" /></svg>转为站点</button></span>
       </div>
     {/if}
+    <SiteDeployBar conv={context} busy={viewBusy} />
     <div class="composer" class:compact class:fileover={fileOver[dropKey]} role="group" aria-label="消息输入">
       {#if queued && queued.convId === activeConvId}
         <div class="queued-row">
