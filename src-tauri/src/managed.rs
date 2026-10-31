@@ -547,12 +547,15 @@ pub fn digests_dir(data_dir: &Path) -> PathBuf {
 
 
 /// 任何代码设置下都不自动改的文件：依赖、构建 / 部署配置、CI、Worker / 函数 / 服务端、脚本、密钥配置，
-/// 以及站点代码以外的后端语言。
+/// 以及站点代码以外的后端语言。后端目录里的页面模板和测试文件除外（见 `backend_template_or_test`）。
 pub fn hard_forbidden(path: &str) -> bool {
     let p = path.trim_start_matches("./");
     let name = p.rsplit('/').next().unwrap_or(p);
     let first = p.split('/').next().unwrap_or("");
     let segs: Vec<&str> = p.split('/').collect();
+    if backend_template_or_test(p) {
+        return false;
+    }
     matches!(
         name,
         "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json"
@@ -567,6 +570,30 @@ pub fn hard_forbidden(path: &str) -> bool {
         || segs.iter().any(|s| matches!(*s, "api" | "server" | "functions" | "middleware"))
         || matches!(name, "go.mod" | "go.sum" | "Makefile" | "Dockerfile")
         || ["py", "sh", "rs", "go", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}")))
+}
+
+/// Go / Python 站点放在 internal/、cmd/、server/ 里的页面模板（.html / .tmpl / .gohtml）和测试文件（_test.go、test_*.py）：
+/// 模板是页面内容，测试只在上线前的检查里跑、不会上线，都不算服务端代码。
+/// 脚本、CI、部署、Worker / Functions / middleware 目录里的照样拦（Functions 目录里每个文件都可能变成线上路由）。
+fn backend_template_or_test(p: &str) -> bool {
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    if matches!(first, ".github" | "node_modules" | "deploy" | "migrations" | "scripts" | "bin" | "worker" | "workers" | "functions")
+        || p.split('/').any(|s| matches!(s, "functions" | "middleware"))
+    {
+        return false;
+    }
+    template_page(name) || test_file(name)
+}
+
+/// 后端渲染的页面模板
+fn template_page(name: &str) -> bool {
+    ["html", "htm", "tmpl", "gohtml"].iter().any(|e| name.ends_with(&format!(".{e}")))
+}
+
+/// 测试文件：按方案的「代码改动」设置判断，新加的代码照样查危险写法。
+fn test_file(name: &str) -> bool {
+    name.ends_with("_test.go") || (name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py")))
 }
 
 /// 放进站点「算网站内容的代码文件」清单也不放行的：依赖、锁文件、构建 / 部署 / CI 配置、密钥配置、
@@ -693,7 +720,7 @@ pub fn text_units(s: &str) -> usize {
 
 
 fn is_page_file(f: &str) -> bool {
-    ["md", "mdx", "markdown", "html", "htm", "astro"].iter().any(|e| f.ends_with(&format!(".{e}")))
+    ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro"].iter().any(|e| f.ends_with(&format!(".{e}")))
 }
 
 /// 去掉 frontmatter 分隔、HTML / JSX 标签、代码围栏后的正文文字。
@@ -928,7 +955,7 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 /// `content_code`：站点放行的「算网站内容的代码文件」（见 `listed`），按 `code` 判断，不再一律拦。
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let mut reasons = Vec::new();
-    let content_ext = ["md", "mdx", "markdown", "html", "htm", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
+    let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
     let (mut code_lines, mut code_files) = (0usize, 0usize);
     for f in split_diff(diff) {
@@ -937,7 +964,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本
         let allowed = hard_forbidden(file) && !never_allow(file) && listed(file, content_code);
         let forbidden = hard_forbidden(file) && !allowed;
-        let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file));
+        let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
             reasons.push(format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改"));
         } else if is_code {
@@ -1351,6 +1378,25 @@ mod tests {
             assert!(!managed_verdict(&d, true, 0, "all", &[p.to_string()]).is_empty(), "{p}");
         }
         assert!(!never_allow("internal/site/build.go") && !never_allow("cmd/site/main.go") && !never_allow("server/pages.py"));
+    }
+
+    #[test]
+    fn backend_templates_and_tests_are_not_server_code() {
+        let file = |p: &str, line: &str| format!("diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+{line}\n");
+        // Go 站的页面模板按页面内容判断，不用放行
+        let tmpl = file("internal/web/templates/hant/learn_hk_vatp.html", "<h1>香港證監會持牌虛擬資產交易平台名單</h1>");
+        assert!(managed_verdict(&tmpl, true, 0, "review", &[]).is_empty(), "{:?}", managed_verdict(&tmpl, true, 0, "review", &[]));
+        assert!(managed_verdict(&file("internal/web/templates/a.gohtml", "<p>x</p>"), true, 0, "review", &[]).is_empty());
+        // 测试文件按方案的代码改动设置判断，危险写法照样拦
+        let test = file("internal/web/hant_test.go", "\twant := \"香港證監會持牌虛擬資產交易平台名單\"");
+        assert!(managed_verdict(&test, true, 0, "all", &[]).is_empty(), "{:?}", managed_verdict(&test, true, 0, "all", &[]));
+        assert!(managed_verdict(&test, true, 0, "review", &[]).iter().any(|r| r.contains("改了代码")));
+        assert!(managed_verdict(&file("internal/web/hant_test.go", "\tout, _ := exec.Command(\"sh\").Output()"), true, 0, "all", &[]).iter().any(|r| r.contains("执行命令")));
+        assert!(managed_verdict(&file("server/tests/test_pages.py", "    assert title == 'x'"), true, 0, "all", &[]).is_empty());
+        // 普通 Go 代码、脚本 / 部署 / Functions 目录里的模板和测试仍然拦
+        for p in ["internal/web/hant_only.go", "scripts/deploy_test.go", "deploy/index.html", "functions/api/page.html", ".github/x.html"] {
+            assert!(managed_verdict(&file(p, "x"), true, 0, "all", &[]).iter().any(|r| r.contains("服务端代码不自动改")), "{p}");
+        }
     }
 
     #[test]
