@@ -991,6 +991,11 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
             if !allow_new_content {
                 reasons.push(format!("{file}：新内容需要运营人员确认后发布"));
             }
+        } else if !is_code {
+            // 已有的内容 / 数据文件里多出来的行是新写的内容（比如往文章列表里加一整篇），按新增内容的上限算；被替换的行才算改动
+            let replaced = f.added.len().min(f.removed.len());
+            changed += f.removed.len() + replaced;
+            new_lines += f.added.len() - replaced;
         } else {
             changed += f.added.len() + f.removed.len();
         }
@@ -1309,6 +1314,18 @@ mod tests {
         assert!(managed_verdict(newpage, false, 1500, "review", &[]).iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
         assert!(managed_verdict(newpage, true, 1500, "review", &[]).iter().all(|r| r.contains("低于这个方案的下限")));
+    }
+
+    #[test]
+    fn appended_content_in_existing_file_is_not_an_edit() {
+        // 往已有文章列表里加一整篇（550 行、只删 1 行）：按新增内容算，不撞「改动已有文件」的上限
+        let added: String = (0..550).map(|_| "+      '每 10 秒成本按套餐价折算成每 100 积分的价格，再乘以生成页上显示的积分消耗。',\n").collect();
+        let append = format!("diff --git a/src/data/articles-comparisons.ts b/src/data/articles-comparisons.ts\n--- a/src/data/articles-comparisons.ts\n+++ b/src/data/articles-comparisons.ts\n@@ -10 +10,550 @@\n-      '旧的一行',\n{added}");
+        assert!(managed_verdict(&append, true, 1500, "all", &[]).is_empty(), "{:?}", managed_verdict(&append, true, 1500, "all", &[]));
+        // 大段替换已有内容（删 300、加 300）仍算改动，超过上限留给人看
+        let removed: String = (0..300).map(|_| "-      '旧的说法',\n").collect();
+        let rewrite = format!("diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -1,300 +1,300 @@\n{removed}{}", &added[..added.len() / 550 * 300]);
+        assert!(managed_verdict(&rewrite, true, 1500, "all", &[]).iter().any(|r| r.contains("改动已有文件 600 行")));
     }
 
     #[test]
