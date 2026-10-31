@@ -16,8 +16,8 @@
   const st = $derived(siteId ? sites.status[siteId] : undefined);
   const job = $derived(siteId ? sites.jobs[siteId] : undefined);
   const running = $derived(job?.status === 'running');
-  // 有没上线的改动：文件夹里有未提交的改动，或者提交了但线上还不是这一版
-  const pending = $derived(!!st?.exists && (st.dirty || (!!st.head && st.head !== st.last_deploy?.commit)));
+  // 有没上线的改动（后端判断：上次上线之后又改过，或者提交了但线上还不是这一版）
+  const pending = $derived(!!st?.exists && st.undeployed);
   const target = $derived(site?.domain || site?.name || '');
 </script>
 

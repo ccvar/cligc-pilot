@@ -781,6 +781,32 @@ pub struct SiteStatus {
     pub head_subject: String,
     pub job: Option<crate::site_jobs::JobState>,
     pub last_deploy: Option<crate::site_deploy::DeployRecord>,
+    /// 文件夹里有没上线的改动（见 `undeployed`）：站点对话里的「构建并上线」卡片看它
+    pub undeployed: bool,
+}
+
+/// 站点文件夹里有没有还没上线的改动：没成功上线过；当前提交不是上次成功上线的那一版；
+/// 或者有未提交的改动、而且是上次上线开始之后才改的——上次上线把未提交的改动一起传上去了的，不算。
+async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[crate::site_deploy::DeployRecord]) -> bool {
+    // 「补验证文件」是原样重传上次的构建产物，不代表文件夹现在的样子
+    let Some(r) = history.iter().find(|r| r.ok && r.trigger != "files") else { return true };
+    if !head.is_empty() && head != r.commit {
+        return true;
+    }
+    if !dirty {
+        return false;
+    }
+    if !r.dirty {
+        return true;
+    }
+    let Ok(o) = crate::site_git::git(dir, &["diff", "--name-only", "HEAD"], "").await else { return true };
+    let changed_after = |f: &str| {
+        let p = dir.join(f);
+        // 删掉的文件没有修改时间，看所在目录（删文件会更新目录的修改时间）
+        let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
+        m.and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_none_or(|d| d.as_secs() >= r.ts)
+    };
+    o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).any(changed_after)
 }
 
 #[tauri::command]
@@ -803,6 +829,8 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
         Default::default()
     };
     let site_dir = state.sites.data_dir(&id);
+    let history = crate::site_deploy::load_history(&site_dir);
+    let undeployed = git && undeployed(&dir, dirty, &head, &history).await;
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
         exists: dir.is_dir(),
@@ -812,7 +840,8 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
         head,
         head_subject,
         job: state.site_jobs.snapshot(&id),
-        last_deploy: crate::site_deploy::load_history(&site_dir).into_iter().next(),
+        last_deploy: history.into_iter().next(),
+        undeployed,
     })
 }
 

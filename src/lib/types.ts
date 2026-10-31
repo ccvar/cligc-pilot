@@ -324,6 +324,8 @@ export interface SiteStatus {
   head_subject: string;
   job: SiteJob | null;
   last_deploy: DeployRecord | null;
+  /** 文件夹里有没上线的改动（上次上线之后又改过、或提交了还没上线） */
+  undeployed: boolean;
 }
 
 // ---- 站点数据 ----
