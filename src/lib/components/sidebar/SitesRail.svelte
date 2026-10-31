@@ -131,6 +131,8 @@
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
   .more { display: block; margin: 1px 8px 2px 30px; padding: 3px 8px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--faint); cursor: pointer; text-align: left; }
   .more:hover { color: var(--text); background: #f5f4f1; }
-  .grp { padding: 6px 8px 2px 30px; font-size: 11px; color: var(--faint); font-weight: 600; }
+  .grp { padding: 7px 8px 2px 30px; font-size: 11px; line-height: 16px; color: var(--faint); font-weight: 600; }
+  /* 第一个分组标题紧贴站点名，不再隔出一截空白 */
+  .grp:first-child { padding-top: 0; }
   @keyframes pulse { 50% { opacity: .35; } }
 </style>
