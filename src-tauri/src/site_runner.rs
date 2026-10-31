@@ -874,23 +874,25 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
     r
 }
 
-/// 某个机会实际可用的最高档位：新内容、技术问题、被复盘降档的类型最多到第 3 档；只分析档不处理。
+/// 某个机会实际可用的最高档位：第 1–4 档里新内容、技术问题、被复盘降档的类型最多到第 3 档；全托管见下；只分析档不处理。
 pub fn effective_level(site: &Site, item: &QueueItem) -> u8 {
     // 并进来的同页面机会（also）一起算：哪一项要你确认，这一条就要你确认
     let opps: Vec<&Opportunity> = std::iter::once(&item.opp).chain(item.also.iter()).collect();
     let mut level = site.ops.level;
-    // 改事实（久未更新的页面）、合并或拉开页面（两个页面抢词）：不管什么档位都留给你确认
-    // 收入偏低、页面太慢、页面体检、对比竞品：改动面大或要人判断，也都留给你确认
-    if opps.iter().any(|o| matches!(o.kind.as_str(), "stale" | "cannibal" | "low_rpm" | "slow" | "img_audit" | "schema" | "serp_gap")) {
-        return level.min(3);
-    }
     let downgraded = |c: &str| site.ops.downgraded.iter().any(|d| d == c);
     if level >= 5 {
-        // 全托管：技术问题、复盘降档的类型留给你确认；新内容是否自动发布在上线那一步按托管设置判断。
-        if opps.iter().any(|o| o.change == "technical" || downgraded(&o.change)) {
+        // 全托管：技术问题、改事实、性能、结构化数据这些也按托管方案走——方案允许这类改动、上线判定（代码改动设置、
+        // 危险写法、推荐内容、改动大小）和内容质检都过了就自动上线，上线后验收没过自动回滚。
+        // 只有合并或拉开抢词的页面（要删页面、做跳转，得人判断留哪个）和被复盘降档的类型留给你确认。
+        if opps.iter().any(|o| o.kind == "cannibal" || downgraded(&o.change)) {
             return 3;
         }
         return 5;
+    }
+    // 改事实（久未更新的页面）、合并或拉开页面（两个页面抢词）：第 1–4 档都留给你确认
+    // 收入偏低、页面太慢、页面体检、对比竞品：改动面大或要人判断，也都留给你确认
+    if opps.iter().any(|o| matches!(o.kind.as_str(), "stale" | "cannibal" | "low_rpm" | "slow" | "img_audit" | "schema" | "serp_gap")) {
+        return level.min(3);
     }
     if opps.iter().any(|o| matches!(o.change.as_str(), "new_content" | "technical") || downgraded(&o.change)) {
         level = level.min(3);
@@ -1411,6 +1413,29 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 /// AI 改完之后由 Pilot 做的事：确认有提交 → 构建和检查 → 按规则判定 → 推送 / 开 PR → 自动上线或留给你确认。
 /// 「重新检查」也走这里（改动已经在分支上，不再让 AI 改一遍）。
 #[allow(clippy::too_many_arguments)]
+/// 上线前有一项没过（构建 / 检查、孤立新页面、内容质检）：把原因交回 AI 在同一个分支上改一次并提交，
+/// 不推送、不上线；调用方随后再走一遍检查和判定。
+async fn fix_round(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, wt: &Path, msg: String, label: &str, commit: &str) -> Result<(), String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let msg = format!(
+        "{msg}\n改完运行构建（`{build}`）确认通过，用 `git add` 和 `git commit` 提交到当前分支。不要推送、不要开 PR、不要部署。\n\
+最后另起一段，用两三句中文说明这次改了什么（{lang}）。",
+        lang = REPORT_IN_CHINESE,
+        build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
+    );
+    let (_, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
+    if job.canceled() {
+        return Err("已取消".into());
+    }
+    let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(400).collect()).unwrap_or_default();
+    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.ai_summary = format!("{}\n\n（{label}：{summary}）", i.ai_summary));
+    if crate::site_git::git(wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
+        crate::site_git::git_ok(wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads", ":(exclude).pilot-api-home"], "").await?;
+        let _ = crate::site_git::git_commit_ok(wt, &["commit", "-qm", commit]).await;
+    }
+    Ok(())
+}
+
 async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u8, cb: &CodeBase, wt: &Path, base_sha: &str, branch: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let (wt, base_sha, branch) = (wt.to_path_buf(), base_sha.to_string(), branch.to_string());
@@ -1432,6 +1457,28 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.snippets = snippets.clone());
     // 上线时用最新的条目（带上 AI 报告的页面和这次的文字）
     let item = &site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).unwrap_or_else(|| item.clone());
+    let hold = held(&site.id);
+    // 全托管：构建或检查没过，先把报错交回 AI 修一次（多半是改出来的类型错误、测试里写死的旧数字），修完再走一遍；
+    // 还是不过才留给你
+    if let Err(e) = &built {
+        if level >= 5 && !hold && !item.build_fixed && !job.canceled() {
+            let first = e.lines().next().unwrap_or("").to_string();
+            let tail = job.tail(80).join("\n");
+            job.line(&format!("{first}。把报错交回 AI 修一次"));
+            site_ops::update_item(&site_dir, &item.id, now(), |i| i.build_fixed = true)?;
+            let msg = format!(
+                "你刚才在当前分支上为「{title}」做的改动，Pilot 上线前跑构建和检查没有通过：{first}\n\n\
+构建和检查最后的输出：\n```\n{tail}\n```\n\n\
+请先找到原因，只修让构建和检查通过所需的地方：\n\
+- 是这次改动引起的（类型错误、语法错误、测试里写死的旧标题 / 旧数字、链接到不存在的页面），就改这次的改动或同步改对应的测试；\n\
+- 不要为了通过删掉或放宽检查、不要跳过测试、不要改依赖、构建和部署配置；\n\
+- 如果是本机环境问题（网络、代理、缺命令），和这次改动无关，就不要改文件，在说明里写清楚。\n",
+                title = item.opp.title,
+            );
+            fix_round(ctx, site, job, item, &wt, msg, "构建没过后修复", "ops: fix checks").await?;
+            return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
+        }
+    }
     let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.contains(w)).cloned().collect();
     let out_dir = site.app_dir(&wt).join(&site.build.out_dir);
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
@@ -1446,8 +1493,22 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         let inbound = crate::site_make::inbound_links(&out_dir);
         let count = |p: &str| inbound.iter().find(|(k, _)| crate::site_make::norm_path(k) == crate::site_make::norm_path(p)).map(|(_, n)| *n);
         let lonely: Vec<String> = item.new_pages.iter().map(|u| path_of(u)).filter(|p| count(p) == Some(0)).collect();
+        if !lonely.is_empty() && level >= 5 && !hold && !item.links_fixed && !job.canceled() {
+            // 全托管：交回 AI 从相关的已有页面补链接，补完再走一遍
+            job.line(&format!("新页面 {} 没有站内链接指向它，交回 AI 补链接", lonely.join("、")));
+            site_ops::update_item(&site_dir, &item.id, now(), |i| i.links_fixed = true)?;
+            let msg = format!(
+                "你刚才在当前分支上为「{title}」新写的页面 {pages} 还没有任何站内页面链接到它，上线后会成孤立页，搜索引擎很难发现。\n\
+请在 2–4 个主题最相关的已有页面里，在讲到相关内容的地方自然地加上指向它的链接（链接文字写读者会搜的说法），\n\
+网站有目录、导航或相关文章列表的话也把它加进去。只加链接，不要改别的内容，不要改依赖、构建和部署配置。\n",
+                title = item.opp.title,
+                pages = lonely.join("、"),
+            );
+            fix_round(ctx, site, job, item, &wt, msg, "补站内链接", "ops: link new page").await?;
+            return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
+        }
         if !lonely.is_empty() {
-            reasons.push(format!("新页面 {} 没有任何站内链接指向它（会成孤立页），留给你确认", lonely.join("、")));
+            reasons.push(format!("新页面 {} 没有任何站内链接指向它（会成孤立页）{}，留给你确认", lonely.join("、"), if item.links_fixed { "，AI 补过一次还是没有" } else { "" }));
         }
     }
     let mut verdict = if let Err(e) = &built {
@@ -1468,7 +1529,6 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 判断模型（Jev）内容质检（托管方案里的规则）：规则都过了、马上要自动上线时，再看一眼新页面 / 大改的页面内容本身。
     // 方案没开、没接 TypeSafe 或调用失败都不影响原来的判定（只会加严，不会放宽）。流程上单独一步，跳过也写明为什么。
     // 「执行但不上线」也照常质检，只记分数给你审核时参考，不交回 AI 重写。
-    let hold = held(&site.id);
     let mut rewrite: Option<(String, Vec<String>)> = None;
     if !checks_ok {
         job.step("quality", "skipped", "检查没通过，不用质检");
@@ -1524,24 +1584,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
 - 把目标搜索问题正面讲清楚，补具体的步骤、数字、例子，删掉空泛的套话；\n\
 - 数字和测试结果要写清来源（或删掉拿不准的），不要编；\n\
 - 删掉正文里写给编辑或 AI 的说明文字；\n\
-- 不要扩大改动范围，不要改网址、依赖、构建和部署配置。\n\
-改完运行构建（`{build}`）确认通过，用 `git add` 和 `git commit` 提交到当前分支。不要推送、不要开 PR、不要部署。\n\
-最后另起一段，用两三句中文说明这次改了什么（{lang}）。",
+- 不要扩大改动范围，不要改网址、依赖、构建和部署配置。\n",
             title = item.opp.title,
             files = files.join("、"),
-            lang = REPORT_IN_CHINESE,
-            build = if site.build.build.is_empty() { "无需构建" } else { &site.build.build },
         );
-        let (_, conv) = run_conversation(ctx, site, "auto", &wt.to_string_lossy(), msg).await?;
-        if job.canceled() {
-            return Err("已取消".into());
-        }
-        let summary: String = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.trim().chars().take(400).collect()).unwrap_or_default();
-        let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.ai_summary = format!("{}\n\n（质检没过后重写：{summary}）", i.ai_summary));
-        if crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
-            crate::site_git::git_ok(&wt, &["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude)uploads", ":(exclude).pilot-api-home"], "").await?;
-            let _ = crate::site_git::git_commit_ok(&wt, &["commit", "-qm", &format!("ops: revise {} after quality check", path_of(&item.opp.page))]).await;
-        }
+        fix_round(ctx, site, job, item, &wt, msg, "质检没过后重写", &format!("ops: revise {} after quality check", path_of(&item.opp.page))).await?;
         // 再走一遍：构建、检查、规则、质检（这次 jev_rewritten 已经记上，不会再重写）
         return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
     }
@@ -3415,6 +3462,16 @@ mod tests {
         assert_eq!(effective_level(&site, &item("meta")), 4);
         assert_eq!(effective_level(&site, &item("new_content")), 3);
         assert_eq!(effective_level(&site, &item("technical")), 3);
+        site.ops.downgraded = vec!["meta".into()];
+        assert_eq!(effective_level(&site, &item("meta")), 3);
+        // 全托管：技术问题、改事实、结构化数据都按方案规则走；抢词合并和降档的类型留给你
+        site.ops.level = 5;
+        site.ops.downgraded.clear();
+        let kind = |kind: &str, change: &str| QueueItem { opp: Opportunity { kind: kind.into(), change: change.into(), ..Default::default() }, ..Default::default() };
+        for (k, c) in [("health", "technical"), ("stale", "content"), ("schema", "technical"), ("slow", "technical"), ("plan", "new_content")] {
+            assert_eq!(effective_level(&site, &kind(k, c)), 5, "{k}/{c}");
+        }
+        assert_eq!(effective_level(&site, &kind("cannibal", "content")), 3);
         site.ops.downgraded = vec!["meta".into()];
         assert_eq!(effective_level(&site, &item("meta")), 3);
     }

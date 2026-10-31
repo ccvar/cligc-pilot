@@ -594,6 +594,12 @@ pub struct QueueItem {
     /// 内容质检没过后，AI 已经按原因重写过一次（只重写一次）。
     #[serde(default)]
     pub jev_rewritten: bool,
+    /// 全托管时构建或检查没过，已经把报错交回 AI 修过一次（只修一次）。
+    #[serde(default)]
+    pub build_fixed: bool,
+    /// 全托管时新页面没有站内链接指向它，已经交回 AI 补过一次链接（只补一次）。
+    #[serde(default)]
+    pub links_fixed: bool,
     /// 新页面有没有被 Google 编入索引（上线 3 天后开始用 URL 检查查，见 index_check）：
     /// 空＝还没查 | indexed | not_indexed（查过、还没编入）| error（查不了，比如没接 Search Console）
     #[serde(default)]

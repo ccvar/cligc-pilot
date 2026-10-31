@@ -286,6 +286,15 @@ impl Job {
         }
     }
 
+    /// 这个作业日志的最后 n 行（交回 AI 修构建时带上报错）。
+    pub fn tail(&self, n: usize) -> Vec<String> {
+        let g = self.jobs.inner.lock().unwrap();
+        match g.get(&self.site_id) {
+            Some(slot) if slot.state.id == self.id => slot.state.log.iter().rev().take(n).rev().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn set_url(&self, url: &str) {
         let url = url.to_string();
         self.with(|s| s.url = url);

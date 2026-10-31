@@ -572,8 +572,8 @@ pub fn hard_forbidden(path: &str) -> bool {
         || ["py", "sh", "rs", "go", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}")))
 }
 
-/// Go / Python 站点放在 internal/、cmd/、server/ 里的页面模板（.html / .tmpl / .gohtml）和测试文件（_test.go、test_*.py）：
-/// 模板是页面内容，测试只在上线前的检查里跑、不会上线，都不算服务端代码。
+/// Go / Python 站点放在 internal/、cmd/、server/ 里的页面模板（.html / .tmpl / .gohtml）、正文（.md / .mdx）和测试文件（_test.go、test_*.py）：
+/// 模板和正文是页面内容，测试只在上线前的检查里跑、不会上线，都不算服务端代码。
 /// 脚本、CI、部署、Worker / Functions / middleware 目录里的照样拦（Functions 目录里每个文件都可能变成线上路由）。
 fn backend_template_or_test(p: &str) -> bool {
     let name = p.rsplit('/').next().unwrap_or(p);
@@ -586,9 +586,9 @@ fn backend_template_or_test(p: &str) -> bool {
     template_page(name) || test_file(name)
 }
 
-/// 后端渲染的页面模板
+/// 后端渲染的页面模板和正文文件
 fn template_page(name: &str) -> bool {
-    ["html", "htm", "tmpl", "gohtml"].iter().any(|e| name.ends_with(&format!(".{e}")))
+    ["html", "htm", "tmpl", "gohtml", "md", "mdx", "markdown"].iter().any(|e| name.ends_with(&format!(".{e}")))
 }
 
 /// 测试文件：按方案的「代码改动」设置判断，新加的代码照样查危险写法。
@@ -611,6 +611,18 @@ pub fn never_allow(path: &str) -> bool {
             || ["astro.config", "vite.config", "next.config", "svelte.config", "tailwind.config"].iter().any(|x| name.starts_with(x))
             || matches!(first, ".github" | "node_modules" | "deploy" | "migrations" | "scripts" | "bin")
             || ["sh", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}"))))
+}
+
+/// 线上直接跑请求的代码：Worker、Pages Functions、中间件、API 路由。页面验收测不到它们坏没坏，
+/// 「代码改动：全部」也不放行，要放就把文件加进站点的「算网站内容的代码文件」清单。
+fn edge_runtime(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    matches!(first, "worker" | "workers" | "functions")
+        || p.split('/').any(|s| matches!(s, "api" | "functions" | "middleware"))
+        || name.starts_with("middleware.")
+        || name == "_worker.js"
 }
 
 /// 文件在不在站点的「算网站内容的代码文件」清单里：写完整路径，或以 / 结尾的目录。
@@ -661,6 +673,9 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
         ("http.NewRequest", "请求外部服务"),
         ("requests.get(", "请求外部服务"),
         ("requests.post(", "请求外部服务"),
+        ("http.Client", "请求外部服务"),
+        ("urllib.request", "请求外部服务"),
+        ("urlopen(", "请求外部服务"),
         ("os.Remove", "删除文件"),
     ] {
         if t.contains(pat) {
@@ -961,8 +976,10 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
     for f in split_diff(diff) {
         let file = &f.file;
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
-        // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本
-        let allowed = hard_forbidden(file) && !never_allow(file) && listed(file, content_code);
+        // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
+        // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
+        // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
+        let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, content_code) || (code == "all" && !edge_runtime(file)));
         let forbidden = hard_forbidden(file) && !allowed;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
@@ -1410,8 +1427,15 @@ mod tests {
         assert!(managed_verdict(&test, true, 0, "review", &[]).iter().any(|r| r.contains("改了代码")));
         assert!(managed_verdict(&file("internal/web/hant_test.go", "\tout, _ := exec.Command(\"sh\").Output()"), true, 0, "all", &[]).iter().any(|r| r.contains("执行命令")));
         assert!(managed_verdict(&file("server/tests/test_pages.py", "    assert title == 'x'"), true, 0, "all", &[]).is_empty());
-        // 普通 Go 代码、脚本 / 部署 / Functions 目录里的模板和测试仍然拦
-        for p in ["internal/web/hant_only.go", "scripts/deploy_test.go", "deploy/index.html", "functions/api/page.html", ".github/x.html"] {
+        // 后端目录里的正文
+        assert!(managed_verdict(&file("internal/web/guides/launchpool.en.md", "# Binance Launchpool"), true, 0, "review", &[]).is_empty());
+        // 普通 Go 代码：「代码改动：全部」时按代码判断（危险写法照样拦），其他设置要放进站点清单
+        let go = file("internal/web/hant_only.go", "\t\"title\": \"香港持牌交易所名單\",");
+        assert!(managed_verdict(&go, true, 0, "all", &[]).is_empty(), "{:?}", managed_verdict(&go, true, 0, "all", &[]));
+        assert!(managed_verdict(&go, true, 0, "small", &[]).iter().any(|r| r.contains("服务端代码不自动改")));
+        assert!(managed_verdict(&file("internal/site/build.go", "\tk := os.Getenv(\"KEY\")"), true, 0, "all", &[]).iter().any(|r| r.contains("读环境变量")));
+        // 脚本 / 部署 / CI 目录、Worker / Functions / API 路由，「全部」也拦
+        for p in ["scripts/deploy_test.go", "deploy/index.html", "functions/api/page.html", ".github/x.html", "functions/x.ts", "src/pages/api/rates.ts", "go.mod"] {
             assert!(managed_verdict(&file(p, "x"), true, 0, "all", &[]).iter().any(|r| r.contains("服务端代码不自动改")), "{p}");
         }
     }
