@@ -392,7 +392,8 @@ export function fmtStamp(secs: number): string {
 export function openFctx(e: MouseEvent, row: SftpRow | null) {
   e.preventDefault();
   e.stopPropagation(); // 空白处也不能冒泡到 window 的菜单关闭监听。
-  if (!sftp.sftpPath || sftp.sftpBusy) return;
+  // 不看 sftpBusy：切回来时会在后台悄悄刷新一次，那几秒里右键也要能用；会改动东西的菜单项自己会看忙不忙
+  if (!sftp.sftpPath) return;
   if (row && isSftpDeleting(row.path)) return;
   if (row) sftp.sftpSel = row.path;
   // 贴边时往回收，别让菜单跑出窗口

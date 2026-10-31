@@ -223,6 +223,8 @@ fn cfg() -> Arc<client::Config> {
 /// 建连 + 认证的总时限：主机不通 / 防火墙丢包时系统自己的 TCP 超时能到一两分钟，
 /// 按钮会一直转着没法取消；这里统一收口。
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+/// 在已有连接上开一条 SFTP 通道的时限（正常不到一秒）。
+const SFTP_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 async fn connect_auth(
     host: &str,
@@ -901,16 +903,23 @@ impl SshSessions {
                 .handle
                 .clone()
         }; // 出锁再开通道：开通道要等服务端确认，持锁 await 会连坐整张表
-        let ch = handle
-            .channel_open_session()
+        // 开通道这几步也要限时：连接半死（网断了但还没被心跳判死）时服务端永远不回，
+        // 文件面板就一直转圈、按钮全灰、右键也没反应（真踩过）。心跳会在一两分钟内把它判死，之后刷新会重新连上。
+        let open = async {
+            let ch = handle
+                .channel_open_session()
+                .await
+                .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
+            ch.request_subsystem(true, "sftp")
+                .await
+                .map_err(|e| format!("请求 sftp 子系统失败（远端可能没开 sftp）: {e}"))?;
+            SftpSession::new(ch.into_stream())
+                .await
+                .map_err(|e| format!("建立 SFTP 会话失败: {e}"))
+        };
+        let sftp = tokio::time::timeout(SFTP_OPEN_TIMEOUT, open)
             .await
-            .map_err(|e| format!("打开 SFTP 通道失败: {e}"))?;
-        ch.request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| format!("请求 sftp 子系统失败（远端可能没开 sftp）: {e}"))?;
-        let sftp = SftpSession::new(ch.into_stream())
-            .await
-            .map_err(|e| format!("建立 SFTP 会话失败: {e}"))?;
+            .map_err(|_| "远程连接没有响应（网络可能断过），过一会儿点刷新会重新连上".to_string())??;
         // 文件操作是直接交互，不能无限卡住按钮。超时只作用于这一条 SFTP 通道，
         // 不影响同一 SSH 连接上的终端 PTY。
         sftp.set_timeout(30);
