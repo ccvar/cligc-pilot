@@ -25,7 +25,9 @@
   const week = $derived(sumRange(DAYS - 7, DAYS, 'shipped'));
   const lastWeek = $derived(sumRange(DAYS - 14, DAYS - 7, 'shipped'));
   const broken = $derived(sumRange(DAYS - 7, DAYS, 'broken'));
-  const idle = $derived(days.slice(DAYS - 7).filter((x) => !x.d?.ran && !total(x.d)).length);
+  // 近 7 天里一次作业都没跑的日子：托管作业要 Pilot 开着才跑，多半是那天没开
+  const idleDays = $derived(days.slice(DAYS - 7).filter((x) => !x.d?.ran && !total(x.d)));
+  const idleTip = $derived(`${idleDays.map((x) => x.label).join('、')} 一次运营作业都没跑\n托管作业要 Pilot 开着才会跑，多半是那天没开\n点一下看${idleDays.length > 1 ? '最近那天' : '那天'}的操作日志`);
 
   const H = 44;
   const seg = (n: number) => (n / top) * H;
@@ -42,7 +44,10 @@
     <div class="st"><b>{week}</b><span>近 7 天上线</span></div>
     <div class="st"><b class:up={week > lastWeek} class:down={week < lastWeek}>{week === lastWeek ? '持平' : `${week > lastWeek ? '+' : ''}${week - lastWeek}`}</b><span>比前 7 天</span></div>
     <div class="st"><b class:err={broken > 0}>{broken}</b><span>回滚或失败</span></div>
-    {#if idle}<div class="st"><b class="warn">{idle} 天</b><span>没有跑</span></div>{/if}
+    {#if idleDays.length}
+      {@const last = idleDays[idleDays.length - 1]}
+      <button class="st idle-st" onclick={() => onpick(last.date, hasReport.has(last.date))} data-tip={idleTip} aria-label={idleTip}><b class="warn">{idleDays.length} 天</b><span>{idleDays.length > 1 ? '没跑作业' : `${last.label}没跑`}</span></button>
+    {/if}
   </div>
   <div class="chart">
     <div class="bars" style:height="{H}px">
@@ -64,7 +69,7 @@
     <div class="axis"><span>{days[0].label}</span><span>今天</span></div>
   </div>
   <div class="legend" aria-hidden="true">
-    <span><i class="ok"></i>上线</span><span><i class="plan"></i>出计划</span><span><i class="warn"></i>待你确认</span><span><i class="err"></i>回滚或失败</span><span><i class="idle"></i>跑了没改动</span>
+    <span><i class="ok"></i>上线</span><span><i class="plan"></i>出计划</span><span><i class="warn"></i>待你确认</span><span><i class="err"></i>回滚或失败</span><span><i class="idle"></i>跑了没改动</span><span><i class="none"></i>没跑（Pilot 没开）</span>
   </div>
 </div>
 
@@ -77,6 +82,8 @@
   .st b.down, .st b.err { color: var(--err); }
   .st b.warn { color: var(--warn); }
   .st span { font-size: 11px; color: var(--faint); }
+  .idle-st { align-items: flex-start; margin: -4px -6px; padding: 4px 6px; border: 0; border-radius: 6px; background: none; font: inherit; text-align: left; cursor: pointer; }
+  .idle-st:hover { background: var(--su-hover); }
   .chart { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
   .bars { display: flex; align-items: flex-end; gap: 3px; }
   .day { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; padding: 0; border: 0; border-radius: 3px; background: none; cursor: pointer; }
@@ -98,5 +105,6 @@
   .legend i.warn { background: var(--warn); }
   .legend i.err { background: var(--err); }
   .legend i.idle { background: #e4e2dc; }
+  .legend i.none { height: 0; border-bottom: 1px dashed #c9c6be; border-radius: 0; }
   @media (max-width: 900px) { .rc { grid-template-columns: minmax(0, 1fr); gap: 10px; } .legend { display: flex; flex-wrap: wrap; gap: 10px; } }
 </style>
