@@ -19,6 +19,10 @@
   $effect(() => { if (v.sftpPathEdit && v.sftpPathEl) { v.sftpPathEl.focus(); v.sftpPathEl.select(); } });
   // 路径深了就把尾巴（当前目录）滚进视野——面包屑是从左往右长的。
   $effect(() => { void v.sftpCrumbs; if (v.crumbEl) v.crumbEl.scrollLeft = v.crumbEl.scrollWidth; });
+  // 面包屑直接作用在这块面板自己那台上，不经过「当前在操作哪台」
+  const crumb = (path: string) => {
+    if (v !== EMPTY_VIEW) void sftpGo(path, v);
+  };
   const over = $derived(sftp.sftpFileOver && sftp.sftpDropTarget?.connId === connId);
 </script>
 
@@ -41,7 +45,7 @@
       <div class="fcrumbs" bind:this={v.crumbEl}>
         {#each v.sftpCrumbs as c, i (c.path)}
           {#if i > 0}<span class="fcrumb-sep">›</span>{/if}
-          <button class="fcrumb" class:cur={c.path === v.sftpPath} disabled={v.sftpBusy} onclick={() => sftpGo(c.path)}>{c.name}</button>
+          <button class="fcrumb" class:cur={c.path === v.sftpPath} disabled={v.sftpBusy} onclick={() => crumb(c.path)}>{c.name}</button>
         {/each}
         <button class="fcrumb-blank" aria-label="直接输入路径" data-tip="点这里可直接输入路径" onclick={startPathEdit}></button>
       </div>
