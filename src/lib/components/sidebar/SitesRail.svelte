@@ -108,8 +108,9 @@
 {/snippet}
 
 <style>
+  /* 展开箭头和上面「全部站点 / 托管运营」的图标同一条竖线（都在距左 25px 处居中） */
   .sr { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }
-  .site { margin: 0 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 2px; border-radius: 9px; cursor: pointer; min-width: 0; }
+  .site { margin: 0 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 8px; border-radius: 9px; cursor: pointer; min-width: 0; }
   .site { transition: background-color .12s; }
   .site:hover { background: #f5f4f1; }
   .site.on { background: #f0efeb; }
@@ -126,7 +127,7 @@
   .bad { width: 15px; height: 15px; border-radius: 50%; background: var(--err-soft); color: var(--err); font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
   .down { color: var(--err); font-size: 12px; font-weight: 700; }
   .run { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
-  .convs { padding: 1px 0 6px 28px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
+  .convs { padding: 1px 0 6px 34px; animation: sr-in .18s cubic-bezier(.2, .7, .2, 1) backwards; }
   @keyframes sr-in { from { opacity: 0; transform: translateY(-3px); } }
   @media (prefers-reduced-motion: reduce) { .convs { animation: none; } }
   .more { display: block; margin: 1px 8px 2px 30px; padding: 3px 8px; border: none; background: none; border-radius: 6px; font: inherit; font-size: 11.5px; color: var(--faint); cursor: pointer; text-align: left; }
