@@ -31,7 +31,7 @@
       <span class="ic"><Icon name="rocket" size={15} /></span>
       <span class="txt"><b>{st?.last_deploy ? '改动还没上线' : `${target} 还没上线过`}</b><small>构建、跑检查，通过后上线到 {target}</small></span>
       <span class="tipwrap" data-tip={running ? `站点正在${job?.title ?? '跑别的任务'}，等它跑完再上线` : '点了会先确认一次'}>
-        <button class="db-btn" onclick={() => void deploySite(site.id)} disabled={running}><Icon name="rocket" size={13} />构建并上线</button>
+        <button class="db-btn" onclick={() => void deploySite(site.id)} disabled={running}><Icon name="rocket" size={12} />构建并上线</button>
       </span>
     {/if}
   </div>
@@ -45,7 +45,7 @@
   .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
   .txt b { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .txt small { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .db-btn { flex: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 13px; font-weight: 500; padding: 6px 13px; border: none; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
+  .db-btn { flex: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; font-weight: 500; padding: 4px 10px; border: none; border-radius: 7px; background: var(--accent); color: #fff; cursor: pointer; }
   .db-btn:hover:not(:disabled) { background: var(--accent-h); }
   .db-btn:disabled { opacity: .45; cursor: default; }
   .db-btn.ghost { background: #fff; color: var(--text); border: 1px solid var(--border2); }
