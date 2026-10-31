@@ -344,6 +344,13 @@ fn held(site_id: &str) -> bool {
     HOLD.lock().unwrap().iter().any(|s| s == site_id)
 }
 
+/// 你在 Pilot 里手动点开的作业（trigger = "manual"）：改好等你确认时不再发 Telegram，你人就在电脑前。
+static MANUAL: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn by_hand(site_id: &str) -> bool {
+    MANUAL.lock().unwrap().iter().any(|s| s == site_id)
+}
+
 /// 临时换模型的作业：（brain, model），只在这个作业里用、不改站点和方案设置，作业结束就恢复。
 static MODEL_OVERRIDE: std::sync::Mutex<Vec<(String, (String, String))>> = std::sync::Mutex::new(Vec::new());
 
@@ -444,6 +451,11 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
         if task == "cycle" && item_id.as_deref() == Some("hold") {
             h.push(site_id.to_string());
         }
+        let mut m = MANUAL.lock().unwrap();
+        m.retain(|s| s != site_id);
+        if trigger == "manual" {
+            m.push(site_id.to_string());
+        }
     }
     let id = job.id.clone();
     let (task, trigger) = (task.to_string(), trigger.to_string());
@@ -491,6 +503,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
         set_model_override(&site.id, None);
         set_effort_override(&site.id, String::new());
         HOLD.lock().unwrap().retain(|s| s != &site.id);
+        MANUAL.lock().unwrap().retain(|s| s != &site.id);
         job.finish(&res);
         if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
             record_run(
@@ -515,7 +528,8 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
         ctx.emit_queue(&site.id);
         // 这次有改动合进了主分支：剩下的待确认改动要是因此合不进去了，接着自动处理（见 resolve）
         if r.is_ok() && matches!(task.as_str(), "accept" | "accept_many" | "cycle" | "work" | "batch" | "recheck" | "scan") && !conflicting(&site, &site_dir).await.is_empty() {
-            if let Err(e) = start(ctx.clone(), &site.id, "resolve", "auto", None) {
+            // 接着你手动的操作自动处理冲突：同样算手动，改好不发 Telegram
+            if let Err(e) = start(ctx.clone(), &site.id, "resolve", if trigger == "manual" { "manual" } else { "auto" }, None) {
                 eprintln!("[ops] 处理冲突没启动：{e}");
             }
         }
@@ -1568,7 +1582,9 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         log_item(ctx, site, "proposed", item, &verdict);
     }
     if !(level >= 4 && verdict == "auto") || hold {
-        crate::push::proposal(&ctx.app, site, &item.id);
+        if !by_hand(&site.id) {
+            crate::push::proposal(&ctx.app, site, &item.id);
+        }
         let why = if hold && verdict == "auto" {
             "检查都通过（按方案规则本来可以自动上线）；这次选了「执行但不上线」，留给你确认".to_string()
         } else if verdict == "auto" {
