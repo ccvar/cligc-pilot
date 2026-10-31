@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import SftpTransfers from '$lib/SftpTransfers.svelte';
   import RefreshIcon from '$lib/components/icons/RefreshIcon.svelte';
   import { workbench, missingSshCredential } from '$lib/state/workbench.svelte.js';
@@ -7,10 +8,11 @@
 
   // 每个窗格一块：显示 connId 那台机器的文件。solo＝主区收起时撑满整宽（只有聚焦的工作台会这样）
   let { connId, solo = false }: { connId: string; solo?: boolean } = $props();
-  $effect(() => { ensureSftpView(connId); });
+  // 只跟 connId 走：ensureSftpView 里会读面板的忙闲、目录等状态，不 untrack 的话每次读完都会再触发一次，变成无限刷新（刷新按钮一直转）
+  $effect(() => { const id = connId; untrack(() => ensureSftpView(id)); });
   // 手动断开过：终端重新连上了，文件面板也跟着回来
   const closed = $derived(sftp.closed.has(connId));
-  $effect(() => { if (closed && workbench.termState[connId]?.on) reopenSftpView(connId); });
+  $effect(() => { if (closed && workbench.termState[connId]?.on) { const id = connId; untrack(() => reopenSftpView(id)); } });
   const v = $derived(sftp.views[connId] ?? EMPTY_VIEW);
   // 在这块面板里点、右键、拖文件进来、键盘操作：接下来的文件操作都作用在这台机器上
   const claim = () => { sftp.sftpConnId = connId; };
