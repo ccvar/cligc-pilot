@@ -30,7 +30,7 @@ class UiState {
 export const ui = new UiState();
 
 // 单行省略文案只有真的被截断时才挂全局 tooltip；宽度够时保持安静。
-function overflowTip(node: HTMLElement, text: string) {
+export function overflowTip(node: HTMLElement, text: string) {
   let current = text;
   let frame = 0;
   const sync = () => {

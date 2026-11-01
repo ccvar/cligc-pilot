@@ -10,7 +10,7 @@
   import BoardIcon from '$lib/components/icons/BoardIcon.svelte';
   import { openSiteBoard } from '$lib/state/sites.svelte.js';
   import ConnectionSwitcher from '$lib/components/sidebar/ConnectionSwitcher.svelte';
-  import { ui, startResize } from '$lib/state/ui.svelte.js';
+  import { ui, startResize, overflowTip } from '$lib/state/ui.svelte.js';
   import { newChat, openConv, deleteConv } from '$lib/state/conversations';
   import { app } from '$lib/state/app.svelte.js';
   import { openTemplates, openPrompts } from '$lib/state/library.svelte.js';
@@ -65,7 +65,7 @@
 <div class="convo {app.activeConvId === c.id ? 'on' : ''}" onpointerdown={(e)=>startConversationPointerDrag(e,c.id)} draggable="true" ondragstart={(e)=>startConversationDrag(e,c.id)} ondragend={endConversationDrag}>
   <button type="button" class="convo-body" onclick={() => openConv(c.id)}>
     <span class="convo-bi" title={brainLabel(c.brain)}><BrainIcon brain={modelIcon(c.brain)} size={11} /></span>
-    <span class="convo-title">{convTitle(c.title)}</span>
+    <span class="convo-title" use:overflowTip={convTitle(c.title)}>{convTitle(c.title)}</span>
     {#if c.status === 'running' || app.running[c.id]}<span class="mini-run"></span>{/if}
     {#if permits.permConvs.has(c.id)}<span class="mini-permit" title="有操作等你批准">待批</span>{/if}
     <span class="convo-when">{relTime(c.updated_at)}</span>
