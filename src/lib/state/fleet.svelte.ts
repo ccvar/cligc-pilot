@@ -220,7 +220,7 @@ let autodetected = false;
 /** 导入站点后也跑一次：刚导入的站点没配部署、没接数据源，马上去 Cloudflare / Google / Bing 里找（数据流不用缓存）。 */
 export async function autodetectDeploys(fresh = false) {
   autodetected = true;
-  deployCheckedAt = Date.now();
+  deployCheckedAt = dataCheckedAt = Date.now();
   try {
     const [deploys, data] = await Promise.all([
       fresh || fleet.rows.some((r) => r.deploy_mode === 'none') ? invoke<string[]>('autodetect_cf_deploys').catch(() => []) : Promise.resolve([] as string[]),
@@ -235,14 +235,24 @@ export async function autodetectDeploys(fresh = false) {
     }
   } catch { /* 识别不到不打扰 */ }
 }
-// 启动后才在 Cloudflare 上配好的站点（比如刚把域名切到 Pages 项目）：还有没配置部署的就隔一会儿再找一次，不用重启
+// 启动后才导入 / 才在 Cloudflare 配好的站点（比如刚把域名切到 Pages 项目）：还有没配置部署、没接数据源的就隔一会儿再找一次，不用重启
 let deployCheckedAt = 0;
+let dataCheckedAt = 0;
 async function recheckDeploys() {
-  if (!fleet.rows.some((r) => r.deploy_mode === 'none') || Date.now() - deployCheckedAt < 2 * 60_000) return;
-  deployCheckedAt = Date.now();
-  const deploys = await invoke<string[]>('autodetect_cf_deploys').catch(() => [] as string[]);
-  if (!deploys.length) return;
-  say(`在 Cloudflare 里认出了 ${deploys.length} 个站点的部署：${deploys.join('；')}`);
+  const now = Date.now();
+  const deploy = fleet.rows.some((r) => r.deploy_mode === 'none') && now - deployCheckedAt >= 2 * 60_000;
+  // 数据源要挨个查 Google / Bing 账号，隔得久一点
+  const data = fleet.rows.some((r) => !r.has_data) && now - dataCheckedAt >= 10 * 60_000;
+  if (!deploy && !data) return;
+  if (deploy) deployCheckedAt = now;
+  if (data) dataCheckedAt = now;
+  const [deploys, bound] = await Promise.all([
+    deploy ? invoke<string[]>('autodetect_cf_deploys').catch(() => [] as string[]) : Promise.resolve([] as string[]),
+    data ? invoke<string[]>('autodetect_data_bindings', { fresh: false }).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+  ]);
+  if (deploys.length) say(`在 Cloudflare 里认出了 ${deploys.length} 个站点的部署：${deploys.join('；')}`);
+  if (bound.length) say(`按域名接上了 ${bound.length} 个站点的数据源：${bound.join('；')}。数据马上开始拉取`);
+  if (!deploys.length && !bound.length) return;
   await refreshSites();
   void loadFleet();
 }
