@@ -217,6 +217,8 @@ pub fn set_sites_managed(state: tauri::State<'_, AppState>, ids: Vec<String>, ma
 pub struct ManagedSite {
     pub id: String,
     pub group_id: String,
+    /// 最近一次活动（秒）：操作日志里这个站点最新的一条、任务队列里最近更新的一条，取较晚的。方案里的站点按它排序
+    pub last_active: u64,
     /// 方案没暂停、站点也没单独停止。
     pub active: bool,
     /// 站点阶段：new / growing / established；stage_manual 表示运营人员手动指定的。
@@ -281,6 +283,11 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
     let convs = state.convos.list();
     let ads = crate::revenue::load_cache(&state.data_dir);
     let (mut revenue_month, mut revenue_tracked) = (0.0, false);
+    let mut logged: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for a in managed::activity(&state.data_dir, 2000) {
+        let t = logged.entry(a.site_id).or_default();
+        *t = (*t).max(a.ts);
+    }
     let sites = state
         .sites
         .list()
@@ -307,7 +314,9 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             let money = crate::revenue::site_money(&ads, &s, &dir);
             revenue_month += money.month;
             revenue_tracked |= money.tracked;
+            let last_active = q.iter().map(|i| i.updated_at).max().unwrap_or(0).max(logged.get(&s.id).copied().unwrap_or(0));
             ManagedSite {
+                last_active,
                 money,
                 cost,
                 shipped_month,

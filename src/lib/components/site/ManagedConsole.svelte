@@ -166,7 +166,7 @@
   });
   // 方案卡片展开 / 收起：点过的记下来；没点过的，暂停的方案收起、其余展开
   let grpOpen = $state<Record<string, boolean>>({});
-  // 站点多的方案先显示 SITE_LIMIT 个，要你处理的、失败的、正在跑的排前面
+  // 站点多的方案先显示 SITE_LIMIT 个，按最近活动排：正在跑的最前，单独停止的放最后
   const SITE_LIMIT = 6;
   let showAll = $state<Set<string>>(new Set());
   function toggleShowAll(id: string) { const n = new Set(showAll); if (n.has(id)) n.delete(id); else n.add(id); showAll = n; }
@@ -177,11 +177,11 @@
   function orderSites(g: ManagedGroup) {
     const rank = (id: string) => {
       const s = sitesById.get(id);
-      if (s && (s.waiting || budgetFull(s.budget))) return 0;
-      if (s?.job || sites.jobs[id]?.status === 'running') return 1;
-      return g.stopped.includes(id) ? 3 : 2;
+      if (s?.job || sites.jobs[id]?.status === 'running') return 0;
+      return g.stopped.includes(id) ? 2 : 1;
     };
-    return [...g.sites].map((id, i) => ({ id, i, r: rank(id) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.id);
+    const last = (id: string) => sitesById.get(id)?.last_active ?? 0;
+    return [...g.sites].map((id, i) => ({ id, i, r: rank(id), t: last(id) })).sort((a, b) => a.r - b.r || b.t - a.t || a.i - b.i).map((x) => x.id);
   }
   /** 方案里各站点最近 14 天的计数按天加起来（站点按现在所在的方案算） */
   function groupDays(g: ManagedGroup) {
@@ -413,6 +413,7 @@
                   {#if s}<span class="stg {s.stage}" data-tip={s.stage_manual ? '手动指定的阶段' : '按 Search Console 数据自动判断'}>{STAGE_LABEL[s.stage] ?? s.stage}</span>{/if}
                   {#if s}
                     <span class="gs-meta">
+                      {#if s.last_active}<span class="faint" data-tip={`最近活动：${full(s.last_active)}（计划、上线、检查、任务状态变化都算）。方案里的站点按它排`}>{ago(s.last_active)}</span>{/if}
                       {#if s.shipped_week}<button class="ship-l" onclick={() => openSite(id, 'queue', 'live')} data-tip="看这个站点的上线记录（任务队列 · 已上线）">本周上线 {s.shipped_week}</button>{/if}
                       {#if need > 0}<button class="ship-l warn-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip="打开这个站点的「需要你处理」：确认上线、驳回或重新检查">待你处理 {need}</button>{/if}
                       {#if s.failed}<button class="ship-l err-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip={failTip(s)}>失败 {s.failed}</button>{/if}

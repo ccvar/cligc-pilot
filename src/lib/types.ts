@@ -574,6 +574,8 @@ export interface ManagedGroup {
   created_at: number;
 }
 export interface ManagedSite {
+  /** 最近一次活动（秒）：操作日志和任务队列里最新的一条 */
+  last_active?: number;
   id: string; group_id: string; active: boolean; stage: string; stage_manual: boolean; name: string; domain: string; shipped_week: number; waiting: number; failed: number; queued: number;
   /** 失败的几条（最新的在前，最多 3 条）：[标题, 原因第一行] */
   failed_why: [string, string][];
