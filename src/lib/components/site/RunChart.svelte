@@ -92,7 +92,8 @@
   .b { display: block; width: 100%; min-height: 2px; }
   .b.ok { background: var(--ok); }
   .b.plan { background: #cfccc4; }
-  .b.warn { background: var(--warn); }
+  /* 柱子和图例里的「待你确认」用亮一些的琥珀色：和「回滚或失败」的红明暗差得开（文字仍用 --warn，保证对比度） */
+  .b.warn { background: #e8a33a; }
   .b.err { background: var(--err); }
   .b.idle { height: 3px; background: #e4e2dc; }
   .b.none { height: 1px; background: transparent; border-bottom: 1px dashed #e4e2dc; }
@@ -102,7 +103,7 @@
   .legend i { width: 8px; height: 8px; border-radius: 2px; }
   .legend i.ok { background: var(--ok); }
   .legend i.plan { background: #cfccc4; }
-  .legend i.warn { background: var(--warn); }
+  .legend i.warn { background: #e8a33a; }
   .legend i.err { background: var(--err); }
   .legend i.idle { background: #e4e2dc; }
   .legend i.none { height: 0; border-bottom: 1px dashed #c9c6be; border-radius: 0; }
