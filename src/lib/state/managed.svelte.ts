@@ -148,7 +148,7 @@ function blankGroup(c: ManagedConfig | undefined, n: number): ManagedGroup {
   return {
     id: '', name: n ? `托管方案 ${n + 1}` : '托管方案', sites: [], stopped: [], paused: false, autonomy: 'auto',
     brain: c?.brain || 'claude', model: c?.model ?? '', fallback_brain: c?.fallback_brain ?? '', fallback_model: c?.fallback_model ?? '',
-    new_content: 'auto', code_changes: 'all', daily_changes: c?.daily_changes ?? 3, cadence: 'daily', cadence_day: 1, cadence_every: 1, per_round: 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
+    new_content: 'auto', code_changes: 'all', strictness: 'standard', allow_kinds: [], daily_changes: c?.daily_changes ?? 3, cadence: 'daily', cadence_day: 1, cadence_every: 1, per_round: 3, tokens_per_week: c?.tokens_per_week ?? 2000000,
     goal: '', actions: ACTIONS.map((a) => a.key), guidelines: GUIDELINE_TEMPLATE, topics: '', metric: 'clicks', min_page_chars: 1500, jev_gate: true, skip_offtopic: true, created_at: 0,
   };
 }
@@ -165,7 +165,34 @@ export function newGroup(sites: string[] = []) {
   const o = managed.overview;
   managed.editor = { ...blankGroup(o?.config, o?.groups.length ?? 0), sites: [...sites] };
 }
-export const CODE_LABEL: Record<string, string> = { review: '代码改动人审', small: '小的代码改动自动上线', all: '代码改动自动上线' };
+/** 拦截等级（全自动时哪些改动留给你确认）。和后端 managed::TIERS 一致 */
+export const TIERS: { key: 'strict' | 'standard' | 'open'; label: string; tip: string }[] = [
+  { key: 'strict', label: '稳妥', tip: '代码改动（模板、组件、样式、站点脚本）都留给你确认；推荐链接、邀请码、返佣相关的行一碰就留给你。' },
+  { key: 'standard', label: '标准', tip: '代码改动检查通过就上线；推荐链接和邀请码真变了才拦（挪位置、改旁边的说法不算）。直接插入 HTML、读环境变量、引入外部包、单次替换已有内容超过 400 行、质检没过、AI 补过链接还是孤立的新页面，留给你确认。' },
+  { key: 'open', label: '放开', tip: '在「标准」基础上再放行：直接插入 HTML、读环境变量、引入外部包、质检没过（分数照记）、AI 补过链接还是孤立的新页面；单次替换上限放到 1500 行；推荐内容只拦删掉或换掉的，新加推荐链接不拦。' },
+];
+export const TIER_COMMON = '不管哪一档：依赖、构建 / 部署配置、脚本、Worker / Functions / API 路由、删文件、调外部服务或执行命令、构建没过、站点被标成危险网站，都不会自动上线；上线后验收没过会自动回滚。';
+/** 方案的拦截等级（老方案按代码改动设置换算，和后端 ManagedGroup::tier 一致） */
+export function tierOf(g: { strictness?: string; code_changes?: string }): 'strict' | 'standard' | 'open' {
+  if (g.strictness === 'strict' || g.strictness === 'standard' || g.strictness === 'open') return g.strictness;
+  return g.code_changes === 'review' || g.code_changes === 'small' ? 'strict' : 'standard';
+}
+/** 能在被拦下的卡片上点「这类以后不拦」的拦截类型（和后端 managed::BLOCK_KINDS 一致） */
+export const BLOCK_KIND_LABEL: Record<string, string> = {
+  money: '推荐链接、邀请码变动', html: '直接插入 HTML', env: '读环境变量', package: '引入外部包', size: '大段替换已有内容',
+  leak: '正文里像有内部说明或占位', thin: '新页面正文偏短', orphan: '新页面没有站内链接', jev: '内容质检没过',
+};
+/** 被拦下的卡片上点「这类以后不拦」（allow＝false：方案编辑器里恢复拦截） */
+export async function setBlockKind(siteId: string, kind: string, allow: boolean, planName: string) {
+  const label = BLOCK_KIND_LABEL[kind] ?? kind;
+  if (allow && !(await confirmDialog(`以后托管方案「${planName}」里的站点，遇到「${label}」不再留给你确认，检查和上线后验收都通过就自动上线（验收没过照样自动回滚）。\n\n只放行这一类；别的原因照样拦。可以在方案的「拦截等级」里恢复。`, { title: '这类以后不拦', kind: 'info', confirmText: '以后不拦' }))) return false;
+  try {
+    await invoke('set_block_kind_allowed', { siteId, kind, allow });
+    await loadManaged();
+    say(allow ? `「${planName}」以后不拦「${label}」。等你确认的改动点「重新检查」就按新规则判断` : `「${planName}」恢复拦截「${label}」`);
+    return true;
+  } catch (e) { say(String(e), 'err'); return false; }
+}
 /** 本月 AI 花费的短写：能估金额就写美元，全是订阅额度就写 token；没用过返回空 */
 export function costText(c?: AiCost | null): string {
   if (!c || !c.turns) return '';

@@ -143,6 +143,13 @@ pub struct ManagedGroup {
     /// 依赖、构建 / 部署配置、Worker / 服务端、读环境变量或调外部服务的代码，任何一档都不自动上线。
     #[serde(default = "default_code")]
     pub code_changes: String,
+    /// 拦截等级：strict 稳妥 | standard 标准 | open 放开（见 `TIERS`）。代码改动跟着它走（稳妥＝留给你确认，其它＝都自动），
+    /// 老方案没有这项，读进来时按 code_changes 换算。
+    #[serde(default)]
+    pub strictness: String,
+    /// 在被拦下的卡片上点了「这类以后不拦」的拦截类型（见 `BLOCK_KINDS`），只对这个方案生效。
+    #[serde(default)]
+    pub allow_kinds: Vec<String>,
     /// 自动上线前用判断模型（Jev）做内容质检；接上 TypeSafe 才生效，见 jev_checks
     #[serde(default = "yes")]
     pub jev_gate: bool,
@@ -160,6 +167,67 @@ fn default_code() -> String {
     "all".into()
 }
 pub const CODE_CHANGES: &[&str] = &["all", "small", "review"];
+
+/// 拦截等级：稳妥（代码改动、推荐内容一碰就留给你）| 标准（推荐链接和邀请码真变了才拦）| 放开（只拦改坏了测不出来、回滚不了的）。
+/// 不管哪一档都不放行的：依赖、构建 / 部署配置、脚本、Worker / Functions / API 路由、删文件、调外部服务或执行命令、
+/// 站点被标成危险网站、构建没过；上线后验收没过照样自动回滚。
+pub const TIERS: &[&str] = &["strict", "standard", "open"];
+/// 可以在被拦下的卡片上点「这类以后不拦」的拦截类型。没列在这里的（依赖 / 配置 / 服务端代码、删文件、调外部服务……）不能放行。
+pub const BLOCK_KINDS: &[&str] = &["money", "html", "env", "package", "size", "leak", "thin", "orphan", "jev"];
+pub fn block_kind_label(k: &str) -> &'static str {
+    match k {
+        "money" => "推荐链接、邀请码变动",
+        "html" => "直接插入 HTML",
+        "env" => "读环境变量",
+        "package" => "引入外部包",
+        "size" => "大段替换已有内容",
+        "leak" => "正文里像有内部说明或占位",
+        "thin" => "新页面正文偏短",
+        "orphan" => "新页面没有站内链接",
+        "jev" => "内容质检没过",
+        _ => "其它",
+    }
+}
+/// 「放开」档默认就不拦的类型
+const OPEN_LETS: &[&str] = &["html", "env", "package", "orphan", "jev"];
+
+/// 一条不能自动上线的原因；kind 是 `BLOCK_KINDS` 里的一种，空＝不能放行。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Block {
+    pub kind: &'static str,
+    pub text: String,
+}
+fn block(kind: &'static str, text: String) -> Block {
+    Block { kind, text }
+}
+
+/// 自动上线判定用的方案规则（见 `ManagedGroup::rules`）。
+pub struct Rules<'a> {
+    pub tier: &'a str,
+    /// review / small / all，见 ManagedGroup.code_changes
+    pub code: &'a str,
+    pub allow: &'a [String],
+    pub new_content: bool,
+    /// 新页面正文下限（字，0＝不检查）
+    pub min_page: usize,
+    /// 站点放行的「算网站内容的代码文件」，见 `listed`
+    pub content_code: &'a [String],
+}
+impl Rules<'_> {
+    /// 这类原因按方案放行（点过「这类以后不拦」，或「放开」档默认不拦）
+    pub fn lets(&self, kind: &str) -> bool {
+        !kind.is_empty() && (self.allow.iter().any(|k| k == kind) || (self.tier == "open" && OPEN_LETS.contains(&kind)))
+    }
+    fn max_changed(&self) -> usize {
+        if self.lets("size") {
+            usize::MAX
+        } else if self.tier == "open" {
+            MAX_CHANGED_LINES_OPEN
+        } else {
+            MAX_CHANGED_LINES
+        }
+    }
+}
 /// 「小改动」的上限：代码文件改动的总行数和文件数。
 pub const SMALL_CODE_LINES: usize = 80;
 pub const SMALL_CODE_FILES: usize = 5;
@@ -235,11 +303,32 @@ impl ManagedGroup {
             metric: default_metric(),
             min_page_chars: default_min_page(),
             code_changes: default_code(),
+            strictness: "standard".into(),
+            allow_kinds: Vec::new(),
             jev_gate: true,
             jev_rewrite: true,
             skip_offtopic: true,
             created_at: 0,
         }
+    }
+    /// 拦截等级（老方案按代码改动设置换算：留给你确认 / 小改动＝稳妥，都自动＝标准）
+    pub fn tier(&self) -> &str {
+        match self.strictness.as_str() {
+            t @ ("strict" | "standard" | "open") => t,
+            _ if matches!(self.code_changes.as_str(), "review" | "small") => "strict",
+            _ => "standard",
+        }
+    }
+    pub fn rules<'a>(&'a self, content_code: &'a [String]) -> Rules<'a> {
+        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code }
+    }
+    /// 保存前把等级落定：老方案补上等级，代码改动跟着等级走，放行清单只留认得的类型
+    pub fn settle_tier(&mut self) {
+        self.strictness = self.tier().to_string();
+        self.code_changes = if self.strictness == "strict" { "review" } else { "all" }.into();
+        self.allow_kinds.retain(|k| BLOCK_KINDS.contains(&k.as_str()));
+        self.allow_kinds.sort();
+        self.allow_kinds.dedup();
     }
     pub fn allows(&self, change: &str) -> bool {
         // 计划里偶尔出现的细分类型（title / meta_description）都算「改标题和描述」
@@ -310,6 +399,9 @@ pub fn load(data_dir: &Path) -> ManagedConfig {
     for g in &mut c.groups {
         if g.per_round == 0 {
             g.per_round = g.daily_changes.clamp(1, DEFAULT_PER_ROUND);
+        }
+        if g.strictness.is_empty() {
+            g.settle_tier();
         }
     }
     c
@@ -392,6 +484,9 @@ pub fn validate_group(g: &ManagedGroup) -> Result<(), String> {
     }
     if !CODE_CHANGES.contains(&g.code_changes.as_str()) {
         return Err(format!("未知的代码改动设置：{}", g.code_changes));
+    }
+    if !g.strictness.is_empty() && !TIERS.contains(&g.strictness.as_str()) {
+        return Err(format!("未知的拦截等级：{}", g.strictness));
     }
     if g.daily_changes > 50 {
         return Err("每天最多自动上线的条数超出范围（0–50）".into());
@@ -591,7 +686,7 @@ fn template_page(name: &str) -> bool {
     ["html", "htm", "tmpl", "gohtml", "md", "mdx", "markdown"].iter().any(|e| name.ends_with(&format!(".{e}")))
 }
 
-/// 测试文件：按方案的「代码改动」设置判断，新加的代码照样查危险写法。
+/// 测试文件：按方案的「拦截等级」判断，新加的代码照样查危险写法。
 fn test_file(name: &str) -> bool {
     name.ends_with("_test.go") || (name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py")))
 }
@@ -631,7 +726,7 @@ pub fn listed(path: &str, list: &[String]) -> bool {
     list.iter().map(|x| x.trim().trim_start_matches("./")).filter(|x| !x.is_empty()).any(|x| if x.ends_with('/') { p.starts_with(x) } else { p == x })
 }
 
-/// 站点代码（模板、组件、样式、前端脚本）：按方案的「代码改动」设置决定能不能自动上线。
+/// 站点代码（模板、组件、样式、前端脚本）：按方案的「拦截等级」决定能不能自动上线。
 fn site_code_file(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     ["ts", "tsx", "js", "jsx", "mjs", "cjs", "css", "scss", "less"].iter().any(|e| name.ends_with(&format!(".{e}")))
@@ -695,6 +790,50 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
         return Some("引入了外部包");
     }
     None
+}
+
+/// 危险写法对应的拦截类型：直接插入 HTML、读环境变量、引入外部包可以按方案放行；调外部服务、执行命令这些不行。
+fn risky_kind(why: &str) -> &'static str {
+    match why {
+        "直接插入 HTML" => "html",
+        "读环境变量" | "读运行环境（密钥、数据库）" => "env",
+        "引入了外部包" => "package",
+        _ => "",
+    }
+}
+
+/// 一行推荐内容里真正带钱的部分：推荐 / 跳转链接、data-ref 属性、写着的码、组件标签、字段。
+/// 用来比较改动前后：同样的链接和码只是挪了位置或换了说法，不算改动推荐内容。拆不出来就用整行（宁可多拦）。
+pub fn money_atoms(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let seps = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | '`' | ',' | '，' | '。' | '）' | '（');
+    let words = ["referral", "invite", "affiliate", "promo", "coupon", "rebate"];
+    for t in line.split(seps).filter(|t| !t.is_empty()) {
+        let l = t.to_lowercase();
+        if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && words.iter().any(|w| l.contains(w))) {
+            out.push(t.trim_end_matches(['.', ';', ':', '!']).to_string());
+        }
+    }
+    // data-ref-code="binance" 这类属性：属性名加值
+    for (i, _) in line.match_indices("data-ref") {
+        let rest = &line[i..];
+        let end = rest.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(rest.len());
+        out.push(rest[..end].to_string());
+    }
+    // 写着的码
+    for k in ["邀请码", "推荐码", "优惠码", "返佣码"] {
+        for (i, _) in line.match_indices(k) {
+            let rest = line[i + k.len()..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '：' | ':' | '「' | '“' | '"' | '`' | '*'));
+            let code: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            if code.chars().count() >= 4 {
+                out.push(format!("{k}{code}"));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(line.trim().to_string());
+    }
+    out
 }
 
 /// 推荐 / 邀请 / 返佣相关的内容：改动里只要删改了带这些标记的行，就不自动上线。
@@ -983,52 +1122,69 @@ fn data_line(line: &str) -> bool {
     !code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).any(|w| CODE_WORDS.contains(&w))
 }
 
-/// 自动上线时，单次改动已有文件的行数上限；新内容文件按新内容规则和正文下限判断，另有一个整体上限。
+/// 自动上线时，单次改动已有文件的行数上限（「放开」档另有一个宽一些的）；新内容文件按新内容规则和正文下限判断，另有一个整体上限。
 const MAX_CHANGED_LINES: usize = 400;
+const MAX_CHANGED_LINES_OPEN: usize = 1500;
 const MAX_NEW_FILE_LINES: usize = 3000;
 
-/// `min_page`：新页面正文下限（字，0＝不检查），见 ManagedGroup.min_page_chars。
-/// `code`：方案的「代码改动」设置（review / small / all），见 ManagedGroup.code_changes。
-/// `content_code`：站点放行的「算网站内容的代码文件」（见 `listed`），按 `code` 判断，不再一律拦。
+/// 老的调用方式（测试里用）：按代码改动设置推等级——留给你确认＝稳妥，其它＝标准；只返回原因文字。
+#[cfg(test)]
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
-    let mut reasons = Vec::new();
+    let tier = if code == "review" { "strict" } else { "standard" };
+    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code }).into_iter().map(|b| b.text).collect()
+}
+
+/// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
+pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
+    let code = rules.code;
+    let mut reasons: Vec<Block> = Vec::new();
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
     let (mut code_lines, mut code_files) = (0usize, 0usize);
+    // 已有文件里删掉 / 加上的推荐内容（文件，行），最后整份比较
+    let (mut money_out, mut money_in): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     for f in split_diff(diff) {
         let file = &f.file;
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
-        let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, content_code) || (code == "all" && !edge_runtime(file)));
+        let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, rules.content_code) || (code == "all" && !edge_runtime(file)));
         let forbidden = hard_forbidden(file) && !allowed;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
-            reasons.push(format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改"));
+            reasons.push(block("", format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改")));
         } else if is_code {
             code_files += 1;
             code_lines += f.added.len() + f.removed.len();
             if code == "review" {
                 let line = f.added.iter().chain(&f.removed).find(|l| !data_line(l)).map(|l| l.trim().chars().take(60).collect::<String>()).unwrap_or_default();
-                reasons.push(format!("{file}：改了代码（比如「{line}」），这个方案设成代码改动留给你确认"));
+                reasons.push(block("", format!("{file}：改了代码（比如「{line}」），这个方案的拦截等级是「稳妥」，代码改动留给你确认")));
             }
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
-            reasons.push(format!("{file}：不是页面内容文件"));
+            reasons.push(block("", format!("{file}：不是页面内容文件")));
         }
         if is_code || template_file(file) {
-            if let Some((why, l)) = f.added.iter().find_map(|l| risky_code(l).map(|w| (w, l))) {
-                reasons.push(format!("{file}：新加的代码{why}（「{}」），留给你确认", l.trim().chars().take(60).collect::<String>()));
+            // 每种危险写法报一条；方案放行的类型跳过
+            let mut seen: Vec<&str> = Vec::new();
+            for l in &f.added {
+                let Some(why) = risky_code(l) else { continue };
+                let kind = risky_kind(why);
+                if seen.contains(&why) || rules.lets(kind) {
+                    continue;
+                }
+                seen.push(why);
+                reasons.push(block(kind, format!("{file}：新加的代码{why}（「{}」），留给你确认", l.trim().chars().take(60).collect::<String>())));
             }
         }
         if f.deleted {
-            reasons.push(format!("{file}：删除文件不自动执行"));
+            reasons.push(block("", format!("{file}：删除文件不自动执行")));
             continue;
         }
         if f.new_file {
             new_lines += f.added.len();
-            if !allow_new_content {
-                reasons.push(format!("{file}：新内容需要运营人员确认后发布"));
+            if !rules.new_content {
+                reasons.push(block("", format!("{file}：新内容需要运营人员确认后发布")));
             }
         } else if !is_code {
             // 已有的内容 / 数据文件里多出来的行是新写的内容（比如往文章列表里加一整篇），按新增内容的上限算；被替换的行才算改动
@@ -1038,25 +1194,24 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
         } else {
             changed += f.added.len() + f.removed.len();
         }
-        for r in &f.removed {
-            if touches_money(r) {
-                reasons.push(format!("{file}：改动了推荐 / 邀请相关的内容"));
-            }
-        }
-        if !f.new_file && f.added.iter().any(|a| touches_money(a)) {
-            reasons.push(format!("{file}：新增了推荐 / 邀请相关的内容"));
+        money_out.extend(f.removed.iter().filter(|r| touches_money(r)).map(|r| (file.clone(), r.clone())));
+        if !f.new_file {
+            money_in.extend(f.added.iter().filter(|a| touches_money(a)).map(|a| (file.clone(), a.clone())));
         }
         let page = is_page_file(file) || data;
         if page {
             // 页面文件看整行；数据文件只看字符串里的文字
             let texts: Vec<String> = f.added.iter().map(|a| if data { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
-            for t in &texts {
-                let lower = t.to_lowercase();
-                if let Some(m) = LEAK_MARKERS.iter().find(|m| lower.contains(&m.to_lowercase())) {
-                    reasons.push(format!("{file}：正文里像是混进了内部说明或占位（「{m}」），留给你确认"));
+            if !rules.lets("leak") {
+                for t in &texts {
+                    let lower = t.to_lowercase();
+                    if let Some(m) = LEAK_MARKERS.iter().find(|m| lower.contains(&m.to_lowercase())) {
+                        reasons.push(block("leak", format!("{file}：正文里像是混进了内部说明或占位（「{m}」），留给你确认")));
+                    }
                 }
             }
-            if f.new_file && min_page > 0 {
+            if f.new_file && rules.min_page > 0 && !rules.lets("thin") {
+                let min_page = rules.min_page;
                 let mut n = 0;
                 let mut in_frontmatter = false;
                 for t in &texts {
@@ -1068,23 +1223,54 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
                     }
                 }
                 if n < min_page {
-                    reasons.push(format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）"));
+                    reasons.push(block("thin", format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）")));
                 }
             }
         }
     }
+    reasons.extend(money_blocks(rules, &money_out, &money_in));
     if code == "small" && (code_lines > SMALL_CODE_LINES || code_files > SMALL_CODE_FILES) {
-        reasons.push(format!("代码改动 {code_lines} 行、{code_files} 个文件，超过「小改动」的上限（{SMALL_CODE_LINES} 行、{SMALL_CODE_FILES} 个文件）"));
+        reasons.push(block("", format!("代码改动 {code_lines} 行、{code_files} 个文件，超过「小改动」的上限（{SMALL_CODE_LINES} 行、{SMALL_CODE_FILES} 个文件）")));
     }
-    if changed > MAX_CHANGED_LINES {
-        reasons.push(format!("改动已有文件 {changed} 行，超过自动上线的上限（{MAX_CHANGED_LINES} 行）"));
+    let max = rules.max_changed();
+    if changed > max {
+        reasons.push(block("size", format!("改动已有文件 {changed} 行，超过自动上线的上限（{max} 行）")));
     }
-    if new_lines > MAX_NEW_FILE_LINES {
-        reasons.push(format!("新增文件共 {new_lines} 行，超过自动上线的上限（{MAX_NEW_FILE_LINES} 行）"));
+    if new_lines > MAX_NEW_FILE_LINES && !rules.lets("size") {
+        reasons.push(block("size", format!("新增文件共 {new_lines} 行，超过自动上线的上限（{MAX_NEW_FILE_LINES} 行）")));
     }
-    reasons.sort();
-    reasons.dedup();
+    reasons.sort_by(|a, b| a.text.cmp(&b.text));
+    reasons.dedup_by(|a, b| a.text == b.text);
     reasons
+}
+
+/// 推荐内容的判定。稳妥：已有文件里删改了带推荐标记的行就拦。标准：改动前后的推荐链接、码、组件不一样才拦（只是挪位置、
+/// 改了旁边的说法不算）。放开：只拦删掉或换掉的，新加推荐链接不拦。点过「这类以后不拦」的都不拦。
+fn money_blocks(rules: &Rules, out: &[(String, String)], ins: &[(String, String)]) -> Vec<Block> {
+    if rules.lets("money") || (out.is_empty() && ins.is_empty()) {
+        return Vec::new();
+    }
+    if rules.tier == "strict" {
+        let mut v: Vec<Block> = out.iter().map(|(f, _)| block("money", format!("{f}：改动了推荐 / 邀请相关的内容"))).collect();
+        v.extend(ins.iter().map(|(f, _)| block("money", format!("{f}：新增了推荐 / 邀请相关的内容"))));
+        return v;
+    }
+    let atoms = |v: &[(String, String)]| v.iter().flat_map(|(f, l)| money_atoms(l).into_iter().map(move |a| (f.clone(), a))).collect::<Vec<_>>();
+    let (mut before, mut after) = (atoms(out), atoms(ins));
+    // 两边都有的抵掉（同一个链接 / 码，挪了位置或换了旁边的说法）
+    before.retain(|(_, a)| match after.iter().position(|(_, b)| b == a) {
+        Some(i) => {
+            after.remove(i);
+            false
+        }
+        None => true,
+    });
+    let short = |a: &str| a.chars().take(60).collect::<String>();
+    let mut v: Vec<Block> = before.iter().map(|(f, a)| block("money", format!("{f}：删掉或换掉了推荐 / 邀请内容（「{}」）", short(a)))).collect();
+    if rules.tier != "open" {
+        v.extend(after.iter().map(|(f, a)| block("money", format!("{f}：新增了推荐 / 邀请内容（「{}」）", short(a)))));
+    }
+    v
 }
 
 /// 计划里的一条任务（模型输出的 JSON）。
@@ -1353,6 +1539,55 @@ mod tests {
         assert!(managed_verdict(newpage, false, 1500, "review", &[]).iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
         assert!(managed_verdict(newpage, true, 1500, "review", &[]).iter().all(|r| r.contains("低于这个方案的下限")));
+    }
+
+    #[test]
+    fn strictness_tiers_and_allowed_kinds() {
+        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[] };
+        let d = |file: &str, minus: &[&str], plus: &[&str]| {
+            let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
+            format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{body}")
+        };
+        let kinds = |v: Vec<Block>| v.into_iter().map(|b| b.kind).collect::<Vec<_>>();
+        // 同一个推荐链接只是换了旁边的说法：稳妥拦，标准 / 放开不拦
+        let moved = d("src/content/a.md", &["去 [币安注册](/go/binance) 拿返佣"], &["点 [这里注册币安](/go/binance)，手续费有返佣"]);
+        assert_eq!(kinds(verdict(&moved, &rules("strict", &[]))), vec!["money", "money"]);
+        assert!(verdict(&moved, &rules("standard", &[])).is_empty());
+        // 换了邀请码：标准、放开都拦
+        let swapped = d("src/content/a.md", &["邀请码：GATE8888"], &["邀请码：GATE9999"]);
+        assert!(kinds(verdict(&swapped, &rules("standard", &[]))).iter().all(|k| *k == "money"));
+        assert!(!verdict(&swapped, &rules("open", &[])).is_empty());
+        // 新加推荐链接：标准拦，放开不拦
+        let added = d("src/content/a.md", &["旧的一段"], &["新的一段，[去欧易注册](/go/okx)"]);
+        assert!(!verdict(&added, &rules("standard", &[])).is_empty());
+        assert!(verdict(&added, &rules("open", &[])).is_empty());
+        // 点过「这类以后不拦」的不拦
+        let money: &'static [String] = Box::leak(Box::new(vec!["money".to_string()]));
+        assert!(verdict(&swapped, &rules("strict", money)).iter().all(|b| b.kind != "money"));
+        // 直接插入 HTML：标准拦（能放行的类型），放开不拦；调外部服务哪一档都拦、不能放行
+        let html = d("src/components/A.astro", &["<p>{t}</p>"], &["<p set:html={t} />"]);
+        assert_eq!(kinds(verdict(&html, &rules("standard", &[]))), vec!["html"]);
+        assert!(verdict(&html, &rules("open", &[])).is_empty());
+        let net = d("src/components/A.astro", &["<p>{t}</p>"], &["const r = await fetch('https://x.com');"]);
+        assert_eq!(kinds(verdict(&net, &rules("open", &[]))), vec![""]);
+        // 大段替换：标准 400 行，放开 1500 行
+        let big: Vec<String> = (0..300).map(|i| format!("第 {i} 行")).collect();
+        let refs: Vec<&str> = big.iter().map(|s| s.as_str()).collect();
+        let rewrite = d("src/content/a.md", &refs, &refs);
+        assert_eq!(kinds(verdict(&rewrite, &rules("standard", &[]))), vec!["size"]);
+        assert!(verdict(&rewrite, &rules("open", &[])).is_empty());
+        // 依赖、删文件哪一档都拦
+        let pkg = d("package.json", &["a"], &["b"]);
+        assert_eq!(kinds(verdict(&pkg, &rules("open", &[]))), vec![""]);
+        // 老方案按代码改动设置换算等级；保存时代码改动跟着等级走
+        let mut g: ManagedGroup = serde_json::from_str(r#"{"id":"g","name":"方案","code_changes":"review"}"#).unwrap();
+        assert_eq!(g.tier(), "strict");
+        g.strictness = "open".into();
+        g.allow_kinds = vec!["jev".into(), "bogus".into(), "jev".into()];
+        g.settle_tier();
+        assert_eq!((g.code_changes.as_str(), g.allow_kinds.clone()), ("all", vec!["jev".to_string()]));
+        let old: ManagedGroup = serde_json::from_str(r#"{"id":"g","name":"方案"}"#).unwrap();
+        assert_eq!(old.tier(), "standard");
     }
 
     #[test]

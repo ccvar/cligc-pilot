@@ -5239,6 +5239,7 @@ pub fn run() {
             managed_cmds::set_managed_paused,
             managed_cmds::set_sites_managed,
             managed_cmds::save_managed_group,
+            managed_cmds::set_block_kind_allowed,
             managed_cmds::delete_managed_group,
             managed_cmds::set_group_paused,
             managed_cmds::set_site_managed_active,

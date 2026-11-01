@@ -126,7 +126,7 @@
       {#if addingCode}
         <div class="cc-add"><input class="tin mono" bind:value={codeDraft} placeholder="internal/site/build.go 或 internal/site/" onkeydown={(e) => { if (e.key === 'Enter') void addCode(); if (e.key === 'Escape') addingCode = false; }} /><button class="btn small ghost" onclick={() => { addingCode = false; codeDraft = ''; }}>取消</button><button class="btn small primary" onclick={addCode} disabled={!codeDraft.trim()}>放行</button></div>
       {/if}
-      <small class="faint">{codeList.length ? '这些文件不再一律留给你确认，按方案的「代码改动」设置判断；依赖和构建 / 部署配置照样拦。' : '服务端代码（比如 internal/、.go 文件）默认一律留给你确认。这个站点的页面标题、文章写在代码里的话，可以把那个文件加进来，按方案的「代码改动」设置判断。'}</small>
+      <small class="faint">{codeList.length ? '这些文件不再一律留给你确认，按方案的「拦截等级」判断；依赖和构建 / 部署配置照样拦。' : '服务端代码（比如 internal/、.go 文件）默认一律留给你确认。这个站点的页面标题、文章写在代码里的话，可以把那个文件加进来，按方案的「拦截等级」判断。'}</small>
     </div>
   {:else if joining}
     <div class="join">

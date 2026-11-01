@@ -142,12 +142,12 @@ export function blockedCode(verdict: string, list: string[] = []): string[] {
   }
   return out;
 }
-const CODE_RULE: Record<string, string> = { review: '代码改动留给你确认', small: '小的代码改动自动上线', all: '代码改动自动上线' };
+const CODE_RULE: Record<string, string> = { review: '「稳妥」，代码改动留给你确认', small: '「稳妥」，代码改动留给你确认', all: '代码改动检查通过就自动上线' };
 /** 把一个代码文件加进 / 移出站点的「算网站内容的代码文件」。plan：站点所在的托管方案（说明按什么规则判断） */
 export async function setContentCode(site: Site, path: string, on: boolean, plan?: { name: string; autonomy: string; code_changes?: string }) {
   const rule = plan ? (plan.autonomy === 'auto' ? `「${plan.name}」现在是${CODE_RULE[plan.code_changes ?? 'all'] ?? ''}` : `「${plan.name}」现在是改好等你确认，放行后仍要你确认；方案改成全自动时才会自动上线`) : '';
   const msg = on
-    ? `以后 AI 改 ${path} 时，不再一律留给你确认，改成按托管方案的「代码改动」设置判断${rule ? `（${rule}）` : ''}。\n\n只放行这个文件：新加的代码里读环境变量、执行命令、请求外部服务的照样拦；依赖和构建 / 部署配置不受影响。确定这个文件里是页面内容（标题、描述、文章）再放行。`
+    ? `以后 AI 改 ${path} 时，不再一律留给你确认，改成按托管方案的「拦截等级」判断${rule ? `（${rule}）` : ''}。\n\n只放行这个文件：新加的代码里读环境变量、执行命令、请求外部服务的照样拦；依赖和构建 / 部署配置不受影响。确定这个文件里是页面内容（标题、描述、文章）再放行。`
     : `把 ${path} 移出清单？之后 AI 改到它，又会一律留给你确认。`;
   if (!(await confirmDialog(msg, { title: on ? '算作网站内容' : '移出清单', kind: on ? 'info' : 'warning', confirmText: on ? '放行' : '移出' }))) return false;
   try {

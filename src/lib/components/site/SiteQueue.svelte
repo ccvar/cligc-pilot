@@ -11,7 +11,7 @@
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { clock, full as fullTime, pageUrl } from './fmt';
-  import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged } from '$lib/state/managed.svelte.js';
+  import { managed, AUTONOMY_LABEL, budgetFull, editGroup, openManaged, setBlockKind, BLOCK_KIND_LABEL } from '$lib/state/managed.svelte.js';
   import WhyChips from './WhyChips.svelte';
   import { sites } from '$lib/state/sites.svelte.js';
   import { synd } from '$lib/state/syndication.svelte.js';
@@ -337,7 +337,8 @@
         <p class="verdict">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。点「让 AI 在最新代码上重改」：先试着直接接上，接不上再让 AI 重做。合并上线以后有这种情况会自动处理。</p>
       {:else if i.verdict && i.status === 'proposed'}
         <p class="verdict" class:ok={i.verdict === 'auto'}>{i.verdict === 'auto' ? '整份改动都在白名单内，检查已通过。' : `不能自动上线：${i.verdict}`}</p>
-        {#if myPlan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, myPlan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「代码改动」设置判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}
+        {#if myPlan?.autonomy === 'auto'}{#each (i.block_kinds ?? []).filter((k) => !myPlan.allow_kinds?.includes(k)) as k (k)}<button class="link-btn allow" onclick={() => setBlockKind(site.id, k, true, myPlan.name)} data-tip={`托管方案「${myPlan.name}」以后遇到这类原因不再留给你确认；别的原因照样拦`}><Icon name="check" size={11} />「{BLOCK_KIND_LABEL[k] ?? k}」以后不拦</button>{/each}{/if}
+        {#if myPlan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, myPlan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「拦截等级」判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}
       {/if}
       {#if i.quality?.length}
         <!-- 判断模型（Jev）的内容质检：每页一行分数，没过的标出原因 -->

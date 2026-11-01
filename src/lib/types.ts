@@ -209,7 +209,7 @@ export interface SiteOps {
   min_impressions: number;
   /** 托管用的站点阶段：空＝自动；new / growing / established＝手动指定 */
   stage: string;
-  /** 算网站内容的代码文件（完整路径或以 / 结尾的目录）：按方案的「代码改动」设置判断，不再一律不自动上线 */
+  /** 算网站内容的代码文件（完整路径或以 / 结尾的目录）：按方案的「拦截等级」判断，不再一律不自动上线 */
   content_code?: string[];
 }
 export interface Site {
@@ -410,6 +410,8 @@ export interface OpsItem {
   pr_url: string;
   change_kind: string;
   verdict: string;
+  /** 不能自动上线的原因里，可以点「这类以后不拦」的类型（money / html / env / package / size / leak / thin / orphan / jev） */
+  block_kinds?: string[];
   /** 托管自动上线前判断模型（Jev）的内容质检结果 */
   quality?: PageQuality[];
   merge_sha: string;
@@ -536,6 +538,10 @@ export interface ManagedGroup {
   new_content: 'auto' | 'review';
   /** 代码改动：review 留给你确认 | small 小改动自动上线 | all 都自动上线（依赖和部署配置除外） */
   code_changes: 'review' | 'small' | 'all';
+  /** 拦截等级：strict 稳妥 | standard 标准 | open 放开；代码改动跟着它走（保存时后端换算）。老方案没有，按 code_changes 推 */
+  strictness?: 'strict' | 'standard' | 'open';
+  /** 在被拦下的卡片上点了「这类以后不拦」的拦截类型 */
+  allow_kinds?: string[];
   /** 老版本的每天自动上线上限，已不用（读老方案时换算成 per_round） */
   daily_changes: number;
   /** 运营节奏：每 cadence_every 天（daily）或每 cadence_every 周（weekly，cadence_day：1＝周一 … 7＝周日）跑一轮 */

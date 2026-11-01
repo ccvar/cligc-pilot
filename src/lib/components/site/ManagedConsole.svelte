@@ -30,7 +30,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, CODE_LABEL, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
+  import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, TIERS, tierOf, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
   import type { ManagedGroup, DayCount, AiCost } from '$lib/types';
 
   const o = $derived(managed.overview);
@@ -385,7 +385,7 @@
           <!-- 规则只留一行最要紧的：模型、怎么上线、每天几条、每周用量、两个判断模型开关；其余（动作、内容准则、新页规则、备用模型）在「规则详情」里 -->
           <div class="rules">
             <span class="model" data-tip={g.fallback_brain ? `备用：${modelLabel(g.fallback_brain, g.fallback_model)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
-            {#if g.autonomy === 'auto'}<span data-tip={CODE_LABEL[g.code_changes ?? 'all']}><Icon name="code" size={12} />{({ review: '人审上线', small: '小改自动上线', all: '自动上线' } as Record<string, string>)[g.code_changes ?? 'all']}</span>{/if}
+            {#if g.autonomy === 'auto'}{@const t = TIERS.find((x) => x.key === tierOf(g))}<span data-tip={`拦截等级「${t?.label}」：${t?.tip}${g.allow_kinds?.length ? `\n另外单独放行了 ${g.allow_kinds.length} 类` : ''}`}><Icon name="shield" size={12} />拦截：{t?.label}{#if g.allow_kinds?.length}<span class="faint"> +{g.allow_kinds.length}</span>{/if}</span>{/if}
             <span data-tip={`运营节奏：${cadenceLabel(g)}跑一轮，每次挑最值得做的 ${g.per_round} 个机会交给 AI（平均每周最多 ${perWeek(g)} 个）；该自动上线的改好就上线`}><Icon name="rocket" size={12} />{cadenceLabel(g)} · 每轮 {g.per_round} 个</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>
             {#if jev.configured}

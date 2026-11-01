@@ -67,6 +67,7 @@ pub fn sync(state: &AppState) -> ManagedConfig {
 pub fn save_managed_group(state: tauri::State<'_, AppState>, group: ManagedGroup) -> Result<ManagedGroup, String> {
     let mut g = group;
     g.name = g.name.trim().to_string();
+    g.settle_tier();
     managed::validate_group(&g)?;
     let known: std::collections::HashSet<String> = state.sites.list().into_iter().map(|s| s.id).collect();
     g.sites.retain(|id| known.contains(id));
@@ -131,6 +132,25 @@ pub fn set_group_paused(state: tauri::State<'_, AppState>, id: String, paused: b
     managed::save(&state.data_dir, &c)?;
     managed::log(&state.data_dir, managed::Activity { ts: crate::now_secs(), kind: if paused { "paused" } else { "resumed" }.into(), title: format!("{}托管方案「{name}」", if paused { "暂停" } else { "恢复" }), ..Default::default() });
     Ok(())
+}
+
+/// 被拦下的卡片上点「这类以后不拦」：把这类拦截原因加进站点所在方案的放行清单（allow＝false 时移出）。返回方案名。
+#[tauri::command]
+pub fn set_block_kind_allowed(state: tauri::State<'_, AppState>, site_id: String, kind: String, allow: bool) -> Result<String, String> {
+    if !managed::BLOCK_KINDS.contains(&kind.as_str()) {
+        return Err("这类原因不能放行".into());
+    }
+    let mut c = managed::load(&state.data_dir);
+    let g = c.groups.iter_mut().find(|g| g.sites.contains(&site_id)).ok_or("这个站点不在任何托管方案里")?;
+    g.allow_kinds.retain(|k| k != &kind);
+    if allow {
+        g.allow_kinds.push(kind.clone());
+    }
+    g.settle_tier();
+    let name = g.name.clone();
+    managed::save(&state.data_dir, &c)?;
+    log_site(&state, &site_id, "rules", format!("托管方案「{name}」{}「{}」这类拦截", if allow { "以后放行" } else { "恢复拦截" }, managed::block_kind_label(&kind)));
+    Ok(name)
 }
 
 /// 单独启用 / 停止方案里的某个站点（规则保留，停止期间不自动运行）。

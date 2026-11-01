@@ -8,7 +8,7 @@
   import Dropdown from '$lib/Dropdown.svelte';
   import { launcher } from '$lib/state/launcher.svelte.js';
   import { sites } from '$lib/state/sites.svelte.js';
-  import { managed, cadenceLabel, perWeek, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset } from '$lib/state/managed.svelte.js';
+  import { managed, cadenceLabel, perWeek, saveGroup, deleteGroup, ACTIONS, GUIDELINE_TEMPLATE, GOAL_PRESETS, AUTONOMY, AUTONOMY_LABEL, suggestPreset, TIERS, TIER_COMMON, tierOf, BLOCK_KIND_LABEL } from '$lib/state/managed.svelte.js';
   import { fleet } from '$lib/state/fleet.svelte.js';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
@@ -221,12 +221,17 @@
       <div class="field"><span class="lbl">新页面<InfoTip label="新页面" text={`整篇新内容。${g.new_content === 'auto' ? 'AI 写好的新页面检查通过就直接上线。' : 'AI 写好的新页面放进「需要你」，你看过点上线才发布。'}\n标题、描述、内链和已有页面的改动，检查通过就自动上线。`} /></span>
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
       </div>
-      <div class="field"><span class="lbl">代码改动<InfoTip label="代码改动" text={`文章、页面写在代码里的站点会用到。\n${g.code_changes === 'review' ? '改到模板、组件、样式或站点脚本的，都放进「需要你」等你看过再上线。' : (g.code_changes ?? 'all') === 'all' ? '改模板、组件、样式、站点脚本和后端渲染页面的代码（比如 Go 站 internal/ 里的标题），构建、检查和上线后验收都通过就自动上线；单次替换已有内容超过 400 行的除外（新加的内容不算）。构建没过、新页面没人链接时，先交回 AI 修一次。' : '代码部分合计不超过 80 行、5 个文件（文章正文这类数据不算）的自动上线，更大的留给你确认。'}\n不管选哪一档，依赖、构建 / 部署配置、脚本、Worker / Functions / API 路由、服务端代码（选「全部」时后端渲染页面的代码除外）、读环境变量或调外部服务、引入新的外部包、推荐 / 邀请相关内容，都不会自动上线；上线后验收没过会自动回滚。`} /></span>
+      {@const tier = tierOf(g)}
+      <div class="field"><span class="lbl">拦截等级<InfoTip label="拦截等级" text={`全自动时，哪些改动要留给你确认。构建没过、新页面没人链接时，先交回 AI 修一次。\n${TIERS.map((t) => `${t.label}：${t.tip}`).join('\n')}\n${TIER_COMMON}`} /></span>
         <div class="seg">
-          <button class:on={(g.code_changes ?? 'all') === 'all'} onclick={() => g && (g.code_changes = 'all')}>都自动上线</button>
-          <button class:on={g.code_changes === 'small'} onclick={() => g && (g.code_changes = 'small')}>小改动自动上线</button>
-          <button class:on={g.code_changes === 'review'} onclick={() => g && (g.code_changes = 'review')}>留给你确认</button>
+          {#each TIERS as t (t.key)}<button class:on={tier === t.key} onclick={() => g && (g.strictness = t.key)}>{t.label}</button>{/each}
         </div>
+        <small>{TIERS.find((t) => t.key === tier)?.tip}</small>
+        {#if g.allow_kinds?.length}
+          <div class="allowed"><span>另外单独放行</span>
+            {#each g.allow_kinds as k (k)}<span class="chip">{BLOCK_KIND_LABEL[k] ?? k}<button class="chip-x" onclick={() => g && (g.allow_kinds = (g.allow_kinds ?? []).filter((x) => x !== k))} aria-label={`恢复拦截：${BLOCK_KIND_LABEL[k] ?? k}`} data-tip="恢复拦截（保存后生效）"><Icon name="x" size={10} /></button></span>{/each}
+          </div>
+        {/if}
       </div>
       <div class="field"><span class="lbl">运营节奏<InfoTip label="运营节奏" text={'到点跑一轮：拉数据 → 从这个站点没处理的机会里挑最值得做的几个交给 AI → 检查通过的按上面的规则上线（该自动上线的改好就上线，要你确认的留在「需要你」）。\n体检不花 AI 的钱，照样每天做；你手动交给 AI 的不受这个数限制。'} /></span>
         <div class="cad">
@@ -390,4 +395,8 @@
   .codex-warn b { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
   .codex-warn p { margin: 4px 0 0; }
   .sub-opt { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--dim); }
+  .allowed { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--dim); }
+  .allowed .chip { display: inline-flex; align-items: center; gap: 3px; padding: 2px 4px 2px 8px; border: 1px solid var(--border2); border-radius: 999px; background: var(--soft); color: var(--text); }
+  .allowed .chip-x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border: none; border-radius: 50%; background: none; color: var(--dim); cursor: pointer; padding: 0; }
+  .allowed .chip-x:hover { background: var(--border2); color: var(--text); }
 </style>

@@ -1487,7 +1487,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let mut reasons = if level >= 5 { crate::managed::managed_verdict(&diff, managed.new_content == "auto", managed.min_page_chars as usize, &managed.code_changes, &site.ops.content_code) } else { cls.reasons.clone() };
+    let rules = managed.rules(&site.ops.content_code);
+    let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
+    // 能在卡片上点「这类以后不拦」的拦截类型
+    let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
+    let mut reasons: Vec<String> = if level >= 5 { blocks.into_iter().map(|b| b.text).collect() } else { cls.reasons.clone() };
     // 新页面要有别的页面链到它，不然上线就是孤立页（搜索引擎很难发现）：AI 漏加了就不自动上线
     if built.is_ok() && !item.new_pages.is_empty() {
         let inbound = crate::site_make::inbound_links(&out_dir);
@@ -1507,8 +1511,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             fix_round(ctx, site, job, item, &wt, msg, "补站内链接", "ops: link new page").await?;
             return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
         }
-        if !lonely.is_empty() {
+        if !lonely.is_empty() && level >= 5 && rules.lets("orphan") {
+            job.line(&format!("新页面 {} 还是没有站内链接指向它，方案的拦截等级放行这类，照样上线", lonely.join("、")));
+        } else if !lonely.is_empty() {
             reasons.push(format!("新页面 {} 没有任何站内链接指向它（会成孤立页）{}，留给你确认", lonely.join("、"), if item.links_fixed { "，AI 补过一次还是没有" } else { "" }));
+            kinds.push("orphan".into());
         }
     }
     let mut verdict = if let Err(e) = &built {
@@ -1561,9 +1568,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                         // 先不留给你：把原因交回 AI 重写一次，再走一遍检查和质检
                         job.step("quality", "failed", &format!("没过：{why}，交回 AI 重写一次"));
                         rewrite = Some((why, files.iter().map(|(f, _)| f.clone()).collect()));
+                    } else if rules.lets("jev") {
+                        job.step("quality", "failed", &format!("没过：{why}（方案的拦截等级放行这类，照样上线，分数记在条目上）"));
+                        job.line(&format!("内容质检没过：{why}。方案放行质检没过的改动，照样上线"));
                     } else {
                         job.step("quality", "failed", &format!("没过：{why}"));
                         verdict = format!("内容质检没过（判断模型 Jev）{}：{why}，留给你确认", if item.jev_rewritten { "，AI 按原因重写过一次还是没过" } else { "" });
+                        kinds.push("jev".into());
                     }
                 }
                 Err(e) => {
@@ -1609,11 +1620,17 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if hold && verdict == "auto" {
         verdict = "按方案规则可以自动上线；这次选了「执行但不上线」，等你确认".into();
     }
+    kinds.sort();
+    kinds.dedup();
+    if verdict == "auto" || !checks_ok || hold {
+        kinds.clear();
+    }
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = status.into();
         i.head_sha = head_sha.clone();
         i.change_kind = change_kind.clone();
         i.verdict = verdict.clone();
+        i.block_kinds = kinds.clone();
         i.pr_number = pr.number;
         i.pr_url = pr.url.clone();
         i.note = if checks_ok { String::new() } else { "构建或检查没通过，改动留在分支上，可以在会话里让 AI 继续修。".into() };

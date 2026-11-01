@@ -594,6 +594,9 @@ pub struct QueueItem {
     /// 内容质检没过后，AI 已经按原因重写过一次（只重写一次）。
     #[serde(default)]
     pub jev_rewritten: bool,
+    /// 不能自动上线的原因里，可以在卡片上点「这类以后不拦」的类型（见 managed::BLOCK_KINDS）。
+    #[serde(default)]
+    pub block_kinds: Vec<String>,
     /// 全托管时构建或检查没过，已经把报错交回 AI 修过一次（只修一次）。
     #[serde(default)]
     pub build_fixed: bool,

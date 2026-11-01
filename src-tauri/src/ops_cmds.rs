@@ -207,7 +207,7 @@ pub fn site_content_code(state: tauri::State<'_, AppState>, id: String, path: St
             return Err(format!("{p} 是依赖、构建 / 部署配置或脚本，不能放行"));
         }
         if !p.ends_with('/') && !crate::managed::hard_forbidden(&p) {
-            return Err(format!("{p} 本来就按托管方案的「代码改动」设置判断，不用放行"));
+            return Err(format!("{p} 本来就按托管方案的「拦截等级」判断，不用放行"));
         }
     }
     let site = state.sites.update(&id, crate::now_secs(), |s| {

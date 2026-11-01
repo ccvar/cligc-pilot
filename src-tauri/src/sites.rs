@@ -196,7 +196,7 @@ pub struct OpsConfig {
     #[serde(default)]
     pub stage: String,
     /// 算网站内容的代码文件（完整路径或以 / 结尾的目录）：比如 Go 站的页面写在 internal/site/build.go 里。
-    /// 这些文件不再一律不自动上线，改成按托管方案的「代码改动」设置判断；依赖和构建 / 部署配置照样拦（见 managed::never_allow）。
+    /// 这些文件不再一律不自动上线，改成按托管方案的「拦截等级」判断；依赖和构建 / 部署配置照样拦（见 managed::never_allow）。
     #[serde(default)]
     pub content_code: Vec<String>,
 }
