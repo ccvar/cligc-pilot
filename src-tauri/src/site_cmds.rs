@@ -823,14 +823,14 @@ async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[c
 async fn changed_at(dir: &std::path::Path, dirty: bool) -> u64 {
     let mut t = crate::site_git::git_ok(dir, &["log", "-1", "--format=%ct"], "").await.ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
     if dirty {
-        if let Ok(o) = crate::site_git::git(dir, &["status", "--porcelain", "--untracked-files=all"], "").await {
-            for l in o.stdout.lines() {
-                let f = l.get(3..).unwrap_or("").rsplit(" -> ").next().unwrap_or("").trim_matches('"');
-                let p = dir.join(f);
-                let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
-                if let Some(s) = m.and_then(|m| m.modified()).ok().and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok()) {
-                    t = t.max(s.as_secs());
-                }
+        // 改过的已跟踪文件 + 新文件，都只要纯路径（git() 会去掉输出两头的空白，status --porcelain 的第一行会错位）
+        let tracked = crate::site_git::git(dir, &["diff", "--name-only", "HEAD"], "").await.map(|o| o.stdout).unwrap_or_default();
+        let untracked = crate::site_git::git(dir, &["ls-files", "--others", "--exclude-standard"], "").await.map(|o| o.stdout).unwrap_or_default();
+        for f in tracked.lines().chain(untracked.lines()).map(str::trim).filter(|f| !f.is_empty()) {
+            let p = dir.join(f);
+            let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
+            if let Some(s) = m.and_then(|m| m.modified()).ok().and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok()) {
+                t = t.max(s.as_secs());
             }
         }
     }

@@ -3304,10 +3304,11 @@ pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
 /// 站点文件夹里未提交的改动（已跟踪的文件）：(文件列表, 是不是全是构建脚本自动重写的数据文件，见 managed::build_outputs)。
 /// 读不到 git 状态返回 None。
 pub async fn dirty_files(site: &Site, dir: &Path) -> Option<(Vec<String>, bool)> {
-    let o = crate::site_git::git(dir, &["status", "--porcelain", "--untracked-files=no"], "").await.ok().filter(|o| o.ok)?;
-    let files: Vec<String> = o.stdout.lines().filter_map(|l| l.get(3..)).map(|f| f.trim().trim_matches('"').to_string()).filter(|f| !f.is_empty()).collect();
+    // 用 diff --name-only 拿纯路径：git() 会把输出两头的空白去掉，status --porcelain 第一行开头的空格会被吃掉、路径错一位
+    let o = crate::site_git::git(dir, &["diff", "--name-only", "HEAD"], "").await.ok().filter(|o| o.ok)?;
+    let files: Vec<String> = o.stdout.lines().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
     let outs = crate::managed::build_outputs(&site.app_dir(dir));
-    let generated = !files.is_empty() && files.iter().all(|f| !f.contains(" -> ") && outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())));
+    let generated = !files.is_empty() && files.iter().all(|f| outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())));
     Some((files, generated))
 }
 
