@@ -88,14 +88,15 @@
         {@const site = siteOf(x.site_id)}
         {@const isOpen = open.has(i.id)}
         {@const ef = effect(x)}
-        {@const url = pageUrl(i.opp.page, site?.domain)}
+        <!-- 写新页面的条目计划里没有 page，用 AI 报告的新页面；再没有就用改到的第一个页面 -->
+        {@const url = pageUrl(i.opp.page, site?.domain) || (i.new_pages ?? [])[0] || (i.pages ?? [])[0] || ''}
         <li class:open={isOpen}>
           <div class="row">
             <button class="main" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
               <span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>
               <span class="tt" class:gone={i.status === 'rolled_back' || i.status === 'dismissed'} data-tip={i.opp.title}>{i.opp.title}</span>
             </button>
-            {#if url}<button class="url mono" onclick={() => openUrl(url)} data-tip={`在浏览器打开：${url}`}><span class="up">{shortPath(i.opp.page)}</span><Icon name="external" size={10} /></button>{/if}
+            {#if url}<button class="url mono" onclick={() => openUrl(url)} data-tip={`在浏览器打开：${url}`}><span class="up">{shortPath(url)}</span><Icon name="external" size={10} /></button>{/if}
             <span class="acts">
               {#if site && i.head_sha}<button class="ic-btn ic-sm" onclick={() => showDiff(site.id, i)} aria-label="看改动" data-tip="看改动"><Icon name="diff" size={13} /></button>{/if}
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}

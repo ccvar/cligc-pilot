@@ -166,7 +166,7 @@
                       {#if g.k === 'failed' && w}<OpsErrorHint text={w} />{/if}
                       {#if g.k === 'proposed' && site && !conflicts.has(i.id)}{@const plan = managed.overview?.groups.find((p) => p.sites.includes(site.id))}{#if plan?.autonomy === 'auto'}{#each (i.block_kinds ?? []).filter((k) => !plan.allow_kinds?.includes(k)) as k (k)}<button class="link-btn allow" onclick={() => setBlockKind(site.id, k, true, plan.name)} data-tip={`托管方案「${plan.name}」以后遇到这类原因不再留给你确认；别的原因照样拦`}><Icon name="check" size={11} />「{BLOCK_KIND_LABEL[k] ?? k}」以后不拦</button>{/each}{/if}{#if plan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, plan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「拦截等级」判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
-                      {#if i.opp.page}<span class="mono url">{i.opp.page}</span>{/if}
+                      {#if i.opp.page || i.new_pages?.length}<span class="mono url">{i.opp.page || i.new_pages?.[0]}</span>{/if}
                       <div class="acts">
                         {#if site}
                           {#if i.status === 'proposed'}
