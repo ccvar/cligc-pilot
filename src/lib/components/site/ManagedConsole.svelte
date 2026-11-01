@@ -417,7 +417,7 @@
                       {#if s.shipped_week}<button class="ship-l" onclick={() => openSite(id, 'queue', 'live')} data-tip="看这个站点的上线记录（任务队列 · 已上线）">本周上线 {s.shipped_week}</button>{/if}
                       {#if need > 0}<button class="ship-l warn-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip="打开这个站点的「需要你处理」：确认上线、驳回或重新检查">待你处理 {need}</button>{/if}
                       {#if s.failed}<button class="ship-l err-text" onclick={() => openSite(id, 'queue', 'todo')} data-tip={failTip(s)}>失败 {s.failed}</button>{/if}
-                      {#if s.queued && on}<span class="faint">排队 {s.queued}</span>{/if}
+                      {#if s.queued && on}<button class="ship-l faint" onclick={() => openSite(id, 'queue', 'todo')} data-tip={`已经排进任务队列、还没交给 AI 的机会有 ${s.queued} 个（计划里的任务、内容缺口等）。方案每轮处理 ${g.per_round} 个，到下一轮自动接着做；想现在做，点进去在「未处理的机会」里选`}>排队 {s.queued}</button>{/if}
                       {#if s.money?.tracked}<span class="faint cost" data-tip={`本月收益（AdSense + 手动记的）；上月 ${usd(s.money.last_month)}`}>收益 {usd(s.money.month)}</span>{/if}
                       {#if costText(s.cost)}<span class="faint cost" data-tip={costTip(s.cost, s.shipped_month)}>{s.money?.tracked ? 'AI' : '本月'} {costText(s.cost)}</span>{/if}
                       {#if budgetFull(s.budget)}<span class="warn-text" data-tip="{budgetFull(s.budget)}。额度满了 AI 不再处理这个站点的任务，调高方案里的「每站每周 token」或等用量滚出最近 7 天">额度已满</span>{/if}
