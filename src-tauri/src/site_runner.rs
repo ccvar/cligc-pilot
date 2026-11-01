@@ -1487,7 +1487,17 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 全托管的判定比第 4 档白名单宽：页面内容的改动都可以自动上线，但依赖 / 配置 / 代码、推荐与邀请相关的内容、
     // 超大改动永远不自动；新页面按托管设置决定。第 1–4 档仍按白名单。
     let managed = crate::managed::load(&ctx.state().data_dir).rules_for(&site.id);
-    let rules = managed.rules(&site.ops.content_code);
+    // 新加的推荐链接 / 码 / 字段里，改动前的站点本来就有的（换个位置再引用）不算新增
+    let mut known = Vec::new();
+    if level >= 5 {
+        for a in crate::managed::added_money_atoms(&diff).into_iter().take(40) {
+            if crate::site_git::git(&wt, &["grep", "-q", "-F", "-e", &a, &base_sha, "--"], "").await.is_ok_and(|o| o.ok) {
+                known.push(a);
+            }
+        }
+    }
+    let mut rules = managed.rules(&site.ops.content_code);
+    rules.known = &known;
     let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();

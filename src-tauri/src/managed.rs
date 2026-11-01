@@ -212,6 +212,8 @@ pub struct Rules<'a> {
     pub min_page: usize,
     /// 站点放行的「算网站内容的代码文件」，见 `listed`
     pub content_code: &'a [String],
+    /// 改动前的站点里本来就有的推荐链接 / 码 / 字段（见 `added_money_atoms`）：再引用一次不算新增
+    pub known: &'a [String],
 }
 impl Rules<'_> {
     /// 这类原因按方案放行（点过「这类以后不拦」，或「放开」档默认不拦）
@@ -320,7 +322,7 @@ impl ManagedGroup {
         }
     }
     pub fn rules<'a>(&'a self, content_code: &'a [String]) -> Rules<'a> {
-        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code }
+        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[] }
     }
     /// 保存前把等级落定：老方案补上等级，代码改动跟着等级走，放行清单只留认得的类型
     pub fn settle_tier(&mut self) {
@@ -802,15 +804,19 @@ fn risky_kind(why: &str) -> &'static str {
     }
 }
 
-/// 一行推荐内容里真正带钱的部分：推荐 / 跳转链接、data-ref 属性、写着的码、组件标签、字段。
-/// 用来比较改动前后：同样的链接和码只是挪了位置或换了说法，不算改动推荐内容。拆不出来就用整行（宁可多拦）。
+/// 推荐相关的英文词（链接、字段名里出现）
+const MONEY_WORDS: &[&str] = &["referral", "invite", "affiliate", "promo", "coupon", "rebate", "refcode", "ref_code", "kickback"];
+
+/// 一行里真正带钱的部分：推荐 / 跳转链接（?ref=、/go/、带推荐词的外部链接）、data-ref 属性、写着的码（邀请码：GATE8888）、
+/// 带推荐词的字段 / 变量 / 组件名（refCode、bn.inviteeKickback、ReferralBox）。空＝这行和钱无关。
+/// 改动前后比较的就是这些：同样的链接和码只是挪了位置、换了旁边的说法，不算改动推荐内容；
+/// 正文里讲「怎么填邀请码」「返佣是什么」、站内文章链接（/guides/invite-code-rebate/）都不算。
 pub fn money_atoms(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let seps = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | '`' | ',' | '，' | '。' | '）' | '（');
-    let words = ["referral", "invite", "affiliate", "promo", "coupon", "rebate"];
+    let mut out: Vec<String> = Vec::new();
+    let seps = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | '`' | ',' | '，' | '。' | '）' | '（' | '{' | '}');
     for t in line.split(seps).filter(|t| !t.is_empty()) {
         let l = t.to_lowercase();
-        if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && words.iter().any(|w| l.contains(w))) {
+        if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && MONEY_WORDS.iter().any(|w| l.contains(w))) {
             out.push(t.trim_end_matches(['.', ';', ':', '!']).to_string());
         }
     }
@@ -830,39 +836,30 @@ pub fn money_atoms(line: &str) -> Vec<String> {
             }
         }
     }
-    if out.is_empty() {
-        out.push(line.trim().to_string());
+    // 字段 / 变量 / 组件名：驼峰、带下划线或点的标识符里有推荐词（英文正文里的 invite、Referral 不算）
+    for t in line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '$')).filter(|t| !t.is_empty()) {
+        let t = t.trim_matches('.');
+        let l = t.to_lowercase();
+        let ident = t.chars().skip(1).any(|c| c.is_ascii_uppercase()) || t.contains('_') || t.contains('.');
+        if ident && !l.contains("http") && MONEY_WORDS.iter().any(|w| l.contains(w)) && !out.iter().any(|o| o.contains(t)) {
+            out.push(t.to_string());
+        }
     }
+    out.dedup();
     out
 }
 
-/// 推荐 / 邀请 / 返佣相关的内容：改动里只要删改了带这些标记的行，就不自动上线。
-/// 只认真正带钱的东西——推荐链接、跳转链接、写着邀请码的值、带这些词的链接 / 标签 / 字段；
-/// 正文里讲「怎么填邀请码」「返佣是什么」的句子不算，不然交易所注册、返佣类站点的教程一改就被拦。
+/// 推荐 / 邀请 / 返佣相关的内容：改动里删改了带这些标记的行（见 `money_atoms`），按拦截等级判断要不要拦。
 pub fn touches_money(line: &str) -> bool {
-    let l = line.to_lowercase();
-    // 「ref=」只认网址参数（?ref= / &ref=），否则每个 href= 都会被当成推荐链接
-    if ["?ref=", "&ref=", "/go/", "data-ref"].iter().any(|k| l.contains(k)) {
-        return true;
-    }
-    let words = ["referral", "invite", "affiliate", "promo", "coupon", "rebate", "邀请", "返佣", "推荐码", "优惠码"];
-    if !words.iter().any(|k| l.contains(k)) {
-        return false;
-    }
-    // 链接、HTML / 组件标签、代码或数据字段里带这些词
-    let structured = ["http", "href", "](", "<", "{", "="].iter().any(|k| l.contains(k))
-        || l.split_once(':').is_some_and(|(k, _)| {
-            let k = k.trim().trim_matches(|c| c == '"' || c == '\'');
-            !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && words.iter().any(|w| k.contains(w))
-        });
-    // 正文里写着具体的码：「邀请码：ABC123」「推荐码 GATE88」
-    let code_value = ["邀请码", "推荐码", "优惠码", "返佣码"].iter().any(|k| {
-        line.match_indices(k).any(|(i, _)| {
-            let rest = line[i + k.len()..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '：' | ':' | '「' | '“' | '"' | '`' | '*'));
-            rest.chars().take_while(|c| c.is_ascii_alphanumeric()).count() >= 4
-        })
-    });
-    structured || code_value
+    !money_atoms(line).is_empty()
+}
+
+/// 改动里新加的推荐内容（链接、码、字段）：上线前查一下改动前的站点里有没有，已有的（比如换个位置再引用 refCode）不算新增。
+pub fn added_money_atoms(diff: &str) -> Vec<String> {
+    let mut v: Vec<String> = split_diff(diff).iter().filter(|f| !f.new_file).flat_map(|f| f.added.iter().flat_map(|a| money_atoms(a))).collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// 全托管的判定：返回不能自动上线的原因（空＝可以）。
@@ -1131,7 +1128,7 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 #[cfg(test)]
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let tier = if code == "review" { "strict" } else { "standard" };
-    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code }).into_iter().map(|b| b.text).collect()
+    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[] }).into_iter().map(|b| b.text).collect()
 }
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
@@ -1244,33 +1241,48 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     reasons
 }
 
-/// 推荐内容的判定。稳妥：已有文件里删改了带推荐标记的行就拦。标准：改动前后的推荐链接、码、组件不一样才拦（只是挪位置、
-/// 改了旁边的说法不算）。放开：只拦删掉或换掉的，新加推荐链接不拦。点过「这类以后不拦」的都不拦。
+/// 推荐内容的判定。稳妥：已有文件里删改了带推荐标记的行就拦。标准：改动前后的推荐链接、码、字段不一样才拦（只是挪位置、
+/// 改了旁边的说法不算；改动前的站点里本来就有的不算新增，见 `Rules::known`）。放开：只拦删掉或换掉的。点过「这类以后不拦」的都不拦。
+/// 每个文件只报一条，列出前几处。
 fn money_blocks(rules: &Rules, out: &[(String, String)], ins: &[(String, String)]) -> Vec<Block> {
     if rules.lets("money") || (out.is_empty() && ins.is_empty()) {
         return Vec::new();
     }
-    if rules.tier == "strict" {
-        let mut v: Vec<Block> = out.iter().map(|(f, _)| block("money", format!("{f}：改动了推荐 / 邀请相关的内容"))).collect();
-        v.extend(ins.iter().map(|(f, _)| block("money", format!("{f}：新增了推荐 / 邀请相关的内容"))));
-        return v;
-    }
     let atoms = |v: &[(String, String)]| v.iter().flat_map(|(f, l)| money_atoms(l).into_iter().map(move |a| (f.clone(), a))).collect::<Vec<_>>();
     let (mut before, mut after) = (atoms(out), atoms(ins));
-    // 两边都有的抵掉（同一个链接 / 码，挪了位置或换了旁边的说法）
-    before.retain(|(_, a)| match after.iter().position(|(_, b)| b == a) {
-        Some(i) => {
-            after.remove(i);
-            false
+    if rules.tier != "strict" {
+        // 两边都有的抵掉（同一个链接 / 码，挪了位置或换了旁边的说法）
+        before.retain(|(_, a)| match after.iter().position(|(_, b)| b == a) {
+            Some(i) => {
+                after.remove(i);
+                false
+            }
+            None => true,
+        });
+        after.retain(|(_, a)| !rules.known.contains(a));
+        if rules.tier == "open" {
+            after.clear();
         }
-        None => true,
-    });
-    let short = |a: &str| a.chars().take(60).collect::<String>();
-    let mut v: Vec<Block> = before.iter().map(|(f, a)| block("money", format!("{f}：删掉或换掉了推荐 / 邀请内容（「{}」）", short(a)))).collect();
-    if rules.tier != "open" {
-        v.extend(after.iter().map(|(f, a)| block("money", format!("{f}：新增了推荐 / 邀请内容（「{}」）", short(a)))));
     }
-    v
+    let mut files: Vec<&String> = before.iter().chain(&after).map(|(f, _)| f).collect();
+    files.sort();
+    files.dedup();
+    let list = |v: &[(String, String)], f: &str| {
+        let xs: Vec<String> = v.iter().filter(|(g, _)| g == f).map(|(_, a)| format!("「{}」", a.chars().take(40).collect::<String>())).collect();
+        match xs.len() {
+            0 => String::new(),
+            n if n > 3 => format!("{} 等 {n} 处", xs[..3].join("")),
+            _ => xs.join(""),
+        }
+    };
+    files
+        .into_iter()
+        .map(|f| {
+            let (gone, new) = (list(&before, f), list(&after, f));
+            let parts: Vec<String> = [(gone, "删掉或换掉了"), (new, "新增了")].into_iter().filter(|(x, _)| !x.is_empty()).map(|(x, w)| format!("{w}{x}")).collect();
+            block("money", format!("{f}：推荐 / 邀请内容有变动，{}", parts.join("，")))
+        })
+        .collect()
 }
 
 /// 计划里的一条任务（模型输出的 JSON）。
@@ -1543,7 +1555,7 @@ mod tests {
 
     #[test]
     fn strictness_tiers_and_allowed_kinds() {
-        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[] };
+        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[] };
         let d = |file: &str, minus: &[&str], plus: &[&str]| {
             let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
             format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{body}")
@@ -1551,7 +1563,12 @@ mod tests {
         let kinds = |v: Vec<Block>| v.into_iter().map(|b| b.kind).collect::<Vec<_>>();
         // 同一个推荐链接只是换了旁边的说法：稳妥拦，标准 / 放开不拦
         let moved = d("src/content/a.md", &["去 [币安注册](/go/binance) 拿返佣"], &["点 [这里注册币安](/go/binance)，手续费有返佣"]);
-        assert_eq!(kinds(verdict(&moved, &rules("strict", &[]))), vec!["money", "money"]);
+        assert_eq!(kinds(verdict(&moved, &rules("strict", &[]))), vec!["money"], "每个文件只报一条");
+        // HTML 里讲邀请码、返佣的正文和站内文章链接不算；新引用站点里已有的字段（refCode）不算新增，没有的才算
+        let prose = d("src/pages/x.astro", &["<li><strong>想拿回手续费</strong>：两家都只能在注册时填写邀请码，返还比例见 <a href=\"/invite/\">邀请码页</a></li>"], &["<p>用本站币安邀请码 <code>{bn.refCode}</code> 注册，返还比例见 <a href=\"/invite/\">邀请码页</a>、<a href=\"/guides/invite-code-rebate/\">返佣说明</a></p>"]);
+        assert_eq!(kinds(verdict(&prose, &rules("standard", &[]))), vec!["money"]);
+        let known = vec!["bn.refCode".to_string()];
+        assert!(verdict(&prose, &Rules { known: &known, ..rules("standard", &[]) }).is_empty());
         assert!(verdict(&moved, &rules("standard", &[])).is_empty());
         // 换了邀请码：标准、放开都拦
         let swapped = d("src/content/a.md", &["邀请码：GATE8888"], &["邀请码：GATE9999"]);
