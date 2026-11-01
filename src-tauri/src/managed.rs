@@ -698,10 +698,32 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
 }
 
 /// 推荐 / 邀请 / 返佣相关的内容：改动里只要删改了带这些标记的行，就不自动上线。
+/// 只认真正带钱的东西——推荐链接、跳转链接、写着邀请码的值、带这些词的链接 / 标签 / 字段；
+/// 正文里讲「怎么填邀请码」「返佣是什么」的句子不算，不然交易所注册、返佣类站点的教程一改就被拦。
 pub fn touches_money(line: &str) -> bool {
     let l = line.to_lowercase();
     // 「ref=」只认网址参数（?ref= / &ref=），否则每个 href= 都会被当成推荐链接
-    ["?ref=", "&ref=", "referral", "invite", "affiliate", "/go/", "promo", "coupon", "邀请", "返佣", "推荐码", "优惠码"].iter().any(|k| l.contains(k))
+    if ["?ref=", "&ref=", "/go/", "data-ref"].iter().any(|k| l.contains(k)) {
+        return true;
+    }
+    let words = ["referral", "invite", "affiliate", "promo", "coupon", "rebate", "邀请", "返佣", "推荐码", "优惠码"];
+    if !words.iter().any(|k| l.contains(k)) {
+        return false;
+    }
+    // 链接、HTML / 组件标签、代码或数据字段里带这些词
+    let structured = ["http", "href", "](", "<", "{", "="].iter().any(|k| l.contains(k))
+        || l.split_once(':').is_some_and(|(k, _)| {
+            let k = k.trim().trim_matches(|c| c == '"' || c == '\'');
+            !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && words.iter().any(|w| k.contains(w))
+        });
+    // 正文里写着具体的码：「邀请码：ABC123」「推荐码 GATE88」
+    let code_value = ["邀请码", "推荐码", "优惠码", "返佣码"].iter().any(|k| {
+        line.match_indices(k).any(|(i, _)| {
+            let rest = line[i + k.len()..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '：' | ':' | '「' | '“' | '"' | '`' | '*'));
+            rest.chars().take_while(|c| c.is_ascii_alphanumeric()).count() >= 4
+        })
+    });
+    structured || code_value
 }
 
 /// 全托管的判定：返回不能自动上线的原因（空＝可以）。
@@ -1354,6 +1376,13 @@ mod tests {
         assert!(!data_line("const x = pick(1);") && !data_line("const t = `${a}`;"));
         assert!(data_line("  seoTitle?: string;") && data_line("  kind: 'a' | 'b';") && data_line("  links?: { label: string; href: string }[];"));
         assert!(!super::touches_money("<a class=\"text-link\" href={link.href}>") && super::touches_money("https://x.com/?ref=abc"));
+        // 正文里讲邀请码、返佣的句子不算；具体的码、链接、字段、组件才算
+        for prose in ["title: 欧易注册流程（2026）：OKX 怎么注册、邀请码与身份认证步骤", "2. **绑定邮箱和手机号**：输入邮箱并填写邀请码（选填，注册后不能补填），输入 6 位邮件验证码。", "手续费返佣是交易所把一部分手续费退给你。", "Enter the invite code if you have one (optional)."] {
+            assert!(!super::touches_money(prose), "{prose}");
+        }
+        for money in ["填写邀请码：GATE8888 可以拿 20% 返佣", "推荐码 「ABCD12」", "[币安返佣链接](https://accounts.binance.com/register?ref=X)", "<CtaButton platform=\"okx\" />去 /go/okx", "  rebatePct: 20,", "  \"inviteCode\": \"XYZ\",", "<span data-ref-code=\"binance\"></span>", "<ReferralBox exchange=\"okx\" />"] {
+            assert!(super::touches_money(money), "{money}");
+        }
         // 正则字面量的值算数据；正则后面接代码不算
         assert!(data_line("    mentions: /(海螺|Hailuo)[^。]{0,60}(\\$\\s*9\\.99|每日少量|small daily)/i,"));
         assert!(data_line("    mentions: /Vidu[^。]{0,40}80\\s*(积分|credits)/i,"));
