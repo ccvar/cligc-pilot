@@ -2073,7 +2073,7 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
             let cur = crate::site_git::current_branch(&main).await;
-            if cur != site.default_branch || !crate::site_git::is_clean(&main).await {
+            if cur != site.default_branch || !settle_build_outputs(site, &main).await {
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再确认（Pilot 不会动你正在改的东西）", site.default_branch));
             }
             if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
@@ -2420,7 +2420,7 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
             let cur = crate::site_git::current_branch(&main).await;
-            if cur != site.default_branch || !crate::site_git::is_clean(&main).await {
+            if cur != site.default_branch || !settle_build_outputs(site, &main).await {
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再回滚", site.default_branch));
             }
             crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await?;
@@ -3299,6 +3299,30 @@ pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
     set_last_data_sync(&st.data_dir, &today());
     DATA_SYNCING.store(false, Ordering::SeqCst);
     true
+}
+
+/// 站点文件夹里未提交的改动（已跟踪的文件）：(文件列表, 是不是全是构建脚本自动重写的数据文件，见 managed::build_outputs)。
+/// 读不到 git 状态返回 None。
+pub async fn dirty_files(site: &Site, dir: &Path) -> Option<(Vec<String>, bool)> {
+    let o = crate::site_git::git(dir, &["status", "--porcelain", "--untracked-files=no"], "").await.ok().filter(|o| o.ok)?;
+    let files: Vec<String> = o.stdout.lines().filter_map(|l| l.get(3..)).map(|f| f.trim().trim_matches('"').to_string()).filter(|f| !f.is_empty()).collect();
+    let outs = crate::managed::build_outputs(&site.app_dir(dir));
+    let generated = !files.is_empty() && files.iter().all(|f| !f.contains(" -> ") && outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())));
+    Some((files, generated))
+}
+
+/// 合并 / 回滚前：站点文件夹干净就直接过；只有构建脚本自动重写的数据文件有改动（上次在这里构建上线时写的，
+/// 比如每次构建同步手续费）就把它们还原——下次构建还会再写一遍；别的文件有改动不动它，返回 false。
+async fn settle_build_outputs(site: &Site, main: &Path) -> bool {
+    match dirty_files(site, main).await {
+        Some((files, _)) if files.is_empty() => true,
+        Some((files, true)) => {
+            let mut args = vec!["checkout", "--"];
+            args.extend(files.iter().map(String::as_str));
+            crate::site_git::git(main, &args, "").await.is_ok_and(|o| o.ok)
+        }
+        _ => false,
+    }
 }
 
 /// 上次 Pilot 退出（或开发版重启）时还在执行的条目：作业跟着进程没了，条目会一直停在「AI 正在处理」。

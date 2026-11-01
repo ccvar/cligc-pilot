@@ -860,8 +860,10 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
     let history = crate::site_deploy::load_history(&site_dir);
     // 在 Pilot 里从零做的站点没上线过就是没上线过
     let since = if site.origin == "created" { 0 } else { site.created_at };
-    let undeployed = git && undeployed(&dir, dirty, &head, &history, since).await;
-    let changed_at = if undeployed { changed_at(&dir, dirty).await } else { 0 };
+    // 只有构建脚本自动重写的数据文件变了（上次在这里构建时写的）不算没上线的改动
+    let real_dirty = dirty && !crate::site_runner::dirty_files(&site, &dir).await.is_some_and(|(_, generated)| generated);
+    let undeployed = git && undeployed(&dir, real_dirty, &head, &history, since).await;
+    let changed_at = if undeployed { changed_at(&dir, real_dirty).await } else { 0 };
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
         exists: dir.is_dir(),
