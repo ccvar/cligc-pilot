@@ -911,6 +911,16 @@ fn prose_of(line: &str) -> String {
     out
 }
 
+/// frontmatter 里一行的文字：很多站点把正文写在 frontmatter 的字段里（answer、steps、faqs 这类），也算正文。
+/// 只取值、不算字段名；文件名、日期、网址、标签这种单个词的值不算。
+fn frontmatter_prose(line: &str) -> String {
+    let t = line.trim().trim_start_matches("- ").trim();
+    let key_end = t.find(':').filter(|&i| t[..i].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && i > 0);
+    let v = key_end.map(|i| t[i + 1..].trim()).unwrap_or(t).trim_matches(['"', '\'', '|', '>']).trim();
+    let cjk = v.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3040}'..='\u{30ff}').contains(&c) || ('\u{ac00}'..='\u{d7af}').contains(&c));
+    if cjk || v.contains(' ') { prose_of(v) } else { String::new() }
+}
+
 /// 这次改动里值得做内容质检的页面文件：新页面，或者正文加了不少（≥ 200 字）的已有页面。删掉的不算。
 /// 返回（文件路径，是不是新文件），最多 5 个。
 pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
@@ -923,7 +933,8 @@ pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// 页面源文件 → （标题，正文纯文字）：去掉 frontmatter（标题从里面的 title: 取）、代码块、import 行和 HTML 标签。
+/// 页面源文件 → （标题，正文纯文字）：去掉代码块、import 行和 HTML 标签；标题从 frontmatter 的 title: 取，
+/// frontmatter 里其它字段的文字（answer、steps、faqs 这类，见 `frontmatter_prose`）也算正文。
 /// 正文截到 `max_chars` 个字符（判断模型单个问题有上下文上限）。
 pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
     let mut title = String::new();
@@ -942,6 +953,12 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
                 in_front = false;
             } else if let Some(v) = t.strip_prefix("title:") {
                 title = v.trim().trim_matches(['"', '\'']).to_string();
+            } else if !t.starts_with("description:") {
+                let text = frontmatter_prose(t);
+                if !text.trim().is_empty() {
+                    body.push_str(text.trim());
+                    body.push('\n');
+                }
             }
             continue;
         }
@@ -1215,7 +1232,9 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                     let t = t.trim();
                     if !data && t == "---" {
                         in_frontmatter = !in_frontmatter;
-                    } else if data || (!in_frontmatter && !t.starts_with("```") && !t.starts_with("import ")) {
+                    } else if in_frontmatter && !data {
+                        n += text_units(&frontmatter_prose(t));
+                    } else if data || (!t.starts_with("```") && !t.starts_with("import ")) {
                         n += text_units(&prose_of(t));
                     }
                 }
@@ -1551,6 +1570,17 @@ mod tests {
         assert!(managed_verdict(newpage, false, 1500, "review", &[]).iter().any(|r| r.contains("新内容")));
         // 允许自动发布新页面时，只剩「低于正文下限」这一条（这个测试页只有一行）
         assert!(managed_verdict(newpage, true, 1500, "review", &[]).iter().all(|r| r.contains("低于这个方案的下限")));
+    }
+
+    #[test]
+    fn frontmatter_fields_count_as_body() {
+        // 正文写在 frontmatter 字段里的页面（答案、步骤、问答）：按字段值算字数，字段名、文件名、日期不算
+        let steps: String = (0..40).map(|i| format!("+  - title: 第 {i} 步：打开币安充值页选择网络\n+    body: 网页版点顶部的充值，再点侧边栏的数字货币充值，币种选 USDT，网络选和对方转出平台都有的那一个。\n+    shot: bn-hans-{i}.webp\n")).collect();
+        let page = format!("diff --git a/src/content/guides/a.md b/src/content/guides/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/guides/a.md\n@@ -0,0 +1 @@\n+---\n+title: 别人给我转 USDT\n+published: \"2026-11-01\"\n+steps:\n{steps}+---\n+短正文。\n");
+        assert!(managed_verdict(&page, true, 1500, "all", &[]).is_empty(), "{:?}", managed_verdict(&page, true, 1500, "all", &[]));
+        assert_eq!(frontmatter_prose("    shot: bn-hans-deposit-network.webp"), "");
+        assert_eq!(frontmatter_prose("published: \"2026-11-01\""), "");
+        assert_eq!(frontmatter_prose("  - q: 收款给 UID 和给地址哪个好？"), "收款给 UID 和给地址哪个好？");
     }
 
     #[test]

@@ -3298,7 +3298,30 @@ pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
     true
 }
 
+/// 上次 Pilot 退出（或开发版重启）时还在执行的条目：作业跟着进程没了，条目会一直停在「AI 正在处理」。
+/// 启动时改成失败并写明原因：分支上已经有 AI 提交的改动就能点「重新检查」接着用，没有就让 AI 再改一遍。
+fn recover_interrupted(ctx: &Ctx) {
+    let st = ctx.state();
+    for s in st.sites.list() {
+        let dir = st.sites.data_dir(&s.id);
+        let stuck: Vec<String> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "working").map(|i| i.id).collect();
+        for id in &stuck {
+            let _ = site_ops::update_item(&dir, id, now(), |i| {
+                if i.status == "working" {
+                    i.status = "failed".into();
+                    i.note = "上次 Pilot 退出或重启时这条还在执行，被中断了。分支上已经有改动的可以点「重新检查」接着用，没有就让 AI 再改一遍。".into();
+                }
+            });
+        }
+        if !stuck.is_empty() {
+            ctx.emit_queue(&s.id);
+        }
+    }
+}
+
 pub fn start_scheduler(app: tauri::AppHandle) {
+    // 这时候还没有任何作业在跑：还停在「正在处理」的都是上次被中断的
+    recover_interrupted(&Ctx { app: app.clone() });
     tauri::async_runtime::spawn(async move {
         // 启动后稍等，别和窗口初始化抢资源
         tokio::time::sleep(Duration::from_secs(60)).await;
