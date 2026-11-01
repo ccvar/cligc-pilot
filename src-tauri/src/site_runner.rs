@@ -1501,6 +1501,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     let mut rules = managed.rules(&site.ops.content_code);
     rules.known = &known;
     rules.generated = &generated;
+    // 构建、检查会跑到的脚本：scripts/ 里别的辅助脚本只改数据时按内容算
+    let commands: Vec<String> = std::iter::once(site.build.build.clone()).chain(site.build.checks.iter().cloned()).collect();
+    let scripts = crate::managed::build_scripts(&site.app_dir(&wt), &commands);
+    rules.build_scripts = scripts.as_deref();
     let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();

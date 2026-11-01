@@ -216,6 +216,8 @@ pub struct Rules<'a> {
     pub known: &'a [String],
     /// 构建时脚本自动重写的数据文件（文件名，见 `build_outputs`）：AI 跑构建时顺手提交进来的，不算 AI 的改动
     pub generated: &'a [String],
+    /// 构建和检查会跑到的脚本（文件名，见 `build_scripts`）；None＝读不到 package.json，scripts/ 下一律拦
+    pub build_scripts: Option<&'a [String]>,
 }
 impl Rules<'_> {
     /// 这类原因按方案放行（点过「这类以后不拦」，或「放开」档默认不拦）
@@ -324,7 +326,7 @@ impl ManagedGroup {
         }
     }
     pub fn rules<'a>(&'a self, content_code: &'a [String]) -> Rules<'a> {
-        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[], generated: &[] }
+        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[], generated: &[], build_scripts: None }
     }
     /// 保存前把等级落定：老方案补上等级，代码改动跟着等级走，放行清单只留认得的类型
     pub fn settle_tier(&mut self) {
@@ -833,6 +835,67 @@ pub fn build_outputs(app_dir: &Path) -> Vec<String> {
     out
 }
 
+/// 构建、检查、部署会跑到的脚本文件名：package.json 里 build / check / test / lint / deploy 一类命令（连同 pre / post 和
+/// 它们 npm run 到的命令）、站点设置里的构建和检查命令点到的脚本，以及这些脚本 import 的本地脚本。读不到 package.json 返回 None。
+pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>> {
+    let raw = std::fs::read_to_string(app_dir.join("package.json")).ok()?;
+    let pkg: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let scripts = pkg["scripts"].as_object().cloned().unwrap_or_default();
+    let ext = |t: &str| ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| t.ends_with(&format!(".{e}")));
+    let mut todo: Vec<String> = commands.to_vec();
+    for k in ["prebuild", "build", "postbuild", "precheck", "check", "postcheck", "test", "lint", "predeploy", "deploy", "postdeploy"] {
+        if let Some(v) = scripts.get(k).and_then(|v| v.as_str()) {
+            todo.push(v.to_string());
+        }
+    }
+    let (mut seen_cmd, mut files): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    while let Some(cmd) = todo.pop() {
+        if seen_cmd.contains(&cmd) || seen_cmd.len() > 50 {
+            continue;
+        }
+        seen_cmd.push(cmd.clone());
+        let toks: Vec<&str> = cmd.split(|c: char| c.is_whitespace() || matches!(c, '&' | ';' | '|' | '"' | '\'')).filter(|t| !t.is_empty()).collect();
+        for (i, t) in toks.iter().enumerate() {
+            if *t == "run" && i > 0 && matches!(toks[i - 1], "npm" | "pnpm" | "yarn" | "bun") {
+                if let Some(v) = toks.get(i + 1).and_then(|n| scripts.get(*n)).and_then(|v| v.as_str()) {
+                    todo.push(v.to_string());
+                }
+            }
+            if ext(t) && !files.contains(&t.to_string()) {
+                files.push(t.to_string());
+            }
+        }
+    }
+    // 这些脚本 import 的本地脚本也算（最多跟三层）
+    let mut i = 0;
+    while i < files.len() && i < 200 {
+        let f = files[i].clone();
+        let base = app_dir.join(&f);
+        if let Ok(src) = std::fs::read_to_string(&base) {
+            for w in src.split(['"', '\'', '`']).skip(1).step_by(2) {
+                if w.starts_with('.') && ext(w) {
+                    let p = base.parent().unwrap_or(app_dir).join(w);
+                    let rel = p.strip_prefix(app_dir).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| w.to_string());
+                    if !files.contains(&rel) {
+                        files.push(rel);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    let mut names: Vec<String> = files.iter().map(|f| f.rsplit('/').next().unwrap_or(f).to_string()).collect();
+    names.sort();
+    names.dedup();
+    Some(names)
+}
+
+/// scripts/ 里构建、检查都不会跑到的脚本
+fn idle_script(file: &str, build: &[String]) -> bool {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    file.split('/').any(|s| s == "scripts") && ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) && !build.iter().any(|b| b == name)
+}
+
 fn generated_by_build(file: &str, generated: &[String]) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
     !hard_forbidden(file) && generated.iter().any(|g| g == name)
@@ -1185,7 +1248,7 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 #[cfg(test)]
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let tier = if code == "review" { "strict" } else { "standard" };
-    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[] }).into_iter().map(|b| b.text).collect()
+    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[], build_scripts: None }).into_iter().map(|b| b.text).collect()
 }
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
@@ -1201,6 +1264,12 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         let file = &f.file;
         // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动
         if generated_by_build(file, rules.generated) {
+            continue;
+        }
+        // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
+        if rules.build_scripts.is_some_and(|b| idle_script(file, b)) && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l)) {
+            changed += f.added.len().min(f.removed.len()) + f.removed.len();
+            new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
         }
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
@@ -1629,10 +1698,30 @@ mod tests {
         assert_eq!(outs, vec!["fee-changes.json".to_string(), "withdrawal-fees.json".to_string()]);
         let rows: String = (0..450).map(|i| format!("-  \"a{i}\": 1,\n+  \"a{i}\": 2,\n")).collect();
         let diff = format!("diff --git a/site/src/data/withdrawal-fees.json b/site/src/data/withdrawal-fees.json\n--- a/site/src/data/withdrawal-fees.json\n+++ b/site/src/data/withdrawal-fees.json\n@@ -1 +1 @@\n{rows}");
-        let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g };
+        let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g, build_scripts: None };
         assert!(!verdict(&diff, &r(&[])).is_empty());
         let g: &'static [String] = Box::leak(outs.into_boxed_slice());
         assert!(verdict(&diff, &r(g)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn idle_helper_scripts_with_only_data_pass() {
+        let dir = std::env::temp_dir().join(format!("pilot-build-scripts-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"build":"astro build && node scripts/postbuild.mjs","check":"node scripts/check.mjs"}}"#).unwrap();
+        std::fs::write(dir.join("scripts/check.mjs"), "import { rules } from './rules.mjs';").unwrap();
+        let b = build_scripts(&dir, &["npm run check".into()]).unwrap();
+        assert_eq!(b, vec!["check.mjs".to_string(), "postbuild.mjs".to_string(), "rules.mjs".to_string()]);
+        let b: &'static [String] = Box::leak(b.into_boxed_slice());
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b) };
+        let d = |file: &str, line: &str| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -39 +39,2 @@\n+{line}\n");
+        // 放截图用的辅助脚本里加一条说明文字：放行
+        assert!(verdict(&d("scripts/place-shots.mjs", "  'binance-register-form': '币安网页版注册首屏（2026 年 11 月）',"), &r).is_empty());
+        // 加的是代码、或者是构建 / 检查会跑的脚本：照样拦
+        assert!(!verdict(&d("scripts/place-shots.mjs", "  await rm(dir, { recursive: true });"), &r).is_empty());
+        assert!(!verdict(&d("scripts/rules.mjs", "  'min': '0',"), &r).is_empty());
+        assert!(!verdict(&d("scripts/place-shots.mjs", "  'a': 'b',"), &Rules { build_scripts: None, ..r }).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1649,7 +1738,7 @@ mod tests {
 
     #[test]
     fn strictness_tiers_and_allowed_kinds() {
-        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[] };
+        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
         let d = |file: &str, minus: &[&str], plus: &[&str]| {
             let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
             format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{body}")
