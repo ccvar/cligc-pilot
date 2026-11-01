@@ -151,22 +151,46 @@ function issueSig(r: SiteRow, k: SiteFilter): string {
   // 按「哪几样要处理」记：天数每天在变，不能用天数，不然忽略了第二天又冒出来
   if (k === 'expiry') return `${r.cert_err ? 'e' : ''}${r.cert_days != null && r.cert_days <= 14 ? 'c' : ''}${r.domain_days != null && r.domain_days <= 60 ? 'd' : ''}`;
   if (k === 'dataerr') return r.summary.errors.join('|');
-  if (k === 'down') return r.summary.data_end;
+  // 按掉了多少记（3 档）：数据每天往后挪一天，不能用数据日期，不然忽略了第二天又冒出来
+  if (k === 'down') return String(downLevel(r));
   if (k === 'proposed') return String(r.proposed);
   return 'x';
+}
+/** 搜索点击比前一段掉了多少：1＝两到四成，2＝四到六成，3＝六成以上 */
+function downLevel(r: SiteRow): number {
+  const drop = 1 - r.summary.gsc_clicks / Math.max(1, r.summary.gsc_clicks_prev);
+  return drop >= 0.6 ? 3 : drop >= 0.4 ? 2 : 1;
 }
 function loadIgnored(): Record<string, string> {
   try { return JSON.parse(localStorage.getItem(IGNORE_KEY) || '{}'); } catch { return {}; }
 }
 export const ignored = $state<{ map: Record<string, string> }>({ map: loadIgnored() });
-export function ignoreIssues(rows: SiteRow[], k: SiteFilter) {
-  const map = { ...ignored.map };
-  for (const r of rows) map[`${k}:${r.id}`] = issueSig(r, k);
+function saveIgnored(map: Record<string, string>) {
   ignored.map = map;
   try { localStorage.setItem(IGNORE_KEY, JSON.stringify(map)); } catch { /* 存不了就只在这次有效 */ }
 }
+export function ignoreIssues(rows: SiteRow[], k: SiteFilter) {
+  const map = { ...ignored.map };
+  for (const r of rows) map[`${k}:${r.id}`] = issueSig(r, k);
+  saveIgnored(map);
+}
+function stillIgnored(r: SiteRow, k: SiteFilter): boolean {
+  const saved = ignored.map[`${k}:${r.id}`];
+  if (saved == null) return false;
+  // 流量下滑：掉得比忽略时更多才再提醒，回升一点不算；旧版记的是数据日期，当作还在忽略
+  if (k === 'down') return !/^\d$/.test(saved) || downLevel(r) <= Number(saved);
+  return saved === issueSig(r, k);
+}
 export function issueRows(rows: SiteRow[], k: SiteFilter): SiteRow[] {
-  return applyFilter(rows, '', k, '').filter((r) => ignored.map[`${k}:${r.id}`] !== issueSig(r, k));
+  return applyFilter(rows, '', k, '').filter((r) => !stillIgnored(r, k));
+}
+/** 流量已经回升的站点清掉忽略记录：以后再掉要重新提醒 */
+function pruneIgnored(rows: SiteRow[]) {
+  const back = rows.filter((r) => r.has_data && !trafficDown(r) && ignored.map[`down:${r.id}`] != null);
+  if (!back.length) return;
+  const map = { ...ignored.map };
+  for (const r of back) delete map[`down:${r.id}`];
+  saveIgnored(map);
 }
 
 export function sortRows(rows: SiteRow[], sort: SiteSort, desc: boolean): SiteRow[] {
@@ -229,6 +253,7 @@ export async function loadFleet() {
     const rows = await invoke<SiteRow[]>('sites_overview');
     fleet.rows = rows;
     fleet.loaded = true;
+    pruneIgnored(rows);
     if (!autodetected) void autodetectDeploys();
     else void recheckDeploys();
   } catch (e) { say(String(e), 'err'); }
