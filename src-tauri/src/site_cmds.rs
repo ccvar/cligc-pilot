@@ -783,6 +783,9 @@ pub struct SiteStatus {
     pub last_deploy: Option<crate::site_deploy::DeployRecord>,
     /// 文件夹里有没上线的改动（见 `undeployed`）：站点对话里的「构建并上线」卡片看它
     pub undeployed: bool,
+    /// 文件夹最近一次改动的时间（秒）：最新提交和未提交文件里较晚的那个。没用 Pilot 上线过的站点，
+    /// 卡片只认这次对话开始之后的改动（对话之前的改动多半已经用别的方式上线了）
+    pub changed_at: u64,
 }
 
 /// 站点文件夹里有没有还没上线的改动：没成功上线过；当前提交不是上次成功上线的那一版；
@@ -816,6 +819,24 @@ async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[c
     o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).any(changed_after)
 }
 
+/// 最新提交的时间和未提交文件的修改时间里较晚的那个（秒）
+async fn changed_at(dir: &std::path::Path, dirty: bool) -> u64 {
+    let mut t = crate::site_git::git_ok(dir, &["log", "-1", "--format=%ct"], "").await.ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+    if dirty {
+        if let Ok(o) = crate::site_git::git(dir, &["status", "--porcelain", "--untracked-files=all"], "").await {
+            for l in o.stdout.lines() {
+                let f = l.get(3..).unwrap_or("").rsplit(" -> ").next().unwrap_or("").trim_matches('"');
+                let p = dir.join(f);
+                let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
+                if let Some(s) = m.and_then(|m| m.modified()).ok().and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok()) {
+                    t = t.max(s.as_secs());
+                }
+            }
+        }
+    }
+    t
+}
+
 #[tauri::command]
 pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Result<SiteStatus, String> {
     let site = state.sites.get(&id)?;
@@ -840,6 +861,7 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
     // 在 Pilot 里从零做的站点没上线过就是没上线过
     let since = if site.origin == "created" { 0 } else { site.created_at };
     let undeployed = git && undeployed(&dir, dirty, &head, &history, since).await;
+    let changed_at = if undeployed { changed_at(&dir, dirty).await } else { 0 };
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
         exists: dir.is_dir(),
@@ -851,6 +873,7 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
         job: state.site_jobs.snapshot(&id),
         last_deploy: history.into_iter().next(),
         undeployed,
+        changed_at,
     })
 }
 

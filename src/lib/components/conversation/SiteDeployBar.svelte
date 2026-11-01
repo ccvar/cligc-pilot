@@ -16,8 +16,10 @@
   const st = $derived(siteId ? sites.status[siteId] : undefined);
   const job = $derived(siteId ? sites.jobs[siteId] : undefined);
   const running = $derived(job?.status === 'running');
-  // 有没上线的改动（后端判断：上次上线之后又改过，或者提交了但线上还不是这一版）
-  const pending = $derived(!!st?.exists && st.undeployed);
+  // 有没上线的改动（后端判断：上次上线之后又改过，或者提交了但线上还不是这一版）。
+  // 没用 Pilot 上线过的导入站点：只认这次对话开始之后的改动，之前的多半已经用别的方式（比如 wrangler）上线了
+  const fresh = $derived(!!st?.last_deploy || site?.origin === 'created' || (st?.changed_at ?? 0) >= (conv?.created_at ?? 0));
+  const pending = $derived(!!st?.exists && st.undeployed && fresh);
   const target = $derived(site?.domain || site?.name || '');
 </script>
 

@@ -326,6 +326,8 @@ export interface SiteStatus {
   last_deploy: DeployRecord | null;
   /** 文件夹里有没上线的改动（上次上线之后又改过、或提交了还没上线） */
   undeployed: boolean;
+  /** 文件夹最近一次改动的时间（秒，只在 undeployed 时算） */
+  changed_at?: number;
 }
 
 // ---- 站点数据 ----
