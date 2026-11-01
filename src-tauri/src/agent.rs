@@ -309,6 +309,10 @@ impl RunRegistry {
     pub(crate) fn unregister(&self, id: &str) {
         self.inner.lock().unwrap().remove(id);
     }
+    /// 这个会话现在有没有正在跑的一轮（这个进程里起的）
+    pub fn is_running(&self, id: &str) -> bool {
+        self.inner.lock().unwrap().contains_key(id)
+    }
     pub fn cancel(&self, id: &str) -> bool {
         if let Some((flag, tx)) = self.inner.lock().unwrap().get_mut(id) {
             flag.store(true, Ordering::SeqCst);

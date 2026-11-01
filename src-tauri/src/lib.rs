@@ -3549,7 +3549,9 @@ fn list_pending_permits(state: tauri::State<'_, AppState>) -> Vec<permit::Pendin
         .map(|c| c.id)
         .collect();
     // 运营任务的无人值守会话：一律拒绝，不出卡（推送、部署等由 Pilot 自己按档位执行）。
-    let (unattended, all): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| site_runner::is_unattended(&p.conv));
+    // 这个进程里没有在跑的会话发来的也拒绝：多半是 Pilot 上次退出 / 重启时没跟着退出的模型进程（它的无人值守标记跟着旧进程没了），
+    // 不能让它冒出一张卡等你批
+    let (unattended, all): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| site_runner::is_unattended(&p.conv) || !state.runs.is_running(&p.conv));
     for p in &unattended {
         let _ = permit::respond(&dir, &p.id, false);
     }
