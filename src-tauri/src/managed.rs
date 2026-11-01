@@ -214,6 +214,8 @@ pub struct Rules<'a> {
     pub content_code: &'a [String],
     /// 改动前的站点里本来就有的推荐链接 / 码 / 字段（见 `added_money_atoms`）：再引用一次不算新增
     pub known: &'a [String],
+    /// 构建时脚本自动重写的数据文件（文件名，见 `build_outputs`）：AI 跑构建时顺手提交进来的，不算 AI 的改动
+    pub generated: &'a [String],
 }
 impl Rules<'_> {
     /// 这类原因按方案放行（点过「这类以后不拦」，或「放开」档默认不拦）
@@ -322,7 +324,7 @@ impl ManagedGroup {
         }
     }
     pub fn rules<'a>(&'a self, content_code: &'a [String]) -> Rules<'a> {
-        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[] }
+        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[], generated: &[] }
     }
     /// 保存前把等级落定：老方案补上等级，代码改动跟着等级走，放行清单只留认得的类型
     pub fn settle_tier(&mut self) {
@@ -804,6 +806,38 @@ fn risky_kind(why: &str) -> &'static str {
     }
 }
 
+/// 站点构建时（npm 的 prebuild / build / postbuild）跑的脚本里写到的数据文件名：这些文件每次构建都会被重写。
+/// 只认 json / csv / txt / xml 这类数据，脚本、配置不算。读不到 package.json 返回空。
+pub fn build_outputs(app_dir: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(app_dir.join("package.json")) else { return Vec::new() };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else { return Vec::new() };
+    let cmds: Vec<&str> = ["prebuild", "build", "postbuild"].iter().filter_map(|k| pkg["scripts"][*k].as_str()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for cmd in cmds {
+        for tok in cmd.split(|c: char| c.is_whitespace() || matches!(c, '&' | ';' | '|' | '"' | '\'')) {
+            if !["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| tok.ends_with(&format!(".{e}"))) {
+                continue;
+            }
+            let Ok(src) = std::fs::read_to_string(app_dir.join(tok)) else { continue };
+            // 只看引号里的字符串（文件路径），res.json() 这种代码不算
+            for word in src.split(['"', '\'', '`']).skip(1).step_by(2) {
+                let name = word.rsplit('/').next().unwrap_or(word);
+                if ["json", "csv", "txt", "xml"].iter().any(|e| name.ends_with(&format!(".{e}"))) && name.len() > 5 && !matches!(name, "package.json" | "tsconfig.json" | "package-lock.json") {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn generated_by_build(file: &str, generated: &[String]) -> bool {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    !hard_forbidden(file) && generated.iter().any(|g| g == name)
+}
+
 /// 推荐相关的英文词（链接、字段名里出现）
 const MONEY_WORDS: &[&str] = &["referral", "invite", "affiliate", "promo", "coupon", "rebate", "refcode", "ref_code", "kickback"];
 
@@ -1145,7 +1179,7 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 #[cfg(test)]
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let tier = if code == "review" { "strict" } else { "standard" };
-    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[] }).into_iter().map(|b| b.text).collect()
+    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[] }).into_iter().map(|b| b.text).collect()
 }
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
@@ -1159,6 +1193,10 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let (mut money_out, mut money_in): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     for f in split_diff(diff) {
         let file = &f.file;
+        // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动
+        if generated_by_build(file, rules.generated) {
+            continue;
+        }
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
@@ -1573,6 +1611,23 @@ mod tests {
     }
 
     #[test]
+    fn build_generated_data_is_not_an_edit() {
+        let dir = std::env::temp_dir().join(format!("pilot-build-out-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"prebuild":"node scripts/check.mjs && NODE_USE_ENV_PROXY=1 node scripts/sync-fees.mjs --soft","build":"astro build"}}"#).unwrap();
+        std::fs::write(dir.join("scripts/sync-fees.mjs"), "const OUT = new URL('../src/data/withdrawal-fees.json', import.meta.url);\nconst C = new URL(\"../src/data/fee-changes.json\", import.meta.url);\nreadFileSync('package.json');\nconst d = await res.json();").unwrap();
+        let outs = build_outputs(&dir);
+        assert_eq!(outs, vec!["fee-changes.json".to_string(), "withdrawal-fees.json".to_string()]);
+        let rows: String = (0..450).map(|i| format!("-  \"a{i}\": 1,\n+  \"a{i}\": 2,\n")).collect();
+        let diff = format!("diff --git a/site/src/data/withdrawal-fees.json b/site/src/data/withdrawal-fees.json\n--- a/site/src/data/withdrawal-fees.json\n+++ b/site/src/data/withdrawal-fees.json\n@@ -1 +1 @@\n{rows}");
+        let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g };
+        assert!(!verdict(&diff, &r(&[])).is_empty());
+        let g: &'static [String] = Box::leak(outs.into_boxed_slice());
+        assert!(verdict(&diff, &r(g)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn frontmatter_fields_count_as_body() {
         // 正文写在 frontmatter 字段里的页面（答案、步骤、问答）：按字段值算字数，字段名、文件名、日期不算
         let steps: String = (0..40).map(|i| format!("+  - title: 第 {i} 步：打开币安充值页选择网络\n+    body: 网页版点顶部的充值，再点侧边栏的数字货币充值，币种选 USDT，网络选和对方转出平台都有的那一个。\n+    shot: bn-hans-{i}.webp\n")).collect();
@@ -1585,7 +1640,7 @@ mod tests {
 
     #[test]
     fn strictness_tiers_and_allowed_kinds() {
-        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[] };
+        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[] };
         let d = |file: &str, minus: &[&str], plus: &[&str]| {
             let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
             format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{body}")

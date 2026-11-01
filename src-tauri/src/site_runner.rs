@@ -1496,8 +1496,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             }
         }
     }
+    // 构建脚本每次都会重写的数据文件（比如同步手续费）：AI 跑构建时顺手提交进来的，不算它的改动
+    let generated = crate::managed::build_outputs(&site.app_dir(&wt));
     let mut rules = managed.rules(&site.ops.content_code);
     rules.known = &known;
+    rules.generated = &generated;
     let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
