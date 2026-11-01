@@ -11,6 +11,8 @@ const EDGE = 8;
 const GAP = 7;
 const MAX_WIDTH = 320;
 const DEFAULT_DELAY = 300;
+// 窗口顶部这一条是 macOS 的红黄绿按钮和拖动区：气泡往上放会盖住它们，放不下就改放到下面
+const TITLE_BAR = 38;
 
 let activeNode: HTMLElement | null = null;
 let activeText = '';
@@ -66,7 +68,7 @@ function placeTip() {
 
   const minTop = viewport.top + EDGE;
   const maxTop = viewport.bottom - EDGE - height;
-  const above = target.top - viewport.top;
+  const above = target.top - viewport.top - TITLE_BAR;
   const below = viewport.bottom - target.bottom;
   const fitsAbove = above >= height + GAP + EDGE;
   const fitsBelow = below >= height + GAP + EDGE;
