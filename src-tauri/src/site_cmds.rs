@@ -787,9 +787,16 @@ pub struct SiteStatus {
 
 /// 站点文件夹里有没有还没上线的改动：没成功上线过；当前提交不是上次成功上线的那一版；
 /// 或者有未提交的改动、而且是上次上线开始之后才改的——上次上线把未提交的改动一起传上去了的，不算。
-async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[crate::site_deploy::DeployRecord]) -> bool {
+/// 没用 Pilot 上线过的导入站点多半已经用别的方式上线了：只有未提交的改动、或加进 Pilot 之后的新提交才算（`since`＝加进 Pilot 的时间）。
+async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[crate::site_deploy::DeployRecord], since: u64) -> bool {
     // 「补验证文件」是原样重传上次的构建产物，不代表文件夹现在的样子
-    let Some(r) = history.iter().find(|r| r.ok && r.trigger != "files") else { return true };
+    let Some(r) = history.iter().find(|r| r.ok && r.trigger != "files") else {
+        if dirty || head.is_empty() {
+            return true;
+        }
+        let t = crate::site_git::git_ok(dir, &["log", "-1", "--format=%ct"], "").await.ok();
+        return t.and_then(|t| t.trim().parse::<u64>().ok()).is_none_or(|t| t >= since);
+    };
     if !head.is_empty() && head != r.commit {
         return true;
     }
@@ -830,7 +837,9 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
     };
     let site_dir = state.sites.data_dir(&id);
     let history = crate::site_deploy::load_history(&site_dir);
-    let undeployed = git && undeployed(&dir, dirty, &head, &history).await;
+    // 在 Pilot 里从零做的站点没上线过就是没上线过
+    let since = if site.origin == "created" { 0 } else { site.created_at };
+    let undeployed = git && undeployed(&dir, dirty, &head, &history, since).await;
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
         exists: dir.is_dir(),

@@ -29,7 +29,7 @@
       <button class="db-btn ghost" onclick={() => openSite(site.id, 'deploy')}>看进度</button>
     {:else}
       <span class="ic"><Icon name="rocket" size={15} /></span>
-      <span class="txt"><b>{st?.last_deploy ? '改动还没上线' : `${target} 还没上线过`}</b><small>构建、跑检查，通过后上线到 {target}</small></span>
+      <span class="txt"><b>{st?.last_deploy || site.origin !== 'created' ? '改动还没上线' : `${target} 还没上线过`}</b><small>构建、跑检查，通过后上线到 {target}</small></span>
       <span class="tipwrap" data-tip={running ? `站点正在${job?.title ?? '跑别的任务'}，等它跑完再上线` : '点了会先确认一次'}>
         <button class="db-btn" onclick={() => void deploySite(site.id)} disabled={running}><Icon name="rocket" size={12} />构建并上线</button>
       </span>
