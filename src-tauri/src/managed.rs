@@ -903,9 +903,15 @@ const LEAK_MARKERS: &[&str] = &["TODO", "FIXME", "TBD", "lorem ipsum", "placehol
 /// 文字里有没有内部痕迹（开发注释、占位、内部说明），有就返回是哪个标记。
 /// 英文标记要整词：TODO / FIXME / TBD 这种代码里的写法还要大小写一致（西班牙语的 todo / todos 是「全部」，不能算）；
 /// lorem ipsum、placeholder 不分大小写但也要整词；中文标记和占位图域名照旧按包含算。
+/// 「待补充」是正常说法里也会出现的词（「认证待补充」＝认证还没补）：前面紧挨着汉字、后面又没接着汉字的不算，
+/// 「（待补充）」「待补充：」「这里待补充数据」照样算。
 pub fn leak_marker(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
+    let han = |c: char| ('\u{4e00}'..='\u{9fff}').contains(&c);
     LEAK_MARKERS.iter().copied().find(|m| {
+        if *m == "待补充" {
+            return text.match_indices(m).any(|(i, _)| !text[..i].chars().next_back().is_some_and(han) || text[i + m.len()..].chars().next().is_some_and(han));
+        }
         if !m.is_ascii() || m.contains('.') {
             return lower.contains(&m.to_lowercase());
         }
@@ -1256,8 +1262,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             let texts: Vec<String> = f.added.iter().map(|a| if data { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
             if !rules.lets("leak") {
                 for t in &texts {
-                    let lower = t.to_lowercase();
-                    if let Some(m) = LEAK_MARKERS.iter().find(|m| lower.contains(&m.to_lowercase())) {
+                    if let Some(m) = leak_marker(t) {
                         reasons.push(block("leak", format!("{file}：正文里像是混进了内部说明或占位（「{m}」），留给你确认")));
                     }
                 }
@@ -1555,6 +1560,10 @@ mod tests {
         assert_eq!(leak_marker("价格（TBD）"), Some("TBD"));
         assert_eq!(leak_marker("Lorem ipsum dolor sit amet"), Some("lorem ipsum"));
         assert_eq!(leak_marker("这里待补充数据"), Some("待补充"));
+        assert_eq!(leak_marker("价格（待补充）"), Some("待补充"));
+        assert_eq!(leak_marker("待补充：手续费表"), Some("待补充"));
+        // 正常说法：认证还没补
+        assert_eq!(leak_marker("提示需要补充身份认证 认证待补充 完成认证"), None);
         assert!(leak_marker("img https://via.placeholder.com/300").is_some());
     }
 
