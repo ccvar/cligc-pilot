@@ -621,6 +621,8 @@ export interface PageQuality {
   unsourced: number;
   leftover: number;
   reasons: string[];
+  /** 已有页面：改动前就有、这次没变差的问题（不拦，只记下来） */
+  inherited?: string[];
 }
 /** 设置里的判断模型（TypeSafe） */
 export interface TypeSafeStatus {

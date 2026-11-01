@@ -1571,13 +1571,25 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             job.line("判断模型（Jev）内容质检…");
             let positioning = crate::site_stage::load_positioning(&site_dir).text;
             let target = if item.opp.target.trim().is_empty() { item.opp.queries.first().map(|q| q.key.clone()).unwrap_or_default() } else { item.opp.target.clone() };
-            match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &site.app_dir(&wt), &files).await {
+            // 已有页面改动前的样子：质检只拦这次改出来或变差的问题，老页面原来就有的毛病不算在这次头上
+            let mut before = std::collections::HashMap::new();
+            for (f, new_file) in &files {
+                if !new_file {
+                    if let Ok(old) = crate::site_git::git_ok(&wt, &["show", &format!("{base_sha}:{f}")], "").await {
+                        before.insert(f.clone(), old);
+                    }
+                }
+            }
+            // 差异里的路径是相对仓库根目录的（站点在子目录里时不能拼在 app_dir 后面）
+            match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &wt, &files, &before).await {
                 Ok(quality) => {
                     let why = crate::jev_checks::gate_verdict(&quality);
                     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
+                    let inherited: Vec<String> = quality.iter().flat_map(|q| q.inherited.iter().map(move |r| format!("{}：{r}", q.page))).collect();
                     if why.is_empty() {
-                        job.step("quality", "ok", &format!("{} 个页面都通过", files.len()));
-                        job.line("内容质检通过");
+                        let note = if inherited.is_empty() { String::new() } else { format!("（改动前就有、这次没变差的不算：{}）", inherited.join("；")) };
+                        job.step("quality", "ok", &format!("{} 个页面都通过{note}", files.len()));
+                        job.line(&format!("内容质检通过{note}"));
                     } else if hold {
                         job.step("quality", "failed", &format!("没过：{why}（这次不上线，只记分数）"));
                         job.line(&format!("内容质检没过：{why}。这次是「执行但不上线」，不交回重写，分数记在条目上"));

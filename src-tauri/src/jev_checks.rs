@@ -36,6 +36,9 @@ pub struct PageQuality {
     /// 没过的原因（空＝通过）
     #[serde(default)]
     pub reasons: Vec<String>,
+    /// 已有页面：改动前就有、这次没变差的问题（不拦，只记下来）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited: Vec<String>,
 }
 
 // 初始阈值：按你的数据再调
@@ -129,33 +132,75 @@ fn site_state(site: &Site, positioning: &str) -> Value {
 
 /// 给这次改动里的页面做质检。`app_dir` 是工作树里站点代码的目录，`files` 来自 managed::content_page_files。
 /// 每页一次请求（几个问题一起问）；任何一页调用失败就整体返回 Err，调用方按原规则走。
-pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, target: &str, app_dir: &Path, files: &[(String, bool)]) -> Result<Vec<PageQuality>, String> {
+pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, target: &str, repo: &Path, files: &[(String, bool)], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
     let mut out = Vec::new();
     for (file, _) in files {
-        let Ok(src) = std::fs::read_to_string(app_dir.join(file)) else { continue };
-        let (title, text) = crate::managed::page_prose(&src, PAGE_CHARS);
-        if crate::managed::text_units(&text) < 100 {
-            continue; // 几乎没有正文（模板 / 跳转页），不判
+        let Ok(src) = std::fs::read_to_string(repo.join(file)) else { continue };
+        let Some(mut q) = score_page(jev, site, positioning, target, file, &src).await? else { continue };
+        // 已有页面没过：再给改动前的版本打一次分，只拦这次改出来的、或者变差了的问题
+        if !q.reasons.is_empty() {
+            if let Some(old) = before.get(file) {
+                if let Some(o) = score_page(jev, site, positioning, target, file, old).await? {
+                    let (worse, kept) = compare(&q, &o);
+                    q.reasons = worse;
+                    q.inherited = kept;
+                }
+            }
         }
-        let state = json!({
-            "site": site_state(site, positioning),
-            "target_query": target,
-            "page": { "path": file, "title": title, "text": text },
-        });
-        let a = jev.ask(state, quality_questions(!target.trim().is_empty())).await?;
-        let mut q = PageQuality {
-            page: file.clone(),
-            answers: if target.trim().is_empty() { None } else { score(&a, "answers") },
-            substance: score(&a, "substance").unwrap_or(3.0),
-            on_topic: score(&a, "on_topic").unwrap_or(3.0),
-            unsourced: noul(&a, "unsourced").unwrap_or(0.0),
-            leftover: noul(&a, "leftover").unwrap_or(0.0),
-            reasons: Vec::new(),
-        };
-        q.reasons = quality_reasons(&q);
         out.push(q);
     }
     Ok(out)
+}
+
+/// 给一份页面源文件打分；几乎没有正文（模板 / 跳转页）返回 None。
+async fn score_page(jev: &Jev, site: &Site, positioning: &str, target: &str, file: &str, src: &str) -> Result<Option<PageQuality>, String> {
+    let (title, text) = crate::managed::page_prose(src, PAGE_CHARS);
+    if crate::managed::text_units(&text) < 100 {
+        return Ok(None);
+    }
+    let state = json!({
+        "site": site_state(site, positioning),
+        "target_query": target,
+        "page": { "path": file, "title": title, "text": text },
+    });
+    let a = jev.ask(state, quality_questions(!target.trim().is_empty())).await?;
+    let mut q = PageQuality {
+        page: file.to_string(),
+        answers: if target.trim().is_empty() { None } else { score(&a, "answers") },
+        substance: score(&a, "substance").unwrap_or(3.0),
+        on_topic: score(&a, "on_topic").unwrap_or(3.0),
+        unsourced: noul(&a, "unsourced").unwrap_or(0.0),
+        leftover: noul(&a, "leftover").unwrap_or(0.0),
+        ..Default::default()
+    };
+    q.reasons = quality_reasons(&q);
+    Ok(Some(q))
+}
+
+/// 分数允许的波动：同一个页面再问一次，分数也会有一点上下
+const SCORE_SLACK: f64 = 0.3;
+const RATE_SLACK: f64 = 0.1;
+
+/// 改动后和改动前比：(这次改出来或变差了的问题, 原来就有、没变差的问题)。
+fn compare(new: &PageQuality, old: &PageQuality) -> (Vec<String>, Vec<String>) {
+    let old_reasons = quality_reasons(old);
+    let was = |prefix: &str| old_reasons.iter().any(|r| r.starts_with(prefix));
+    let mut worse = Vec::new();
+    let mut kept = Vec::new();
+    for r in &new.reasons {
+        let prefix = r.split('（').next().unwrap_or(r);
+        let held = was(prefix)
+            && match prefix {
+                p if p.starts_with("没把目标") => new.answers.unwrap_or(3.0) >= old.answers.unwrap_or(3.0) - SCORE_SLACK,
+                p if p.starts_with("空话多") => new.substance >= old.substance - SCORE_SLACK,
+                p if p.starts_with("和站点定位") => new.on_topic >= old.on_topic - SCORE_SLACK,
+                p if p.starts_with("有具体数字") => new.unsourced <= old.unsourced + RATE_SLACK,
+                p if p.starts_with("正文里像是") => new.leftover <= old.leftover + RATE_SLACK,
+                _ => false,
+            };
+        if held { kept.push(r.clone()) } else { worse.push(r.clone()) }
+    }
+    (worse, kept)
 }
 
 /// 质检没过的页面合成一句判定（空＝全部通过）。
@@ -265,10 +310,29 @@ pub async fn rank_opportunities(jev: &Jev, site: &Site, site_dir: &Path, opps: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_problems_that_did_not_get_worse_do_not_block() {
+        let mk = |unsourced: f64, substance: f64| {
+            let mut q = PageQuality { page: "a.md".into(), answers: None, substance, on_topic: 3.0, unsourced, leftover: 0.0, ..Default::default() };
+            q.reasons = quality_reasons(&q);
+            q
+        };
+        // 改动前 89% 没来源，改完 75%：原来就有的问题，没变差，不拦
+        let (worse, kept) = compare(&mk(0.75, 2.5), &mk(0.89, 2.5));
+        assert!(worse.is_empty() && kept.len() == 1, "{worse:?} {kept:?}");
+        // 改动前没问题、改完才有：拦
+        let (worse, _) = compare(&mk(0.8, 2.5), &mk(0.3, 2.5));
+        assert_eq!(worse.len(), 1);
+        // 原来就空话多，改完更空了：拦
+        let (worse, _) = compare(&mk(0.1, 0.8), &mk(0.1, 1.4));
+        assert_eq!(worse.len(), 1);
+    }
+
     use crate::site_ops::Opportunity;
 
     fn page(answers: Option<f64>, substance: f64, on_topic: f64, unsourced: f64, leftover: f64) -> PageQuality {
-        let mut q = PageQuality { page: "src/content/a.md".into(), answers, substance, on_topic, unsourced, leftover, reasons: vec![] };
+        let mut q = PageQuality { page: "src/content/a.md".into(), answers, substance, on_topic, unsourced, leftover, reasons: vec![], inherited: vec![] };
         q.reasons = quality_reasons(&q);
         q
     }

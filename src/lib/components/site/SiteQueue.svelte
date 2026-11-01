@@ -344,7 +344,7 @@
         <!-- 判断模型（Jev）的内容质检：每页一行分数，没过的标出原因 -->
         <div class="quality">
           {#each i.quality as q, qi (`${q.page}:${qi}`)}
-            <p class:bad={q.reasons.length > 0}><span class="qp">{q.page.split('/').pop()}</span>{#if q.answers != null}<span>回答问题 {q.answers.toFixed(1)}/3</span>{/if}<span>信息量 {q.substance.toFixed(1)}/3</span><span>相关 {q.on_topic.toFixed(1)}/3</span>{#if q.unsourced >= 0.5}<span>数据来源存疑 {Math.round(q.unsourced * 100)}%</span>{/if}{#if q.leftover >= 0.5}<span>遗留说明 {Math.round(q.leftover * 100)}%</span>{/if}</p>
+            <p class:bad={q.reasons.length > 0}><span class="qp">{q.page.split('/').pop()}</span>{#if q.answers != null}<span>回答问题 {q.answers.toFixed(1)}/3</span>{/if}<span>信息量 {q.substance.toFixed(1)}/3</span><span>相关 {q.on_topic.toFixed(1)}/3</span>{#if q.unsourced >= 0.5}<span>数据来源存疑 {Math.round(q.unsourced * 100)}%</span>{/if}{#if q.leftover >= 0.5}<span>遗留说明 {Math.round(q.leftover * 100)}%</span>{/if}{#if q.inherited?.length}<span class="inh" data-tip={`这些问题改动前的页面就有，这次没有变差，所以不拦：${q.inherited.join('；')}`}>原来就有的问题不算</span>{/if}</p>
           {/each}
         </div>
       {/if}
@@ -494,6 +494,7 @@
   .quality p { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11.5px; color: var(--dim); }
   .quality p.bad { color: var(--su-warn-ink); }
   .quality .qp { font-weight: 600; color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .quality .inh { color: var(--faint); text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
   .acts { gap: 6px; margin-top: 4px; }
   .foot { font-size: 11.5px; color: var(--faint); }
   .diff-modal { width: min(900px, calc(100vw - 32px)); }
