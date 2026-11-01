@@ -136,7 +136,7 @@
         </li>
       {/each}
     </ol>
-    {#if items.length > LIMIT}<button class="all" onclick={() => (all = !all)}>{all ? '收起' : `显示全部 ${items.length} 条`}</button>{/if}
+    {#if items.length > LIMIT}<button class="all" onclick={() => (all = !all)}>{all ? '收起' : `显示全部 ${items.length} 条`}<svg class="chev" class:open={all} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
   {/if}
 </div>
 <DiffModal />
@@ -186,7 +186,9 @@
   .sum :global(a) { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
   .more-t { margin-top: 4px; font-size: 12px; }
   .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--accent-soft); font-size: 11px; color: var(--dim); }
-  .all { display: block; width: calc(100% + 36px); margin: 0 -18px -16px; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); border-radius: 0 0 12px 12px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .all { display: flex; align-items: center; justify-content: center; gap: 5px; width: calc(100% + 36px); margin: 0 -18px -16px; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); border-radius: 0 0 12px 12px; background: none; font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .all .chev { transition: transform .15s; }
+  .all .chev.open { transform: rotate(180deg); }
   .all:hover { color: var(--text); background: #fcfbf9; }
   .rows:last-child { margin-bottom: -16px; }
   .rows:last-child > li:last-child .row { border-radius: 0 0 12px 12px; }

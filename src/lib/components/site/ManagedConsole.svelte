@@ -460,7 +460,7 @@
                 {/if}
               {/each}
               {#if ordered.length > SITE_LIMIT && !gq}
-                <button class="li gs-all" onclick={() => toggleShowAll(g.id)}>{showAll.has(g.id) ? '收起' : `显示全部 ${ordered.length} 个站点`}</button>
+                <button class="li gs-all" onclick={() => toggleShowAll(g.id)}>{showAll.has(g.id) ? '收起' : `显示全部 ${ordered.length} 个站点`}<svg class="chev" class:open={showAll.has(g.id)} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
               {/if}
             </div>
           {:else}<p class="hint">这个方案还没有站点。<button class="link-btn" onclick={() => editGroup(g)}>选择站点</button></p>{/if}
@@ -582,8 +582,10 @@
   /* 站点的「…」菜单：平时隐藏，悬停这一行或打开时才出现 */
   .gs-more { opacity: 0; transition: opacity .12s; }
   .gs:hover .gs-more, .gs-more:focus-within, .gs-more.on { opacity: 1; }
-  .gs-all { display: block; width: 100%; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
+  .gs-all { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
   .gs-all:hover { color: var(--text); background: #fcfbf9; }
+  .gs-all .chev { transition: transform .15s; }
+  .gs-all .chev.open { transform: rotate(180deg); }
   .grp.shut > h3 { margin-bottom: 0; }
   /* 方案标题整行（名称、标签、概况、空白处）都能点开收起，箭头在右边 */
   .gq-bar { display: flex; align-items: center; gap: 12px; margin: 2px 0 10px; }
