@@ -2133,8 +2133,18 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
             crate::site_git::git_commit_ok(&main, &["commit", "-qm", &title]).await?;
             crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
             let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
+            push_after(site, &main, job).await;
             Ok(crate::site_git::head_sha(&main).await)
         }
+    }
+}
+
+/// 本地主分支合并 / 回退后推到 GitHub（有 origin 才推）；推不上去只在作业里记一行，不耽误上线
+async fn push_after(site: &Site, main: &Path, job: &Job) {
+    match crate::site_git::push_origin(main, &site.default_branch).await {
+        Ok(true) => job.line("已推送到 GitHub"),
+        Ok(false) => {}
+        Err(e) => job.line(&format!("推送到 GitHub 没成功（不影响上线，可以之后自己推）：{}", e.lines().last().unwrap_or(&e))),
     }
 }
 
@@ -2473,6 +2483,7 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再回滚", site.default_branch));
             }
             crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await?;
+            push_after(site, &main, job).await;
             crate::site_git::head_sha(&main).await
         }
     };

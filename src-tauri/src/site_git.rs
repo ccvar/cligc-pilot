@@ -12,6 +12,17 @@ pub struct GitOut {
     pub stderr: String,
 }
 
+/// 本地来源的站点：主分支合并 / 回退后推到 origin（一般是 GitHub 私库），让远端和本地保持一致。
+/// 只推快进，不强推：远端有本地没有的提交就推不上去、原样报错；没有 origin 返回 Ok(false)。
+/// SSH 远端不弹密码框（BatchMode），没配好就直接失败。
+pub async fn push_origin(main: &Path, branch: &str) -> Result<bool, String> {
+    if git(main, &["remote", "get-url", "origin"], "").await.map(|o| o.ok).unwrap_or(false) {
+        git_ok(main, &["-c", "core.sshCommand=ssh -o BatchMode=yes", "push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")], "").await.map(|_| true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// 跑一条 git 命令。`token` 非空时注入 GitHub 凭据助手（见 github::git_env），并把输出里的 Token 抹掉。
 pub async fn git(dir: &Path, args: &[&str], token: &str) -> Result<GitOut, String> {
     let mut cmd = tokio::process::Command::new("git");
@@ -266,6 +277,25 @@ pub fn code_dir(site: &crate::sites::Site, gh: Option<&crate::conns::Connection>
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn push_origin_fast_forwards_and_skips_without_remote() {
+        let t = tempfile::tempdir().unwrap();
+        let (repo, bare) = (t.path().join("repo"), t.path().join("bare.git"));
+        let run = |d: &Path, a: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(d).args(a).output().unwrap().status.success(), "{a:?}");
+        std::fs::create_dir_all(&repo).unwrap();
+        run(&repo, &["init", "-q", "-b", "main"]);
+        run(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a"]);
+        assert!(!push_origin(&repo, "main").await.unwrap(), "没有 origin 不推");
+        run(t.path(), &["init", "-q", "--bare", "bare.git"]);
+        run(&repo, &["remote", "add", "origin", &bare.to_string_lossy()]);
+        assert!(push_origin(&repo, "main").await.unwrap());
+        run(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "b"]);
+        assert!(push_origin(&repo, "main").await.unwrap());
+        let head = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+        let remote = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse", "main"]).output().unwrap().stdout).unwrap();
+        assert_eq!(head, remote);
+    }
+
     use super::*;
 
     #[tokio::test]
