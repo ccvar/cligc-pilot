@@ -433,9 +433,9 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         if added.starts_with("++") || file.starts_with(".pilot/") {
             continue;
         }
-        // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上
+        // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上；<script> 里的文字（结构化数据的描述）也不会
         let a = added.trim_start();
-        if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) {
+        if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) || a.to_ascii_lowercase().contains("<script") {
             continue;
         }
         // Markdown 正文：去掉记号后的整行（表格行渲染后格子之间隔开了，不拿）；frontmatter 的「key: "…"」照旧取引号里的
@@ -691,6 +691,15 @@ mod tests {
         assert!(page_has(&page, "TWEX 没有交易平台业务"), "简体写的、线上是繁体");
         assert!(!page_has(&page, "TWEX 没有交易所的牌照和"), "汉字大半不同就不算");
         assert!(!page_has(&page, "OKX 没有交易平台业务"), "非汉字要一样");
+    }
+
+    #[test]
+    fn json_ld_script_text_is_not_a_snippet() {
+        // dexask 修 96 个页面的结构化数据：改的是 <script type="application/ld+json"> 里的 JSON，描述文字不显示在页面上
+        let d = "+++ b/legacy/site/en/buy/usdc/turkey.html\n+  <script type=\"application/ld+json\">{\"@type\":\"Article\",\"description\":\"If TRY-to-USDC uses another asset first, check the quote before sending\",\"datePublished\":\"2026-09-21\"}</script>\n+<p>Turkey residents can buy USDC with TRY</p>\n";
+        let s = snippets_from_diff(d);
+        assert!(!s.iter().any(|x| x.contains("TRY-to-USDC")), "{s:?}");
+        assert!(s.iter().any(|x| x.contains("Turkey residents can buy USDC")), "{s:?}");
     }
 
     #[test]
