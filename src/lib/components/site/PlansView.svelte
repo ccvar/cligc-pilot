@@ -19,7 +19,7 @@
   let { sites, plans }: { sites: ManagedSite[]; plans: SitePlan[] } = $props();
 
   const ST: Record<string, { l: string; c: string }> = {
-    '': { l: '没进队列', c: 'line' }, open: { l: '排队中', c: '' }, working: { l: '处理中', c: 'run' }, proposed: { l: '待你确认', c: 'warn' },
+    '': { l: '没进队列', c: 'line' }, expired: { l: '已过期', c: 'line' }, open: { l: '排队中', c: '' }, working: { l: '处理中', c: 'run' }, proposed: { l: '待你确认', c: 'warn' },
     merged: { l: '已合并', c: 'run' }, deployed: { l: '已上线', c: 'ok' }, attention: { l: '上线待核对', c: 'warn' },
     dismissed: { l: '已驳回', c: 'line' }, rolled_back: { l: '已回滚', c: 'err' }, failed: { l: '失败', c: 'err' },
   };

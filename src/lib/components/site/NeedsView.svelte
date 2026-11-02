@@ -46,7 +46,8 @@
     { k: 'failed', l: '失败了', c: 'err', tip: 'AI 没改成或检查没通过。可以重新检查、让 AI 重新改，或驳回。' },
     { k: 'attention', l: '上线后待核对', c: 'warn', tip: '已经上线、网站正常，但线上验收有几项要你看一眼。没问题就点「没问题」，有问题可以回滚。' },
   ];
-  const why = (i: OpsItem) => (i.status === 'deployed' ? i.attention : i.verdict && i.verdict !== 'auto' ? i.verdict : i.note) || '';
+  // 失败的显示失败原因（note）；verdict 是上线前判定留下的，失败后还在，不能拿来当原因
+  const why = (i: OpsItem) => (i.status === 'deployed' ? i.attention : i.status === 'failed' ? i.note : i.verdict && i.verdict !== 'auto' ? i.verdict : i.note) || '';
 
   const bySite = $derived.by(() => {
     const m = new Map<string, { id: string; name: string; n: number; bad: boolean }>();
@@ -174,7 +175,7 @@
                             {#if conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} data-tip="先试着用 git 把这一版直接接到最新的主分支上（不花钱）；接不上再让 AI 照着这一版在最新代码上重做。好了照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
                             {:else}<button class="btn tiny primary" onclick={() => acceptItem(site, i)}><Icon name={i.branch ? 'rocket' : 'check'} size={11} />{i.branch ? '上线' : '标记已处理'}</button>{/if}
                           {:else if i.status === 'failed'}
-                            {#if i.branch && i.head_sha}<button class="btn tiny primary" onclick={() => recheckItem(site.id, i)} data-tip="改动还在分支上：重新构建、检查，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
+                            {#if i.branch && i.head_sha && !i.merge_sha}<button class="btn tiny primary" onclick={() => recheckItem(site.id, i)} data-tip="改动还在分支上：重新构建、检查，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
                             {@const mt = modelTarget(siteModels[site.id] ?? '')}
                             <span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, site.id, i)} data-tip={`用 ${mt.name} 重新改一遍（这个站点默认的模型）\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} 重新改</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, site.id, i)} aria-label="换个模型重新改" data-tip="换个模型重新改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>
                             {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />看改动</button>{/if}

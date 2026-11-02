@@ -205,6 +205,10 @@
     <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>
   {/if}
 
+  <!-- 站点正在跑别的作业时下面的按钮都是灰的：说一声为什么、什么时候能点（只说一次，不每条重复） -->
+  {#if busy && filter === 'todo' && (needItems.length || openItems.length)}
+    <div class="qnote"><span class="spin"></span><span>这个站点正在跑「{job?.title || '另一项作业'}」，同一个站点一次只跑一项，跑完下面的按钮就能点了</span></div>
+  {/if}
   <div class="secs" bind:this={listEl}>
   {#if filter === 'todo'}
     {#if !needItems.length && !runningItems.length && !openItems.length}
@@ -348,7 +352,7 @@
           {/each}
         </div>
       {/if}
-      {#if i.note && !(conflicts.has(i.id) && i.status === 'proposed' && i.note.includes('冲突'))}<p class="verdict">{i.note}</p>{#if i.status === 'failed' || i.status === 'merged'}<OpsErrorHint text={i.note} siteId={site.id} />{/if}{/if}
+      {#if i.note && !(conflicts.has(i.id) && i.status === 'proposed' && i.note.includes('冲突'))}<p class="verdict" data-tip={i.retry_note ? `上次的失败原因：${i.retry_note}` : null}>{i.note}</p>{#if i.status === 'failed' || i.status === 'merged'}<OpsErrorHint text={i.note} siteId={site.id} />{/if}{/if}
       {#if i.status === 'deployed' && i.attention}<p class="verdict">上线了，网站正常；线上验收有几项要你核对：{i.attention}</p>{/if}
       {#if i.checks?.length}
         {@const bad = i.checks.filter((c) => !c.ok).length}
@@ -362,11 +366,11 @@
           </ul>
         {/if}
       {/if}
-      {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '正面' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
+      {#if i.review}<p class="hint">效果复盘：<b class={i.review === 'positive' ? 'up' : i.review === 'negative' ? 'down' : ''}>{i.review === 'positive' ? '有效' : i.review === 'negative' ? '负面' : '持平'}</b> · {i.review_note}</p>{/if}
       <div class="row wrap acts">
         {#if i.status === 'proposed' && conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} disabled={busy} data-tip="先试着用 git 把这一版直接接到最新的主分支上（不花钱）；接不上再让 AI 照着这一版在最新代码上重做。好了照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
         {:else if i.status === 'proposed'}<button class="btn tiny primary" onclick={() => acceptItem(site, i)} disabled={busy}><Icon name={i.branch ? 'merge' : 'check'} size={11} />{i.branch ? (site.source === 'github' ? '合并并上线' : '合并到主分支并上线') : '标记已处理'}</button>{/if}
-        {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto' && !conflicts.has(i.id))) && i.branch && i.head_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
+        {#if (i.status === 'failed' || (i.status === 'proposed' && i.verdict !== 'auto' && !conflicts.has(i.id))) && i.branch && i.head_sha && !i.merge_sha}<button class="btn tiny" class:primary={i.status === 'failed'} onclick={() => recheckItem(site.id, i)} disabled={busy} data-tip="AI 的改动还在分支上：重新构建、检查，通过后按方案规则上线或留给你确认，不再让 AI 改一遍"><Icon name="refresh" size={11} />重新检查</button>{/if}
         {#if canWork(i)}<span class="split"><button class="btn tiny" onclick={() => workItem(site.id, i)} oncontextmenu={(e) => openModelMenu(e, i)} disabled={busy} data-tip={`用 ${mt.name} ${i.status === 'failed' && i.head_sha ? '重新改一遍' : '改'}：${modelNote || `这个站点默认的模型${siteModel ? '' : '（还没设好，会提示你去设）'}`}\n右边 ▾ 可以换个模型，只用这一次`}>{#if mt.icon}<span class="bi-w"><BrainIcon brain={mt.icon} size={12} /></span>{:else}<Icon name="sparkles" size={11} />{/if}用 {mt.name} {i.status === 'failed' && i.head_sha ? '重新改' : '改'}</button><button class="btn tiny caret" onclick={(e) => openModelMenu(e, i)} disabled={busy} aria-label="换个模型改" data-tip="换个模型改（只用这一次）"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></span>{/if}
         {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />查看差异</button>{/if}
         {#if i.conv_id}<button class="btn tiny" onclick={() => openConv(i.conv_id)}><Icon name="chat" size={11} />打开会话</button>{/if}
@@ -377,8 +381,6 @@
         {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
         {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
       </div>
-      <!-- 站点正在跑别的作业时这些按钮都是灰的：说一声为什么、什么时候能点 -->
-      {#if busy && ['proposed', 'failed', 'open'].includes(i.status)}<p class="hint busy-hint"><span class="spin"></span>这个站点正在跑「{job?.title || '另一项作业'}」，同一个站点一次只跑一项，跑完这些按钮就能点了</p>{/if}
       {/if}
     </div>
 {/snippet}
@@ -395,7 +397,6 @@
 {#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m, e); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
-  .busy-hint { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; }
   .checks { list-style: none; margin: 2px 0 4px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
   .checks li { line-height: 1.55; }
   .checks .ck-i { display: inline-block; width: 16px; color: var(--ok); }

@@ -197,13 +197,14 @@ export async function deploySite(id: string, background = false) {
 /** 已经提交、还没上线的站点（Pilot 直接部署、上线过、文件夹干净、最新提交不是上次上线的那一版） */
 export type PendingDeploy = { id: string; name: string; subject: string };
 /** 「全部上线」这一批的进度：sites 按顺序，at＝正在上线第几个（等于 sites.length 表示做完了），failed＝没成功的站点名 */
-export type BulkDeploy = { sites: [string, string][]; at: number; failed: string[] };
+export type BulkDeploy = { sites: [string, string][]; at: number; failed: string[]; finished_at: number };
 export const pendingDeploys = $state<{ list: PendingDeploy[]; bulk: BulkDeploy | null }>({ list: [], bulk: null });
 let bulkTimer: ReturnType<typeof setTimeout> | undefined;
 export async function loadPendingDeploys() {
   try {
     const b = await invoke<BulkDeploy>('deploy_many_status');
-    pendingDeploys.bulk = b.sites.length ? b : null;
+    // 做完超过 10 分钟的结果不再显示
+    pendingDeploys.bulk = b.sites.length && !(b.at >= b.sites.length && b.finished_at && Date.now() / 1000 - b.finished_at > 600) ? b : null;
     pendingDeploys.list = await invoke<PendingDeploy[]>('undeployed_sites');
   } catch { /* 读不到就不显示按钮 */ }
   // 这一批还在跑：几秒后再查一次进度；跑完了停
