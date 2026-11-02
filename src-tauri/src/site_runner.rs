@@ -3348,17 +3348,44 @@ fn recover_interrupted(ctx: &Ctx) {
     let st = ctx.state();
     for s in st.sites.list() {
         let dir = st.sites.data_dir(&s.id);
-        let stuck: Vec<String> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "working").map(|i| i.id).collect();
-        for id in &stuck {
-            let _ = site_ops::update_item(&dir, id, now(), |i| {
-                if i.status == "working" {
-                    i.status = "failed".into();
-                    i.note = "上次 Pilot 退出或重启时这条还在执行，被中断了。分支上已经有改动的可以点「重新检查」接着用，没有就让 AI 再改一遍。".into();
-                }
-            });
+        let stuck: Vec<site_ops::QueueItem> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "working").collect();
+        for it in &stuck {
+            // AI 在分支上提交过的话，记下最新提交，「重新检查」就能接着用
+            let wt = crate::sites::build_root(&dir).join("work").join(&it.id);
+            let head = branch_head(&wt, &it.base_sha);
+            let _ = site_ops::update_item(&dir, &it.id, now(), |i| settle_interrupted(i, head.clone()));
         }
         if !stuck.is_empty() {
             ctx.emit_queue(&s.id);
+        }
+    }
+}
+
+/// 被中断那条的分支上，比开始时多出提交的话返回最新提交（没有工作区、没提交过都是 None）
+fn branch_head(wt: &Path, base: &str) -> Option<String> {
+    if base.is_empty() || !wt.join(".git").exists() {
+        return None;
+    }
+    let out = std::process::Command::new("git").arg("-C").arg(wt).args(["rev-parse", "HEAD"]).output().ok()?;
+    let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !head.is_empty() && !head.starts_with(base)).then_some(head)
+}
+
+/// 上次退出 / 重启时还在执行的那条：AI 已经提交了改动 → 失败，点「重新检查」接着用；
+/// 还没提交（改到一半或还没开始）→ 放回排队，托管方案下一轮自动重做，不用你处理
+fn settle_interrupted(i: &mut site_ops::QueueItem, head: Option<String>) {
+    if i.status != "working" {
+        return;
+    }
+    match head {
+        Some(h) => {
+            i.status = "failed".into();
+            i.head_sha = h;
+            i.note = "上次 Pilot 退出或重启时这条还在执行，被中断了。AI 已经把改动提交到分支上：点「重新检查」接着用，不用再改一遍。".into();
+        }
+        None => {
+            i.status = "open".into();
+            i.note = "上次 Pilot 退出或重启时这条正在改，被中断了，AI 还没提交改动：已放回排队，下一轮自动重做。".into();
         }
     }
 }
@@ -3455,6 +3482,19 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interrupted_items_without_commits_go_back_to_the_queue() {
+        let mut a = site_ops::QueueItem { status: "working".into(), ..Default::default() };
+        settle_interrupted(&mut a, None);
+        assert_eq!(a.status, "open");
+        let mut b = site_ops::QueueItem { status: "working".into(), ..Default::default() };
+        settle_interrupted(&mut b, Some("abc123".into()));
+        assert_eq!((b.status.as_str(), b.head_sha.as_str()), ("failed", "abc123"));
+        let mut c = site_ops::QueueItem { status: "deployed".into(), ..Default::default() };
+        settle_interrupted(&mut c, None);
+        assert_eq!(c.status, "deployed");
+    }
+
     #[test]
     fn persistent_model_failures_are_told_apart_from_transient_ones() {
         use super::persistent_failure as p;
