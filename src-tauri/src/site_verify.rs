@@ -74,6 +74,25 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
     Ok(Fetched { status, body: body.chars().take(2_000_000).collect(), final_url })
 }
 
+/// 「新内容已生效」没过的那条，过后用现在的对照规则再查一次：这些页面里找得到这次加的任何一段文字就算生效。
+/// 页面都打不开时返回 None（查不了，不下结论）。
+pub async fn snippets_live(urls: &[String], snippets: &[String]) -> Option<bool> {
+    let snippets: Vec<String> = snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| strip_md(x.trim())).filter(|x| x.chars().count() >= 4 && !x.starts_with('|')).collect();
+    if snippets.is_empty() {
+        return None;
+    }
+    let client = client();
+    let mut text = String::new();
+    for u in urls.iter().take(MAX_PAGES) {
+        if let Ok(f) = fetch(&client, u).await {
+            if (200..300).contains(&f.status) {
+                text.push_str(&format!("{}\n{}\n{}\n", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body)));
+            }
+        }
+    }
+    (!text.is_empty()).then(|| snippets.iter().any(|s| page_has(&text, s)))
+}
+
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(20))

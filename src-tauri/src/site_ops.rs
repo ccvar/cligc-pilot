@@ -417,13 +417,17 @@ fn recent_years_in(s: &str) -> Vec<i32> {
     out
 }
 
-/// 托管方案里失败的、原因和这条任务本身无关（Pilot 中途退出、站点还没建 git 仓库、模型临时用不了）：
-/// 各放回排队一次，按方案节奏自动重做，不用你手动点。改出问题、检查没过这类不重试，照样留给你。
-pub fn requeue_retryable(site_dir: &Path, now: u64) -> Result<Vec<String>, String> {
-    const TRANSIENT: [&str; 12] = ["上次 Pilot 退出或重启时", "不是 git 仓库", "余额不足", "额度", "credit", "rate limit", "overloaded", "超时", "timed out", "网络", "连接", "529"];
+/// 托管方案里失败的、原因和这条任务本身无关的放回排队，按方案节奏自动重做，不用你手动点：
+/// - 站点的 git 仓库没建好（不是仓库、一次没提交）：等仓库好了（repo_ok，有这类失败时才去查）就放回去，不限次数；
+/// - Pilot 中途退出、模型临时用不了：放回去一次，再失败才留给你。
+/// 改出问题、检查没过这类不重试，照样留给你。
+pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) -> Result<Vec<String>, String> {
+    const REPO: [&str; 3] = ["不是 git 仓库", "还没有任何提交", "unknown revision"];
+    const TRANSIENT: [&str; 11] = ["上次 Pilot 退出或重启时", "余额不足", "额度", "credit", "rate limit", "overloaded", "超时", "timed out", "网络", "连接", "529"];
+    let has = |note: &str, ks: &[&str]| ks.iter().any(|k| note.to_lowercase().contains(&k.to_lowercase()));
     let ids: Vec<String> = load_queue(site_dir)
         .into_iter()
-        .filter(|i| i.status == "failed" && !i.auto_retried && i.head_sha.is_empty() && TRANSIENT.iter().any(|k| i.note.to_lowercase().contains(&k.to_lowercase())))
+        .filter(|i| i.status == "failed" && i.head_sha.is_empty() && if has(&i.note, &REPO) { repo_ok() } else { !i.auto_retried && has(&i.note, &TRANSIENT) })
         .map(|i| i.id)
         .collect();
     for id in &ids {
@@ -660,6 +664,9 @@ pub struct QueueItem {
     /// 托管方案自动重试过一次（中断、环境问题这类失败放回排队过）：再失败就留给你
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_retried: bool,
+    /// 「新内容已生效」没过的，后台已经用新的对照规则复查过一次（不管结果，不再反复查）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub snippet_rechecked: bool,
     /// 上线后复查到第几次：0＝1 小时后，1＝24 小时后，2＝查完了。
     #[serde(default)]
     pub watch_stage: u8,
@@ -1263,13 +1270,18 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let item = |id: &str, note: &str, head: &str| QueueItem { id: id.into(), status: "failed".into(), note: note.into(), head_sha: head.into(), ..Default::default() };
         save_queue(t.path(), &[item("a", "上次 Pilot 退出或重启时这条还在执行，被中断了。", ""), item("b", "站点文件夹不是 git 仓库：请先 git init", ""), item("c", "构建没通过：npm run build 报错", ""), item("d", "上次 Pilot 退出或重启时…", "abc")]).unwrap();
-        assert_eq!(requeue_retryable(t.path(), 1).unwrap(), vec!["a", "b"]);
+        // 仓库还没好：git 那条不动
+        assert_eq!(requeue_retryable(t.path(), 1, || false).unwrap(), vec!["a"]);
+        assert_eq!(requeue_retryable(t.path(), 1, || true).unwrap(), vec!["b"]);
         let q = load_queue(t.path());
         assert_eq!(q.iter().map(|i| i.status.as_str()).collect::<Vec<_>>(), vec!["open", "open", "failed", "failed"]);
         assert!(q[0].retry_note.contains("中断"));
         // 再失败就不重试了
         update_item(t.path(), "a", 2, |i| { i.status = "failed".into(); i.note = "上次 Pilot 退出或重启时…".into(); }).unwrap();
-        assert!(requeue_retryable(t.path(), 3).unwrap().is_empty());
+        assert!(requeue_retryable(t.path(), 3, || true).unwrap().is_empty());
+        // 仓库问题不限次数：仓库好了就放回去
+        update_item(t.path(), "b", 4, |i| { i.status = "failed".into(); i.note = "站点文件夹是 git 仓库但还没有任何提交".into(); }).unwrap();
+        assert_eq!(requeue_retryable(t.path(), 5, || true).unwrap(), vec!["b"]);
     }
 
     #[test]

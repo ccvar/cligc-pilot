@@ -636,7 +636,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     let rules = group_rules(ctx, site);
     // 托管方案：失败原因和任务本身无关的（中断、没建 git 仓库、模型临时用不了）放回排队重做一次，不用你手动点
     if rules.is_some() {
-        if let Ok(ids) = site_ops::requeue_retryable(&site_dir, now()) {
+        if let Ok(ids) = site_ops::requeue_retryable(&site_dir, now(), || repo_ready(site)) {
             if !ids.is_empty() {
                 job.line(&format!("{} 条上次因为中断、环境或模型问题失败的，放回排队重做一次", ids.len()));
             }
@@ -1334,6 +1334,15 @@ async fn code_base(ctx: &Ctx, site: &Site, job: &Job) -> Result<CodeBase, String
             let main = crate::site_git::code_dir(site, None)?;
             if !main.join(".git").exists() {
                 return Err("站点文件夹不是 git 仓库：第 3、4 档需要用分支隔离改动，请先 git init 并提交一次".into());
+            }
+            // git init 了但一次都没提交（或默认分支名对不上）：分支没法从它切出来，先说清楚，别让 git 的原话冒到卡片上
+            if crate::site_git::git_ok(&main, &["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", site.default_branch)], "").await.is_err() {
+                let any = crate::site_git::git_ok(&main, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], "").await.is_ok();
+                return Err(if any {
+                    format!("站点文件夹的 git 仓库里没有「{}」分支：在站点设置里把默认分支改成仓库实际用的分支名", site.default_branch)
+                } else {
+                    "站点文件夹是 git 仓库但还没有任何提交：第 3、4 档需要用分支隔离改动，请先提交一次".into()
+                });
             }
             Ok(CodeBase { main, token: String::new(), base_ref: site.default_branch.clone() })
         }
@@ -3385,6 +3394,44 @@ fn recover_interrupted(ctx: &Ctx) {
     }
 }
 
+/// 上线后验收只差「新内容已生效」、挂着「上线后待核对」的：用现在的对照规则再查一次线上页面（每条只查一次）。
+/// 找到了就去掉这一条待核对，不用你点「没问题」——早先对照文字带 Markdown 记号、站点转繁体时会误报。
+const SNIPPET_MISS: &str = "这次加的内容在验收的页面里没找到";
+async fn recheck_snippets(ctx: &Ctx) {
+    let st = ctx.state();
+    for site in st.sites.list() {
+        let dir = st.sites.data_dir(&site.id);
+        let due: Vec<QueueItem> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "deployed" && !i.snippet_rechecked && i.attention.contains(SNIPPET_MISS) && i.deployed_at + 14 * 86400 > now()).collect();
+        for it in due {
+            let urls: Vec<String> = it.pages.iter().chain(&it.new_pages).cloned().collect();
+            let live = crate::site_verify::snippets_live(&urls, &it.snippets).await;
+            let _ = site_ops::update_item(&dir, &it.id, now(), |i| {
+                i.snippet_rechecked = true;
+                if live == Some(true) {
+                    // 待核对可能是几条用「；」连起来的：只去掉这一条，别的照样留着
+                    i.attention = i.attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
+                    for c in i.checks.iter_mut().filter(|c| c.label == "新内容已生效") {
+                        c.ok = true;
+                        c.detail.clear();
+                    }
+                }
+            });
+            if live == Some(true) {
+                ctx.emit_queue(&site.id);
+            }
+        }
+    }
+}
+
+/// 站点的代码能不能切分支：GitHub 来源的总能；本地文件夹要是 git 仓库、默认分支上有提交
+fn repo_ready(site: &Site) -> bool {
+    if site.source != "local" {
+        return true;
+    }
+    let Ok(dir) = crate::site_git::code_dir(site, None) else { return false };
+    std::process::Command::new("git").arg("-C").arg(&dir).args(["rev-parse", "--verify", "--quiet", &format!("{}^{{commit}}", site.default_branch)]).output().is_ok_and(|o| o.status.success())
+}
+
 /// 被中断那条的分支上，比开始时多出提交的话返回最新提交（没有工作区、没提交过都是 None）
 fn branch_head(wt: &Path, base: &str) -> Option<String> {
     if base.is_empty() || !wt.join(".git").exists() {
@@ -3461,11 +3508,13 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             // 不在「需要你」里挂着；真正重做还是按方案节奏
             for g in mcfg.groups.iter().filter(|g| !mcfg.paused && !g.paused) {
                 for id in g.sites.iter().filter(|id| g.active_for(id) && !st.site_jobs.running(id)) {
-                    if site_ops::requeue_retryable(&st.sites.data_dir(id), now()).is_ok_and(|ids| !ids.is_empty()) {
+                    let ready = || st.sites.get(id).is_ok_and(|s| repo_ready(&s));
+                    if site_ops::requeue_retryable(&st.sites.data_dir(id), now(), ready).is_ok_and(|ids| !ids.is_empty()) {
                         ctx.emit_queue(id);
                     }
                 }
             }
+            recheck_snippets(&ctx).await;
             // 同时最多跑这么多个运营作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建
             let mut busy = st.site_jobs.running_count();
             for site in st.sites.list() {
