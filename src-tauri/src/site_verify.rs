@@ -106,7 +106,7 @@ fn path_of(url: &str) -> String {
     url.split_once("://").and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string())).unwrap_or_else(|| "/".into())
 }
 
-fn same_page(a: &str, b: &str) -> bool {
+pub(crate) fn same_page(a: &str, b: &str) -> bool {
     let norm = |u: &str| {
         let u = u.split(['?', '#']).next().unwrap_or(u).trim_end_matches('/').to_lowercase();
         u.replace("://www.", "://")

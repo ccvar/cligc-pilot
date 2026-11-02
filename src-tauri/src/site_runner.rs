@@ -1407,6 +1407,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         i.branch = branch.clone();
         i.base_sha = base_sha.clone();
         i.replay.clear();
+        // 重做是新的一轮：上一版用掉的「修一次」机会（修构建、补链接、质检重写）重新给
+        i.build_fixed = false;
+        i.links_fixed = false;
+        i.jev_rewritten = false;
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
     let mut plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
@@ -1557,6 +1561,9 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 降档记的是改动类型（meta / content…），白名单是 classify 的细分（title / meta_description…）：按对应关系过滤
     let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.iter().any(|d| kinds_of_change(d).contains(&w.as_str()))).cloned().collect();
     let out_dir = site.app_dir(&wt).join(&site.build.out_dir);
+    // 新页面不只靠 AI 在回复里自报：这次构建里有、上次上线的构建里没有的页面也算新页面，不然 AI 漏报一行，
+    // 孤立页检查、上线后的 sitemap / 站内链接检查就整个跳过了
+    let item = &derive_new_pages(ctx, site, item, &out_dir, built.is_ok(), job);
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
     let change_kind = if cls.kinds.is_empty() { "mixed".to_string() } else { cls.kinds.join(",") };
     let checks_ok = built.is_ok();
@@ -1947,6 +1954,35 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
     }
     ctx.emit_queue(&site.id);
     Ok(())
+}
+
+/// 这次构建产物里有、上次上线的构建里没有的 HTML 页面并进 item.new_pages（AI 自报的照旧保留）。最多补 10 个。
+fn derive_new_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, built: bool, job: &Job) -> QueueItem {
+    let mut item = item.clone();
+    if !built || site.domain.is_empty() {
+        return item;
+    }
+    let Ok(prev) = crate::syndicate::built_out(&ctx.state(), site) else { return item };
+    if prev == out_dir || !prev.join("index.html").is_file() || !out_dir.join("index.html").is_file() {
+        return item;
+    }
+    let old: HashSet<String> = crate::site_make::real_pages(&prev).iter().map(|(f, _)| crate::site_make::page_url(&prev, f)).collect();
+    let fresh: Vec<String> = crate::site_make::real_pages(out_dir)
+        .iter()
+        .map(|(f, _)| crate::site_make::page_url(out_dir, f))
+        .filter(|p| !old.contains(p))
+        .map(|p| format!("https://{}{p}", site.domain))
+        .filter(|u| !item.new_pages.iter().any(|n| crate::site_verify::same_page(n, u)))
+        .take(10)
+        .collect();
+    if fresh.is_empty() {
+        return item;
+    }
+    job.line(&format!("构建产物里多出 {} 个页面，按新页面验收：{}", fresh.len(), fresh.iter().map(|u| path_of(u)).collect::<Vec<_>>().join("、")));
+    item.new_pages.extend(fresh);
+    let pages = item.new_pages.clone();
+    let _ = site_ops::update_item(&ctx.site_dir(&site.id), &item.id, now(), |i| i.new_pages = pages.clone());
+    item
 }
 
 /// 改动类型（任务上的 change）对应 classify 产出的细分类型
