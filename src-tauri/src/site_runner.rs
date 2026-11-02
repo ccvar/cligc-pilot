@@ -3457,6 +3457,15 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             crate::speed::schedule(&app);
             crate::page_audit::schedule(&app);
             crate::serp::schedule(&app);
+            // 托管站点里原因和任务无关的失败（中断、没建 git 仓库、模型临时用不了）：不等下一轮，这会儿就放回排队，
+            // 不在「需要你」里挂着；真正重做还是按方案节奏
+            for g in mcfg.groups.iter().filter(|g| !mcfg.paused && !g.paused) {
+                for id in g.sites.iter().filter(|id| g.active_for(id) && !st.site_jobs.running(id)) {
+                    if site_ops::requeue_retryable(&st.sites.data_dir(id), now()).is_ok_and(|ids| !ids.is_empty()) {
+                        ctx.emit_queue(id);
+                    }
+                }
+            }
             // 同时最多跑这么多个运营作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建
             let mut busy = st.site_jobs.running_count();
             for site in st.sites.list() {
