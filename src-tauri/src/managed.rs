@@ -952,6 +952,31 @@ fn generated_by_build(file: &str, generated: &[String]) -> bool {
     !hard_forbidden(file) && generated.iter().any(|g| g == name)
 }
 
+/// frontmatter 里改了网址（slug / permalink / url / aliases / redirect_from 的旧行被删）或把页面改成不可见
+/// （draft → true、published → false、noindex → true）：返回那个键
+fn url_or_unpublish_change(removed: &[String], added: &[String]) -> Option<&'static str> {
+    fn kv(l: &str) -> Option<(&str, String)> {
+        let t = l.trim();
+        if t.starts_with('-') || t.starts_with('#') {
+            return None;
+        }
+        let (k, v) = t.split_once(':')?;
+        Some((k.trim().trim_matches(['"', '\'']), v.trim().trim_end_matches(',').trim_matches(['"', '\'']).to_ascii_lowercase()))
+    }
+    let after = |key: &str| added.iter().filter_map(|l| kv(l)).find(|(k, _)| *k == key).map(|(_, v)| v);
+    for l in removed {
+        let Some((k, v)) = kv(l) else { continue };
+        match k {
+            "slug" | "permalink" | "url" | "aliases" | "redirect_from" => return Some(match k { "slug" => "slug", "permalink" => "permalink", "url" => "url", "aliases" => "aliases", _ => "redirect_from" }),
+            "draft" if v != "true" && after("draft").as_deref() == Some("true") => return Some("draft"),
+            "published" if v != "false" && after("published").as_deref() == Some("false") => return Some("published"),
+            "noindex" if v != "true" && after("noindex").as_deref() == Some("true") => return Some("noindex"),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// 这次改动里新建的页面文件（给「允许的动作」核对：方案没允许写新页面却新建了页面就拦）
 pub fn new_page_files(diff: &str) -> Vec<String> {
     split_diff(diff).into_iter().filter(|f| f.new_file && is_page_file(&f.file)).map(|f| f.file).collect()
@@ -1328,8 +1353,9 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let (mut money_out, mut money_in): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     for f in split_diff(diff) {
         let file = &f.file;
-        // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动
-        if generated_by_build(file, rules.generated) {
+        // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动；
+        // .pilot/ 是 Pilot 自己的记录（待办、站点说明），不上线
+        if generated_by_build(file, rules.generated) || file.starts_with(".pilot/") || file.contains("/.pilot/") {
             continue;
         }
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
@@ -1373,15 +1399,10 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                 seen.push(why);
                 reasons.push(block(kind, format!("{file}：页面里{why}（「{}」），留给你确认", l.trim().chars().take(60).collect::<String>())));
             }
-            // 改网址、下架：slug / permalink / draft 这些键一变，旧网址就 404（没有跳转）或页面消失，要人判断
-            for r in &f.removed {
-                let t = r.trim();
-                if let Some(key) = t.split_once(':').map(|(k, _)| k.trim().trim_matches(['"', '\''])) {
-                    if matches!(key, "slug" | "permalink" | "url" | "draft" | "published" | "noindex" | "redirect_from" | "aliases") && !t.starts_with('-') && !t.starts_with('#') {
-                        reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
-                        break;
-                    }
-                }
+            // 改网址、下架：slug / permalink 这些键一变旧网址就 404（没有跳转）；draft / published / noindex 往「不可见」的方向改，页面就消失。
+            // 把草稿发布出去（draft: true → false、published: false → true）是正常任务，不拦
+            if let Some(key) = url_or_unpublish_change(&f.removed, &f.added) {
+                reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
             }
         }
         if is_code || template_file(file) {
@@ -1431,7 +1452,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                     }
                 }
             }
-            if f.new_file && rules.min_page > 0 && !rules.lets("thin") {
+            if f.new_file && !jsonish && rules.min_page > 0 && !rules.lets("thin") {
                 let min_page = rules.min_page;
                 let mut n = 0;
                 let mut in_frontmatter = false;
@@ -1870,6 +1891,13 @@ mod tests {
         // 改 slug / draft：旧网址失效或页面消失
         let slug = format!("diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -1 +1 @@\n-slug: okx-fees\n+slug: okx-fee-guide\n");
         assert!(v(&slug).iter().any(|r| r.contains("改了 slug")));
+        let fm = |minus: &str, plus: &str| format!("diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -1 +1 @@\n-{minus}\n+{plus}\n");
+        assert!(v(&fm("draft: false", "draft: true")).iter().any(|r| r.contains("改了 draft")), "下架要拦");
+        assert!(!v(&fm("published: false", "published: true")).iter().any(|r| r.contains("发布状态")), "把草稿发布出去是正常任务");
+        assert!(!v(&fm("draft: true", "draft: false")).iter().any(|r| r.contains("发布状态")));
+        // Pilot 自己的记录文件不算改动，也不会被当成太薄的新页面
+        let pilot = "diff --git a/.pilot/todo.json b/.pilot/todo.json\nnew file mode 100644\n--- /dev/null\n+++ b/.pilot/todo.json\n@@ -0,0 +1 @@\n+[{\"title\": \"缺截图\"}]\n";
+        assert!(managed_verdict(pilot, true, 1500, "all", &[]).is_empty());
         // .json 数据文件里的内部用语
         let j = format!("diff --git a/src/data/faq.json b/src/data/faq.json\n--- a/src/data/faq.json\n+++ b/src/data/faq.json\n@@ -1 +1 @@\n-x\n+  \"answer\": \"TODO 待补充具体步骤\"\n");
         assert!(v(&j).iter().any(|r| r.contains("内部说明")));
@@ -2080,3 +2108,4 @@ mod tests {
         assert!(parse_plan("没有计划").is_err());
     }
 }
+
