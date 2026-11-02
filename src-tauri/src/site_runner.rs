@@ -501,6 +501,10 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
                 Err(format!("超过 {} 小时还没结束，已停止；详情见作业日志和会话", MAX_JOB_DURATION.as_secs() / 3600))
             }
         };
+        // 作业超时被强停、Pilot 内部出错：任务体没机会把条目收尾，会一直停在「AI 处理中」。按启动恢复那套处理
+        if r.is_err() && settle_site_interrupted(&ctx.state().sites.data_dir(&site.id)) {
+            ctx.emit_queue(&site.id);
+        }
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
         set_model_override(&site.id, None);
         set_effort_override(&site.id, String::new());
@@ -575,6 +579,12 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     let (wanted, offtopic): (Vec<_>, Vec<_>) = opps.iter().cloned().partition(|o| !skip || o.relevance.is_none_or(|r| r >= OFFTOPIC_BELOW));
     let added = site_ops::enqueue(&site_dir, &wanted, now(), COOLDOWN)?;
     job.line(&format!("发现 {} 个机会，新入队 {} 个", opps.len(), added.len()));
+    // 两周前的计划里还没做的：过期撤掉，不然每周多出来的计划项越积越多、永远排在数据规则的机会前面
+    let cutoff = (chrono::Local::now() - chrono::Duration::days(14)).format("%G-W%V").to_string();
+    let expired = site_ops::drop_open_where(&site_dir, |i| i.opp.kind == "plan" && i.opp.key.strip_prefix("plan:").and_then(|k| k.split(':').next()).is_some_and(|w| w < cutoff.as_str()))?;
+    if expired > 0 {
+        job.line(&format!("撤掉 {expired} 条两周前的计划项（没做完就过期了，下次计划会重新安排）"));
+    }
     if !offtopic.is_empty() {
         job.line(&format!("{} 个机会的搜索词和站点定位基本无关（判断模型 Jev），没有入队", offtopic.len()));
     }
@@ -646,6 +656,17 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     }
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
+    // 计划项固定高分，数据规则找出的机会（点击率低、排名掉了…）只有几分到几十分，按分数排永远轮不到：
+    // 上一条做的是计划项，这一轮就先做一条数据机会（修复任务和你手动加的照样最优先）
+    let q = site_ops::load_queue(&site_dir);
+    let last_was_plan = q.iter().filter(|i| i.status != "open").max_by_key(|i| i.updated_at).is_some_and(|i| i.opp.kind == "plan");
+    if last_was_plan {
+        if let Some(pos) = picked.iter().position(|i| i.opp.kind != "plan" && i.opp.kind != "followup" && i.opp.source != "manual") {
+            let it = picked.remove(pos);
+            let front = picked.iter().position(|i| i.opp.kind != "followup" && i.opp.source != "manual").unwrap_or(picked.len());
+            picked.insert(front, it);
+        }
+    }
     // 同一种页面的改标题 / 描述合成一条（同批量让 AI 改）
     let ids: Vec<String> = picked.iter().map(|i| i.id.clone()).collect();
     let own = content_stems(ctx, site).await;
@@ -1396,21 +1417,28 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         plan_brief.push_str(&format!("【页面写在代码里】这个站点的页面内容（标题、描述、文章）写在这些代码文件里，需要时可以直接改，按上面的代码改动规则来：{}。新加的代码不要读环境变量、执行命令、请求外部服务。\n\n", site.ops.content_code.join("、")));
     }
     if !item.retry_note.is_empty() {
-        plan_brief.push_str(&format!("【上次的问题】这条改动上次上线后，线上验收没通过，已经回滚：{}。这次先找到原因再改；改完确认构建结果里有对应页面、网址和你写的一致。\n", item.retry_note));
+        if item.auto_retried {
+            plan_brief.push_str(&format!("【上次没做成】这条任务上次没跑完，原因和内容无关（{}），已经从头再来：工作区是干净的，按下面的要求做就行。\n", item.retry_note.lines().next().unwrap_or("")));
+        } else {
+            plan_brief.push_str(&format!("【上次的问题】这条改动上次上线后，线上验收没通过，已经回滚：{}。这次先找到原因再改；改完确认构建结果里有对应页面、网址和你写的一致。\n", item.retry_note));
+        }
     }
     let msg = format!(
-        "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
+        "【运营 · 改动】{title}\n\n{ev}\n{plan_brief}今天是 {today}（发布日期、更新日期、核对日期都按这个写）。\n\
+当前目录是 Pilot 为这个任务准备的独立工作区（分支 `{branch}`，基于默认分支 `{base}`）。请直接完成改动：\n\
 读站点要省：只看这次要改的页面、它的模板，以及准备互相链接的两三篇，不要逐篇通读；需要查询词等数据用站点数据工具查。\n\
 1. 找到这个页面对应的源文件，按上面的依据修改。改动方向：{guide}\n\
 2. 改动小而集中，{scope}；不要改网址、依赖、构建和部署配置，也不要动推荐链接 / 邀请码。\n\
    {code_rule}\n\
 3. 改完运行构建（`{build}`）{checks}，确认通过。\n\
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
-不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；需要确认的操作在这里会被自动拒绝。\n\
+费率、步骤、规则这类事实先联网核实：可以搜网页、打开官网和帮助中心（无人值守时这两样会放行），写明来源和核对日期；核实不了的不写。\n\
+不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；除联网查资料以外需要确认的操作在这里会被自动拒绝。\n\
 完成后另起一段，用两三句中文说明改了哪些文件、为什么这样改（{lang}）。然后在最后两行按这个格式写出这次涉及的公开页面（Pilot 上线后会逐个打开验收）：\n\
 新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
 改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
         title = item.opp.title,
+        today = today(),
         scope = if item.also.is_empty() { "只处理这一个机会".to_string() } else { format!("只处理上面这 {} 条", item.also.len() + 1) },
         ev = evidence_all(item),
         base = site.default_branch,
@@ -1452,6 +1480,10 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 /// 不推送、不上线；调用方随后再走一遍检查和判定。
 async fn fix_round(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, wt: &Path, msg: String, label: &str, commit: &str) -> Result<(), String> {
     let site_dir = ctx.site_dir(&site.id);
+    // 一条任务里最多再跑三轮 AI（修构建、重写、补链接）：每轮前都看额度，别一条就把本周的 token 花光
+    if let Some(why) = over_tokens(&budget(site, &site_dir, &ctx.state().convos)) {
+        return Err(format!("{label}前额度已用完：{why}"));
+    }
     let msg = format!(
         "{msg}\n改完运行构建（`{build}`）确认通过，用 `git add` 和 `git commit` 提交到当前分支。不要推送、不要开 PR、不要部署。\n\
 最后另起一段，用两三句中文说明这次改了什么（{lang}）。",
@@ -1487,6 +1519,8 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         job.line(&format!("还原了构建时自动生成的数据文件，不算这次的改动：{}", reverted.join("、")));
     }
     let head_sha = crate::site_git::head_sha(&wt).await;
+    // 先记下 AI 的提交：之后推送、开 PR 这些失败了，自动重试走「重新检查」接着用，不会把分支重置、整条重做
+    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.head_sha = head_sha.clone());
     if let Ok(out) = crate::site_git::git_ok(&wt, &["diff", "--name-only", &base_sha, &head_sha], "").await {
         let files: Vec<String> = out.lines().map(str::trim).filter(|l| !l.is_empty()).take(30).map(str::to_string).collect();
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.files = files.clone());
@@ -1520,7 +1554,8 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
         }
     }
-    let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.contains(w)).cloned().collect();
+    // 降档记的是改动类型（meta / content…），白名单是 classify 的细分（title / meta_description…）：按对应关系过滤
+    let whitelist: Vec<String> = site.ops.whitelist.iter().filter(|w| !site.ops.downgraded.iter().any(|d| kinds_of_change(d).contains(&w.as_str()))).cloned().collect();
     let out_dir = site.app_dir(&wt).join(&site.build.out_dir);
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
     let change_kind = if cls.kinds.is_empty() { "mixed".to_string() } else { cls.kinds.join(",") };
@@ -1585,6 +1620,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     };
     if level >= 5 && verdict == "auto" && !managed.allows(&item.opp.change) {
         verdict = format!("托管方案「{}」不允许「{}」这类改动，留给你确认", managed.name, crate::managed::action_label(&item.opp.change));
+    }
+    // 任务标签说是改内容，diff 里却新建了页面：按实际改动核对方案允许的动作
+    if level >= 5 && verdict == "auto" && !managed.allows("new_content") {
+        let fresh = crate::managed::new_page_files(&diff);
+        if !fresh.is_empty() {
+            verdict = format!("托管方案「{}」不允许写新页面，这次却新建了 {}，留给你确认", managed.name, fresh.join("、"));
+        }
     }
     // 站点被标记为危险网站（Google 安全浏览、Cloudflare、Quad9）：先查清原因，期间自动上线暂停
     let unsafe_by = crate::safety::load(&site_dir).summary();
@@ -1900,11 +1942,23 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
     })?
     .ok_or("这条改动不存在")?;
     if !attention.is_empty() {
+        // 修复任务等 1 小时后的复查还在才开（缓存、CDN 过一会儿多半就好了，见 watch）
         log_item(ctx, site, "attention", &item, &format!("上线了，网站正常；有 {} 项待核对：{attention}", sh.attention.len()));
-        follow_up(ctx, site, &item, &attention);
     }
     ctx.emit_queue(&site.id);
     Ok(())
+}
+
+/// 改动类型（任务上的 change）对应 classify 产出的细分类型
+fn kinds_of_change(change: &str) -> &'static [&'static str] {
+    match change {
+        "meta" => &["title", "meta_description", "meta"],
+        "internal_links" => &["internal_links"],
+        "content" => &["content"],
+        "new_content" => &["new_page", "new_content"],
+        "technical" => &["technical", "sitemap"],
+        _ => &[],
+    }
 }
 
 /// 全自动方案：验收发现一般问题时开一条「修技术问题」的后续任务（每个站点每天最多一条，防止来回改）。
@@ -1915,16 +1969,17 @@ fn follow_up(ctx: &Ctx, site: &Site, item: &QueueItem, attention: &str) {
         return;
     }
     let Some(g) = group_rules(ctx, site) else { return };
-    if g.autonomy != "auto" || !g.allows("technical") {
+    // 修复任务自己上线后又有待核对：不再开下一条，否则 AI 修不掉的问题会一天一条没完没了
+    if g.autonomy != "auto" || !g.allows("technical") || item.opp.kind == "followup" {
         return;
     }
     let site_dir = ctx.site_dir(&site.id);
-    let day = today();
-    if site_ops::load_queue(&site_dir).iter().any(|i| i.opp.kind == "followup" && i.opp.key.ends_with(&day)) {
+    if site_ops::load_queue(&site_dir).iter().any(|i| i.opp.kind == "followup" && i.updated_at >= now().saturating_sub(DAY) && i.status != "dismissed") {
         return;
     }
+    // 每条改动只开一次（key 不带日期：驳回过、处理过的不再提）
     let opp = Opportunity {
-        key: format!("followup:{}:{day}", item.id),
+        key: format!("followup:{}", item.id),
         kind: "followup".into(),
         title: format!("修复上线验收发现的问题：{}", item.opp.title),
         page: item.new_pages.first().or(item.pages.first()).cloned().unwrap_or_else(|| item.opp.page.clone()),
@@ -1952,6 +2007,20 @@ async fn verify_failed(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, reason:
     let why = reason.trim_start_matches(crate::site_verify::HARD_PREFIX).to_string();
     log_item(ctx, site, "watch_failed", &item, &format!("上线后验收没通过：{why}，自动回滚"));
     job.line(&format!("线上验收没通过（{why}），自动回滚"));
+    // 这次一起上线的「之前合并没上线」的条目也可能就是坏的那条：一并回退并标失败，不然下一次上线它又搭车、再把无辜的改动回滚一遍
+    let ride: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "merged" && i.deployed_at == 0 && !i.merge_sha.is_empty() && i.id != item_id).collect();
+    for r in &ride {
+        match revert_item(ctx, site, job, r).await {
+            Ok(_) => {
+                let _ = site_ops::update_item(&site_dir, &r.id, now(), |i| {
+                    i.status = "failed".into();
+                    i.note = format!("和「{}」一起上线时线上验收没通过（{why}），分不清是哪条的问题，一并回退了。可以「重新检查」单独再上线", item.opp.title);
+                });
+                log_item(ctx, site, "rolled_back", r, "和另一条一起上线时验收没通过，一并回退");
+            }
+            Err(e) => job.line(&format!("一起上线的「{}」回退失败：{e}", r.opp.title)),
+        }
+    }
     if let Err(e) = rollback(ctx, site, job, item_id).await {
         pause_site(ctx, site, &format!("自动回滚失败：{e}"));
         ctx.notify(&format!("{} · 回滚失败，已暂停托管", site.name), &item.opp.title);
@@ -2391,7 +2460,8 @@ async fn rebase_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
     if !wt.is_dir() {
         crate::site_git::reattach_worktree(&cb.main, &wt, &item.branch).await?;
     }
-    if !crate::site_git::is_clean(&wt).await {
+    // 构建会重写生成的数据文件、弄脏工作树：只有这些就还原，别的改动才算没提交
+    if !settle_build_outputs(site, &wt).await {
         return Err("工作目录里有没提交的改动".into());
     }
     let base = crate::site_git::git_ok(&cb.main, &["rev-parse", &site.default_branch], "").await?.trim().to_string();
@@ -2495,7 +2565,12 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
             if cur != site.default_branch || !settle_build_outputs(site, &main).await {
                 return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再回滚", site.default_branch));
             }
-            crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await?;
+            if let Err(e) = crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await {
+                // 回退冲突（这些文件后来又被别的改动改过）：把主分支恢复原样，不能留着冲突标记让之后每次合并都失败
+                let _ = crate::site_git::git(&main, &["revert", "--abort"], "").await;
+                let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
+                return Err(if e.contains("CONFLICT") || e.contains("conflict") { "这些文件后来又被别的改动改过，回退会冲突，没有动主分支".into() } else { e });
+            }
             push_after(site, &main, job).await;
             crate::site_git::head_sha(&main).await
         }
@@ -2709,7 +2784,8 @@ pub fn judge_expect(r: &ReviewInput) -> (&'static str, String) {
         return if pa.impressions >= 30.0 { ("positive", format!("看展现：{n}，已经被搜到")) } else if pa.impressions > 0.0 { ("neutral", format!("看展现：{n}，被搜到的还很少")) } else { ("neutral", "看展现：新页面 4 周内还没有搜索展现（新页面通常要更久，下次复盘再看）".into()) };
     }
     let adj_clicks = rel(pa.clicks, pb.clicks) - site_clicks;
-    if pb.clicks >= 5.0 && adj_clicks <= -0.15 {
+    // 判负面要有足够的基数：改动前至少 20 次点击、100 次展现，不然 5 → 4 这种波动也会被当成下跌而回滚
+    if pb.clicks >= 20.0 && pb.impressions >= 100.0 && adj_clicks <= -0.15 {
         return ("negative", format!("点击 {:.0} → {:.0}，扣掉全站变化后 {}，跌幅超过 15%{site_note}", pb.clicks, pa.clicks, pct(adj_clicks)));
     }
     if r.metric == "health" {
@@ -2752,7 +2828,8 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let mut facts = Vec::new();
     let mut downgraded = site.ops.downgraded.clone();
     for i in &items {
-        let is_new = i.before.is_none();
+        // 新页面按「有没有被搜到」判，不按点击涨跌；写新内容的任务就算填了已有页面网址也算新页面
+        let is_new = i.before.is_none() || !i.new_pages.is_empty() || i.opp.change == "new_content";
         let page = if i.opp.page.starts_with("https://") { i.opp.page.clone() } else { i.new_pages.first().cloned().unwrap_or_default() };
         let before = i.before.clone().unwrap_or_default();
         let after = by_page.get(page.as_str()).map(|r| (*r).clone()).unwrap_or_default();
@@ -2773,7 +2850,8 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         });
         let note = if i.opp.expect_note.is_empty() { note } else { format!("{note}（预期：{}）", i.opp.expect_note) };
         facts.push(format!("- {}｜{}｜{}", i.opp.title, match verdict { "positive" => "有效", "negative" => "负面", _ => "持平" }, note));
-        let kind = i.change_kind.split(',').next().unwrap_or("").to_string();
+        // 降档按任务的改动类型记（和自动上线判定用的是同一套词：meta / content / new_content…）
+        let kind = i.opp.change.clone();
         let neg = state.negatives.entry(kind.clone()).or_insert(0);
         if verdict == "negative" {
             *neg += 1;
@@ -2792,7 +2870,8 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         })?;
         lines.push(format!("{}：{}（{note}）", i.opp.title, match verdict { "positive" => "正面", "negative" => "负面", _ => "持平" }));
         // 全托管：效果负面的自动改动直接回滚，并记一笔。
-        if verdict == "negative" && site.ops.level >= 5 && i.auto {
+        // 新页面不自动回滚：回滚等于把已经收录的页面删掉（404、没有跳转），比流量没涨糟得多
+        if verdict == "negative" && site.ops.level >= 5 && i.auto && !is_new {
             match rollback(ctx, site, job, &i.id).await {
                 Ok(_) => log_item(ctx, site, "rolled_back", i, &format!("效果复盘负面（{note}），已自动回滚")),
                 Err(e) => log_item(ctx, site, "failed", i, &format!("效果负面，自动回滚失败：{e}")),
@@ -2889,6 +2968,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         .take(20)
         .map(|i| format!("- [{}] {}{}", i.status, i.opp.title, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
         .collect();
+    // 已经排队、还没做的（上周计划剩下的、数据规则找出的）：计划 AI 看得到才不会把同一件事再排一次
+    let queued: Vec<String> = q.iter().filter(|i| i.status == "open").take(20).map(|i| format!("- {}", i.opp.title)).collect();
     let rules = group_rules(ctx, site);
     let n = rules.as_ref().map(|g| g.per_round).unwrap_or(site.ops.budget.items_per_run).clamp(1, 8) * 2;
     let plan_brief = rules.as_ref().map(|g| g.brief()).unwrap_or_default();
@@ -2902,7 +2983,7 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         name = site.name,
         domain = site.domain,
         brief = data_brief(&site_dir),
-        hist = if history.is_empty() { "（暂无）".to_string() } else { history.join("\n") },
+        hist = if history.is_empty() { "（暂无）".to_string() } else { format!("{}{}", history.join("\n"), if queued.is_empty() { String::new() } else { format!("\n\n已经排队、还没做的（不要再安排同样的事）：\n{}", queued.join("\n")) }) },
         kinds = kinds.join("|"),
     );
     job.line(&format!(
@@ -3023,11 +3104,11 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         if attention.is_empty() {
             log_item(ctx, site, "watch_ok", &i, &format!("{when}复查：页面正常"));
             out.push(format!("{} 正常", i.opp.title));
+            // 之前因为待核对开出来、还没动的修复任务：问题已经没了，撤掉
+            dismiss_followups(&site_dir, &i.id, "复查时页面已经正常，不用修");
         } else {
             log_item(ctx, site, "attention", &i, &format!("{when}复查：网站正常，{} 项待核对：{attention}", rep.soft.len()));
-            if stage >= 1 {
-                follow_up(ctx, site, &i, &attention);
-            }
+            follow_up(ctx, site, &i, &attention);
             out.push(format!("{} 有 {} 项待核对", i.opp.title, rep.soft.len()));
         }
     }
@@ -3431,18 +3512,22 @@ async fn settle_build_outputs(site: &Site, main: &Path) -> bool {
 fn recover_interrupted(ctx: &Ctx) {
     let st = ctx.state();
     for s in st.sites.list() {
-        let dir = st.sites.data_dir(&s.id);
-        let stuck: Vec<site_ops::QueueItem> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "working").collect();
-        for it in &stuck {
-            // AI 在分支上提交过的话，记下最新提交，「重新检查」就能接着用
-            let wt = crate::sites::build_root(&dir).join("work").join(&it.id);
-            let head = branch_head(&wt, &it.base_sha);
-            let _ = site_ops::update_item(&dir, &it.id, now(), |i| settle_interrupted(i, head.clone()));
-        }
-        if !stuck.is_empty() {
+        if settle_site_interrupted(&st.sites.data_dir(&s.id)) {
             ctx.emit_queue(&s.id);
         }
     }
+}
+
+/// 一个站点里还停在「AI 处理中」的条目都收尾（见 settle_interrupted）；返回有没有动过
+fn settle_site_interrupted(dir: &Path) -> bool {
+    let stuck: Vec<site_ops::QueueItem> = site_ops::load_queue(dir).into_iter().filter(|i| i.status == "working").collect();
+    for it in &stuck {
+        // AI 在分支上提交过的话，记下最新提交，「重新检查」就能接着用
+        let wt = crate::sites::build_root(dir).join("work").join(&it.id);
+        let head = branch_head(&wt, &it.base_sha);
+        let _ = site_ops::update_item(dir, &it.id, now(), |i| settle_interrupted(i, head.clone()));
+    }
+    !stuck.is_empty()
 }
 
 /// 上线后验收只差「新内容已生效」、挂着「上线后待核对」的：用现在的对照规则再查一次线上页面（每条只查一次）。
@@ -3471,18 +3556,23 @@ async fn recheck_snippets(ctx: &Ctx) {
             });
             // 待核对都清掉了：因为它开出来、还没动的修复任务一起撤掉（和点「没问题」一样）
             if cleared {
-                let prefix = format!("followup:{}:", it.id);
-                for f in site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)) {
-                    let _ = site_ops::update_item(&dir, &f.id, now(), |i| {
-                        i.status = "dismissed".into();
-                        i.note = "上线后验收是误报（复查时线上已经有这次的内容），不用修".into();
-                    });
-                }
+                dismiss_followups(&dir, &it.id, "上线后验收是误报（复查时线上已经有这次的内容），不用修");
             }
             if live == Some(true) {
                 ctx.emit_queue(&site.id);
             }
         }
+    }
+}
+
+/// 撤掉一条改动开出来、还没开始的修复任务（key 以 followup:{id} 开头）
+fn dismiss_followups(site_dir: &Path, item_id: &str, note: &str) {
+    let prefix = format!("followup:{item_id}");
+    for f in site_ops::load_queue(site_dir).into_iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)) {
+        let _ = site_ops::update_item(site_dir, &f.id, now(), |i| {
+            i.status = "dismissed".into();
+            i.note = note.to_string();
+        });
     }
 }
 
@@ -3549,7 +3639,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             // 每天早上 7 点同步一次所有站点的 GA4 / Search Console / Bing（错过了就在之后第一次检查时补上）
             if hour >= DATA_SYNC_HOUR && last_data_sync(&st.data_dir) != today() {
                 set_last_data_sync(&st.data_dir, &today());
-                daily_data_sync(ctx.clone()).await;
+                // 几十个站点各拉三个数据源要跑好几分钟：放到后台，别把这一轮的任务和上线复查都拖住
+                tauri::async_runtime::spawn(daily_data_sync(ctx.clone()));
             }
             // 内容分发：新上线的文章写摘要、按渠道的发布方式发出去（见 syndicate）
             crate::syndicate::schedule(&app);
@@ -3574,6 +3665,10 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     let ready = || st.sites.get(id).is_ok_and(|s| repo_ready(&s));
                     if site_ops::requeue_retryable(&st.sites.data_dir(id), now(), ready).is_ok_and(|ids| !ids.is_empty()) {
                         ctx.emit_queue(id);
+                    }
+                    // AI 已经提交到分支、后面推送 / 中断才失败的：自动「重新检查」接着用（每条一次），不用你点
+                    if let Some(item) = site_ops::take_recheckable(&st.sites.data_dir(id), now()) {
+                        let _ = start(ctx.clone(), id, "recheck", "schedule", Some(item));
                     }
                 }
             }
