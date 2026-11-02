@@ -167,6 +167,8 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
                 continue;
             }
             match fetch(&client, u).await {
+                // 不存在的页面被站点跳到首页（软 404）：对新页面 / 改到的页面来说就是没上线
+                Ok(f) if i > 0 && (200..300).contains(&f.status) && !f.final_url.is_empty() && same_page(&f.final_url, &home) && !same_page(u, &home) => last[i] = "跳到了首页（页面不存在）".into(),
                 Ok(f) if (200..300).contains(&f.status) || f.challenged => got[i] = Some(f),
                 Ok(f) => last[i] = format!("返回 {}", f.status),
                 Err(e) => last[i] = e,
@@ -376,26 +378,40 @@ fn internal_links(html: &str, domain: &str) -> Vec<String> {
 }
 
 async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
+    // 先看 robots.txt 里声明的 Sitemap:（放在非标准路径的站点只有这里能找到），再试常见路径
     let mut queue: Vec<String> = ["sitemap.xml", "sitemap-index.xml", "sitemap_index.xml"].iter().map(|p| format!("https://{domain}/{p}")).collect();
+    if let Ok(r) = fetch(client, &format!("https://{domain}/robots.txt")).await {
+        if (200..300).contains(&r.status) {
+            for l in r.body.lines() {
+                if let Some(u) = l.trim().strip_prefix("Sitemap:").or_else(|| l.trim().strip_prefix("sitemap:")) {
+                    queue.push(u.trim().to_string());
+                }
+            }
+        }
+    }
     let mut seen = HashSet::new();
     let mut locs = Vec::new();
     let mut fetched = 0;
     while let Some(u) = queue.pop() {
-        if !seen.insert(u.clone()) || fetched >= 12 {
+        if !seen.insert(u.clone()) || fetched >= 30 {
             continue;
         }
-        fetched += 1;
+        // 压缩的 sitemap 不解（不下结论），别把它当成页面地址
+        if u.ends_with(".gz") {
+            continue;
+        }
         let Ok(f) = fetch(client, &u).await else { continue };
         if !(200..300).contains(&f.status) {
             continue;
         }
+        fetched += 1;
         let lower = f.body.to_ascii_lowercase();
         let mut from = 0;
         while let Some(i) = lower[from..].find("<loc>") {
             let s = from + i + 5;
             let e = lower[s..].find("</loc>").map(|x| s + x).unwrap_or(s);
-            let loc = decode(f.body[s..e].trim());
-            if loc.ends_with(".xml") {
+            let loc = decode(f.body[s..e].trim().trim_start_matches("<![CDATA[").trim_end_matches("]]>").trim());
+            if loc.ends_with(".xml") || loc.ends_with(".xml.gz") {
                 queue.push(loc);
             } else {
                 locs.push(loc);

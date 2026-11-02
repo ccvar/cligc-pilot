@@ -305,30 +305,49 @@ fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
     }
     let images = !r.no_alt.is_empty() || !r.broken.is_empty() || !r.large.is_empty();
     if (any && images) || r.no_alt.len() >= 3 || !r.broken.is_empty() || r.large.len() >= 2 {
-        let mut lines = Vec::new();
-        for i in r.broken.iter().take(10) {
-            lines.push(format!("图片不存在：{} 里的 {}", i.page, i.src));
+        // 按页面分块，每条任务最多 10 个页面：几十张图一起改必然超过自动上线的行数上限
+        let mut pages: Vec<String> = Vec::new();
+        for p in r.broken.iter().map(|i| &i.page).chain(r.large.iter().map(|i| &i.page)).chain(r.no_alt.iter().map(|i| &i.page)) {
+            if !pages.contains(p) {
+                pages.push(p.clone());
+            }
         }
-        for i in r.large.iter().take(10) {
-            lines.push(format!("图片太大（{} KB）：{}（用在 {}）", i.bytes / 1024, i.src, i.page));
+        pages.sort();
+        for chunk in pages.chunks(SCHEMA_CHUNK) {
+            let (broken, large, no_alt): (Vec<_>, Vec<_>, Vec<_>) = (
+                r.broken.iter().filter(|i| chunk.contains(&i.page)).collect(),
+                r.large.iter().filter(|i| chunk.contains(&i.page)).collect(),
+                r.no_alt.iter().filter(|i| chunk.contains(&i.page)).collect(),
+            );
+            if !any && broken.is_empty() && large.len() < 2 && no_alt.len() < 3 {
+                continue;
+            }
+            let mut lines = Vec::new();
+            for i in broken.iter().take(10) {
+                lines.push(format!("图片不存在：{} 里的 {}", i.page, i.src));
+            }
+            for i in large.iter().take(10) {
+                lines.push(format!("图片太大（{} KB）：{}（用在 {}）", i.bytes / 1024, i.src, i.page));
+            }
+            for i in no_alt.iter().take(20) {
+                lines.push(format!("缺替代文字：{} 里的 {}", i.page, i.src));
+            }
+            out.push(crate::site_ops::Opportunity {
+                key: format!("img_audit:{}", crate::site_ops::stable_key(&chunk.join("|"))),
+                kind: "img_audit".into(),
+                title: format!(
+                    "图片问题：{}{}",
+                    [(broken.len(), "张不存在"), (large.len(), "张太大"), (no_alt.len(), "张缺替代文字")].iter().filter(|(n, _)| *n > 0).map(|(n, l)| format!("{n}{l}")).collect::<Vec<_>>().join("、"),
+                    if pages.len() > chunk.len() { format!("（{} 个页面，共 {} 个页面有问题，分批处理）", chunk.len(), pages.len()) } else { String::new() }
+                ),
+                page: chunk[0].clone(),
+                evidence: format!("体检时在构建产物里发现（只改这 {} 个页面，别的页面另有任务）：\n{}\n缺替代文字会让搜索引擎和读屏软件不知道图片是什么；图片太大拖慢页面；不存在的图片是坏链接。按清单逐条处理：补 alt、压缩或缩小尺寸、修好或删掉引用。", chunk.len(), lines.join("\n")),
+                // 技术类分数封顶，别压过计划项和数据机会（排序按道走，这里只决定同类之间谁先）
+                score: ((broken.len() * 20 + large.len() * 8 + no_alt.len().min(50)) as f64).min(200.0),
+                change: "technical".into(),
+                ..Default::default()
+            });
         }
-        for i in r.no_alt.iter().take(20) {
-            lines.push(format!("缺替代文字：{} 里的 {}", i.page, i.src));
-        }
-        let sample = r.broken.first().or(r.large.first()).or(r.no_alt.first()).map(|i| i.page.clone()).unwrap_or_default();
-        out.push(crate::site_ops::Opportunity {
-            key: "img_audit:site".into(),
-            kind: "img_audit".into(),
-            title: format!(
-                "图片问题：{}",
-                [(r.broken.len(), "张不存在"), (r.large.len(), "张太大"), (r.no_alt.len(), "张缺替代文字")].iter().filter(|(n, _)| *n > 0).map(|(n, l)| format!("{n}{}{l}", if *n >= CAP { "+" } else { "" })).collect::<Vec<_>>().join("、")
-            ),
-            page: sample,
-            evidence: format!("体检时在构建产物里发现（最多列前几十条）：\n{}\n缺替代文字会让搜索引擎和读屏软件不知道图片是什么；图片太大拖慢页面；引用不存在的图片会显示成破图。", lines.join("\n")),
-            score: (r.broken.len() * 20 + r.large.len() * 8 + r.no_alt.len().min(50)) as f64,
-            change: "technical".into(),
-            ..Default::default()
-        });
     }
     if !r.schema.is_empty() {
         // 按页面分块，每条任务最多 10 个页面：几十个页面一起改必然超过自动上线的行数上限，整轮白跑

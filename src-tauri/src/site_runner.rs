@@ -659,17 +659,11 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     }
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
-    // 计划项固定高分，数据规则找出的机会（点击率低、排名掉了…）只有几分到几十分，按分数排永远轮不到：
-    // 上一条做的是计划项，这一轮就先做一条数据机会（修复任务和你手动加的照样最优先）
+    // 各类机会的分数量级不可比（计划项固定 1000、修复任务 2000、数据规则几分到几十分）：不按绝对分数排，分四条道——
+    // 修复上线后的问题 → 你手动加的 → 计划项和数据机会轮着来（上一条做的是计划项，这次先做数据机会），每条道里再按分数排
     let q = site_ops::load_queue(&site_dir);
-    let last_was_plan = q.iter().filter(|i| i.worked_at > 0).max_by_key(|i| i.worked_at).is_some_and(|i| i.opp.kind == "plan");
-    if last_was_plan {
-        if let Some(pos) = picked.iter().position(|i| i.opp.kind != "plan" && i.opp.kind != "followup" && i.opp.source != "manual") {
-            let it = picked.remove(pos);
-            let front = picked.iter().position(|i| i.opp.kind != "followup" && i.opp.source != "manual").unwrap_or(picked.len());
-            picked.insert(front, it);
-        }
-    }
+    let last_lane = q.iter().filter(|i| i.worked_at > 0).max_by_key(|i| i.worked_at).map(lane_of).unwrap_or(3);
+    picked = order_lanes(picked, last_lane);
     // 同一种页面的改标题 / 描述合成一条（同批量让 AI 改）
     let ids: Vec<String> = picked.iter().map(|i| i.id.clone()).collect();
     let own = content_stems(ctx, site).await;
@@ -2068,6 +2062,30 @@ fn page_stem(p: &str) -> String {
     let last = segs.last().copied().unwrap_or("");
     let name = last.rsplit_once('.').map(|(n, _)| n).unwrap_or(last);
     if name == "index" { segs.iter().rev().nth(1).copied().unwrap_or("").to_string() } else { name.to_string() }
+}
+
+/// 机会属于哪条道：0 修复上线后的问题、1 你手动加的、2 计划项、3 数据规则找出的
+fn lane_of(i: &QueueItem) -> usize {
+    if i.opp.kind == "followup" { 0 } else if i.opp.source == "manual" { 1 } else if i.opp.kind == "plan" { 2 } else { 3 }
+}
+
+/// 按道排：修复 → 手动 → 计划项和数据机会轮着来（上一条做的是哪条道，这次先做另一条），每条道里保持原来的分数顺序
+fn order_lanes(picked: Vec<QueueItem>, last_lane: usize) -> Vec<QueueItem> {
+    let mut lanes: Vec<Vec<QueueItem>> = vec![Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for i in picked {
+        let l = lane_of(&i);
+        lanes[l].push(i);
+    }
+    let (mut plan, mut data) = (std::mem::take(&mut lanes[2]), std::mem::take(&mut lanes[3]));
+    let mut out = std::mem::take(&mut lanes[0]);
+    out.extend(std::mem::take(&mut lanes[1]));
+    let mut take_plan = last_lane != 2;
+    while !plan.is_empty() || !data.is_empty() {
+        let src = if (take_plan && !plan.is_empty()) || data.is_empty() { &mut plan } else { &mut data };
+        out.push(src.remove(0));
+        take_plan = !take_plan;
+    }
+    out
 }
 
 /// 一条任务失败时写在条目上的原因。作业超时被 Pilot 强停时 AI 回合报的是「被停止了」，那不是人停的：
@@ -3986,6 +4004,19 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lanes_alternate_plan_and_data_after_followups_and_manual() {
+        let mk = |id: &str, kind: &str, source: &str, score: f64| QueueItem { id: id.into(), opp: Opportunity { kind: kind.into(), source: source.into(), score, ..Default::default() }, ..Default::default() };
+        let picked = vec![mk("f", "followup", "health", 2000.0), mk("p1", "plan", "positioning", 990.0), mk("p2", "plan", "positioning", 980.0), mk("m", "plan", "manual", 50.0), mk("d1", "low_ctr", "data", 40.0), mk("d2", "striking", "data", 5.0)];
+        let ids = |v: Vec<QueueItem>| v.into_iter().map(|i| i.id).collect::<Vec<_>>();
+        // 上一条做的是计划项：先数据机会
+        assert_eq!(ids(order_lanes(picked.clone(), 2)), vec!["f", "m", "d1", "p1", "d2", "p2"]);
+        // 上一条做的是数据机会（或没做过）：先计划项
+        assert_eq!(ids(order_lanes(picked.clone(), 3)), vec!["f", "m", "p1", "d1", "p2", "d2"]);
+        // 一边空了就只剩另一边
+        assert_eq!(ids(order_lanes(vec![mk("d1", "low_ctr", "data", 1.0), mk("d2", "low_ctr", "data", 0.5)], 3)), vec!["d1", "d2"]);
+    }
+
     #[test]
     fn plan_effort_follows_primary_and_fallback() {
         let g = crate::managed::ManagedGroup { brain: "api:x".into(), model: "claude-opus-5-5".into(), effort: "api:high".into(), fallback_brain: "claude".into(), fallback_model: String::new(), fallback_effort: "max".into(), ..crate::managed::ManagedGroup::from_legacy(&Default::default(), "t") };
