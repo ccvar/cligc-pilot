@@ -397,6 +397,26 @@ fn years_in(s: &str) -> Vec<i32> {
     out
 }
 
+/// 标题里表示「今年 / 最新」的年份：去掉「Since 2021」「从 2021 年起」「2021 年以来」这种讲起点的年份
+fn recent_years_in(s: &str) -> Vec<i32> {
+    let lower = s.to_lowercase();
+    let mut out = Vec::new();
+    let mut from = 0;
+    for y in years_in(s) {
+        let ys = y.to_string();
+        let Some(at) = lower[from..].find(&ys).map(|i| i + from) else { continue };
+        from = at + 4;
+        let before = lower[..at].trim_end();
+        let after = lower[at + 4..].trim_start();
+        let start = ["since", "from", "自", "从", "始于"].iter().any(|w| before.ends_with(w));
+        let since = ["年以来", "以来", "年起", "至今", "年至今"].iter().any(|w| after.starts_with(w));
+        if !start && !since {
+            out.push(y);
+        }
+    }
+    out
+}
+
 /// 页面多久没更新算「久未更新」
 pub const STALE_DAYS: i64 = 180;
 
@@ -420,8 +440,10 @@ pub fn stale_opportunities(site: &Site, site_dir: &Path, facts: &[crate::site_ma
         if r.clicks < 3.0 && r.impressions < min_impr {
             continue;
         }
-        let stale_y: Vec<i32> = years_in(&f.title).into_iter().filter(|y| *y < target && *y >= year - 10).collect();
-        if let Some(y) = stale_y.iter().max() {
+        // 标题里已经有今年（或更新）的年份就是新的，剩下的旧年份是讲范围 / 历史（「Since 2021」「2021–2026」）
+        let current = years_in(&f.title).into_iter().any(|y| y >= target);
+        let stale_y: Vec<i32> = recent_years_in(&f.title).into_iter().filter(|y| *y < target && *y >= year - 10).collect();
+        if let Some(y) = stale_y.iter().max().filter(|_| !current) {
             years.push(Opportunity {
                 key: format!("stale_year:{}:{target}", r.key),
                 kind: "stale_year".into(),
@@ -1233,6 +1255,12 @@ mod tests {
         let opps = stale_opportunities(&site(), t.path(), &[f("/best/", "2026 最好用的交易所", "2026-12-01")], day("2026-12-20"));
         assert_eq!(opps[0].key, "stale_year:https://x.com/best/:2027");
         assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "2026 最好用的交易所", "2026-12-01")], day("2026-12-01")).is_empty());
+        // 已经写着今年，旧年份是讲范围的；讲起点的年份不算过时（tailcan /recalls/）
+        assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "Cat Food Recalls 2026: Every US Cat Food Recall Since 2021 | Tailcan", "2026-09-01")], day("2026-10-27")).is_empty());
+        assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "Every Cat Food Recall Since 2021", "2026-09-01")], day("2026-10-27")).is_empty());
+        assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "从 2021 年起的召回记录", "2026-09-01")], day("2026-10-27")).is_empty());
+        assert!(stale_opportunities(&site(), t.path(), &[f("/best/", "2021 年以来的召回记录", "2026-09-01")], day("2026-10-27")).is_empty());
+        assert_eq!(recent_years_in("Best Exchanges 2025 (since 2019)"), vec![2025]);
     }
 
     #[test]
