@@ -76,7 +76,7 @@
 {#snippet head()}
     <span class="sub">{#if !rep?.checked_at}每周检查一次构建产物{:else if !rep.pages}还没有构建产物 · {ago(rep.checked_at)}看过{:else}{rep.pages} 个页面 · {rep.images} 张图片 · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{/if}</span>
     <span class="grow"></span>
-    {#if groups.length}<HealthAiButton siteId={site.id} what="audit" match={(k) => k === 'img_audit:site' || k === 'schema:site'} label="交给 AI 修" tip="把查出来的图片和结构化数据问题交给 AI：补替代文字、压缩过大的图片、修好破图和结构化数据，不改正文；改好后要你确认才上线" />{/if}
+    {#if groups.length}<HealthAiButton siteId={site.id} what="audit" match={(k) => k.startsWith('img_audit:') || k.startsWith('schema:')} label="交给 AI 修" tip="把查出来的图片和结构化数据问题交给 AI：补替代文字、压缩过大的图片、修好破图和结构化数据，不改正文；改好后要你确认才上线" />{/if}
     <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="把构建产物里的页面过一遍，只读本地文件">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
 {/snippet}
 
