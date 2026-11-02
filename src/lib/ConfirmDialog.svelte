@@ -70,15 +70,18 @@
 <style>
   .confirm-layer { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; isolation: isolate; }
   .confirm-backdrop { position: absolute; inset: 0; border: 0; padding: 0; background: color-mix(in srgb, #171817 38%, transparent); backdrop-filter: blur(3px); cursor: default; animation: confirm-fade .16s ease-out; }
-  .confirm-card { position: relative; width: fit-content; min-width: 250px; max-width: min(320px, calc(100vw - 32px)); margin: 0; padding: 12px 14px 10px; border: 1px solid color-mix(in srgb, var(--border2) 78%, #fff); border-radius: 12px; background: var(--bg); box-shadow: 0 14px 42px rgba(32, 28, 20, .19), 0 2px 8px rgba(32, 28, 20, .08); animation: confirm-rise .2s cubic-bezier(.2,.8,.2,1); }
-  .confirm-head { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }
+  /* 卡片不超出窗口：正文太长时只让正文滚动，标题和按钮一直看得见 */
+  .confirm-card { position: relative; display: flex; flex-direction: column; max-height: calc(100vh - 32px); box-sizing: border-box; width: fit-content; min-width: 250px; max-width: min(320px, calc(100vw - 32px)); margin: 0; padding: 12px 14px 10px; border: 1px solid color-mix(in srgb, var(--border2) 78%, #fff); border-radius: 12px; background: var(--bg); box-shadow: 0 14px 42px rgba(32, 28, 20, .19), 0 2px 8px rgba(32, 28, 20, .08); animation: confirm-rise .2s cubic-bezier(.2,.8,.2,1); }
+  .confirm-head { display: flex; align-items: flex-start; gap: 7px; min-width: 0; min-height: 0; }
+  .confirm-copy { display: flex; flex-direction: column; align-self: stretch; min-width: 0; min-height: 0; }
   .confirm-icon { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; }
   .confirm-icon svg { width: 18px; height: 18px; }
   .confirm-icon.warning { color: #a57622; background: #fbf1dc; }
   .confirm-icon.danger { color: #b03e31; background: #fae7e3; }
   .confirm-icon.info { color: #54779a; background: #e8f0f8; }
   .confirm-copy h2 { margin: 0; color: var(--text); font-size: 16px; line-height: 1.35; letter-spacing: -.02em; }
-  .confirm-copy p { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+  .confirm-copy p { margin: 4px 0 0; color: var(--dim); font-size: 12.5px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+  .confirm-actions { flex: none; }
   .confirm-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
   .confirm-actions button { min-width: 56px; height: 26px; padding: 0 8px; border-radius: 6px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer; transition: background .12s, border-color .12s, transform .12s; }
   .confirm-actions button:active { transform: translateY(1px); }

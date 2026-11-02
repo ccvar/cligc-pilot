@@ -204,8 +204,9 @@ export async function loadPendingDeploys() {
 export async function deployAllPending() {
   const list = pendingDeploys.list;
   if (!list.length) return;
-  const names = list.map((p) => `· ${p.name}${p.subject ? `：${p.subject}` : ''}`).join('\n');
-  if (!(await confirmDialog(`按顺序把这 ${list.length} 个站点构建并上线，一个跑完再开下一个，每个照常做线上验收：\n${names}`, { title: '全部上线', kind: 'info', confirmText: `上线 ${list.length} 个站点` }))) return;
+  // 只列站点名（每个站的改动在它的部署页能看到），确认框里一眼看完
+  const names = list.map((p) => p.name).join('、');
+  if (!(await confirmDialog(`${names}\n\n一个跑完再开下一个，每个照常做线上验收。`, { title: `把 ${list.length} 个站点构建并上线？`, kind: 'info', confirmText: `上线 ${list.length} 个站点` }))) return;
   try {
     await invoke<number>('deploy_many', { ids: list.map((p) => p.id) });
     pendingDeploys.list = [];
