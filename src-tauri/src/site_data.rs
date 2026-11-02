@@ -221,9 +221,10 @@ async fn fetch_ga4(token: &str, property: &str, dir: &Path) -> Result<(String, S
 /// Search Console：近 180 天按天（全部站点列表要算近 90 天和前 90 天）；近 28 天与前 28 天的查询词、页面；查询词×页面；sitemap。
 async fn fetch_gsc(token: &str, site: &str, dir: &Path) -> Result<(String, String), String> {
     let daily = search_rows(google::gsc_query(token, site, &day(183), &day(1), &["date"], 1000).await?);
-    // 以最近一天有数据的日期为截止日（通常比今天晚 2–3 天）。
+    // 以最近一天有数据的日期为截止日。查询用的是 dataState=all，最近两天的数据还不完整：往前退两天，
+    // 不然「近 28 天」末尾少算、「前 28 天」是完整的，页面会系统性地被判成下滑
     let end = daily.iter().map(|r| r.key.clone()).max().unwrap_or_else(|| day(3));
-    let end_d = chrono::NaiveDate::parse_from_str(&end, "%Y-%m-%d").unwrap_or_else(|_| chrono::Utc::now().date_naive());
+    let end_d = chrono::NaiveDate::parse_from_str(&end, "%Y-%m-%d").unwrap_or_else(|_| chrono::Utc::now().date_naive()) - chrono::Duration::days(2);
     let fmt = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
     let start = fmt(end_d - chrono::Duration::days(27));
     let prev_end = fmt(end_d - chrono::Duration::days(28));

@@ -330,7 +330,9 @@ fn cannibal_opportunities(qp: &[Row], min_impr: f64) -> Vec<Opportunity> {
         }
         cand.sort_by(|a, b| b.clicks.total_cmp(&a.clicks).then(b.impressions.total_cmp(&a.impressions)));
         let (a, b) = (cand[0], cand[1]);
-        pairs.entry((a.key2.clone(), b.key2.clone())).or_default().push((a, b));
+        // 同一对页面在不同查询词上强弱可能互换：配对的键按网址排序，别生成两条
+        let pair = if a.key2 <= b.key2 { (a.key2.clone(), b.key2.clone()) } else { (b.key2.clone(), a.key2.clone()) };
+        pairs.entry(pair).or_default().push((a, b));
     }
     let mut out = Vec::new();
     for ((strong, weak), mut shared) in pairs {
@@ -460,6 +462,16 @@ pub fn drop_open_where(site_dir: &Path, pred: impl Fn(&QueueItem) -> bool) -> Re
         q.retain(|i| !(i.status == "open" && pred(i)));
         before - q.len()
     })
+}
+
+/// 稳定的短键（FNV-1a 64 位，十六进制 16 位）：给中文标题这类没法做 slug 的东西当 key
+pub fn stable_key(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
 }
 
 /// 页面多久没更新算「久未更新」
@@ -685,9 +697,12 @@ pub struct QueueItem {
     /// 托管方案自动重试过一次（中断、环境问题这类失败放回排队过）：再失败就留给你
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_retried: bool,
-    /// 「新内容已生效」没过的，后台已经用新的对照规则复查过一次（不管结果，不再反复查）
+    /// 「新内容已生效」没过的，后台复查结束了（找到了，或两次都没找到不再查）
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub snippet_rechecked: bool,
+    /// 后台复查了几次都没找到对照文字
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub snippet_misses: u8,
     /// 上线后复查到第几次：0＝1 小时后，1＝24 小时后，2＝查完了。
     #[serde(default)]
     pub watch_stage: u8,

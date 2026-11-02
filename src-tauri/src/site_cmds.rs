@@ -934,7 +934,9 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
                 let Ok(gh) = state.conns.get(&site.gh_conn_id) else { continue };
                 let Ok(token) = crate::keychain::get_key(&gh.id) else { continue };
                 let Ok(dir) = crate::github::repo_dir(&gh.skill_dir, &site.repo) else { continue };
-                let r = crate::site_git::git_ok(&dir, &["ls-remote", "origin", &format!("refs/heads/{}", site.default_branch)], &token).await.unwrap_or_default();
+                // 上线记录记的是部署分支（没设就是默认分支）的提交：比的也要是同一条分支
+                let branch = if site.deploy.branch.trim().is_empty() { site.default_branch.as_str() } else { site.deploy.branch.trim() };
+                let r = crate::site_git::git_ok(&dir, &["ls-remote", "origin", &format!("refs/heads/{branch}")], &token).await.unwrap_or_default();
                 (r.split_whitespace().next().unwrap_or("").to_string(), String::new())
             }
             _ => continue,

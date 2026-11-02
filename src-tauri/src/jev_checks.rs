@@ -222,9 +222,9 @@ pub fn gate_verdict(results: &[PageQuality]) -> String {
 
 /// 每次最多问多少条（一次请求里每条一个问题，共享同一份站点信息）
 const RANK_BATCH: usize = 20;
-/// 技术类机会（抓取问题、站点地图出错）和搜索词无关，不打相关度
+/// 和搜索词无关的机会（抓取问题、站点地图、页面速度、图片、结构化数据、收益）不打相关度——没有词可判，打出来只会是「无关」
 fn rankable(kind: &str) -> bool {
-    !matches!(kind, "crawl_issue" | "sitemap_error")
+    !matches!(kind, "crawl_issue" | "sitemap_error" | "slow" | "img_audit" | "schema" | "low_rpm" | "stale" | "stale_year")
 }
 
 #[derive(Serialize, Deserialize, Default)]

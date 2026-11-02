@@ -236,7 +236,8 @@ pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: Str
 #[tauri::command]
 pub fn queue_mark_done(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
-    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| i.status = "done".into())?;
+    // AI 正在处理的不能标完成：作业结束时会把状态写回去
+    site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| if i.status != "working" { i.status = "done".into() })?;
     Ok(())
 }
 

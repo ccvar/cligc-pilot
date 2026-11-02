@@ -428,13 +428,30 @@ pub fn load(data_dir: &Path) -> ManagedConfig {
     c
 }
 
+static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn save(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {
+    let _g = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    save_unlocked(data_dir, c)
+}
+
+fn save_unlocked(data_dir: &Path, c: &ManagedConfig) -> Result<(), String> {
     let d = dir(data_dir);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let raw = serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?;
-    let tmp = d.join("config.json.tmp");
+    // 临时文件名带随机串：几个作业同时写不会互相截断
+    let tmp = d.join(format!("config.json.{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, d.join("config.json")).map_err(|e| e.to_string())
+}
+
+/// 读 → 改 → 写一气呵成（加锁）：作业里改方案（暂停站点、记日报时间）用这个，别和界面上的保存互相覆盖
+pub fn modify(data_dir: &Path, f: impl FnOnce(&mut ManagedConfig)) -> Result<ManagedConfig, String> {
+    let _g = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut c = load(data_dir);
+    f(&mut c);
+    save_unlocked(data_dir, &c)?;
+    Ok(c)
 }
 
 /// 老站点迁移（只做一次）：第 1–4 档、不在任何方案里的站点按档位和模型归进方案，
@@ -1583,7 +1600,7 @@ pub struct PlanTask {
     pub change: String,
     #[serde(default)]
     pub why: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u32")]
     pub priority: u32,
     /// data | gap | topic | positioning | health
     #[serde(default)]
@@ -1623,9 +1640,25 @@ pub fn default_metric_for(change: &str) -> &'static str {
 
 /// 从模型回复里取出计划 JSON（```json … ``` 代码块，或回复里第一个 JSON 数组）。
 /// 计划回复：`{"positioning": "...", "tasks": [...]}`，也兼容只有任务数组的老格式。
+/// 模型把 priority 写成 "1"、1.5、null 都认
+fn lenient_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v {
+        serde_json::Value::Number(n) => n.as_f64().unwrap_or(0.0).max(0.0) as u32,
+        serde_json::Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0).max(0.0) as u32,
+        _ => 0,
+    })
+}
+
+/// 回复里最后一个 ```json 块（模型读站点时可能先展示过别的 JSON）
+fn last_json_block(reply: &str) -> Option<String> {
+    let i = reply.rfind("```json")?;
+    Some(reply[i + 7..].split("```").next().unwrap_or("").to_string())
+}
+
 pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
-    let body = if let Some(i) = reply.find("```json") {
-        reply[i + 7..].split("```").next().unwrap_or("").to_string()
+    let body = if let Some(b) = last_json_block(reply) {
+        b
     } else {
         let a = reply.find(['{', '[']).ok_or("回复里没有计划（缺少 JSON）")?;
         let b = reply.rfind(['}', ']']).ok_or("回复里没有计划（缺少 JSON）")?;
@@ -1639,25 +1672,23 @@ pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
 
 /// 计划回复里给运营人员的说明（notes 字段，没有就是空串）。
 pub fn parse_plan_notes(reply: &str) -> String {
-    let body = match reply.find("```json") {
-        Some(i) => reply[i + 7..].split("```").next().unwrap_or("").to_string(),
-        None => return String::new(),
-    };
+    let Some(body) = last_json_block(reply) else { return String::new() };
     serde_json::from_str::<serde_json::Value>(body.trim()).ok().and_then(|v| v["notes"].as_str().map(|s| s.trim().chars().take(1000).collect())).unwrap_or_default()
 }
 
 pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
-    let body = if let Some(i) = reply.find("```json") {
-        let rest = &reply[i + 7..];
-        rest.split("```").next().unwrap_or("")
+    let body = if let Some(b) = last_json_block(reply) {
+        b
     } else {
         let a = reply.find('[').ok_or("回复里没有计划（缺少 JSON）")?;
         let b = reply.rfind(']').ok_or("回复里没有计划（缺少 JSON）")?;
-        &reply[a..=b]
+        reply[a..=b].to_string()
     };
     let v: serde_json::Value = serde_json::from_str(body.trim()).map_err(|e| format!("计划 JSON 无法解析：{e}"))?;
     let arr = if v.is_array() { v } else { v["tasks"].clone() };
-    let mut tasks: Vec<PlanTask> = serde_json::from_value(arr).map_err(|e| format!("计划格式不对：{e}"))?;
+    // 一条写坏了（缺 title、字段类型不对）只丢那一条，不让整份计划作废
+    let items = arr.as_array().cloned().ok_or("计划格式不对：tasks 不是数组")?;
+    let mut tasks: Vec<PlanTask> = items.into_iter().filter_map(|t| serde_json::from_value(t).ok()).collect();
     tasks.retain(|t| !t.title.trim().is_empty());
     for t in tasks.iter_mut() {
         if !matches!(t.change.as_str(), "meta" | "content" | "internal_links" | "new_content" | "technical") {

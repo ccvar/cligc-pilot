@@ -61,6 +61,8 @@ struct Fetched {
     body: String,
     /// 跟完跳转之后的地址（去掉防缓存参数）
     final_url: String,
+    /// 被 Cloudflare 这类防火墙的人机验证拦住了（403 / 429 / 503 + cf-mitigated 或挑战页）：页面本身多半没事，只是查不了
+    challenged: bool,
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
@@ -69,9 +71,14 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
     let busted = format!("{url}{sep}_pv={}", crate::now_secs());
     let r = client.get(&busted).send().await.map_err(|e| if e.is_timeout() { "超时".to_string() } else { "打不开".to_string() })?;
     let status = r.status().as_u16();
+    let success = r.status().is_success();
     let final_url = r.url().as_str().split(['?', '#']).next().unwrap_or("").to_string();
-    let body = if r.status().is_success() { r.text().await.unwrap_or_default() } else { String::new() };
-    Ok(Fetched { status, body: body.chars().take(2_000_000).collect(), final_url })
+    let mitigated = r.headers().get("cf-mitigated").is_some();
+    let suspicious = matches!(status, 403 | 429 | 503);
+    let body = if success || suspicious { r.text().await.unwrap_or_default() } else { String::new() };
+    let challenged = suspicious && (mitigated || body.contains("challenge-platform") || body.contains("Just a moment") || body.contains("cf-chl"));
+    let body = if success { body } else { String::new() };
+    Ok(Fetched { status, body: body.chars().take(2_000_000).collect(), final_url, challenged })
 }
 
 /// 「新内容已生效」没过的那条，过后用现在的对照规则再查一次：这些页面里找得到这次加的任何一段文字就算生效。
@@ -108,8 +115,10 @@ fn path_of(url: &str) -> String {
 
 pub(crate) fn same_page(a: &str, b: &str) -> bool {
     let norm = |u: &str| {
-        let u = u.split(['?', '#']).next().unwrap_or(u).trim_end_matches('/').to_lowercase();
-        u.replace("://www.", "://")
+        let u = u.split(['?', '#']).next().unwrap_or(u).to_lowercase();
+        let u = u.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.");
+        // Pages / 多数静态站把 a.html 和 /a、/a/index.html 当同一页
+        u.trim_end_matches('/').trim_end_matches("/index.html").trim_end_matches(".html").trim_end_matches('/').to_string()
     };
     norm(a) == norm(b)
 }
@@ -122,11 +131,15 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     }
     let home = format!("https://{}/", spec.domain);
     let mut urls: Vec<String> = vec![home.clone()];
-    for u in spec.pages.iter().chain(&spec.new_pages) {
+    // 新页面和主要页面先排，之前合并一起上线的页面多时也不会把它们挤出去
+    for u in spec.new_pages.iter().chain(&spec.primary).chain(&spec.pages) {
         if !urls.iter().any(|x| same_page(x, u)) && urls.len() < MAX_PAGES + 1 {
             urls.push(u.clone());
         }
     }
+    // 首页本身就是改到的页面：内容对照和 SEO 检查也要看它（否则只拿它查「能不能打开」）
+    let home_in_spec = spec.pages.iter().chain(&spec.new_pages).chain(&spec.primary).any(|u| same_page(u, &home));
+    let first = if home_in_spec { 0 } else { 1 };
     let client = client();
     let waits: &[u64] = if patient { &[0, 30, 60, 120, 120] } else { &[0, 30] };
     let mut got: Vec<Option<Fetched>> = urls.iter().map(|_| None).collect();
@@ -154,27 +167,32 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
                 continue;
             }
             match fetch(&client, u).await {
-                Ok(f) if (200..300).contains(&f.status) => got[i] = Some(f),
+                Ok(f) if (200..300).contains(&f.status) || f.challenged => got[i] = Some(f),
                 Ok(f) => last[i] = format!("返回 {}", f.status),
                 Err(e) => last[i] = e,
             }
         }
         if !snippets_ok {
             // 改标题 / 描述的改动，新文字只在 <title> 和 meta description 里，正文里没有：一起找
-            let text: String = got.iter().skip(1).flatten().map(|f| format!("{}\n{}\n{}", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body))).collect::<Vec<_>>().join("\n");
+            let text: String = got.iter().skip(first).flatten().map(|f| format!("{}\n{}\n{}", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body))).collect::<Vec<_>>().join("\n");
             snippets_ok = snippets.iter().any(|s| page_has(&text, s));
         }
         if got.iter().all(|g| g.is_some()) && snippets_ok {
             break;
         }
     }
-    // 页面能打开
+    // 被防火墙的人机验证拦住的：不算打不开，也查不了内容，记一条待核对
+    let challenged: Vec<String> = urls.iter().enumerate().filter(|(i, _)| got[*i].as_ref().is_some_and(|f| f.challenged)).map(|(_, u)| path_of(u)).collect();
+    if !challenged.is_empty() {
+        rep.soft.push(format!("验收被网站的防火墙（人机验证）拦住，查不了 {}；可以给 User-Agent「CligcPilot-Verify」加一条放行规则", challenged.join("、")));
+    }
+    // 页面能打开（首页写成「首页 …」：首页打不开多半是整站或 CDN 的问题，上线后复查按它判断要不要回滚）
     for (i, u) in urls.iter().enumerate() {
         let label = if i == 0 { "首页能打开".to_string() } else { format!("{} 能打开", path_of(u)) };
         match &got[i] {
             Some(_) => rep.checks.push(Check { label, ok: true, detail: String::new(), hard: true }),
             None => {
-                let msg = format!("{} {}", path_of(u), last[i]);
+                let msg = if i == 0 { format!("首页 {}", last[i]) } else { format!("{} {}", path_of(u), last[i]) };
                 if last[i].contains("404") && spec.built.iter().any(|b| same_page(b, u)) {
                     rep.deploy_issue = true;
                 }
@@ -198,8 +216,11 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     }
     // 每个改到的页面：SEO 基本项和内部痕迹
     let mut page_bad: HashSet<usize> = HashSet::new();
-    for (i, u) in urls.iter().enumerate().skip(1) {
+    for (i, u) in urls.iter().enumerate().skip(first) {
         let Some(f) = &got[i] else { continue };
+        if f.challenged {
+            continue;
+        }
         let p = path_of(u);
         let mut issues = Vec::new();
         if html_title(&f.body).is_empty() {
@@ -267,7 +288,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             rep.soft.push(format!("新页面里有打不开的站内链接：{}", broken.join("、")));
         }
     }
-    rep.passed = urls.iter().enumerate().skip(1).filter(|(i, _)| got[*i].is_some() && !page_bad.contains(i)).map(|(_, u)| u.clone()).collect();
+    rep.passed = urls.iter().enumerate().skip(first).filter(|(i, _)| got[*i].as_ref().is_some_and(|f| !f.challenged) && !page_bad.contains(i)).map(|(_, u)| u.clone()).collect();
     rep
 }
 
@@ -386,7 +407,18 @@ async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
 }
 
 fn decode(s: &str) -> String {
-    s.replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&#x27;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+    let s = s
+        .replace("&quot;", "\"").replace("&#39;", "'").replace("&#x27;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ")
+        .replace("&#8217;", "'").replace("&rsquo;", "'").replace("&#8216;", "'").replace("&lsquo;", "'")
+        .replace("&#8220;", "\"").replace("&ldquo;", "\"").replace("&#8221;", "\"").replace("&rdquo;", "\"")
+        .replace("&#8211;", "-").replace("&ndash;", "-").replace("&#8212;", "-").replace("&mdash;", "-").replace("&hellip;", "...").replace("&#8230;", "...")
+        .replace("&amp;", "&");
+    s
+}
+
+/// 排版替换（smartypants 把 ' 变 ’、" 变 “”、-- 变 –）：比对前两边都换回普通字符
+fn plain_punct(s: &str) -> String {
+    s.chars().map(|c| match c { '’' | '‘' | '´' => '\'', '“' | '”' | '„' => '"', '–' | '—' => '-', '\u{ad}' => '\0', _ => c }).filter(|c| *c != '\0').collect::<String>().replace('…', "...")
 }
 
 /// 页面上看得到的文字：去掉 script / style 和标签，解码常见实体，空白压成一个空格。
@@ -423,28 +455,46 @@ pub fn visible_text(html: &str) -> String {
 pub fn snippets_from_diff(diff: &str) -> Vec<String> {
     let mut cands: Vec<String> = Vec::new();
     let mut file = "";
+    let mut in_script = false;
     for line in diff.lines() {
         if let Some(f) = line.strip_prefix("+++ ") {
             file = f.strip_prefix("b/").unwrap_or(f);
+            in_script = false;
             continue;
         }
         let Some(added) = line.strip_prefix('+') else { continue };
-        // Pilot 自己的文件（.pilot/todo.json 这类待办）不会出现在页面上
-        if added.starts_with("++") || file.starts_with(".pilot/") {
+        // 不会出现在页面上的文件：Pilot 自己的记录、README / 文档 / 测试 / 脚本 / 多语言文案（语言未必是验收的页面）
+        if added.starts_with("++") || off_page_file(file) {
             continue;
         }
-        // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上；<script> 里的文字（结构化数据的描述）也不会
+        // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上；<script> 里的文字（结构化数据的描述）也不会，跨行的也跳过
         let a = added.trim_start();
-        if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) || a.to_ascii_lowercase().contains("<script") {
+        let lower = a.to_ascii_lowercase();
+        if in_script {
+            if lower.contains("</script") {
+                in_script = false;
+            }
+            continue;
+        }
+        if lower.contains("<script") {
+            in_script = !lower.contains("</script");
+            continue;
+        }
+        if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) {
             continue;
         }
         // Markdown 正文：去掉记号后的整行（表格行渲染后格子之间隔开了，不拿）；frontmatter 的「key: "…"」照旧取引号里的
         let md = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
         let yaml_key = a.split_once(':').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        // 模板 / 页面文件（.astro / .html / .tsx…）：只拿标签之间的正文，属性值（alt、title、class…）线上看不到
+        let pageish = [".astro", ".html", ".htm", ".tsx", ".jsx", ".vue", ".svelte", ".tmpl", ".gohtml", ".njk", ".liquid", ".hbs"].iter().any(|e| file.ends_with(e));
         let texts: Vec<String> = if md && a.starts_with('|') {
             continue;
         } else if md && !yaml_key {
             vec![strip_md(&visible_text(added))]
+        } else if pageish {
+            if !a.contains('<') { continue; }
+            vec![visible_text(added)]
         // 字符串里的文字（数据文件），或去掉标签后的整行（页面文件）；没有引号又像代码的行（赋值、语句）不算正文
         } else if added.contains('\'') || added.contains('"') {
             quoted(added)
@@ -544,7 +594,7 @@ fn is_cjk(c: char) -> bool {
 /// 线上页面里有没有这段文字。不看空白（加粗、链接渲染成标签后，中文之间会多出空格）；
 /// 站点构建时把简体转成繁体（或反过来）的，汉字对不上：其它字符一样、汉字至少一半相同、长度相同就算找到。
 fn page_has(text: &str, snippet: &str) -> bool {
-    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>();
+    let squash = |s: &str| plain_punct(s).chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>();
     let (hay, needle) = (squash(text), squash(snippet));
     if needle.is_empty() || needle.len() > hay.len() {
         return false;
@@ -561,6 +611,20 @@ fn page_has(text: &str, snippet: &str) -> bool {
         }
         same * 2 >= cjk
     })
+}
+
+/// 不会渲染成页面的文件：Pilot 记录、文档、测试、脚本、CI、多语言文案目录
+fn off_page_file(file: &str) -> bool {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let lower = name.to_ascii_lowercase();
+    file.starts_with(".pilot/")
+        || file.contains("/.pilot/")
+        || lower.starts_with("readme")
+        || lower.starts_with("changelog")
+        || matches!(lower.as_str(), "claude.md" | "agents.md" | "license" | "license.md")
+        || lower.contains(".test.")
+        || lower.contains(".spec.")
+        || file.split('/').any(|s| matches!(s, "docs" | "doc" | ".github" | "__tests__" | "tests" | "test" | "fixtures" | "scripts" | "i18n" | "locales" | "lang"))
 }
 
 /// 按 printf 风格的占位（%s、%d、%v、%5.2f、%-10s…）把字符串切成几段字面文字；%% 是字面的百分号。
@@ -620,23 +684,55 @@ fn quoted(line: &str) -> Vec<String> {
 
 /// AI 改完在回复最后写的「新页面：…」「改动的页面：…」，取本站的完整网址。
 pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
-    let bare = domain.trim_start_matches("www.");
+    let bare = domain.trim_start_matches("www.").to_ascii_lowercase();
+    // 本站的完整网址，或以 / 开头的路径（补上域名）；去掉 markdown 的加粗、反引号、链接括号
     let pick = |line: &str| -> Vec<String> {
-        line.split(|c: char| c.is_whitespace() || "，,、；;（）()<>`".contains(c))
-            .map(|w| w.trim_end_matches(['。', '.']))
-            .filter(|w| w.starts_with("https://"))
-            .filter(|w| w.trim_start_matches("https://").split('/').next().unwrap_or("").trim_start_matches("www.") == bare)
-            .map(str::to_string)
+        line.split(|c: char| c.is_whitespace() || "，,、；;（）()<>`[]*".contains(c))
+            .map(|w| w.trim_end_matches(['。', '.', '，', ',']))
+            .filter(|w| !w.is_empty())
+            .filter_map(|w| {
+                if w.starts_with("https://") || w.starts_with("http://") {
+                    let host = w.trim_start_matches("https://").trim_start_matches("http://").split('/').next().unwrap_or("").trim_start_matches("www.").to_ascii_lowercase();
+                    (host == bare).then(|| format!("https://{}", w.trim_start_matches("https://").trim_start_matches("http://")))
+                } else if w.starts_with('/') && w.len() > 1 && !w.contains("//") {
+                    Some(format!("https://{bare}{w}"))
+                } else {
+                    None
+                }
+            })
             .take(10)
             .collect()
     };
+    let is_new = |t: &str| ["新页面", "新頁面", "新增页面", "新增頁面", "new pages", "new page"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
+    let is_changed = |t: &str| ["改动的页面", "改動的頁面", "改动页面", "修改的页面", "changed pages", "modified pages", "updated pages"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
     let (mut new, mut changed) = (Vec::new(), Vec::new());
+    // 「新页面：」后面可能直接跟网址，也可能换行后一行一个（- / * / 1. 开头）：吃到空行或下一个标题为止
+    let mut mode: Option<bool> = None;
     for l in reply.lines() {
-        let t = l.trim().trim_start_matches(['-', '*', ' ']).trim_start_matches("**");
-        if let Some(r) = t.strip_prefix("新页面：").or_else(|| t.strip_prefix("新页面:")) {
-            new.extend(pick(r));
-        } else if let Some(r) = t.strip_prefix("改动的页面：").or_else(|| t.strip_prefix("改动的页面:")) {
-            changed.extend(pick(r));
+        let t = l.trim().trim_start_matches(['-', '*', '#', ' ']).trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ').trim_start_matches("**").trim();
+        let t = t.trim_start_matches("**");
+        let head = t.replace("**", "");
+        if is_new(&head) || is_changed(&head) {
+            let m = is_new(&head);
+            let rest = head.split_once(['：', ':']).map(|(_, r)| r).unwrap_or("");
+            let urls = pick(rest);
+            if m { new.extend(urls) } else { changed.extend(urls) }
+            mode = Some(m);
+            continue;
+        }
+        if t.is_empty() {
+            mode = None;
+            continue;
+        }
+        if let Some(m) = mode {
+            let urls = pick(&head);
+            if urls.is_empty() {
+                mode = None;
+            } else if m {
+                new.extend(urls)
+            } else {
+                changed.extend(urls)
+            }
         }
     }
     new.dedup();
@@ -691,6 +787,24 @@ mod tests {
         assert!(page_has(&page, "TWEX 没有交易平台业务"), "简体写的、线上是繁体");
         assert!(!page_has(&page, "TWEX 没有交易所的牌照和"), "汉字大半不同就不算");
         assert!(!page_has(&page, "OKX 没有交易平台业务"), "非汉字要一样");
+    }
+
+    #[test]
+    fn reported_pages_accept_lists_and_relative_paths() {
+        let reply = "改好了。\n\n**新页面：**\n- https://x.com/zh/a/\n- `/zh/b/`\n\n改动的页面：\n1. [首页](https://www.x.com/)\n2. https://evil.com/\n\n谢谢";
+        let (n, c) = reported_pages(reply, "x.com");
+        assert_eq!(n, vec!["https://x.com/zh/a/", "https://x.com/zh/b/"]);
+        assert_eq!(c, vec!["https://www.x.com/"]);
+        assert!(same_page("https://x.com/a.html", "http://www.x.com/a/"));
+        assert!(same_page("https://x.com/a/index.html", "https://x.com/a"));
+        assert!(page_has(&visible_text("<p>It’s “fine” – really</p>"), "It's \"fine\" - really"));
+        // 模板里只拿标签之间的正文，不拿属性值；README / 测试 / i18n 不算
+        let d = "+++ b/src/pages/a.astro\n+<img alt=\"一张展示欧易提币页面截图的图片\" src=x>\n+<p class=\"lead\">欧易提币到钱包要先选对网络再提币</p>\n+++ b/README.md\n+这一段是写给开发者看的说明文字不会上线\n+++ b/src/i18n/zh.json\n+  \"hello\": \"这是多语言文案里的一句话不该拿来对照\"\n";
+        let s = snippets_from_diff(d);
+        assert_eq!(s, vec!["欧易提币到钱包要先选对网络再提币"], "{s:?}");
+        // 跨行的 <script> 里的文字也跳过
+        let d2 = "+++ b/public/a.html\n+<script type=\"application/ld+json\">\n+{\"description\": \"结构化数据里的描述文字不显示在页面上\"}\n+</script>\n+<p>页面上真正显示出来的一段正文文字</p>\n";
+        assert_eq!(snippets_from_diff(d2), vec!["页面上真正显示出来的一段正文文字"]);
     }
 
     #[test]

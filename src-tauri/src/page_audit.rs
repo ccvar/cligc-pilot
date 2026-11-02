@@ -18,6 +18,8 @@ const WEEK: u64 = 7 * 86_400;
 pub const LARGE_IMAGE: u64 = 300 * 1024;
 /// 每类问题最多记这么多条
 const CAP: usize = 200;
+/// 结构化数据的问题按页面分块，每条任务最多改这么多个页面
+const SCHEMA_CHUNK: usize = 10;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct ImgIssue {
@@ -329,17 +331,28 @@ fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
         });
     }
     if !r.schema.is_empty() {
-        let lines: Vec<String> = r.schema.iter().take(20).map(|s| format!("{}：{}", s.page, s.problem)).collect();
-        out.push(crate::site_ops::Opportunity {
-            key: "schema:site".into(),
-            kind: "schema".into(),
-            title: format!("{} 个页面的结构化数据有问题", r.schema.iter().map(|s| &s.page).collect::<std::collections::HashSet<_>>().len()),
-            page: r.schema[0].page.clone(),
-            evidence: format!("体检时发现（最多列前 20 条）：\n{}\n结构化数据写对了，Google 的搜索结果和 AI 搜索更容易认出文章的标题、日期和作者。", lines.join("\n")),
-            score: (r.schema.len() * 5).min(80) as f64,
-            change: "technical".into(),
-            ..Default::default()
-        });
+        // 按页面分块，每条任务最多 10 个页面：几十个页面一起改必然超过自动上线的行数上限，整轮白跑
+        let mut pages: Vec<String> = Vec::new();
+        for s in &r.schema {
+            if !pages.contains(&s.page) {
+                pages.push(s.page.clone());
+            }
+        }
+        pages.sort();
+        for chunk in pages.chunks(SCHEMA_CHUNK) {
+            let lines: Vec<String> = r.schema.iter().filter(|s| chunk.contains(&s.page)).take(30).map(|s| format!("{}：{}", s.page, s.problem)).collect();
+            let n = lines.len();
+            out.push(crate::site_ops::Opportunity {
+                key: format!("schema:{}", crate::site_ops::stable_key(&chunk.join("|"))),
+                kind: "schema".into(),
+                title: format!("{} 个页面的结构化数据有问题{}", chunk.len(), if pages.len() > chunk.len() { format!("（共 {} 个，分批处理）", pages.len()) } else { String::new() }),
+                page: chunk[0].clone(),
+                evidence: format!("体检时发现（只改这 {} 个页面，别的页面另有任务）：\n{}\n结构化数据写对了，Google 的搜索结果和 AI 搜索更容易认出文章的标题、日期和作者。", chunk.len(), lines.join("\n")),
+                score: (n * 5).min(80) as f64,
+                change: "technical".into(),
+                ..Default::default()
+            });
+        }
     }
     out
 }
