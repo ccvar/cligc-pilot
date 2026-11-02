@@ -917,7 +917,7 @@ pub struct PendingDeploy {
 pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<PendingDeploy>, String> {
     let mut out = Vec::new();
     for site in state.sites.list() {
-        if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") || state.site_jobs.running(&site.id) {
+        if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") || state.site_jobs.running(&site.id) || bulk().lock().unwrap().queued(&site.id) {
             continue;
         }
         let history = crate::site_deploy::load_history(&state.sites.data_dir(&site.id));
@@ -946,22 +946,68 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
     Ok(out)
 }
 
-/// 「全部上线」：按顺序一个个构建并上线（等上一个跑完再开下一个，不让几个站点同时构建），每个照常线上验收。
-/// 中途有站点开不了作业（比如正在跑别的）就跳过它。返回排上的站点数。
+/// 「全部上线」的进度：这一批有哪些站点、做到第几个、各自成没成。界面上按钮换成「正在上线 3/14」。
+#[derive(Serialize, Clone, Default)]
+pub struct BulkDeploy {
+    /// (站点 id, 站点名)，按上线顺序
+    pub sites: Vec<(String, String)>,
+    /// 正在上线的是第几个（从 0 数）；等于 sites.len() 表示这一批做完了
+    pub at: usize,
+    /// 上线失败或没开起来的站点名
+    pub failed: Vec<String>,
+}
+
+impl BulkDeploy {
+    /// 还没轮到或正在上线：这些站点不再列进「有改动没上线」
+    fn queued(&self, id: &str) -> bool {
+        self.sites.iter().skip(self.at).any(|(s, _)| s == id)
+    }
+}
+
+fn bulk() -> &'static std::sync::Mutex<BulkDeploy> {
+    static B: std::sync::OnceLock<std::sync::Mutex<BulkDeploy>> = std::sync::OnceLock::new();
+    B.get_or_init(Default::default)
+}
+
 #[tauri::command]
-pub fn deploy_many(app: tauri::AppHandle, ids: Vec<String>) -> Result<usize, String> {
-    let n = ids.len();
+pub fn deploy_many_status() -> BulkDeploy {
+    bulk().lock().unwrap().clone()
+}
+
+/// 「全部上线」：按顺序一个个构建并上线（等上一个跑完再开下一个，不让几个站点同时构建），每个照常线上验收。
+/// 中途有站点开不了作业（比如正在跑别的）就记为失败、跳过它。上一批还没做完时不接新的。返回排上的站点数。
+#[tauri::command]
+pub fn deploy_many(app: tauri::AppHandle, state: tauri::State<'_, AppState>, ids: Vec<String>) -> Result<usize, String> {
+    {
+        let mut b = bulk().lock().unwrap();
+        if b.at < b.sites.len() {
+            return Err(format!("上一批还在上线（{}/{}），做完再点", b.at + 1, b.sites.len()));
+        }
+        let sites: Vec<(String, String)> = ids.iter().filter_map(|id| state.sites.get(id).ok().map(|s| (s.id, s.name))).collect();
+        *b = BulkDeploy { sites, at: 0, failed: Vec::new() };
+    }
+    let n = bulk().lock().unwrap().sites.len();
     tauri::async_runtime::spawn(async move {
         use tauri::Manager;
         let state = app.state::<AppState>();
-        for id in ids {
-            if start_deploy(app.clone(), &state, id.clone()).is_err() {
-                continue;
-            }
-            while state.site_jobs.running(&id) {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let sites = bulk().lock().unwrap().sites.clone();
+        for (i, (id, name)) in sites.into_iter().enumerate() {
+            bulk().lock().unwrap().at = i;
+            let ok = match start_deploy(app.clone(), &state, id.clone()) {
+                Ok(_) => {
+                    while state.site_jobs.running(&id) {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    }
+                    crate::site_deploy::load_history(&state.sites.data_dir(&id)).first().is_some_and(|r| r.ok)
+                }
+                Err(_) => false,
+            };
+            if !ok {
+                bulk().lock().unwrap().failed.push(name);
             }
         }
+        let mut b = bulk().lock().unwrap();
+        b.at = b.sites.len();
     });
     Ok(n)
 }

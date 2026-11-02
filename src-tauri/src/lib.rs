@@ -5122,6 +5122,7 @@ pub fn run() {
             site_cmds::deploy_site,
             site_cmds::undeployed_sites,
             site_cmds::deploy_many,
+            site_cmds::deploy_many_status,
             site_cmds::check_site,
             site_cmds::site_pages_deployments,
             site_cmds::retry_pages_deployment,

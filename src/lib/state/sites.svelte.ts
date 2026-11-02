@@ -196,9 +196,20 @@ export async function deploySite(id: string, background = false) {
 }
 /** 已经提交、还没上线的站点（Pilot 直接部署、上线过、文件夹干净、最新提交不是上次上线的那一版） */
 export type PendingDeploy = { id: string; name: string; subject: string };
-export const pendingDeploys = $state<{ list: PendingDeploy[] }>({ list: [] });
+/** 「全部上线」这一批的进度：sites 按顺序，at＝正在上线第几个（等于 sites.length 表示做完了），failed＝没成功的站点名 */
+export type BulkDeploy = { sites: [string, string][]; at: number; failed: string[] };
+export const pendingDeploys = $state<{ list: PendingDeploy[]; bulk: BulkDeploy | null }>({ list: [], bulk: null });
+let bulkTimer: ReturnType<typeof setTimeout> | undefined;
 export async function loadPendingDeploys() {
-  try { pendingDeploys.list = await invoke<PendingDeploy[]>('undeployed_sites'); } catch { /* 读不到就不显示按钮 */ }
+  try {
+    const b = await invoke<BulkDeploy>('deploy_many_status');
+    pendingDeploys.bulk = b.sites.length ? b : null;
+    pendingDeploys.list = await invoke<PendingDeploy[]>('undeployed_sites');
+  } catch { /* 读不到就不显示按钮 */ }
+  // 这一批还在跑：几秒后再查一次进度；跑完了停
+  clearTimeout(bulkTimer);
+  const b = pendingDeploys.bulk;
+  if (b && b.at < b.sites.length) bulkTimer = setTimeout(() => void loadPendingDeploys(), 4000);
 }
 /** 全部上线：确认后按顺序一个个构建并上线（后台排队，不会几个站点同时构建），每个照常线上验收 */
 export async function deployAllPending() {
@@ -210,7 +221,7 @@ export async function deployAllPending() {
   try {
     await invoke<number>('deploy_many', { ids: list.map((p) => p.id) });
     pendingDeploys.list = [];
-    say(`已经排上 ${list.length} 个站点，按顺序上线；进度在各站点的部署页`, 'ok');
+    void loadPendingDeploys();
   } catch (e) { say(String(e), 'err'); }
 }
 /** 补上线上缺的验证文件：上次上线的构建产物还在就原样补文件再传（不重新构建），否则走完整的构建并上线。 */

@@ -136,7 +136,15 @@
     </div>
     <div class="row">
       <!-- 已经提交、还没上线的站点：一键按顺序上线（悬停看是哪几个） -->
-      {#if pendingDeploys.list.length}
+      {#if pendingDeploys.bulk}
+        {@const b = pendingDeploys.bulk}
+        {#if b.at < b.sites.length}
+          <span class="iss soft" data-tip={`按顺序上线：${b.sites.map(([, n], i) => `${i < b.at ? '✓' : i === b.at ? '→' : '·'} ${n}`).join('\n')}`}><span class="spin"></span>正在上线 {b.at + 1}/{b.sites.length}：{b.sites[b.at][1]}</span>
+        {:else}
+          <span class="iss soft" data-tip={b.failed.length ? `没成功的：${b.failed.join('、')}，到它们的部署页看原因` : '都上线了，每个都做了线上验收'}><Icon name={b.failed.length ? 'x' : 'check'} size={13} />{b.failed.length ? `上线完成 ${b.sites.length - b.failed.length}/${b.sites.length}，${b.failed.length} 个没成功` : `${b.sites.length} 个站点都上线了`}</span>
+        {/if}
+      {/if}
+      {#if pendingDeploys.list.length && !(pendingDeploys.bulk && pendingDeploys.bulk.at < pendingDeploys.bulk.sites.length)}
         <button class="iss soft" onclick={deployAllPending} data-tip={`这些站点有已经提交、还没上线的改动：\n${pendingDeploys.list.map((p) => p.name).join('、')}\n点一下确认后按顺序构建并上线`}><Icon name="rocket" size={13} />{pendingDeploys.list.length} 个站点有改动没上线 · 全部上线</button>
       {/if}
       {#if issues.length}
