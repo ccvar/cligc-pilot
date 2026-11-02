@@ -15,10 +15,11 @@
   import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { stopsFor, effortValue } from '$lib/effortStops';
+  import ModelFx from '$lib/ModelFx.svelte';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
-  const modelOpts = $derived(launcher.comboOpts.map((x) => ({ value: x.value, label: x.label, sub: x.value.startsWith('codex::') ? `${x.sub} · 托管时断网运行` : x.sub, icon: x.icon, disabled: x.disabled })));
+  const modelOpts = $derived(launcher.comboOpts.map((x) => ({ value: x.value, label: x.label, sub: x.value.startsWith('codex::') ? `${x.sub} · 托管时断网运行` : x.sub, icon: x.icon, disabled: x.disabled, apiProtocol: x.apiProtocol })));
   // Codex 没有逐条确认的钩子：托管时 Pilot 把它关在工作文件夹里并断网运行，选它要先看清楚代价
   const usesCodex = $derived(!!g && (g.brain === 'codex' || g.fallback_brain === 'codex'));
   const primary = $derived(g ? `${g.brain}::${g.model}` : '');
@@ -40,15 +41,13 @@
     const key = which === 'primary' ? 'effort' : 'fallback_effort';
     if (!stopOpts(v).some((o) => o.value === (g[key] ?? ''))) g[key] = '';
   }
-  // 推理强度：按这个模型能用的档位列（和对话框、运营模型菜单同一份档位表）
+  // 这个模型能用的推理强度档位（和对话框、运营模型菜单同一份档位表）：换模型时用来判断原来那一档还能不能留
   function stopOpts(v: string) {
     if (!v) return [];
     const [b, ...m] = v.split('::');
     const proto = launcher.comboOpts.find((o) => o.value === v)?.apiProtocol;
-    return stopsFor(b, m.join('::'), proto).map((s) => ({ value: effortValue(b, s.v), label: s.l, sub: s.d }));
+    return stopsFor(b, m.join('::'), proto).map((s) => ({ value: effortValue(b, s.v) }));
   }
-  const primaryStops = $derived(stopOpts(primary));
-  const fallbackStops = $derived(stopOpts(fallback));
 
   let q = $state('');
   const otherOf = (id: string) => groups.find((x) => x.id !== g?.id && x.sites.includes(id));
@@ -283,10 +282,9 @@
       </div>
       <div class="sec"><Icon name="cpu" size={13} />模型</div>
       <div class="grid2">
-        <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
-        <div class="field"><span class="lbl">备用模型<InfoTip label="备用模型" text="主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。" /></span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
-        <div class="field"><span class="lbl">主模型推理强度<InfoTip label="推理强度" text="越高想得越深、改得越稳，但更慢、更费 token；「自动」跟随模型默认。" /></span><Dropdown bind:value={() => g?.effort ?? '', (v) => g && (g.effort = v)} options={primaryStops} disabled={!primaryStops.length} /></div>
-        <div class="field"><span class="lbl">备用模型推理强度</span><Dropdown bind:value={() => g?.fallback_effort ?? '', (v) => g && (g.fallback_effort = v)} options={fallbackStops.length ? fallbackStops : [{ value: '', label: '—' }]} disabled={!fallbackStops.length} /></div>
+        <!-- 和对话框一样：点开上半选模型、下半拖推理强度（越高想得越深、更慢更费 token；「自动」跟随模型默认） -->
+        <div class="field"><span class="lbl">主模型</span><ModelFx field showFast={false} options={modelOpts} value={primary} effort={g.effort ?? ''} onpick={(v: string) => pick(v, 'primary')} oneffort={(v: string) => g && (g.effort = v)} /></div>
+        <div class="field"><span class="lbl">备用模型<InfoTip label="备用模型" text="主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。" /></span><ModelFx field showFast={false} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} value={fallback} effort={g.fallback_effort ?? ''} onpick={(v: string) => pick(v, 'fallback')} oneffort={(v: string) => g && (g.fallback_effort = v)} /></div>
       </div>
       {#if usesCodex}
         <div class="codex-warn" role="note">

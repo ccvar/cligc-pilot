@@ -17,6 +17,10 @@
     /** 装着的 CLI 够不够新（headless fast 需要 2.1.205+）。不够就置灰并说明，
      *  绝不摆一个「点了没反应」的开关——那个键在旧版上是静默失效的。 */
     fastOk = true,
+    /** 表单里用：触发器做成和下拉框一样的整宽输入框样式（托管方案的主 / 备用模型） */
+    field = false,
+    /** 不提供 Fast 模式（无人值守的托管任务不支持） */
+    showFast = true,
     onpick = (_v: string) => {},
     oneffort = (_v: string) => {},
     onfast = (_v: boolean) => {},
@@ -127,11 +131,12 @@
   });
 </script>
 
-<div class="fx" bind:this={root}>
+<div class="fx" class:field bind:this={root}>
   <button type="button" class="fx-trigger" class:open onclick={toggle}>
     {#if current?.icon}<BrainIcon brain={current.icon} size={13} />{/if}
     <span class="fx-label">{current?.label ?? (value || '模型')}</span>
     {#if apiModel}<span class="fx-eff">API · {unsupportedApiEffort ? '待调整' : stops[idx].l}</span>{:else if idx > 0}<span class="fx-eff">{stops[idx].l}</span>{/if}
+    {#if field}<span class="fx-grow"></span>{/if}
     <svg class="fx-chev" width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
   </button>
   {#if open}
@@ -146,6 +151,8 @@
           </button>
         {/each}
       </div>
+      <!-- 选的是「不用备用模型」这类空选项：没有推理强度可调 -->
+      {#if value}
       {#if !apiModel || apiLevels.length}
       <div class="fx-div"></div>
       <div class="fx-sec">推理强度<span class="fx-sec-sub">{stops[liveIdx].l} · {brainName} {stops[liveIdx].v || (apiModel ? 'default' : 'auto')}{stops[liveIdx].d ? ' · ' + stops[liveIdx].d : ''}</span></div>
@@ -172,11 +179,12 @@
         <div class="fx-div"></div>
         <div class="fx-api-note">{limitedChatReasoning ? '此模型的工具调用需使用 OpenAI Responses 接口。' : '此模型暂未确认可用推理档位，使用服务商默认配置。'}用量由服务商独立计费</div>
       {/if}
+      {/if}
       {#if limitedChatReasoning && apiLevels.length}<div class="fx-api-note">此模型在兼容接口中使用工具仅支持「无」推理；如需思考等级，请使用 OpenAI Responses 接口。</div>{/if}
       {#if unsupportedApiEffort}
         <div class="fx-api-note fx-api-warning" role="status">已保存的「{apiEffortValue(effort)}」不受此模型支持，请选择可用档位或<button type="button" onclick={() => oneffort('')}>恢复默认</button>。</div>
       {/if}
-      {#if fastable}
+      {#if fastable && showFast}
         <div class="fx-div"></div>
         <button type="button" class="fx-fast" class:on={fast && fastOk} disabled={!fastOk} onclick={() => onfast(!fast)}>
           <span class="fx-otext"><b>Fast 模式</b><small>{fastOk ? '更快出字 · 按 API 用量单独计费' : 'CLI 需 2.1.205+ · 去「本地模型」升级'}</small></span>
@@ -207,6 +215,13 @@
   .fx-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .fx-eff { font-size: 10.5px; padding: 0 6px; border-radius: 999px; background: #edece7; color: var(--text, #26241f); }
   .fx-chev { opacity: .6; flex: none; }
+  /* 表单形态：和 Dropdown 的 .dd-trigger 同尺度（整宽、白底、细边框、13px） */
+  .fx.field { display: flex; width: 100%; }
+  .fx.field .fx-trigger { width: 100%; height: var(--ctl-h, 30px); gap: 7px; padding: 0 10px; border: 1px solid var(--border2, #e1dfd8); border-radius: 8px; background: #fff; font-size: 13px; color: var(--text, #26241f); }
+  .fx.field .fx-trigger:hover { border-color: #cfccc2; background: #fff; }
+  .fx.field .fx-trigger.open { border-color: #b7b2a6; background: #fff; }
+  .fx.field .fx-label { max-width: none; min-width: 0; }
+  .fx-grow { flex: 1; }
 
   .fx-menu { position: fixed; z-index: 95; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--border2, #e2dfd7); border-radius: 12px; box-shadow: 0 12px 32px rgba(30, 25, 15, .16); padding: 7px; }
   /* 菜单是列向 flex ＋ max-height 钳制（position() 注入）：除模型列表外一律 flex:none，
