@@ -417,6 +417,26 @@ fn recent_years_in(s: &str) -> Vec<i32> {
     out
 }
 
+/// 托管方案里失败的、原因和这条任务本身无关（Pilot 中途退出、站点还没建 git 仓库、模型临时用不了）：
+/// 各放回排队一次，按方案节奏自动重做，不用你手动点。改出问题、检查没过这类不重试，照样留给你。
+pub fn requeue_retryable(site_dir: &Path, now: u64) -> Result<Vec<String>, String> {
+    const TRANSIENT: [&str; 12] = ["上次 Pilot 退出或重启时", "不是 git 仓库", "余额不足", "额度", "credit", "rate limit", "overloaded", "超时", "timed out", "网络", "连接", "529"];
+    let ids: Vec<String> = load_queue(site_dir)
+        .into_iter()
+        .filter(|i| i.status == "failed" && !i.auto_retried && i.head_sha.is_empty() && TRANSIENT.iter().any(|k| i.note.to_lowercase().contains(&k.to_lowercase())))
+        .map(|i| i.id)
+        .collect();
+    for id in &ids {
+        update_item(site_dir, id, now, |i| {
+            i.status = "open".into();
+            i.auto_retried = true;
+            i.retry_note = std::mem::take(&mut i.note);
+            i.note = "上次失败的原因和这条任务本身无关，已自动放回排队重做一次".into();
+        })?;
+    }
+    Ok(ids)
+}
+
 /// 页面多久没更新算「久未更新」
 pub const STALE_DAYS: i64 = 180;
 
@@ -637,6 +657,9 @@ pub struct QueueItem {
     /// 上次失败的原因，重做时交给 AI。
     #[serde(default)]
     pub retry_note: String,
+    /// 托管方案自动重试过一次（中断、环境问题这类失败放回排队过）：再失败就留给你
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_retried: bool,
     /// 上线后复查到第几次：0＝1 小时后，1＝24 小时后，2＝查完了。
     #[serde(default)]
     pub watch_stage: u8,
@@ -1233,6 +1256,20 @@ mod tests {
         assert_eq!(opps[0].page, "https://x.com/a");
         assert_eq!(opps[0].queries.len(), 2);
         assert_eq!(opps[0].key, "cannibal:https://x.com/a|https://x.com/b");
+    }
+
+    #[test]
+    fn transient_failures_are_requeued_once() {
+        let t = tempfile::tempdir().unwrap();
+        let item = |id: &str, note: &str, head: &str| QueueItem { id: id.into(), status: "failed".into(), note: note.into(), head_sha: head.into(), ..Default::default() };
+        save_queue(t.path(), &[item("a", "上次 Pilot 退出或重启时这条还在执行，被中断了。", ""), item("b", "站点文件夹不是 git 仓库：请先 git init", ""), item("c", "构建没通过：npm run build 报错", ""), item("d", "上次 Pilot 退出或重启时…", "abc")]).unwrap();
+        assert_eq!(requeue_retryable(t.path(), 1).unwrap(), vec!["a", "b"]);
+        let q = load_queue(t.path());
+        assert_eq!(q.iter().map(|i| i.status.as_str()).collect::<Vec<_>>(), vec!["open", "open", "failed", "failed"]);
+        assert!(q[0].retry_note.contains("中断"));
+        // 再失败就不重试了
+        update_item(t.path(), "a", 2, |i| { i.status = "failed".into(); i.note = "上次 Pilot 退出或重启时…".into(); }).unwrap();
+        assert!(requeue_retryable(t.path(), 3).unwrap().is_empty());
     }
 
     #[test]

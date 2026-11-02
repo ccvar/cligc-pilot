@@ -634,6 +634,14 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
     let site_dir = ctx.site_dir(&site.id);
     // 全托管：只挑方案允许的动作
     let rules = group_rules(ctx, site);
+    // 托管方案：失败原因和任务本身无关的（中断、没建 git 仓库、模型临时用不了）放回排队重做一次，不用你手动点
+    if rules.is_some() {
+        if let Ok(ids) = site_ops::requeue_retryable(&site_dir, now()) {
+            if !ids.is_empty() {
+                job.line(&format!("{} 条上次因为中断、环境或模型问题失败的，放回排队重做一次", ids.len()));
+            }
+        }
+    }
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
     // 同一种页面的改标题 / 描述合成一条（同批量让 AI 改）
