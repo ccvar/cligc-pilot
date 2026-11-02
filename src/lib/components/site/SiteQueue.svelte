@@ -377,6 +377,8 @@
         {#if ['merged', 'deployed'].includes(i.status) && i.merge_sha}<button class="btn tiny danger" onclick={() => rollbackItem(site, i)} disabled={busy}><Icon name="undo" size={11} />回滚</button>{/if}
         {#if ['open', 'proposed', 'failed'].includes(i.status)}<span class="grow"></span><button class="btn tiny quiet" onclick={() => dismissItem(site, i)} disabled={busy}><Icon name="x" size={11} />驳回</button>{/if}
       </div>
+      <!-- 站点正在跑别的作业时这些按钮都是灰的：说一声为什么、什么时候能点 -->
+      {#if busy && ['proposed', 'failed', 'open'].includes(i.status)}<p class="hint busy-hint"><span class="spin"></span>这个站点正在跑「{job?.title || '另一项作业'}」，同一个站点一次只跑一项，跑完这些按钮就能点了</p>{/if}
       {/if}
     </div>
 {/snippet}
@@ -393,6 +395,7 @@
 {#if mMenu}<ModelMenu at={mMenu.at} current={siteModel} note="只用这一次，站点和托管方案的模型不变" onpick={(m, _d, e) => { const it = mMenu?.item; mMenu = null; if (it) void workItem(site.id, it, m, e); }} onclose={() => (mMenu = null)} />{/if}
 
 <style>
+  .busy-hint { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; }
   .checks { list-style: none; margin: 2px 0 4px; padding: 0 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
   .checks li { line-height: 1.55; }
   .checks .ck-i { display: inline-block; width: 16px; color: var(--ok); }
