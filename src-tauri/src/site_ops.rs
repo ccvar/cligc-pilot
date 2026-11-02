@@ -424,7 +424,7 @@ fn recent_years_in(s: &str) -> Vec<i32> {
 pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) -> Result<Vec<String>, String> {
     const REPO: [&str; 3] = ["不是 git 仓库", "还没有任何提交", "unknown revision"];
     // 只认失败原因的开头：模型层（余额、限流、网络）、Pilot 中断、拉代码 / 推送；别处提到「连接」「超时」的不算
-    const TRANSIENT: [&str; 5] = ["上次 Pilot 退出或重启时", "模型这一轮没有完成：", "git push ", "git fetch ", "git clone "];
+    const TRANSIENT: [&str; 7] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch ", "git clone "];
     let has = |note: &str, ks: &[&str]| ks.iter().any(|k| note.contains(k));
     let starts = |note: &str, ks: &[&str]| ks.iter().any(|k| note.starts_with(k));
     let ids: Vec<String> = load_queue(site_dir)
@@ -443,15 +443,14 @@ pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) 
     Ok(ids)
 }
 
-/// AI 已经提交到分支上、后面才失败的（推送 / 中断 / 模型层）：拿一条出来让调度自动「重新检查」，每条只自动查一次
-pub fn take_recheckable(site_dir: &Path, now: u64) -> Option<String> {
-    const RECHECK: [&str; 4] = ["上次 Pilot 退出或重启时", "模型这一轮没有完成：", "git push ", "推送"];
-    let id = load_queue(site_dir)
+/// AI 已经提交到分支上、后面才失败的（推送 / 中断 / 模型层）：挑一条让调度自动「重新检查」。
+/// 作业真的起来了调用方再标 auto_retried（每条只自动查一次；站点正忙起不了就下个 tick 再来）
+pub fn peek_recheckable(site_dir: &Path) -> Option<String> {
+    const RECHECK: [&str; 6] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch "];
+    load_queue(site_dir)
         .into_iter()
-        .find(|i| i.status == "failed" && !i.head_sha.is_empty() && !i.branch.is_empty() && !i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k)))
-        .map(|i| i.id)?;
-    update_item(site_dir, &id, now, |i| i.auto_retried = true).ok()?;
-    Some(id)
+        .find(|i| i.status == "failed" && !i.head_sha.is_empty() && !i.branch.is_empty() && i.merge_sha.is_empty() && !i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k)))
+        .map(|i| i.id)
 }
 
 /// 撤掉还没开始处理（open）、满足条件的条目（不是驳回：以后还可以再提）。返回撤掉几条。
@@ -771,6 +770,8 @@ pub fn should_enqueue(q: &[QueueItem], key: &str, now: u64, cooldown: u64) -> bo
     !q.iter().any(|i| {
         (i.opp.key == key || i.also.iter().any(|o| o.key == key))
             && (matches!(i.status.as_str(), "open" | "working" | "proposed" | "merged" | "dismissed")
+                // 效果复盘负面被回滚的：这件事做过、证明没用，不再提
+                || (i.status == "rolled_back" && i.review == "negative")
                 || now.saturating_sub(i.updated_at) < cooldown)
     })
 }
@@ -1306,9 +1307,10 @@ mod tests {
         assert_eq!(requeue_retryable(t.path(), 1, || true).unwrap(), vec!["b"]);
         let q = load_queue(t.path());
         assert_eq!(q.iter().map(|i| i.status.as_str()).collect::<Vec<_>>(), vec!["open", "open", "failed", "failed", "failed"], "正文里提到「连接」「超时」的不算瞬时失败");
-        // 已经提交到分支的中断条目：不放回排队，交给自动「重新检查」（每条一次）
-        assert_eq!(take_recheckable(t.path(), 2).as_deref(), Some("d"));
-        assert_eq!(take_recheckable(t.path(), 2), None);
+        // 已经提交到分支的中断条目：不放回排队，交给自动「重新检查」（作业起来后调用方标 auto_retried）
+        assert_eq!(peek_recheckable(t.path()).as_deref(), Some("d"));
+        update_item(t.path(), "d", 2, |i| i.auto_retried = true).unwrap();
+        assert_eq!(peek_recheckable(t.path()), None);
         assert!(q[0].retry_note.contains("中断"));
         // 再失败就不重试了
         update_item(t.path(), "a", 2, |i| { i.status = "failed".into(); i.note = "上次 Pilot 退出或重启时…".into(); }).unwrap();

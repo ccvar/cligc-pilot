@@ -955,6 +955,8 @@ pub struct BulkDeploy {
     pub at: usize,
     /// 上线失败或没开起来的站点名
     pub failed: Vec<String>,
+    /// 这一批做完的时间（秒）；界面上过一会儿就不再显示结果
+    pub finished_at: u64,
 }
 
 impl BulkDeploy {
@@ -984,7 +986,7 @@ pub fn deploy_many(app: tauri::AppHandle, state: tauri::State<'_, AppState>, ids
             return Err(format!("上一批还在上线（{}/{}），做完再点", b.at + 1, b.sites.len()));
         }
         let sites: Vec<(String, String)> = ids.iter().filter_map(|id| state.sites.get(id).ok().map(|s| (s.id, s.name))).collect();
-        *b = BulkDeploy { sites, at: 0, failed: Vec::new() };
+        *b = BulkDeploy { sites, at: 0, failed: Vec::new(), finished_at: 0 };
     }
     let n = bulk().lock().unwrap().sites.len();
     tauri::async_runtime::spawn(async move {
@@ -1008,6 +1010,7 @@ pub fn deploy_many(app: tauri::AppHandle, state: tauri::State<'_, AppState>, ids
         }
         let mut b = bulk().lock().unwrap();
         b.at = b.sites.len();
+        b.finished_at = now();
     });
     Ok(n)
 }

@@ -826,25 +826,33 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
 
 /// 页面文件（Markdown / HTML / SVG）里不该自动上线的写法：Markdown 允许内嵌 HTML，Astro 原样渲染，`public/` 下的 HTML / SVG 直接上线。
 /// 脚本、事件处理、javascript: 任何等级都要人看；iframe / object / embed 按「直接插入 HTML」算（方案可以放行）。
-fn page_risky(line: &str) -> Option<&'static str> {
+/// `markdown`：正文文件（.md / .mdx）里任何 <script> 都硬拦；模板（.astro / .html / .svg）里内联 <script> 是正常写法，
+/// 只硬拦引外站脚本和 javascript:，其余按「直接插入 HTML」（方案可以放行）
+fn page_risky(line: &str, markdown: bool) -> Option<&'static str> {
     let l = line.to_ascii_lowercase();
-    if l.contains("<script") || l.contains("javascript:") {
+    // 结构化数据（<script type="application/ld+json">…）不是可执行脚本，页面模板里改它是常见任务
+    let ld_json = l.contains("<script") && l.contains("application/ld+json") && !l.contains("src=");
+    let external = l.contains("<script") && l.contains("src=") && (l.contains("src=\"http") || l.contains("src='http") || l.contains("src=\"//") || l.contains("src='//"));
+    // javascript: 要在属性值的位置（前面是 = 或引号），正文里的「JavaScript: 基础」不算
+    let js_url = l.match_indices("javascript:").any(|(i, _)| l[..i].trim_end().ends_with(['=', '"', '\'', '(']));
+    if external || js_url || (markdown && l.contains("<script") && !ld_json) {
         return Some("插入脚本");
     }
-    // 标签属性里的事件处理：onclick= / onload= / onerror=（前面是空格或引号，后面紧跟 =）
+    // 标签属性里的事件处理：onclick= / onload= / onerror=（前面是空格或引号、处在标签里，后面紧跟 =）
     let mut from = 0;
     while let Some(i) = l[from..].find("on") {
         let i = from + i;
-        let before_ok = i == 0 || matches!(l.as_bytes()[i - 1], b' ' | b'"' | b'\'' | b'<');
+        let before_ok = i > 0 && matches!(l.as_bytes()[i - 1], b' ' | b'"' | b'\'');
+        let in_tag = l[..i].rfind('<').is_some_and(|lt| l[lt..i].find('>').is_none());
         let rest = &l[i + 2..];
         let name_len = rest.chars().take_while(|c| c.is_ascii_alphabetic()).count();
-        if before_ok && name_len >= 3 && rest[name_len..].trim_start().starts_with('=') {
+        if before_ok && in_tag && name_len >= 3 && rest[name_len..].starts_with('=') {
             return Some("插入脚本");
         }
         from = i + 2;
     }
-    if l.contains("<iframe") || l.contains("<object") || l.contains("<embed") {
-        return Some("嵌入外部页面");
+    if (l.contains("<script") && !ld_json) || l.contains("<iframe") || l.contains("<object") || l.contains("<embed") {
+        return Some(if l.contains("<script") { "内联脚本" } else { "嵌入外部页面" });
     }
     None
 }
@@ -852,7 +860,7 @@ fn page_risky(line: &str) -> Option<&'static str> {
 /// 危险写法对应的拦截类型：直接插入 HTML、读环境变量、引入外部包可以按方案放行；调外部服务、执行命令这些不行。
 fn risky_kind(why: &str) -> &'static str {
     match why {
-        "直接插入 HTML" | "嵌入外部页面" => "html",
+        "直接插入 HTML" | "嵌入外部页面" | "内联脚本" => "html",
         "读环境变量" | "读运行环境（密钥、数据库）" => "env",
         "引入了外部包" => "package",
         _ => "",
@@ -955,24 +963,44 @@ fn generated_by_build(file: &str, generated: &[String]) -> bool {
 /// frontmatter 里改了网址（slug / permalink / url / aliases / redirect_from 的旧行被删）或把页面改成不可见
 /// （draft → true、published → false、noindex → true）：返回那个键
 fn url_or_unpublish_change(removed: &[String], added: &[String]) -> Option<&'static str> {
-    fn kv(l: &str) -> Option<(&str, String)> {
+    // 只认 frontmatter 顶层的键：没有缩进、不是列表项（正文里 sources 列表的 `  - url:` 不算）
+    fn kv(l: &str) -> Option<(String, String)> {
+        if l.starts_with([' ', '\t']) {
+            return None;
+        }
         let t = l.trim();
         if t.starts_with('-') || t.starts_with('#') {
             return None;
         }
         let (k, v) = t.split_once(':')?;
-        Some((k.trim().trim_matches(['"', '\'']), v.trim().trim_end_matches(',').trim_matches(['"', '\'']).to_ascii_lowercase()))
+        let k = k.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+        if k.is_empty() || !k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        Some((k, v.trim().trim_end_matches(',').trim_matches(['"', '\'']).to_ascii_lowercase()))
     }
-    let after = |key: &str| added.iter().filter_map(|l| kv(l)).find(|(k, _)| *k == key).map(|(_, v)| v);
+    let before = |key: &str| removed.iter().filter_map(|l| kv(l)).find(|(k, _)| k == key).map(|(_, v)| v);
+    let after = |key: &str| added.iter().filter_map(|l| kv(l)).find(|(k, _)| k == key).map(|(_, v)| v);
     for l in removed {
-        let Some((k, v)) = kv(l) else { continue };
-        match k {
-            "slug" | "permalink" | "url" | "aliases" | "redirect_from" => return Some(match k { "slug" => "slug", "permalink" => "permalink", "url" => "url", "aliases" => "aliases", _ => "redirect_from" }),
-            "draft" if v != "true" && after("draft").as_deref() == Some("true") => return Some("draft"),
-            "published" if v != "false" && after("published").as_deref() == Some("false") => return Some("published"),
-            "noindex" if v != "true" && after("noindex").as_deref() == Some("true") => return Some("noindex"),
+        let Some((k, _)) = kv(l) else { continue };
+        match k.as_str() {
+            "slug" => return Some("slug"),
+            "permalink" => return Some("permalink"),
+            "url" => return Some("url"),
+            "aliases" => return Some("aliases"),
+            "redirect_from" => return Some("redirect_from"),
             _ => {}
         }
+    }
+    // 改成不可见：原来不是（或原来没写这个键）、现在是
+    if after("draft").as_deref() == Some("true") && before("draft").as_deref() != Some("true") {
+        return Some("draft");
+    }
+    if after("published").as_deref() == Some("false") && before("published").as_deref() != Some("false") {
+        return Some("published");
+    }
+    if after("noindex").as_deref() == Some("true") && before("noindex").as_deref() != Some("true") {
+        return Some("noindex");
     }
     None
 }
@@ -1020,7 +1048,13 @@ pub fn money_atoms(line: &str) -> Vec<String> {
         let l = t.to_lowercase();
         let ident = t.chars().skip(1).any(|c| c.is_ascii_uppercase()) || t.contains('_') || t.contains('.');
         if ident && !l.contains("http") && MONEY_WORDS.iter().any(|w| l.contains(w)) && !out.iter().any(|o| o.contains(t)) {
-            out.push(t.to_string());
+            // 字段带着值一起算（inviteCode: "ABC" → inviteCode=abc）：只换值不换字段名也能看出来
+            let value = line.find(t).map(|i| &line[i + t.len()..]).and_then(|rest| {
+                let r = rest.trim_start().trim_start_matches([':', '=']).trim_start();
+                let v: String = r.trim_start_matches(['"', '\'', '`']).chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
+                (!v.is_empty() && rest.trim_start().starts_with([':', '='])).then_some(v)
+            });
+            out.push(match value { Some(v) => format!("{t}={v}"), None => t.to_string() });
         }
     }
     out.dedup();
@@ -1294,7 +1328,9 @@ fn data_line(line: &str) -> bool {
     // `* …` 多半是块注释里的一行，但 `* globalThis[...]()` 也是合法的乘法表达式（和上一行的数字接上）：
     // 带调用、下标、赋值、模板串的不算注释；`/* … */ 代码` 这种注释后面还有东西的也不算
     if t.starts_with('*') {
-        return !t.contains(['(', '[', '=', '`']);
+        // 去掉星号再看：有危险写法、或像 `[...](...)` / `(...)(...)` 这种调用的才不算注释
+        let body = t.trim_start_matches('*').trim();
+        return risky_code(body).is_none() && !body.contains("](") && !body.contains(")(") && !body.contains("['") && !body.contains("[\"");
     }
     if let Some(rest) = t.strip_prefix("/*") {
         return rest.split_once("*/").is_none_or(|(_, after)| after.trim().is_empty());
@@ -1390,7 +1426,8 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             let mut seen: Vec<&str> = Vec::new();
             for l in &f.added {
                 let t = l.trim_start();
-                let why = page_risky(l).or_else(|| if file.ends_with(".mdx") && (t.starts_with("import ") || t.starts_with("export ")) { risky_code(l) } else { None });
+                let markdown = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
+                let why = page_risky(l, markdown).or_else(|| if file.ends_with(".mdx") && (t.starts_with("import ") || t.starts_with("export ")) { risky_code(l) } else { None });
                 let Some(why) = why else { continue };
                 let kind = risky_kind(why);
                 if seen.contains(&why) || rules.lets(kind) {
@@ -1401,8 +1438,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             }
             // 改网址、下架：slug / permalink 这些键一变旧网址就 404（没有跳转）；draft / published / noindex 往「不可见」的方向改，页面就消失。
             // 把草稿发布出去（draft: true → false、published: false → true）是正常任务，不拦
-            if let Some(key) = url_or_unpublish_change(&f.removed, &f.added) {
-                reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
+            let markdown = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
+            if markdown {
+                if let Some(key) = url_or_unpublish_change(&f.removed, &f.added) {
+                    reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
+                }
             }
         }
         if is_code || template_file(file) {
@@ -1879,6 +1919,16 @@ mod tests {
         assert_eq!(verdict(&d("src/content/a.md", &["<iframe src=\"https://www.youtube.com/embed/x\"></iframe>"]), &Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None }).len(), 0);
         // .mdx 的 import / export 是构建期代码
         assert!(v(&d("src/content/a.mdx", &["export const d = await (await import('node:' + 'fs')).promises.readFile('/etc/hosts')"])).iter().any(|r| r.contains("动态加载代码")));
+        // 结构化数据的 <script type="application/ld+json"> 不算脚本
+        assert!(!v(&d("src/layouts/Base.astro", &["<script type=\"application/ld+json\" set:html={JSON.stringify(ld)} />"])).iter().any(|r| r.contains("插入脚本")));
+        assert!(v(&d("public/a.html", &["<script type=\"application/ld+json\" src=\"https://evil/x.js\"></script>"])).iter().any(|r| r.contains("插入脚本")));
+        // 模板里的内联 <script> 按「直接插入 HTML」（放开档放行）；引外站脚本任何等级都拦；正文「JavaScript: 基础」不算
+        let open = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
+        assert!(verdict(&d("src/layouts/Base.astro", &["<script>document.body.dataset.ready = '1'</script>"]), &open).is_empty());
+        assert!(v(&d("src/layouts/Base.astro", &["<script>x()</script>"])).iter().any(|r| r.contains("内联脚本")));
+        assert!(v(&d("src/layouts/Base.astro", &["<script src=\"https://cdn.example/x.js\"></script>"])).iter().any(|r| r.contains("插入脚本")));
+        assert!(!v(&d("src/content/a.md", &["## JavaScript: 基础语法"])).iter().any(|r| r.contains("脚本")));
+        assert!(!v(&d("src/pages/a.astro", &["const online = true;", "{one === 1 && <b>x</b>}"])).iter().any(|r| r.contains("脚本")));
         // 正文里提到 onclick 这个词不算（不是标签属性）
         assert!(!v(&d("src/content/a.md", &["按钮的 onclick 事件是前端常见写法。"])).iter().any(|r| r.contains("插入脚本")));
         // 数据文件：`*` 开头的「乘法行」、注释后面接代码、import 后面接语句都不是纯数据
@@ -1895,6 +1945,15 @@ mod tests {
         assert!(v(&fm("draft: false", "draft: true")).iter().any(|r| r.contains("改了 draft")), "下架要拦");
         assert!(!v(&fm("published: false", "published: true")).iter().any(|r| r.contains("发布状态")), "把草稿发布出去是正常任务");
         assert!(!v(&fm("draft: true", "draft: false")).iter().any(|r| r.contains("发布状态")));
+        // 正文引用列表里的 url、.astro 里的对象字面量不算；新加一行 draft: true（没有删掉的行）也算下架
+        assert!(!v(&fm("  - url: https://www.okx.com/fees", "  - url: https://www.okx.com/zh-hans/fees")).iter().any(|r| r.contains("网址")));
+        assert!(!v(&d("src/pages/nav.astro", &["  url: '/fees',"])).iter().any(|r| r.contains("网址")));
+        assert!(v(&fm("title: a", "draft: true")).iter().any(|r| r.contains("改了 draft")));
+        // JSDoc 里带括号、等号的注释行还是数据
+        assert!(data_line("* @param x (optional) 默认 = 0"));
+        assert!(!data_line("* (0, eval)('1')"));
+        // 只换推荐码的值也算改动
+        assert!(money_atoms("  inviteCode: \"ABC123\",").iter().any(|a| a == "inviteCode=ABC123"), "{:?}", money_atoms("  inviteCode: \"ABC123\","));
         // Pilot 自己的记录文件不算改动，也不会被当成太薄的新页面
         let pilot = "diff --git a/.pilot/todo.json b/.pilot/todo.json\nnew file mode 100644\n--- /dev/null\n+++ b/.pilot/todo.json\n@@ -0,0 +1 @@\n+[{\"title\": \"缺截图\"}]\n";
         assert!(managed_verdict(pilot, true, 1500, "all", &[]).is_empty());
@@ -2108,4 +2167,5 @@ mod tests {
         assert!(parse_plan("没有计划").is_err());
     }
 }
+
 
