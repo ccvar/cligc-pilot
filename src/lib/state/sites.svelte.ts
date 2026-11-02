@@ -194,6 +194,24 @@ export async function deploySite(id: string, background = false) {
     await invoke<string>('deploy_site', { id });
   } catch (e) { say(String(e), 'err'); }
 }
+/** 已经提交、还没上线的站点（Pilot 直接部署、上线过、文件夹干净、最新提交不是上次上线的那一版） */
+export type PendingDeploy = { id: string; name: string; subject: string };
+export const pendingDeploys = $state<{ list: PendingDeploy[] }>({ list: [] });
+export async function loadPendingDeploys() {
+  try { pendingDeploys.list = await invoke<PendingDeploy[]>('undeployed_sites'); } catch { /* 读不到就不显示按钮 */ }
+}
+/** 全部上线：确认后按顺序一个个构建并上线（后台排队，不会几个站点同时构建），每个照常线上验收 */
+export async function deployAllPending() {
+  const list = pendingDeploys.list;
+  if (!list.length) return;
+  const names = list.map((p) => `· ${p.name}${p.subject ? `：${p.subject}` : ''}`).join('\n');
+  if (!(await confirmDialog(`按顺序把这 ${list.length} 个站点构建并上线，一个跑完再开下一个，每个照常做线上验收：\n${names}`, { title: '全部上线', kind: 'info', confirmText: `上线 ${list.length} 个站点` }))) return;
+  try {
+    await invoke<number>('deploy_many', { ids: list.map((p) => p.id) });
+    pendingDeploys.list = [];
+    say(`已经排上 ${list.length} 个站点，按顺序上线；进度在各站点的部署页`, 'ok');
+  } catch (e) { say(String(e), 'err'); }
+}
 /** 补上线上缺的验证文件：上次上线的构建产物还在就原样补文件再传（不重新构建），否则走完整的构建并上线。 */
 export async function publishFiles(id: string) {
   try { await invoke<string>('site_publish_files', { id, fallback: true }); }

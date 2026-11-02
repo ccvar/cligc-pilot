@@ -10,7 +10,7 @@
   import ConnectionMark from '$lib/components/icons/ConnectionMark.svelte';
   import type { SiteRow, ChannelBrief } from '$lib/types';
   import { startDrag } from '$lib/state/ui.svelte.js';
-  import { openSite, openSiteImport } from '$lib/state/sites.svelte.js';
+  import { openSite, openSiteImport, pendingDeploys, loadPendingDeploys, deployAllPending } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
   import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, STAT_DAYS, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
@@ -103,6 +103,8 @@
     '点一下打开分发',
   ].join('\n');
   const status = (r: SiteRow) => r.unsafe_by ? { t: '被标记为危险', c: 'err' } : r.site_down ? { t: '打不开', c: 'err' } : r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.links_broken ? { t: `${r.links_broken} 个推广链接失效`, c: 'err' } : r.cert_err ? { t: '证书有问题', c: 'err' } : r.cert_days != null && r.cert_days <= 14 ? { t: r.cert_days < 0 ? '证书已过期' : `证书 ${r.cert_days} 天后过期`, c: r.cert_days <= 3 ? 'err' : 'warn' } : r.domain_days != null && r.domain_days <= 60 ? { t: r.domain_days < 0 ? '域名已过期' : `域名 ${r.domain_days} 天后到期`, c: r.domain_days <= 7 ? 'err' : 'warn' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
+  // 有没有已提交、还没上线的站点：打开时查一次，回到「站点」页再查
+  $effect(() => { if (fleet.tab === 'sites') void loadPendingDeploys(); });
 </script>
 
 {#snippet delta(cur: number, prev: number)}
@@ -133,6 +135,10 @@
       <SitePicker rows={all} />
     </div>
     <div class="row">
+      <!-- 已经提交、还没上线的站点：一键按顺序上线（悬停看是哪几个） -->
+      {#if pendingDeploys.list.length}
+        <button class="iss soft" onclick={deployAllPending} data-tip={`这些站点有已经提交、还没上线的改动：\n${pendingDeploys.list.map((p) => p.name).join('、')}\n点一下确认后按顺序构建并上线`}><Icon name="rocket" size={13} />{pendingDeploys.list.length} 个站点有改动没上线 · 全部上线</button>
+      {/if}
       {#if issues.length}
         <div class="iss-wrap">
           <button class="iss" class:soft={!problemSites} onclick={() => (issuesOpen = !issuesOpen)} aria-expanded={issuesOpen}>

@@ -901,6 +901,71 @@ pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id:
     start_deploy(app, &state, id)
 }
 
+/// 已经提交、但还没上线的站点（「全部站点」上的「全部上线」用）：
+/// 由 Pilot 直接上传部署（direct / workers / vps）、用 Pilot 成功上线过、现在没有作业在跑，
+/// 主分支最新提交不是上次成功上线的那一版。文件夹里有未提交改动的不算（不替你把改到一半的东西传上去）。
+/// GitHub 来源的看远端生产分支（Pilot 上线时也是拉远端最新的）。
+#[derive(Serialize)]
+pub struct PendingDeploy {
+    pub id: String,
+    pub name: String,
+    /// 最新提交的说明（本地来源；GitHub 来源为空）
+    pub subject: String,
+}
+
+#[tauri::command]
+pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<PendingDeploy>, String> {
+    let mut out = Vec::new();
+    for site in state.sites.list() {
+        if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") || state.site_jobs.running(&site.id) {
+            continue;
+        }
+        let history = crate::site_deploy::load_history(&state.sites.data_dir(&site.id));
+        let Some(last) = history.iter().find(|r| r.ok && r.trigger != "files") else { continue };
+        let (head, subject) = match site.source.as_str() {
+            "local" => {
+                let dir = PathBuf::from(&site.local_dir);
+                if !dir.join(".git").exists() || !crate::site_git::is_clean(&dir).await {
+                    continue;
+                }
+                (crate::site_git::head_sha(&dir).await, crate::site_git::head_subject(&dir).await)
+            }
+            "github" => {
+                let Ok(gh) = state.conns.get(&site.gh_conn_id) else { continue };
+                let Ok(token) = crate::keychain::get_key(&gh.id) else { continue };
+                let Ok(dir) = crate::github::repo_dir(&gh.skill_dir, &site.repo) else { continue };
+                let r = crate::site_git::git_ok(&dir, &["ls-remote", "origin", &format!("refs/heads/{}", site.default_branch)], &token).await.unwrap_or_default();
+                (r.split_whitespace().next().unwrap_or("").to_string(), String::new())
+            }
+            _ => continue,
+        };
+        if !head.is_empty() && head != last.commit {
+            out.push(PendingDeploy { id: site.id.clone(), name: site.name.clone(), subject });
+        }
+    }
+    Ok(out)
+}
+
+/// 「全部上线」：按顺序一个个构建并上线（等上一个跑完再开下一个，不让几个站点同时构建），每个照常线上验收。
+/// 中途有站点开不了作业（比如正在跑别的）就跳过它。返回排上的站点数。
+#[tauri::command]
+pub fn deploy_many(app: tauri::AppHandle, ids: Vec<String>) -> Result<usize, String> {
+    let n = ids.len();
+    tauri::async_runtime::spawn(async move {
+        use tauri::Manager;
+        let state = app.state::<AppState>();
+        for id in ids {
+            if start_deploy(app.clone(), &state, id.clone()).is_err() {
+                continue;
+            }
+            while state.site_jobs.running(&id) {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+        }
+    });
+    Ok(n)
+}
+
 pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) -> Result<String, String> {
     let mut site = state.sites.get(&id)?;
     // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
