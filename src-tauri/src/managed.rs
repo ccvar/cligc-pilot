@@ -102,6 +102,11 @@ pub struct ManagedGroup {
     pub fallback_brain: String,
     #[serde(default)]
     pub fallback_model: String,
+    /// 主模型 / 备用模型的推理强度（空＝跟随模型默认；API 模型带 api: 前缀，和对话里一样）
+    #[serde(default)]
+    pub effort: String,
+    #[serde(default)]
+    pub fallback_effort: String,
     #[serde(default = "default_review")]
     pub new_content: String,
     /// 老版本的「每站每天自动上线上限」：已经不用了，只在老方案第一次读进来时换算成「每轮最多改几条」。
@@ -295,6 +300,8 @@ impl ManagedGroup {
             model: c.model.clone(),
             fallback_brain: c.fallback_brain.clone(),
             fallback_model: c.fallback_model.clone(),
+            effort: String::new(),
+            fallback_effort: String::new(),
             new_content: c.new_content.clone(),
             daily_changes: c.daily_changes,
             cadence: default_cadence(),

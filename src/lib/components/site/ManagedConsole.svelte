@@ -14,6 +14,7 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
   import { modelIcon } from '$lib/state/models';
+  import { effortLabel } from '$lib/effortStops';
   import { openSite } from '$lib/state/sites.svelte.js';
   import DigestCalendar from './DigestCalendar.svelte';
   import PlansView from './PlansView.svelte';
@@ -59,6 +60,8 @@
     return lines.slice(0, 6).join('\n') + (lines.length > 6 ? '\n…' : '');
   };
   const modelLabel = (b: string, m: string) => launcher.comboOpts.find((x) => x.value === `${b}::${m}`)?.label ?? (m || b);
+  // 模型名后面带上推理强度（「API Opus 5.5 · 高」）；跟随默认就不写
+  const modelWithEffort = (b: string, m: string, e?: string) => { const l = effortLabel(`${b}::${m}`, e ?? '', launcher.comboOpts.find((x) => x.value === `${b}::${m}`)?.apiProtocol); return l ? `${modelLabel(b, m)} · ${l}` : modelLabel(b, m); };
   const siteName = (id: string) => sitesById.get(id)?.name ?? id;
   const sitesById = $derived(new Map((o?.sites ?? []).map((s) => [s.id, s])));
   const groups = $derived(o?.groups ?? []);
@@ -224,7 +227,7 @@
   function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
     const lines = [`可以做的动作：${acts}`, `新页面：${g.new_content === 'auto' ? `检查通过直接上线${g.min_page_chars ? `，正文少于 ${g.min_page_chars} 字的留给你确认` : ''}` : '等你看过再上线'}`];
-    if (g.fallback_brain) lines.push(`备用模型：${modelLabel(g.fallback_brain, g.fallback_model)}`);
+    if (g.fallback_brain) lines.push(`备用模型：${modelWithEffort(g.fallback_brain, g.fallback_model, g.fallback_effort)}`);
     if (g.guidelines?.trim()) lines.push('有内容准则');
     if (g.topics?.trim()) lines.push(`${g.topics.split('\n').filter((l) => l.trim()).length} 个选题`);
     return lines;
@@ -384,7 +387,7 @@
           {/if}
           <!-- 规则只留一行最要紧的：模型、怎么上线、每天几条、每周用量、两个判断模型开关；其余（动作、内容准则、新页规则、备用模型）在「规则详情」里 -->
           <div class="rules">
-            <span class="model" data-tip={g.fallback_brain ? `备用：${modelLabel(g.fallback_brain, g.fallback_model)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelLabel(g.brain, g.model)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
+            <span class="model" data-tip={g.fallback_brain ? `备用：${modelWithEffort(g.fallback_brain, g.fallback_model, g.fallback_effort)}（主模型不可用时换它）` : null}><BrainIcon brain={modelIcon(g.brain)} size={12} /><span class="trunc">{modelWithEffort(g.brain, g.model, g.effort)}</span>{#if g.brain === 'codex' || g.fallback_brain === 'codex'}<span class="codex-off" data-tip="Codex 改代码时不联网（没法逐条确认它的操作，所以只让它在单独的文件夹里改）；推送和上线由 Pilot 来做">不联网改</span>{/if}</span>
             {#if g.autonomy === 'auto'}{@const t = TIERS.find((x) => x.key === tierOf(g))}<span data-tip={`拦截等级「${t?.label}」：${t?.tip}${g.allow_kinds?.length ? `\n另外单独放行了 ${g.allow_kinds.length} 类` : ''}`}><Icon name="shield" size={12} />拦截：{t?.label}{#if g.allow_kinds?.length}<span class="faint"> +{g.allow_kinds.length}</span>{/if}</span>{/if}
             <span data-tip={`运营节奏：${cadenceLabel(g)}跑一轮，每次挑最值得做的 ${g.per_round} 个机会交给 AI（平均每周最多 ${perWeek(g)} 个）；该自动上线的改好就上线`}><Icon name="rocket" size={12} />{cadenceLabel(g)} · 每轮 {g.per_round} 个</span>
             <span data-tip="每个站点每周的模型用量上限，用完暂停到下周"><Icon name="gauge" size={12} />每周 {g.tokens_per_week ? `${kTok(g.tokens_per_week)} token` : '不限'}</span>

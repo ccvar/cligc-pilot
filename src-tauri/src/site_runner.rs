@@ -1144,6 +1144,18 @@ pub fn models_for(site: &Site, data_dir: &Path) -> Result<((String, String), Opt
     Ok(((site.ops.brain.clone(), ops_model(site)?), None))
 }
 
+/// 托管方案给这个模型设的推理强度：是主模型就用主模型的档位，是备用模型就用备用的（没写具体模型的按默认模型比）
+fn group_effort(g: &crate::managed::ManagedGroup, model: &(String, String)) -> String {
+    let same = |b: &str, m: &str| b == model.0 && (m.trim() == model.1 || (m.trim().is_empty() && default_model(b).as_deref() == Some(model.1.as_str())));
+    if same(&g.brain, &g.model) {
+        g.effort.clone()
+    } else if !g.fallback_brain.is_empty() && same(&g.fallback_brain, &g.fallback_model) {
+        g.fallback_effort.clone()
+    } else {
+        String::new()
+    }
+}
+
 /// 无人值守地开一条站点会话（origin=ops），跑完首轮才返回。主模型这一轮失败时，有备用模型就换它重跑一次
 /// （新开一条会话，接着同一个工作区；备用模型能看到主模型已经做了的改动）。
 async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String) -> Result<(String, crate::convo::Conversation), String> {
@@ -1200,8 +1212,12 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
     }
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
-    // 推理强度只给临时选的那个模型（主模型失败换备用模型时不带过去）
-    let effort = if model_override(&site.id).as_ref() == Some(model) { effort_override(&site.id) } else { String::new() };
+    // 推理强度：临时选了模型就用那次选的（主模型失败换备用模型时不带过去）；托管站点用方案里给主 / 备用模型各自设的档位
+    let effort = if model_override(&site.id).is_some() {
+        if model_override(&site.id).as_ref() == Some(model) { effort_override(&site.id) } else { String::new() }
+    } else {
+        crate::managed::load(&st.data_dir).group_of(&site.id).map(|g| group_effort(g, model)).unwrap_or_default()
+    };
     let (brain, model) = model.clone();
     // 把这一轮的实时事件转给前端（ops-turn），打开这条会话就能看到 AI 正在做什么；
     // 第一条事件到达时刷新会话列表，会话一开始就出现在侧栏里，而不是跑完才出现。
@@ -3490,6 +3506,14 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plan_effort_follows_primary_and_fallback() {
+        let g = crate::managed::ManagedGroup { brain: "api:x".into(), model: "claude-opus-5-5".into(), effort: "api:high".into(), fallback_brain: "claude".into(), fallback_model: String::new(), fallback_effort: "max".into(), ..crate::managed::ManagedGroup::from_legacy(&Default::default(), "t") };
+        assert_eq!(group_effort(&g, &("api:x".into(), "claude-opus-5-5".into())), "api:high");
+        assert_eq!(group_effort(&g, &("claude".into(), SONNET.into())), "max", "备用模型没写具体模型，按默认模型比");
+        assert_eq!(group_effort(&g, &("codex".into(), String::new())), "");
+    }
+
     #[test]
     fn interrupted_items_without_commits_go_back_to_the_queue() {
         let mut a = site_ops::QueueItem { status: "working".into(), ..Default::default() };

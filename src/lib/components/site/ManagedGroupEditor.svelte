@@ -14,6 +14,7 @@
   import { openConnectionSetup } from '$lib/state/settings.svelte.js';
   import TypeSafeMark from '$lib/components/icons/TypeSafeMark.svelte';
   import InfoTip from '$lib/components/common/InfoTip.svelte';
+  import { stopsFor, effortValue } from '$lib/effortStops';
 
   const g = $derived(managed.editor);
   const groups = $derived(managed.overview?.groups ?? []);
@@ -35,7 +36,19 @@
     const i = v.indexOf('::');
     const [b, m] = i < 0 ? ['', ''] : [v.slice(0, i), v.slice(i + 2)];
     if (which === 'primary') { g.brain = b; g.model = m; } else { g.fallback_brain = b; g.fallback_model = m; }
+    // 换了模型：新模型没有原来那一档就回到「跟随默认」
+    const key = which === 'primary' ? 'effort' : 'fallback_effort';
+    if (!stopOpts(v).some((o) => o.value === (g[key] ?? ''))) g[key] = '';
   }
+  // 推理强度：按这个模型能用的档位列（和对话框、运营模型菜单同一份档位表）
+  function stopOpts(v: string) {
+    if (!v) return [];
+    const [b, ...m] = v.split('::');
+    const proto = launcher.comboOpts.find((o) => o.value === v)?.apiProtocol;
+    return stopsFor(b, m.join('::'), proto).map((s) => ({ value: effortValue(b, s.v), label: s.l, sub: s.d }));
+  }
+  const primaryStops = $derived(stopOpts(primary));
+  const fallbackStops = $derived(stopOpts(fallback));
 
   let q = $state('');
   const otherOf = (id: string) => groups.find((x) => x.id !== g?.id && x.sites.includes(id));
@@ -272,6 +285,8 @@
       <div class="grid2">
         <div class="field"><span class="lbl">主模型</span><Dropdown bind:value={() => primary, (v) => pick(v, 'primary')} options={modelOpts} /></div>
         <div class="field"><span class="lbl">备用模型<InfoTip label="备用模型" text="主模型这一轮失败（额度用完、限流、不可用）时自动换备用模型重跑一次。" /></span><Dropdown bind:value={() => fallback, (v) => pick(v, 'fallback')} options={[{ value: '', label: '不用备用模型' }, ...modelOpts]} /></div>
+        <div class="field"><span class="lbl">主模型推理强度<InfoTip label="推理强度" text="越高想得越深、改得越稳，但更慢、更费 token；「自动」跟随模型默认。" /></span><Dropdown bind:value={() => g?.effort ?? '', (v) => g && (g.effort = v)} options={primaryStops} disabled={!primaryStops.length} /></div>
+        <div class="field"><span class="lbl">备用模型推理强度</span><Dropdown bind:value={() => g?.fallback_effort ?? '', (v) => g && (g.fallback_effort = v)} options={fallbackStops.length ? fallbackStops : [{ value: '', label: '—' }]} disabled={!fallbackStops.length} /></div>
       </div>
       {#if usesCodex}
         <div class="codex-warn" role="note">
