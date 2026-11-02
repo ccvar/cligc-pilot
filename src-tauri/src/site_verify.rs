@@ -113,7 +113,8 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let mut got: Vec<Option<Fetched>> = urls.iter().map(|_| None).collect();
     let mut last: Vec<String> = urls.iter().map(|_| String::new()).collect();
     // 早先记下的文字可能带着 %s 这类占位（代码里的格式化字符串），线上不会原样出现：切开只用字面的几段
-    let snippets: Vec<String> = spec.snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| x.trim().to_string()).filter(|x| x.chars().count() >= 4 && !x.starts_with("//") && !x.starts_with("/*")).collect();
+    // 早先记下的还可能带着 Markdown 记号（**加粗**、[链接]、列表的「- 」），线上是渲染后的文字：先去掉
+    let snippets: Vec<String> = spec.snippets.iter().flat_map(|s| split_placeholders(s)).map(|x| strip_md(x.trim())).filter(|x| x.chars().count() >= 4 && !x.starts_with("//") && !x.starts_with("/*") && !x.starts_with('|')).collect();
     let mut snippets_ok = snippets.is_empty();
     for (n, w) in waits.iter().enumerate() {
         if *w > 0 {
@@ -142,7 +143,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         if !snippets_ok {
             // 改标题 / 描述的改动，新文字只在 <title> 和 meta description 里，正文里没有：一起找
             let text: String = got.iter().skip(1).flatten().map(|f| format!("{}\n{}\n{}", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body))).collect::<Vec<_>>().join("\n");
-            snippets_ok = snippets.iter().any(|s| text.contains(s.as_str()));
+            snippets_ok = snippets.iter().any(|s| page_has(&text, s));
         }
         if got.iter().all(|g| g.is_some()) && snippets_ok {
             break;
@@ -402,9 +403,15 @@ pub fn visible_text(html: &str) -> String {
 /// 只挑像正文的句子（够长、主要是文字、不像代码或网址），截到第一个标点，避免被页面里的加粗、链接拆开。
 pub fn snippets_from_diff(diff: &str) -> Vec<String> {
     let mut cands: Vec<String> = Vec::new();
+    let mut file = "";
     for line in diff.lines() {
+        if let Some(f) = line.strip_prefix("+++ ") {
+            file = f.strip_prefix("b/").unwrap_or(f);
+            continue;
+        }
         let Some(added) = line.strip_prefix('+') else { continue };
-        if added.starts_with("++") {
+        // Pilot 自己的文件（.pilot/todo.json 这类待办）不会出现在页面上
+        if added.starts_with("++") || file.starts_with(".pilot/") {
             continue;
         }
         // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上
@@ -412,8 +419,15 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) {
             continue;
         }
+        // Markdown 正文：去掉记号后的整行（表格行渲染后格子之间隔开了，不拿）；frontmatter 的「key: "…"」照旧取引号里的
+        let md = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
+        let yaml_key = a.split_once(':').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        let texts: Vec<String> = if md && a.starts_with('|') {
+            continue;
+        } else if md && !yaml_key {
+            vec![strip_md(&visible_text(added))]
         // 字符串里的文字（数据文件），或去掉标签后的整行（页面文件）；没有引号又像代码的行（赋值、语句）不算正文
-        let texts: Vec<String> = if added.contains('\'') || added.contains('"') {
+        } else if added.contains('\'') || added.contains('"') {
             quoted(added)
         } else if a.contains(" = ") || a.contains("=>") || a.trim_end().ends_with(';') {
             continue;
@@ -446,6 +460,88 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// 去掉 Markdown 记号，剩下页面上看得到的文字：行首的列表 / 引用 / 标题记号，**加粗**、`代码`、~~删除线~~，
+/// [文字](网址) 只留文字，![图](网址) 整个去掉。
+fn strip_md(s: &str) -> String {
+    let mut t = s.trim_start();
+    loop {
+        let before = t;
+        for p in ["- ", "* ", "+ ", "> ", "#"] {
+            t = t.strip_prefix(p).unwrap_or(t).trim_start();
+        }
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        if digits > 0 && t[digits..].starts_with(". ") {
+            t = t[digits + 2..].trim_start();
+        }
+        if t == before {
+            break;
+        }
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut it = t.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '*' | '`' | '~' => {}
+            '_' if it.peek() == Some(&'_') => {
+                it.next();
+            }
+            '!' if it.peek() == Some(&'[') => {
+                // 图片：跳过 [alt] 和 (网址)
+                for d in it.by_ref() {
+                    if d == ']' {
+                        break;
+                    }
+                }
+                if it.peek() == Some(&'(') {
+                    for d in it.by_ref() {
+                        if d == ')' {
+                            break;
+                        }
+                    }
+                }
+            }
+            '[' => {}
+            ']' => {
+                if it.peek() == Some(&'(') {
+                    for d in it.by_ref() {
+                        if d == ')' {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
+fn is_cjk(c: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&c)
+}
+
+/// 线上页面里有没有这段文字。不看空白（加粗、链接渲染成标签后，中文之间会多出空格）；
+/// 站点构建时把简体转成繁体（或反过来）的，汉字对不上：其它字符一样、汉字至少一半相同、长度相同就算找到。
+fn page_has(text: &str, snippet: &str) -> bool {
+    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<Vec<char>>();
+    let (hay, needle) = (squash(text), squash(snippet));
+    if needle.is_empty() || needle.len() > hay.len() {
+        return false;
+    }
+    let cjk = needle.iter().filter(|c| is_cjk(**c)).count();
+    hay.windows(needle.len()).any(|w| {
+        let mut same = 0;
+        for (a, b) in w.iter().zip(&needle) {
+            if a == b {
+                same += is_cjk(*b) as usize;
+            } else if !(is_cjk(*a) && is_cjk(*b)) {
+                return false;
+            }
+        }
+        same * 2 >= cjk
+    })
 }
 
 /// 按 printf 风格的占位（%s、%d、%v、%5.2f、%-10s…）把字符串切成几段字面文字；%% 是字面的百分号。
@@ -561,6 +657,21 @@ mod tests {
         // 正文照旧
         let ok = "+++ b/src/content/a.md\n+合约一张是多少要看交易所的面值规定，不同币种不一样\n";
         assert_eq!(snippets_from_diff(ok), vec!["合约一张是多少要看交易所的面值规定"]);
+    }
+
+    #[test]
+    fn markdown_and_script_conversion_do_not_hide_new_text() {
+        // 线上验收误报：biannex（.pilot/todo.json、- **加粗**）、gateneo（[链接]、表格）、oaneo（构建时转成繁体）
+        let d = "+++ b/.pilot/todo.json\n+    \"title\": \"欧易提币教程缺提币页面截图：登录后的资产页\",\n+++ b/src/content/guides/a.mdx\n+title: \"欧易怎么提币到钱包：网络和手续费\"\n+- **提到自己的个人钱包**：选对网络再提\n+OKX 的費率表與試算見 [OKX 手續費一覽](/zh-hant/guides/okx-fees/)。\n+| VIP 門檻 | 資產量或交易量擇一 | 交易量且 BNB 持倉 |\n";
+        let s = snippets_from_diff(d);
+        assert_eq!(s, vec!["欧易怎么提币到钱包", "提到自己的个人钱包", "OKX 的費率表與試算見 OKX 手續費一覽"], "{s:?}");
+        assert_eq!(strip_md("1. 看 ![图](/a.png)**核准业务**栏，`交易平台`、[名单](/x#a)"), "看 核准业务栏，交易平台、名单");
+        let page = visible_text("<p>OKX 的費率表與試算見 <a href=\"/zh-hant/guides/okx-fees/\">OKX 手續費一覽</a>。手續費看的是<strong>倉位價值</strong></p><p>TWEX 沒有交易平台業務，KryptoGO</p>");
+        assert!(page_has(&page, "OKX 的費率表與試算見 OKX 手續費一覽"));
+        assert!(page_has(&page, "手續費看的是倉位價值"));
+        assert!(page_has(&page, "TWEX 没有交易平台业务"), "简体写的、线上是繁体");
+        assert!(!page_has(&page, "TWEX 没有交易所的牌照和"), "汉字大半不同就不算");
+        assert!(!page_has(&page, "OKX 没有交易平台业务"), "非汉字要一样");
     }
 
     #[test]

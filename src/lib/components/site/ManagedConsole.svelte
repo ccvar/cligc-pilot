@@ -353,7 +353,7 @@
         {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
           <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
-            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need}{' · '}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.failed}{' · '}<span class="err-text">{sum.failed} 项失败</span>{/if}{#if costText(sum.cost)}{' · '}<span data-tip={costTip(sum.cost, sum.shippedMonth, '这个方案')}>本月 AI {costText(sum.cost)}</span>{/if}</span>
+            <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if sum.need || sum.failed}{' · '}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions --><span class="to-needs" onclick={(e) => { e.stopPropagation(); managed.tab = 'needs'; }} data-tip="打开「需要你」逐条处理">{#if sum.need}<span class="warn-text">{sum.need} 项要你处理</span>{/if}{#if sum.need && sum.failed}{' · '}{/if}{#if sum.failed}<span class="err-text">{sum.failed} 项失败</span>{/if}</span>{/if}{#if costText(sum.cost)}{' · '}<span data-tip={costTip(sum.cost, sum.shippedMonth, '这个方案')}>本月 AI {costText(sum.cost)}</span>{/if}</span>
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}
             <svg class="chev" class:up={gOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
@@ -595,6 +595,8 @@
   .gq input:focus { border-color: #b7b2a6; }
   .gq-n { font-size: 12px; }
   /* 下一次运行：放在右边（方案标题上是箭头左边的绿色小胶囊，站点行在「…」和开关左边），一列对齐好扫 */
+  .to-needs { cursor: pointer; border-radius: 4px; }
+  .to-needs:hover { text-decoration: underline; text-underline-offset: 3px; }
   .next-chip { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--su-ok-soft); color: var(--ok); font-size: 11.5px; font-weight: 550; white-space: nowrap; }
   .next-t { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--dim); white-space: nowrap; }
   .next-t :global(svg) { color: var(--ok); }
