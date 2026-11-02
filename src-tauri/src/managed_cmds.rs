@@ -68,6 +68,10 @@ pub fn save_managed_group(state: tauri::State<'_, AppState>, group: ManagedGroup
     let mut g = group;
     g.name = g.name.trim().to_string();
     g.settle_tier();
+    // 等级比原来严了：原来点的「这类以后不拦」作废
+    if let Some(prev) = managed::load(&state.data_dir).groups.iter().find(|x| x.id == g.id).map(|x| x.tier().to_string()) {
+        g.tighten_from(&prev);
+    }
     managed::validate_group(&g)?;
     let known: std::collections::HashSet<String> = state.sites.list().into_iter().map(|s| s.id).collect();
     g.sites.retain(|id| known.contains(id));

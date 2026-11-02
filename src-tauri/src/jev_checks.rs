@@ -181,6 +181,11 @@ async fn score_page(jev: &Jev, site: &Site, positioning: &str, target: &str, fil
 const SCORE_SLACK: f64 = 0.3;
 const RATE_SLACK: f64 = 0.1;
 
+/// 「原来就有」也有底线：已经不及格的维度每轮再差一点都算「没变差」，几轮下来会一路滑下去（棘轮）。
+/// 低于及格线再减这么多（分数）/ 再加这么多（比例）的，不管改动前是多少都算变差。
+const SCORE_FLOOR: f64 = 0.5;
+const RATE_FLOOR: f64 = 0.15;
+
 /// 改动后和改动前比：(这次改出来或变差了的问题, 原来就有、没变差的问题)。
 fn compare(new: &PageQuality, old: &PageQuality) -> (Vec<String>, Vec<String>) {
     let old_reasons = quality_reasons(old);
@@ -191,11 +196,11 @@ fn compare(new: &PageQuality, old: &PageQuality) -> (Vec<String>, Vec<String>) {
         let prefix = r.split('（').next().unwrap_or(r);
         let held = was(prefix)
             && match prefix {
-                p if p.starts_with("没把目标") => new.answers.unwrap_or(3.0) >= old.answers.unwrap_or(3.0) - SCORE_SLACK,
-                p if p.starts_with("空话多") => new.substance >= old.substance - SCORE_SLACK,
-                p if p.starts_with("和站点定位") => new.on_topic >= old.on_topic - SCORE_SLACK,
-                p if p.starts_with("有具体数字") => new.unsourced <= old.unsourced + RATE_SLACK,
-                p if p.starts_with("正文里像是") => new.leftover <= old.leftover + RATE_SLACK,
+                p if p.starts_with("没把目标") => new.answers.unwrap_or(3.0) >= (old.answers.unwrap_or(3.0) - SCORE_SLACK).max(MIN_ANSWERS - SCORE_FLOOR),
+                p if p.starts_with("空话多") => new.substance >= (old.substance - SCORE_SLACK).max(MIN_SUBSTANCE - SCORE_FLOOR),
+                p if p.starts_with("和站点定位") => new.on_topic >= (old.on_topic - SCORE_SLACK).max(MIN_ON_TOPIC - SCORE_FLOOR),
+                p if p.starts_with("有具体数字") => new.unsourced <= (old.unsourced + RATE_SLACK).min(MAX_UNSOURCED + RATE_FLOOR),
+                p if p.starts_with("正文里像是") => new.leftover <= (old.leftover + RATE_SLACK).min(MAX_LEFTOVER + RATE_FLOOR),
                 _ => false,
             };
         if held { kept.push(r.clone()) } else { worse.push(r.clone()) }
@@ -327,6 +332,10 @@ mod tests {
         // 原来就空话多，改完更空了：拦
         let (worse, _) = compare(&mk(0.1, 0.8), &mk(0.1, 1.4));
         assert_eq!(worse.len(), 1);
+        // 棘轮：原来 1.2（已不及格），改完 1.0 在 0.3 的波动内，但低于地板 1.0 以下就算变差；1.1 还算没变差
+        assert!(compare(&mk(0.1, 1.1), &mk(0.1, 1.2)).0.is_empty());
+        assert_eq!(compare(&mk(0.1, 0.95), &mk(0.1, 1.2)).0.len(), 1);
+        assert_eq!(compare(&mk(0.95, 2.5), &mk(0.89, 2.5)).0.len(), 1, "没来源的比例超过地板 0.9 算变差");
     }
 
     use crate::site_ops::Opportunity;

