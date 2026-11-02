@@ -109,8 +109,9 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 id: s.id,
                 name: s.name,
                 domain: s.domain,
+                // 本地文件夹来源没记 repo 的：看 origin 指向的 GitHub 仓库，列表上照样显示 GitHub 图标
+                repo: if s.repo.is_empty() && s.source == "local" { crate::sites::origin_github_repo(std::path::Path::new(&s.local_dir)).unwrap_or_default() } else { s.repo },
                 source: s.source,
-                repo: s.repo,
                 pinned: s.pinned,
                 tags: s.tags,
                 level: s.ops.level,

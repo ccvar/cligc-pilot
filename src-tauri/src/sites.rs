@@ -813,6 +813,22 @@ pub fn github_repo_from_url(url: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
+/// 本地文件夹的 origin 指向的 GitHub 仓库（owner/repo）。直接读 .git/config，不起 git 进程：站点列表每次刷新都要给几十个站点算一遍
+pub fn origin_github_repo(dir: &Path) -> Option<String> {
+    let cfg = std::fs::read_to_string(dir.join(".git").join("config")).ok()?;
+    let mut in_origin = false;
+    for line in cfg.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_origin = line == "[remote \"origin\"]";
+        } else if in_origin {
+            if let Some(url) = line.strip_prefix("url").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
+                return github_repo_from_url(url);
+            }
+        }
+    }
+    None
+}
+
 pub fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -1113,6 +1129,17 @@ pub fn delete_env(site_id: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn origin_github_repo_reads_git_config() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(t.path().join(".git")).unwrap();
+        assert_eq!(origin_github_repo(t.path()), None);
+        std::fs::write(t.path().join(".git/config"), "[core]\n\tbare = false\n[remote \"upstream\"]\n\turl = https://github.com/x/other.git\n[remote \"origin\"]\n\turl = git@github.com:ccvar/oknax.com.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n").unwrap();
+        assert_eq!(origin_github_repo(t.path()).as_deref(), Some("ccvar/oknax.com"));
+        std::fs::write(t.path().join(".git/config"), "[remote \"origin\"]\n\turl = https://gitlab.com/a/b.git\n").unwrap();
+        assert_eq!(origin_github_repo(t.path()), None, "不是 GitHub 不算");
+    }
+
 
 
     /// 原子写：写完文件完整，旁边不留临时文件。
