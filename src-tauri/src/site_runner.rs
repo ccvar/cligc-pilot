@@ -1909,6 +1909,11 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
 
 /// 全自动方案：验收发现一般问题时开一条「修技术问题」的后续任务（每个站点每天最多一条，防止来回改）。
 fn follow_up(ctx: &Ctx, site: &Site, item: &QueueItem, attention: &str) {
+    // 「新内容没找到」是验收没对上文字，不是网站有问题：不开修复任务（后台会再复查一次，见 recheck_snippets）
+    let attention = attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
+    if attention.is_empty() {
+        return;
+    }
     let Some(g) = group_rules(ctx, site) else { return };
     if g.autonomy != "auto" || !g.allows("technical") {
         return;
@@ -3451,6 +3456,7 @@ async fn recheck_snippets(ctx: &Ctx) {
         for it in due {
             let urls: Vec<String> = it.pages.iter().chain(&it.new_pages).cloned().collect();
             let live = crate::site_verify::snippets_live(&urls, &it.snippets).await;
+            let mut cleared = false;
             let _ = site_ops::update_item(&dir, &it.id, now(), |i| {
                 i.snippet_rechecked = true;
                 if live == Some(true) {
@@ -3460,8 +3466,19 @@ async fn recheck_snippets(ctx: &Ctx) {
                         c.ok = true;
                         c.detail.clear();
                     }
+                    cleared = i.attention.is_empty();
                 }
             });
+            // 待核对都清掉了：因为它开出来、还没动的修复任务一起撤掉（和点「没问题」一样）
+            if cleared {
+                let prefix = format!("followup:{}:", it.id);
+                for f in site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)) {
+                    let _ = site_ops::update_item(&dir, &f.id, now(), |i| {
+                        i.status = "dismissed".into();
+                        i.note = "上线后验收是误报（复查时线上已经有这次的内容），不用修".into();
+                    });
+                }
+            }
             if live == Some(true) {
                 ctx.emit_queue(&site.id);
             }
