@@ -3553,7 +3553,9 @@ fn list_pending_permits(state: tauri::State<'_, AppState>) -> Vec<permit::Pendin
     // 不能让它冒出一张卡等你批
     let (unattended, all): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| site_runner::is_unattended(&p.conv) || !state.runs.is_running(&p.conv));
     for p in &unattended {
-        let _ = permit::respond(&dir, &p.id, false);
+        // 正在跑的无人值守会话：只读联网放行（见 permit::unattended_web_ok），其余拒绝；没在跑的进程发来的一律拒绝
+        let allow = site_runner::is_unattended(&p.conv) && permit::unattended_web_ok(p);
+        let _ = permit::respond(&dir, &p.id, allow);
     }
     let (auto, show): (Vec<_>, Vec<_>) = all.into_iter().partition(|p| full.contains(&p.conv));
     for p in &auto {

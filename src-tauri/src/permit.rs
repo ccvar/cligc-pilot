@@ -397,6 +397,32 @@ pub fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// 无人值守的运营任务里可以放行的只读联网：搜网页（WebSearch）、打开公网的 http(s) 网页（WebFetch）。
+/// AI 要靠它对照官网核实费率、步骤，不然只能凭印象写或者干脆不写。本机、内网、非 http(s) 的地址照样拒绝
+/// （别让它去碰本机的开发服务、路由器后台）；推送、部署这些仍然一律拒绝。
+pub fn unattended_web_ok(p: &PendingPermit) -> bool {
+    match p.tool.as_str() {
+        "WebSearch" => true,
+        "WebFetch" => public_http(&p.arg),
+        _ => false,
+    }
+}
+
+fn public_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) else { return false };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
+    let host = if host.starts_with('[') { host.split(']').next().unwrap_or("").trim_start_matches('[') } else { host.split(':').next().unwrap_or("") }.to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") || host.ends_with(".internal") || !host.contains(['.', ':']) {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1])),
+        Ok(std::net::IpAddr::V6(ip)) => !(ip.is_loopback() || ip.is_unspecified() || (ip.segments()[0] & 0xfe00) == 0xfc00 || (ip.segments()[0] & 0xffc0) == 0xfe80),
+        Err(_) => true,
+    }
+}
+
 /// 列出所有待批请求（读 pending 目录里的 *.req.json）。按时间升序。
 pub fn list_pending(pending_dir: &Path) -> Vec<PendingPermit> {
     let mut out = Vec::new();
@@ -533,6 +559,18 @@ pub fn sweep_all(pending_dir: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unattended_runs_may_read_the_public_web_only() {
+        let p = |tool: &str, arg: &str| PendingPermit { tool: tool.into(), arg: arg.into(), ..Default::default() };
+        assert!(unattended_web_ok(&p("WebSearch", "okx withdrawal fee")));
+        assert!(unattended_web_ok(&p("WebFetch", "https://www.okx.com/zh-hans/fees")));
+        assert!(unattended_web_ok(&p("WebFetch", "http://8.8.8.8/x")));
+        for bad in ["http://localhost:4321/", "http://127.0.0.1:9310", "http://192.168.1.1/", "http://10.0.0.5/a", "http://169.254.169.254/latest", "http://[::1]:80/", "http://myhost/", "http://nas.local/", "file:///etc/passwd", "http://user@127.0.0.1/", "http://100.64.1.2/"] {
+            assert!(!unattended_web_ok(&p("WebFetch", bad)), "{bad}");
+        }
+        assert!(!unattended_web_ok(&p("Bash", "git push")));
+    }
+
     use super::*;
 
     #[test]

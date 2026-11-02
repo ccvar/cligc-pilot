@@ -3,7 +3,8 @@
 //! 安全边界（见设计文档「安全与凭据」）：
 //! - 模型只在 Pilot 准备的工作树里改代码、在本地提交；推送、开 PR、合并、部署、IndexNow 全由 Pilot 执行。
 //! - 无人值守的回合里，所有需要确认的操作（推送、部署、读 Token 环境变量等）一律由 Pilot 代为拒绝，
-//!   确认卡也不会出现在界面上（见 `is_unattended` 与 lib.rs::list_pending_permits）。
+//!   确认卡也不会出现在界面上（见 `is_unattended` 与 lib.rs::list_pending_permits）；
+//!   只读联网（搜网页、打开公网网页，见 permit::unattended_web_ok）放行，好让 AI 对照官网核实事实。
 //! - 不允许 Codex（没有逐条确认钩子）。失败不重放：中途失败就停下，等你处理。
 
 use serde::{Deserialize, Serialize};
@@ -52,7 +53,8 @@ impl UnattendedGuard {
             while !s.load(std::sync::atomic::Ordering::SeqCst) {
                 for p in crate::permit::list_pending(&pending_dir) {
                     if p.conv == c {
-                        let _ = crate::permit::respond(&pending_dir, &p.id, false);
+                        // 只读联网（搜网页、打开公网网页）放行，好让 AI 对照官网核实；其余一律拒绝
+                        let _ = crate::permit::respond(&pending_dir, &p.id, crate::permit::unattended_web_ok(&p));
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1477,6 +1479,12 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         crate::site_git::remove_worktree(&cb.main, &wt).await;
         let _ = crate::site_git::git(&cb.main, &["branch", "-D", &branch], "").await;
         return Err("AI 没有做出任何改动（详见会话）".into());
+    }
+    // AI 跑构建时顺手提交进来的、构建脚本每次都会重写的数据文件（比如同步手续费）：还原成改动前的样子再往下走，
+    // 不和内容改动绑在一个提交里上线（单独回滚这条内容时不会把费率数据一起退回去，也不和每天的数据更新撞车）
+    let reverted = revert_generated(site, &wt, &base_sha).await;
+    if !reverted.is_empty() {
+        job.line(&format!("还原了构建时自动生成的数据文件，不算这次的改动：{}", reverted.join("、")));
     }
     let head_sha = crate::site_git::head_sha(&wt).await;
     if let Ok(out) = crate::site_git::git_ok(&wt, &["diff", "--name-only", &base_sha, &head_sha], "").await {
@@ -3372,6 +3380,33 @@ pub async fn dirty_files(site: &Site, dir: &Path) -> Option<(Vec<String>, bool)>
     Some((files, generated))
 }
 
+/// 分支上相对 base 改过的、构建脚本自动生成的数据文件（见 managed::build_outputs）：还原成 base 的版本（base 没有的就移出版本库），
+/// 单独提交一次。返回还原了哪些文件（相对仓库根目录）。
+async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
+    let outs = crate::managed::build_outputs(&site.app_dir(wt));
+    if outs.is_empty() {
+        return Vec::new();
+    }
+    let Ok(changed) = crate::site_git::git_ok(wt, &["diff", "--name-only", base, "HEAD"], "").await else { return Vec::new() };
+    let files: Vec<String> = changed.lines().map(str::trim).filter(|f| !f.is_empty() && outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str()))).map(str::to_string).collect();
+    let mut done = Vec::new();
+    for f in &files {
+        let at_base = crate::site_git::git(wt, &["cat-file", "-e", &format!("{base}:{f}")], "").await.is_ok_and(|o| o.ok);
+        let ok = if at_base {
+            crate::site_git::git(wt, &["checkout", base, "--", f], "").await.is_ok_and(|o| o.ok)
+        } else {
+            crate::site_git::git(wt, &["rm", "-q", "--cached", "--", f], "").await.is_ok_and(|o| o.ok)
+        };
+        if ok {
+            done.push(f.clone());
+        }
+    }
+    if !done.is_empty() && crate::site_git::git_commit_ok(wt, &["commit", "-qm", "还原构建时自动生成的数据文件"]).await.is_err() {
+        return Vec::new();
+    }
+    done
+}
+
 /// 合并 / 回滚前：站点文件夹干净就直接过；只有构建脚本自动重写的数据文件有改动（上次在这里构建上线时写的，
 /// 比如每次构建同步手续费）就把它们还原——下次构建还会再写一遍；别的文件有改动不动它，返回 false。
 async fn settle_build_outputs(site: &Site, main: &Path) -> bool {
@@ -3581,6 +3616,30 @@ mod tests {
         assert_eq!(group_effort(&g, &("api:x".into(), "claude-opus-5-5".into())), "api:high");
         assert_eq!(group_effort(&g, &("claude".into(), SONNET.into())), "max", "备用模型没写具体模型，按默认模型比");
         assert_eq!(group_effort(&g, &("codex".into(), String::new())), "");
+    }
+
+    #[tokio::test]
+    async fn generated_data_is_reverted_out_of_the_ai_change() {
+        use crate::site_git as g;
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().to_path_buf();
+        let w = |p: &str, c: &str| { let f = repo.join(p); std::fs::create_dir_all(f.parent().unwrap()).unwrap(); std::fs::write(f, c).unwrap(); };
+        g::git_ok(&repo, &["init", "-q", "-b", "main"], "").await.unwrap();
+        w("package.json", r#"{"scripts":{"prebuild":"node scripts/sync.mjs","build":"astro build"}}"#);
+        w("scripts/sync.mjs", "writeFileSync('src/data/fees.json', x)");
+        w("src/data/fees.json", "{\"a\":1}");
+        w("src/pages/a.md", "old");
+        g::git_ok(&repo, &["add", "-A"], "").await.unwrap();
+        g::git_commit_ok(&repo, &["commit", "-qm", "base"]).await.unwrap();
+        let base = g::head_sha(&repo).await;
+        w("src/data/fees.json", "{\"a\":2}");
+        w("src/pages/a.md", "new");
+        g::git_ok(&repo, &["add", "-A"], "").await.unwrap();
+        g::git_commit_ok(&repo, &["commit", "-qm", "ai"]).await.unwrap();
+        let site: Site = serde_json::from_value(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 0})).unwrap();
+        assert_eq!(revert_generated(&site, &repo, &base).await, vec!["src/data/fees.json"]);
+        let diff = g::git_ok(&repo, &["diff", "--name-only", &base, "HEAD"], "").await.unwrap();
+        assert_eq!(diff.trim(), "src/pages/a.md");
     }
 
     #[test]
