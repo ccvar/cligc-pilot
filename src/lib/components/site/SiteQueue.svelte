@@ -419,7 +419,9 @@
   @keyframes qflash { 0%, 40% { background: color-mix(in srgb, var(--accent, var(--ok)) 12%, transparent); } 100% { background: transparent; } }
   .qnote { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.6; color: var(--dim); padding: 9px 14px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; }
   .qnote :global(svg) { flex: none; margin-top: 4px; }
-  .qnote span { flex: 1; }
+  /* 转圈的 .spin 也是 span：不能跟着撑满，不然圆圈被拉成一条横跨卡片的斜线在转 */
+  .qnote span:not(.spin) { flex: 1; }
+  .qnote .spin { margin-top: 5px; }
   .qnote.warn { color: var(--su-warn-ink); background: var(--su-warn-soft); border-color: transparent; }
   .qnote .link-btn { flex: none; font-size: 12.5px; }
   .qq { display: flex; flex-direction: column; gap: 12px; }
