@@ -227,7 +227,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let mut page_bad: HashSet<usize> = HashSet::new();
     for (i, u) in urls.iter().enumerate().skip(first) {
         let Some(f) = &got[i] else { continue };
-        if f.challenged {
+        if f.challenged || hidden_page(&f.body) {
             continue;
         }
         let p = path_of(u);
@@ -258,7 +258,12 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         }
     }
     // 新页面：在 sitemap 里、站内链接能打开
-    let new_idx: Vec<usize> = urls.iter().enumerate().filter(|(_, u)| spec.new_pages.iter().any(|n| same_page(n, u))).map(|(i, _)| i).collect();
+    let new_idx: Vec<usize> = urls
+        .iter()
+        .enumerate()
+        .filter(|(i, u)| spec.new_pages.iter().any(|n| same_page(n, u)) && !got[*i].as_ref().is_some_and(|f| hidden_page(&f.body)))
+        .map(|(i, _)| i)
+        .collect();
     if !new_idx.is_empty() {
         let locs = sitemap_locs(&client, &spec.domain).await;
         if locs.is_empty() {
@@ -343,6 +348,13 @@ fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
         from = end;
     }
     out
+}
+
+/// 同时 noindex、nofollow 的页面：站点有意藏起来的内部页面（比如给分享卡片截图用的 /og-card/），
+/// 不查标题描述、收录和 sitemap。只 noindex 的照查（新文章误设 noindex 是真问题）。
+fn hidden_page(html: &str) -> bool {
+    let r = meta_content(html, "robots").to_lowercase();
+    r.contains("noindex") && r.contains("nofollow")
 }
 
 pub(crate) fn meta_content(html: &str, name: &str) -> String {
