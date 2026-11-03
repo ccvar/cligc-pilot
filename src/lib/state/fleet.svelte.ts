@@ -41,9 +41,19 @@ export function clicksChange(r: SiteRow): number {
 export function expiring(r: SiteRow): boolean {
   return !!r.cert_err || (r.cert_days != null && r.cert_days <= 14) || (r.domain_days != null && r.domain_days <= 60);
 }
+// 数据源报「没有权限」（连接的账号没有这个站点的 Search Console / GA4 权限，多半是还没在那边添加、验证这个站点）：
+// 算「没接上」，不算出错——不标红、不进「需要你关注」，在「数据源没接上」里列出来
+const NO_ACCESS = /没有权限|sufficient permission|not have permission|permission_denied/i;
+/** 真正的数据源错误（接上了但拉数据出错） */
+export const dataErrors = (r: SiteRow) => r.summary.errors.filter((e) => !NO_ACCESS.test(e));
+/** 没权限的数据源（「Search Console：没有权限：…」这样的原文） */
+export const noAccess = (r: SiteRow) => r.summary.errors.filter((e) => NO_ACCESS.test(e));
+/** 没权限的数据源短名：GSC / GA4 / Bing */
+export const noAccessNames = (r: SiteRow) => noAccess(r).map((e) => { const l = e.split('：')[0]; return l === 'Search Console' ? 'GSC' : l; });
+
 /** 需要你关注：被标记为危险网站、有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
-  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || r.summary.errors.length > 0;
+  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || dataErrors(r).length > 0;
 }
 
 // 「待处理」交给 AI 时选的模型记在本机
@@ -124,10 +134,10 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
       || (f === 'expiry' && expiring(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
       || (f === 'links' && (r.links_broken ?? 0) > 0)
-      || (f === 'dataerr' && r.summary.errors.length > 0)
+      || (f === 'dataerr' && dataErrors(r).length > 0)
       || (f === 'down' && trafficDown(r))
       || (f === 'proposed' && r.proposed > 0)
-      || (f === 'nodata' && !r.has_data)));
+      || (f === 'nodata' && (!r.has_data || noAccess(r).length > 0))));
 }
 /** 右上角提醒里的问题分组（按要紧程度排）；soft＝不算问题，只是提示。 */
 export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
@@ -150,7 +160,7 @@ function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'offline') return String(r.down_since ?? 0);
   // 按「哪几样要处理」记：天数每天在变，不能用天数，不然忽略了第二天又冒出来
   if (k === 'expiry') return `${r.cert_err ? 'e' : ''}${r.cert_days != null && r.cert_days <= 14 ? 'c' : ''}${r.domain_days != null && r.domain_days <= 60 ? 'd' : ''}`;
-  if (k === 'dataerr') return r.summary.errors.join('|');
+  if (k === 'dataerr') return dataErrors(r).join('|');
   // 按掉了多少记（3 档）：数据每天往后挪一天，不能用数据日期，不然忽略了第二天又冒出来
   if (k === 'down') return String(downLevel(r));
   if (k === 'proposed') return String(r.proposed);

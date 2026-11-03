@@ -12,7 +12,7 @@
   import { startDrag } from '$lib/state/ui.svelte.js';
   import { openSite, openSiteImport, pendingDeploys, loadPendingDeploys, deployAllPending } from '$lib/state/sites.svelte.js';
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
-  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, STAT_DAYS, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, type SiteSort } from '$lib/state/fleet.svelte.js';
+  import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, STAT_DAYS, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, dataErrors, noAccess, noAccessNames, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
   import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
@@ -102,7 +102,7 @@
     `已发 ${c.published} 篇${c.failed ? ` · ${c.failed} 篇发布失败` : ''}`,
     '点一下打开分发',
   ].join('\n');
-  const status = (r: SiteRow) => r.unsafe_by ? { t: '被标记为危险', c: 'err' } : r.site_down ? { t: '打不开', c: 'err' } : r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.links_broken ? { t: `${r.links_broken} 个推广链接失效`, c: 'err' } : r.cert_err ? { t: '证书有问题', c: 'err' } : r.cert_days != null && r.cert_days <= 14 ? { t: r.cert_days < 0 ? '证书已过期' : `证书 ${r.cert_days} 天后过期`, c: r.cert_days <= 3 ? 'err' : 'warn' } : r.domain_days != null && r.domain_days <= 60 ? { t: r.domain_days < 0 ? '域名已过期' : `域名 ${r.domain_days} 天后到期`, c: r.domain_days <= 7 ? 'err' : 'warn' } : r.summary.errors.length ? { t: '数据源出错', c: 'err' } : { t: '正常', c: '' };
+  const status = (r: SiteRow) => r.unsafe_by ? { t: '被标记为危险', c: 'err' } : r.site_down ? { t: '打不开', c: 'err' } : r.job ? { t: r.job + '中', c: 'run' } : r.proposed ? { t: `${r.proposed} 条待确认`, c: 'warn' } : r.last_deploy_ok === false ? { t: '上线失败', c: 'err' } : r.failed ? { t: `${r.failed} 条失败`, c: 'err' } : r.links_broken ? { t: `${r.links_broken} 个推广链接失效`, c: 'err' } : r.cert_err ? { t: '证书有问题', c: 'err' } : r.cert_days != null && r.cert_days <= 14 ? { t: r.cert_days < 0 ? '证书已过期' : `证书 ${r.cert_days} 天后过期`, c: r.cert_days <= 3 ? 'err' : 'warn' } : r.domain_days != null && r.domain_days <= 60 ? { t: r.domain_days < 0 ? '域名已过期' : `域名 ${r.domain_days} 天后到期`, c: r.domain_days <= 7 ? 'err' : 'warn' } : dataErrors(r).length ? { t: '数据源出错', c: 'err' } : noAccess(r).length ? { t: `${noAccessNames(r).join('、')} 没接入`, c: 'line' } : { t: '正常', c: '' };
   // 有没有已提交、还没上线的站点：打开时查一次，回到「站点」页再查
   $effect(() => { if (fleet.tab === 'sites') void loadPendingDeploys(); });
 </script>
@@ -245,7 +245,7 @@
                 {@const st = status(r)}
                 <tr class="clickable" onclick={() => openSite(r.id)}>
                   <td class="site-cell">
-                    <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if syncRun.has(r.id)}<span class="sync" data-tip={RUN_TIP} aria-label={RUN_TIP}><span class="spin"></span></span>{:else if syncQ.has(r.id)}<span class="sync q" data-tip={Q_TIP} aria-label={Q_TIP}><Icon name="clock" size={11} /></span>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={st.t === '被标记为危险' ? `${r.unsafe_by} 把这个站标记成了危险网站，访客会看到警告页或打不开；自动上线已暂停（站点概览 → 站点健康 → 安全标记）` : st.t === '数据源出错' ? r.summary.errors.join('\n') : st.t === '打不开' ? `${r.down_err || '首页打不开'}（连续两次检查都没打开）` : st.t === '证书有问题' ? r.cert_err : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
+                    <b><SiteIcon id={r.id} size={15} /><span class="nm" data-tip={r.domain && r.domain !== r.name ? `站点名称：${r.name}` : null}>{r.domain || r.name}</span>{#if r.domain}<button class="ext" onclick={(e) => { e.stopPropagation(); void openUrl(`https://${r.domain}`); }} aria-label="打开 {r.domain}" data-tip="打开 {r.domain}">↗</button>{/if}{#if syncRun.has(r.id)}<span class="sync" data-tip={RUN_TIP} aria-label={RUN_TIP}><span class="spin"></span></span>{:else if syncQ.has(r.id)}<span class="sync q" data-tip={Q_TIP} aria-label={Q_TIP}><Icon name="clock" size={11} /></span>{/if}{#if st.c}<span class="pill st {st.c}" data-tip={st.t === '被标记为危险' ? `${r.unsafe_by} 把这个站标记成了危险网站，访客会看到警告页或打不开；自动上线已暂停（站点概览 → 站点健康 → 安全标记）` : st.t === '数据源出错' ? dataErrors(r).join('\n') : st.t.endsWith(' 没接入') ? `连接的账号还没有这个站点的权限：到 ${noAccessNames(r).includes('GSC') ? 'Search Console' : '对应后台'} 添加并验证 ${r.domain || r.name}，或在那边把连接用的账号加为用户；下次同步就会接上。\n\n${noAccess(r).join('\n')}` : st.t === '打不开' ? `${r.down_err || '首页打不开'}（连续两次检查都没打开）` : st.t === '证书有问题' ? r.cert_err : null}>{#if st.c === 'run'}<span class="spin"></span>{/if}{st.t}</span>{/if}</b>
                     <small><span class="dm"><DeployMark mode={r.deploy_mode} size={11} />{MODE[r.deploy_mode] ?? r.deploy_mode}</span>{#if r.repo}<button class="gh" onclick={(e) => { e.stopPropagation(); void openUrl(`https://github.com/${r.repo}`); }} aria-label="GitHub 仓库 {r.repo}" data-tip="GitHub 仓库：{r.repo}（点一下打开）"><GhMark size={12} /></button>{/if}{#if r.channels?.length}<span class="chs">{#each r.channels as c, i (i)}<button class="ch" class:off={!c.enabled} class:bad={c.failed > 0} onclick={(e) => { e.stopPropagation(); openSite(r.id, 'distribute'); }} aria-label={chTip(c)} data-tip={chTip(c)}><ConnectionMark kind={c.kind} size={12} /></button>{/each}</span>{/if}{#each r.tags as t (t)}<span class="tag">#{t}</span>{/each}</small>
                   </td>
                   <td class="c-lvl"><span class="am am-{r.autonomy || 'none'}" data-tip={r.plan ? `托管方案「${r.plan}」` : '不在任何托管方案里'}>{r.autonomy === 'stopped' ? '已停止' : r.autonomy ? AUTONOMY_LABEL[r.autonomy] : '自己运营'}</span></td>
@@ -268,7 +268,8 @@
                     <td class="num nodata" colspan="2">
                       {#if syncRun.has(r.id) || syncQ.has(r.id)}<span class="pulling"><span class="spin"></span>{syncRun.has(r.id) ? '正在拉数据…' : '排队拉数据…'}</span>
                       {:else if !r.has_data}<button class="link-btn" onclick={(e) => { e.stopPropagation(); openSite(r.id, 'settings'); }} data-tip="在站点设置里接上 GA4、Search Console、Bing">还没接数据源</button>
-                      {:else if r.summary.errors.length}<span class="err-t" data-tip={r.summary.errors.join('\n')}>没拉到数据</span>
+                      {:else if dataErrors(r).length}<span class="err-t" data-tip={dataErrors(r).join('\n')}>没拉到数据</span>
+                      {:else if noAccess(r).length}<span data-tip={noAccess(r).join('\n')}>{noAccessNames(r).join('、')} 没接入</span>
                       {:else}<span data-tip="每天早上 7 点自动同步，也可以点右上角 ⋯ 立即同步">还没拉到数据</span>{/if}
                     </td><td class="c-impr"></td><td class="c-impr"></td><td class="c-idx"></td><td class="c-trend"></td>
                   {/if}
