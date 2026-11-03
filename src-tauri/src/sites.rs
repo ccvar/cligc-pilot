@@ -189,6 +189,9 @@ pub struct OpsConfig {
     /// 效果复盘持续负面而被自动降档的改动类型（这些类型在该站最高只到第 3 档）。
     #[serde(default)]
     pub downgraded: Vec<String>,
+    /// 最近一次降档的时间（秒）：60 天后自动恢复
+    #[serde(default)]
+    pub downgraded_at: u64,
     /// 机会扫描阈值：展现量下限（小站可调低）。
     #[serde(default = "default_min_impressions")]
     pub min_impressions: u32,
@@ -228,6 +231,7 @@ impl Default for OpsConfig {
             brain: default_brain(),
             model: String::new(),
             downgraded: Vec::new(),
+            downgraded_at: 0,
             min_impressions: default_min_impressions(),
             stage: String::new(),
             content_code: Vec::new(),

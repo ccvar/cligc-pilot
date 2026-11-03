@@ -342,6 +342,21 @@ pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option
 /// 「执行但不上线」的站点：这一轮照方案规则判定、照常做内容质检（只记分数，不交回重写），但最后不上线，都留给你确认。
 static HOLD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
+/// 作业超时被 Pilot 强停的站点：这期间 AI 回合报的「被停止」不是人停的（失败原因写成可自动重试的）
+static KILLED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+fn mark_killed(site_id: &str) {
+    let mut k = KILLED.lock().unwrap();
+    if !k.iter().any(|s| s == site_id) {
+        k.push(site_id.to_string());
+    }
+}
+fn was_killed(site_id: &str) -> bool {
+    KILLED.lock().unwrap().iter().any(|s| s == site_id)
+}
+fn clear_killed(site_id: &str) {
+    KILLED.lock().unwrap().retain(|s| s != site_id);
+}
+
 fn held(site_id: &str) -> bool {
     HOLD.lock().unwrap().iter().any(|s| s == site_id)
 }
@@ -497,6 +512,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
             Ok(Err(_)) => Err("任务被中止".into()),
             Err(_) => {
                 // 先停掉正在跑的命令和 AI 回合，给它一点时间自己收尾（会话状态能正常落库），再强行中止
+                mark_killed(&site.id);
                 ctx.state().site_jobs.kill(&site.id);
                 let _ = tokio::time::timeout(Duration::from_secs(60), &mut body).await;
                 body.abort();
@@ -509,6 +525,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
             ctx.emit_queue(&site.id);
         }
         let res = r.as_ref().map(|_| ()).map_err(|e| e.clone());
+        clear_killed(&site.id);
         set_model_override(&site.id, None);
         set_effort_override(&site.id, String::new());
         HOLD.lock().unwrap().retain(|s| s != &site.id);
@@ -709,8 +726,9 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             Err(e) => {
                 // 失败不重放：标记失败、写明原因，等你处理；继续下一个机会。
                 job.line(&format!("「{}」处理失败：{e}", item.opp.title));
+                left -= 1;
                 // 已经合并进主分支、只是上线没完成的留在「已合并」（可以重新上线）；验收失败的回滚流程已经写好状态；只有还在处理中的才标失败
-                let (note, head) = failure_note(job, &e, &site_dir, &item);
+                let (note, head) = failure_note(job, &e, &site_dir, &item, &site.id);
                 let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
                     if i.status == "working" {
                         i.status = "failed".into();
@@ -723,6 +741,10 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             }
         }
         ctx.emit_queue(&site.id);
+        // AI 回合被停掉（作业超时被 Pilot 强停、或你点了停止）：这一轮到此为止，别接着给下一条开新会话
+        if site_ops::load_queue(&site_dir).iter().any(|i| i.id == item.id && i.note.starts_with(STOPPED) || i.id == item.id && i.note.starts_with("作业超时")) {
+            break;
+        }
     }
     (done, notes, stopped)
 }
@@ -820,7 +842,7 @@ async fn work_one(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<St
     // 你手动点「让 AI 改」：没托管或「只出建议」的站点也按「改好等你确认」处理
     let r = process(ctx, site, job, &item, true).await;
     if let Err(e) = &r {
-        let (note, head) = failure_note(job, e, &site_dir, &item);
+        let (note, head) = failure_note(job, e, &site_dir, &item, &site.id);
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
             if i.status == "working" {
                 i.status = "failed".into();
@@ -1398,7 +1420,10 @@ async fn code_base(ctx: &Ctx, site: &Site, job: &Job) -> Result<CodeBase, String
 
 fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     move |href: &str| {
-        let p = href.split(['#', '?']).next().unwrap_or("").trim_start_matches('/');
+        // 浏览器里复制的网址带百分号编码（中文路径），磁盘上是原文
+        let raw = href.split(['#', '?']).next().unwrap_or("");
+        let decoded = percent_decode(raw);
+        let p = decoded.trim_start_matches('/');
         if p.is_empty() {
             return out.join("index.html").exists();
         }
@@ -2052,7 +2077,9 @@ fn drop_unbuilt_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, 
 fn shipped_for(rider: &QueueItem, sh: &Shipped) -> Shipped {
     let mut own = sh.clone();
     let paths: Vec<String> = std::iter::once(path_of(&rider.opp.page)).chain(rider.pages.iter().map(|u| path_of(u))).chain(rider.new_pages.iter().map(|u| path_of(u))).filter(|p| p.len() > 1).collect();
-    own.attention.retain(|a| !a.starts_with(SNIPPET_MISS) && paths.iter().any(|p| a.contains(p.as_str())));
+    // 路径要按边界匹配（/zh/ 不能把 /zh/guide/ 的问题也认领了）
+    let bounded = |a: &str, p: &str| a.match_indices(p).any(|(i, _)| a[i + p.len()..].chars().next().is_none_or(|c| "：:、 ，,；;）)".contains(c)));
+    own.attention.retain(|a| !a.starts_with(SNIPPET_MISS) && !a.starts_with(crate::site_verify::CHALLENGED) && paths.iter().any(|p| bounded(a, p)));
     own
 }
 
@@ -2088,14 +2115,36 @@ fn order_lanes(picked: Vec<QueueItem>, last_lane: usize) -> Vec<QueueItem> {
     out
 }
 
+/// %E5%85%85 这类百分号编码解回原文（解不了的原样保留）
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() + 0 && i + 2 <= b.len() - 1 {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
 /// 一条任务失败时写在条目上的原因。作业超时被 Pilot 强停时 AI 回合报的是「被停止了」，那不是人停的：
 /// 写成「作业超时被停止时…」（自动重试认这个开头），分支上已有提交的记下来，自动「重新检查」接着用
-fn failure_note(job: &Job, e: &str, site_dir: &Path, item: &QueueItem) -> (String, Option<String>) {
-    if !e.starts_with(STOPPED) || job.canceled() {
+fn failure_note(job: &Job, e: &str, site_dir: &Path, item: &QueueItem, site_id: &str) -> (String, Option<String>) {
+    // 「被停止」有两种：Pilot 超时强停的才自动重做；你在会话里点的停止不重做
+    if !e.starts_with(STOPPED) || job.canceled() || !was_killed(site_id) {
         return (e.to_string(), None);
     }
+    // base_sha 是 implement 里才写进条目的：拿最新的条目看分支上有没有提交
+    let fresh = site_ops::load_queue(site_dir).into_iter().find(|i| i.id == item.id).unwrap_or_else(|| item.clone());
     let wt = crate::sites::build_root(site_dir).join("work").join(&item.id);
-    let head = branch_head(&wt, &item.base_sha);
+    let head = branch_head(&wt, &fresh.base_sha);
     let tail = if head.is_some() { "AI 已经把改动提交到分支上：会自动「重新检查」接着用" } else { "AI 还没提交改动：会自动放回排队重做" };
     (format!("作业超时被停止时这条还在执行，被中断了。{tail}"), head)
 }
@@ -2117,14 +2166,14 @@ fn kinds_of_change(change: &str) -> &'static [&'static str] {
 
 /// 全自动方案：验收发现一般问题时开一条「修技术问题」的后续任务（每个站点每天最多一条，防止来回改）。
 fn follow_up(ctx: &Ctx, site: &Site, item: &QueueItem, attention: &str) {
-    // 「新内容没找到」是验收没对上文字，不是网站有问题：不开修复任务（后台会再复查一次，见 recheck_snippets）
-    let attention = attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
+    // 「新内容没找到」是验收没对上文字、「被防火墙拦住」是验收查不了：都不是网站有问题，不开修复任务（AI 也改不了）
+    let attention = attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS) && !p.starts_with(crate::site_verify::CHALLENGED)).collect::<Vec<_>>().join("；");
     if attention.is_empty() {
         return;
     }
     let Some(g) = group_rules(ctx, site) else { return };
-    // 修复任务自己上线后又有待核对：不再开下一条，否则 AI 修不掉的问题会一天一条没完没了
-    if g.autonomy != "auto" || !g.allows("technical") || item.opp.kind == "followup" {
+    // 修复任务自己上线后又有待核对：不再开下一条，否则 AI 修不掉的问题会一天一条没完没了；停止托管的站点也不开
+    if g.autonomy != "auto" || !g.active_for(&site.id) || !g.allows("technical") || item.opp.kind == "followup" {
         return;
     }
     let site_dir = ctx.site_dir(&site.id);
@@ -2197,6 +2246,7 @@ async fn verify_failed(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, reason:
             job.line(&format!("一并回退后重新上线没成功：{e}"));
         }
     }
+    log_item(ctx, site, "rolled_back", &item, &format!("上线后验收没通过（{why}），已自动回滚"));
     downgrade_if_repeated(ctx, site, &item.opp.change);
     let item = site_ops::update_item(&site_dir, item_id, now(), |i| i.verify_rollbacks += 1)?.ok_or("这条改动不存在")?;
     let auto = group_rules(ctx, site).is_some_and(|g| g.autonomy == "auto") && crate::managed::load(&ctx.state().data_dir).rules_for(&site.id).autonomy == "auto";
@@ -2252,6 +2302,7 @@ fn downgrade_if_repeated(ctx: &Ctx, site: &Site, change: &str) {
             if !s.ops.downgraded.contains(&change) {
                 s.ops.downgraded.push(change.clone());
             }
+            s.ops.downgraded_at = now();
             Ok(())
         });
         log(ctx, site, "downgraded", &format!("「{}」类改动不再自动上线", crate::managed::action_label(&change)), "最近 30 天有 2 次上线后验收没通过、被回滚，之后这类改动留给你确认", "");
@@ -2303,6 +2354,11 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     mark_merged(ctx, site, &item, &merge_sha, auto)?;
     ctx.emit_queue(&site.id);
     if site.deploy.mode == "none" {
+        // 没配部署：合并进主分支就是这条改动的终点，记一笔、通知一声，别悄悄进了主分支
+        log_item(ctx, site, "shipped", &item, "已合并进主分支（站点没有配置部署，上线由你来做）");
+        if auto {
+            ctx.notify(&format!("{} · 已自动合并", site.name), &format!("{}（没有配置部署，上线由你来做）", item.opp.title));
+        }
         return Ok("已合并（站点没有配置部署）".into());
     }
     let ride = riders(ctx, site, &[item_id], job);
@@ -2763,7 +2819,15 @@ pub fn reports_dir(site_dir: &Path) -> PathBuf {
 fn write_report(site_dir: &Path, name: &str, body: &str) -> Result<(), String> {
     let d = reports_dir(site_dir);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    std::fs::write(d.join(format!("{name}.md")), body).map_err(|e| e.to_string())
+    std::fs::write(d.join(format!("{name}.md")), body).map_err(|e| e.to_string())?;
+    // 同类报告只留最近 40 份（文件名是 日期-类型.md，按名字排就是按日期排）
+    let kind = name.rsplit('-').next().unwrap_or("").to_string();
+    let mut same: Vec<PathBuf> = std::fs::read_dir(&d).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&format!("-{kind}.md")))).collect()).unwrap_or_default();
+    same.sort();
+    for p in same.iter().take(same.len().saturating_sub(40)) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
 }
 
 fn today() -> String {
@@ -2995,6 +3059,7 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let mut lines = Vec::new();
     let mut facts = Vec::new();
     let mut downgraded = site.ops.downgraded.clone();
+    let mut downgraded_stamp = false;
     for i in &items {
         // 新页面按「有没有被搜到」判，不按点击涨跌；写新内容的任务就算填了已有页面网址也算新页面
         let is_new = i.before.is_none() || !i.new_pages.is_empty() || i.opp.change == "new_content";
@@ -3025,6 +3090,7 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             *neg += 1;
             if *neg >= 2 && !kind.is_empty() && !downgraded.contains(&kind) {
                 downgraded.push(kind.clone());
+                downgraded_stamp = true;
                 lines.push(format!("「{}」类改动连续负面，已在该站自动降到第 3 档", crate::site_ops::kind_label(&kind)));
             }
         } else {
@@ -3050,6 +3116,9 @@ async fn review(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     if downgraded != site.ops.downgraded {
         st.sites.update(&site.id, t, |s| {
             s.ops.downgraded = downgraded.clone();
+            if downgraded_stamp {
+                s.ops.downgraded_at = now();
+            }
             Ok(())
         })?;
     }
@@ -3177,6 +3246,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
             format!("https://{}{p}", site.domain)
         } else if p.starts_with("http") && !p.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.").starts_with(site.domain.trim_start_matches("www.")) {
             String::new()
+        } else if let Some(rest) = p.strip_prefix("http://") {
+            format!("https://{rest}")
         } else {
             p
         };
@@ -3249,7 +3320,7 @@ pub fn latest_plan(site_dir: &Path) -> Option<serde_json::Value> {
 
 /// 这条改动到了上线后复查的时间没有：1 小时后一次、24 小时后再一次。
 fn watch_is_due(i: &QueueItem) -> bool {
-    i.status == "deployed" && i.watch_due > 0 && now() >= i.watch_due && (i.watched.is_empty() || i.watch_stage == 1)
+    i.status == "deployed" && i.watch_due > 0 && now() >= i.watch_due
 }
 
 /// 上线后复查（1 小时后、24 小时后）：再做一遍线上验收。页面打不开就自动回滚；
@@ -3276,11 +3347,25 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
                 x.checks = rep.checks.clone();
             })?;
             // 首页都打不开是整站的事，不是这条改动的问题；「改好等你确认」的方案是你亲手上线的，也不替你回滚：
-            // 记下来、1 小时后再查，通知你
-            let site_down = rep.hard.iter().any(|h| h.contains("首页"));
+            // 记下来、1 小时后再查一次；第二次还不行就不再查，写进待核对交给你（只通知这两次，不每小时刷屏）
+            let site_down = rep.home_down;
             if site_down || !auto_plan {
-                site_ops::update_item(&site_dir, &i.id, now(), |x| x.watch_due = now() + 3600)?;
-                let why = if site_down { "首页也打不开，像是整站或 CDN 的问题，没有回滚；1 小时后再查" } else { "这个方案不是全自动，没有替你回滚；1 小时后再查" };
+                let failures = i.watch_failures + 1;
+                let last = failures >= 2;
+                site_ops::update_item(&site_dir, &i.id, now(), |x| {
+                    x.watch_failures = failures;
+                    x.watch_due = if last { 0 } else { now() + 3600 };
+                    if last {
+                        let add = format!("上线后复查两次没通过：{failure}");
+                        x.attention = if x.attention.is_empty() { add } else { format!("{}；{add}", x.attention) };
+                    }
+                })?;
+                let why = match (site_down, last) {
+                    (true, false) => "首页也打不开，像是整站或 CDN 的问题，没有回滚；1 小时后再查",
+                    (true, true) => "首页还是打不开，没有回滚；不再自动查了，请你看一下",
+                    (false, false) => "这个方案不是全自动，没有替你回滚；1 小时后再查",
+                    (false, true) => "这个方案不是全自动，没有替你回滚；不再自动查了，请你看一下",
+                };
                 log_item(ctx, site, "watch_failed", &i, &format!("{when}复查：{failure}。{why}"));
                 ctx.notify(&format!("{} · 上线后复查没通过", site.name), &format!("{}：{failure}（{why}）", i.opp.title));
                 out.push(format!("{} 复查没通过（{why}）", i.opp.title));
@@ -3414,15 +3499,18 @@ pub fn build_digest(sites: &[(Site, PathBuf)], acts: &[crate::managed::Activity]
         sites_total: sites.len(),
         shipped: count(&["shipped"]),
         planned: count(&["planned"]),
-        broken: count(&["rolled_back", "failed", "watch_failed"]),
+        // 复查没通过只是明细（回滚了会另记 rolled_back），不单独算
+        broken: count(&["rolled_back", "failed"]),
         ..Default::default()
     };
     for (s, dir) in sites {
-        let waiting: Vec<DigestNeed> = site_ops::load_queue(dir)
-            .iter()
-            .filter(|i| site_ops::needs_you(i))
-            .map(|i| DigestNeed { site_id: s.id.clone(), site_name: s.name.clone(), title: i.opp.title.clone(), why: need_why(i).into() })
-            .collect();
+        // 只列最近 7 天有动静的；老的折成一条「另有 N 项超过一周没处理」，不然同一批条目每天重复推
+        let q = site_ops::load_queue(dir);
+        let (recent, old): (Vec<&QueueItem>, Vec<&QueueItem>) = q.iter().filter(|i| site_ops::needs_you(i)).partition(|i| i.updated_at + 7 * DAY > now());
+        let mut waiting: Vec<DigestNeed> = recent.iter().map(|i| DigestNeed { site_id: s.id.clone(), site_name: s.name.clone(), title: i.opp.title.clone(), why: need_why(i).into() }).collect();
+        if !old.is_empty() {
+            waiting.push(DigestNeed { site_id: s.id.clone(), site_name: s.name.clone(), title: format!("另有 {} 项超过一周没处理", old.len()), why: "待你处理".into() });
+        }
         let events: Vec<DigestEvent> = acts
             .iter()
             .filter(|a| a.site_id == s.id)
@@ -3779,15 +3867,16 @@ async fn recheck_snippets(ctx: &Ctx) {
                     urls.push(p.clone());
                 }
             }
-            let live = crate::site_verify::snippets_live(&urls, &it.snippets).await;
-            if live.is_none() {
+            // 第二次要等上线满 24 小时（CDN 缓存通常长于 10 分钟）；页面一直打不开（比如被防火墙拦着）查 3 次就不再查，待核对留着
+            if it.snippet_misses >= 1 && it.deployed_at + DAY > now() {
                 continue;
             }
+            let live = crate::site_verify::snippets_live(&urls, &it.snippets).await;
             let give_up = live == Some(false) && it.snippet_misses >= 1;
             let mut cleared = false;
             let _ = site_ops::update_item(&dir, &it.id, now(), |i| {
                 i.snippet_misses += 1;
-                i.snippet_rechecked = live == Some(true) || give_up;
+                i.snippet_rechecked = live == Some(true) || give_up || (live.is_none() && i.snippet_misses >= 3);
                 if give_up {
                     i.attention = i.attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
                     i.note = "上线后两次都没在线上找到这次的对照文字，多半是不显示在页面上的字段（frontmatter、属性），不再当问题".into();
@@ -3882,9 +3971,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             let hour: u8 = chrono::Local::now().format("%H").to_string().parse().unwrap_or(0);
             if mcfg.digest && !mcfg.paused && hour >= mcfg.digest_hour && mcfg.last_digest != today() && !mcfg.groups.iter().all(|g| g.sites.is_empty()) {
                 let _ = digest(&app);
-                let mut c = mcfg.clone();
-                c.last_digest = today();
-                let _ = crate::managed::save(&st.data_dir, &c);
+                let _ = crate::managed::modify(&st.data_dir, |c| c.last_digest = today());
             }
             // 每天早上 7 点同步一次所有站点的 GA4 / Search Console / Bing（错过了就在之后第一次检查时补上）
             if hour >= DATA_SYNC_HOUR && last_data_sync(&st.data_dir) != today() {
@@ -3942,6 +4029,14 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 }
             }
             recheck_snippets(&ctx).await;
+            // 降档过了 60 天自动恢复：当时连续负面的那类改动，隔两个月值得再让它自动上线一次（再负面还会降）
+            for site in st.sites.list() {
+                if !site.ops.downgraded.is_empty() && site.ops.downgraded_at > 0 && site.ops.downgraded_at + 60 * DAY < now() {
+                    let kinds = site.ops.downgraded.join("、");
+                    let _ = st.sites.update(&site.id, now(), |s| { s.ops.downgraded.clear(); s.ops.downgraded_at = 0; Ok(()) });
+                    log(&ctx, &site, "resumed", "降档到期恢复", &format!("「{kinds}」类改动 60 天前因复盘负面降档，现在恢复按方案规则自动上线"), "");
+                }
+            }
             // 每小时清一次没人要的工作树：条目已经完结（上线、驳回、回滚）或已不存在，目录和分支还留着，几周下来几百 MB
             if tick % 6 == 0 {
                 prune_worktrees(&st);

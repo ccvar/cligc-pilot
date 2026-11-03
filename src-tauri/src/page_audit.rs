@@ -21,6 +21,23 @@ const CAP: usize = 200;
 /// 结构化数据的问题按页面分块，每条任务最多改这么多个页面
 const SCHEMA_CHUNK: usize = 10;
 
+/// 把页面按「路径哈希取模」分到固定几个桶里（桶数按页面数定，最多 16 个）：某个页面修好了只影响它自己那个桶，
+/// 别的桶的成员和 key 不变——按顺序切块的话修好一个页面所有块都会平移、key 全变，驳回和冷却就失效了
+fn buckets(pages: &[String]) -> Vec<Vec<String>> {
+    let n = pages.len().div_ceil(SCHEMA_CHUNK).clamp(1, 16);
+    let mut out: Vec<Vec<String>> = vec![Vec::new(); n];
+    for p in pages {
+        let h = u64::from_str_radix(&crate::site_ops::stable_key(p)[..8], 16).unwrap_or(0) as usize;
+        out[h % n].push(p.clone());
+    }
+    out.into_iter().filter(|b| !b.is_empty()).map(|mut b| { b.sort(); b }).collect()
+}
+
+/// 桶的 key：桶里第一个页面的哈希（桶数不变、那个页面还在时稳定）
+fn bucket_key(chunk: &[String]) -> String {
+    crate::site_ops::stable_key(chunk.first().map(String::as_str).unwrap_or(""))
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct ImgIssue {
     pub page: String,
@@ -312,8 +329,8 @@ fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
                 pages.push(p.clone());
             }
         }
-        pages.sort();
-        for chunk in pages.chunks(SCHEMA_CHUNK) {
+        for chunk in buckets(&pages) {
+            let chunk = chunk.as_slice();
             let (broken, large, no_alt): (Vec<_>, Vec<_>, Vec<_>) = (
                 r.broken.iter().filter(|i| chunk.contains(&i.page)).collect(),
                 r.large.iter().filter(|i| chunk.contains(&i.page)).collect(),
@@ -333,7 +350,7 @@ fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
                 lines.push(format!("缺替代文字：{} 里的 {}", i.page, i.src));
             }
             out.push(crate::site_ops::Opportunity {
-                key: format!("img_audit:{}", crate::site_ops::stable_key(&chunk.join("|"))),
+                key: format!("img_audit:{}", bucket_key(chunk)),
                 kind: "img_audit".into(),
                 title: format!(
                     "图片问题：{}{}",
@@ -357,12 +374,12 @@ fn build(r: &AuditReport, any: bool) -> Vec<crate::site_ops::Opportunity> {
                 pages.push(s.page.clone());
             }
         }
-        pages.sort();
-        for chunk in pages.chunks(SCHEMA_CHUNK) {
+        for chunk in buckets(&pages) {
+            let chunk = chunk.as_slice();
             let lines: Vec<String> = r.schema.iter().filter(|s| chunk.contains(&s.page)).take(30).map(|s| format!("{}：{}", s.page, s.problem)).collect();
             let n = lines.len();
             out.push(crate::site_ops::Opportunity {
-                key: format!("schema:{}", crate::site_ops::stable_key(&chunk.join("|"))),
+                key: format!("schema:{}", bucket_key(chunk)),
                 kind: "schema".into(),
                 title: format!("{} 个页面的结构化数据有问题{}", chunk.len(), if pages.len() > chunk.len() { format!("（共 {} 个，分批处理）", pages.len()) } else { String::new() }),
                 page: chunk[0].clone(),

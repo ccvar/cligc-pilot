@@ -59,7 +59,7 @@
     <section>
       <h4><Icon name="activity" size={13} />今天有动静的站点<span class="cnt">{data.active.length}</span></h4>
       <div class="sites">
-        {#each data.active as s (s.site_name)}
+        {#each data.active as s, si (s.site_id || `${s.site_name}:${si}`)}
           <div class="site-card">
             {#if s.site_id}<button class="site-name" onclick={() => openSite(s.site_id, 'overview')} data-tip="打开这个站点">{s.site_name}</button>{:else}<span class="site-name gone">{s.site_name}</span>{/if}
             <ul class="events">
@@ -96,7 +96,7 @@
         <table class="tr">
           <thead><tr><th>站点</th><th class="num">Google 点击</th><th class="num">变化</th>{#if hasViews}<th class="num">浏览量</th><th class="num">变化</th>{/if}</tr></thead>
           <tbody>
-            {#each data.traffic as t (t.site_name)}
+            {#each data.traffic as t, ti (t.site_id || `${t.site_name}:${ti}`)}
               {@const dc = delta(t.clicks, t.clicks_prev)}
               {@const dv = delta(t.views, t.views_prev)}
               <tr>

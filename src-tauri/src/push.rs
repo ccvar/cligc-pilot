@@ -374,17 +374,13 @@ async fn command(app: &tauri::AppHandle, text: &str) -> Reply {
             Some((format!("{n} 条等你确认{}：", if n > 10 { "（先发最早的 10 条）" } else { "" }), msgs))
         }
         "/pause" | "暂停" => {
-            let mut c = crate::managed::load(&st.data_dir);
-            c.paused = true;
-            let _ = crate::managed::save(&st.data_dir, &c);
+            let _ = crate::managed::modify(&st.data_dir, |c| c.paused = true);
             use tauri::Emitter;
             let _ = app.emit("managed-changed", ());
             Some(("已暂停全部托管。正在跑的任务会跑完，之后不再自动开始新的。发 /resume 恢复。".into(), Vec::new()))
         }
         "/resume" | "恢复" => {
-            let mut c = crate::managed::load(&st.data_dir);
-            c.paused = false;
-            let _ = crate::managed::save(&st.data_dir, &c);
+            let _ = crate::managed::modify(&st.data_dir, |c| c.paused = false);
             use tauri::Emitter;
             let _ = app.emit("managed-changed", ());
             Some(("已恢复托管。".into(), Vec::new()))

@@ -47,6 +47,8 @@ pub struct Report {
     pub checks: Vec<Check>,
     pub hard: Vec<String>,
     pub soft: Vec<String>,
+    /// 首页本身打不开（多半是整站或 CDN 的问题，不是某条改动的）
+    pub home_down: bool,
     /// 严重失败看起来是部署没到位（构建产物里有这个页面，线上却打不开）：值得重新上传一次
     pub deploy_issue: bool,
     /// 打开正常、没有页面级问题的网址（可以提交 IndexNow）
@@ -54,6 +56,8 @@ pub struct Report {
 }
 
 const MAX_PAGES: usize = 12;
+/// 「验收被防火墙拦住」这条待核对的固定开头：修复任务和一起上线的条目都按它过滤（AI 改不了 WAF 规则）
+pub const CHALLENGED: &str = "验收被网站的防火墙（人机验证）拦住";
 const MAX_LINKS: usize = 15;
 
 struct Fetched {
@@ -186,7 +190,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     // 被防火墙的人机验证拦住的：不算打不开，也查不了内容，记一条待核对
     let challenged: Vec<String> = urls.iter().enumerate().filter(|(i, _)| got[*i].as_ref().is_some_and(|f| f.challenged)).map(|(_, u)| path_of(u)).collect();
     if !challenged.is_empty() {
-        rep.soft.push(format!("验收被网站的防火墙（人机验证）拦住，查不了 {}；可以给 User-Agent「CligcPilot-Verify」加一条放行规则", challenged.join("、")));
+        rep.soft.push(format!("{CHALLENGED}，查不了 {}；可以给 User-Agent「CligcPilot-Verify」加一条放行规则", challenged.join("、")));
     }
     // 页面能打开（首页写成「首页 …」：首页打不开多半是整站或 CDN 的问题，上线后复查按它判断要不要回滚）
     for (i, u) in urls.iter().enumerate() {
@@ -195,6 +199,9 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             Some(_) => rep.checks.push(Check { label, ok: true, detail: String::new(), hard: true }),
             None => {
                 let msg = if i == 0 { format!("首页 {}", last[i]) } else { format!("{} {}", path_of(u), last[i]) };
+                if i == 0 {
+                    rep.home_down = true;
+                }
                 if last[i].contains("404") && spec.built.iter().any(|b| same_page(b, u)) {
                     rep.deploy_issue = true;
                 }
@@ -486,14 +493,22 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         // 代码注释（// 、/* */、HTML 注释、JSX 注释）不会出现在页面上；<script> 里的文字（结构化数据的描述）也不会，跨行的也跳过
         let a = added.trim_start();
         let lower = a.to_ascii_lowercase();
-        if in_script {
-            if lower.contains("</script") {
-                in_script = false;
+        // 模板 / 页面文件（.astro / .html / .tsx…）：只拿标签之间的正文，属性值（alt、class…）线上看不到；
+        // 标题 / 描述属性和 frontmatter 里的 title / description 赋值除外（它们会渲染成标题和描述）
+        let pageish = [".astro", ".html", ".htm", ".tsx", ".jsx", ".vue", ".svelte", ".tmpl", ".gohtml", ".njk", ".liquid", ".hbs"].iter().any(|e| file.ends_with(e));
+        // <script> 里的文字跨行也跳过（只对模板文件：Markdown 正文里提到 <script> 这个词不算）
+        if pageish {
+            if in_script {
+                if lower.contains("</script") {
+                    in_script = false;
+                }
+                continue;
             }
-            continue;
-        }
-        if lower.contains("<script") {
-            in_script = !lower.contains("</script");
+            if lower.contains("<script") {
+                in_script = !lower.contains("</script");
+                continue;
+            }
+        } else if lower.starts_with("<script") {
             continue;
         }
         if ["//", "/*", "*", "<!--", "{/*"].iter().any(|p| a.starts_with(p)) {
@@ -502,15 +517,22 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
         // Markdown 正文：去掉记号后的整行（表格行渲染后格子之间隔开了，不拿）；frontmatter 的「key: "…"」照旧取引号里的
         let md = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
         let yaml_key = a.split_once(':').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
-        // 模板 / 页面文件（.astro / .html / .tsx…）：只拿标签之间的正文，属性值（alt、title、class…）线上看不到
-        let pageish = [".astro", ".html", ".htm", ".tsx", ".jsx", ".vue", ".svelte", ".tmpl", ".gohtml", ".njk", ".liquid", ".hbs"].iter().any(|e| file.ends_with(e));
         let texts: Vec<String> = if md && a.starts_with('|') {
             continue;
         } else if md && !yaml_key {
             vec![strip_md(&visible_text(added))]
         } else if pageish {
-            if !a.contains('<') { continue; }
-            vec![visible_text(added)]
+            let titled = ["title=", "description=", "content=", "title:", "description:", "const title", "const description", "let title", "let description"].iter().any(|k| lower.contains(k));
+            if titled {
+                quoted(added)
+            } else if a.contains('<') {
+                vec![visible_text(added)]
+            } else if !a.contains(['=', '{', '}', ';']) && (a.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c)).count() >= 8 || a.split_whitespace().count() >= 5) {
+                // prettier 把长文本单独放一行（<p> 的内容在下一行）
+                vec![a.to_string()]
+            } else {
+                continue;
+            }
         // 字符串里的文字（数据文件），或去掉标签后的整行（页面文件）；没有引号又像代码的行（赋值、语句）不算正文
         } else if added.contains('\'') || added.contains('"') {
             quoted(added)
@@ -629,6 +651,13 @@ fn page_has(text: &str, snippet: &str) -> bool {
     })
 }
 
+/// 像源文件路径的（/src/pages/a.astro、/content/x.md）：不是页面网址
+fn source_path(w: &str) -> bool {
+    let l = w.to_ascii_lowercase();
+    [".astro", ".md", ".mdx", ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".json", ".yml", ".yaml", ".css", ".scss", ".toml"].iter().any(|e| l.ends_with(e))
+        || l.starts_with("/src/") || l.starts_with("/content/") || l.starts_with("/public/") || l.starts_with("/scripts/")
+}
+
 /// 不会渲染成页面的文件：Pilot 记录、文档、测试、脚本、CI、多语言文案目录
 fn off_page_file(file: &str) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
@@ -640,7 +669,8 @@ fn off_page_file(file: &str) -> bool {
         || matches!(lower.as_str(), "claude.md" | "agents.md" | "license" | "license.md")
         || lower.contains(".test.")
         || lower.contains(".spec.")
-        || file.split('/').any(|s| matches!(s, "docs" | "doc" | ".github" | "__tests__" | "tests" | "test" | "fixtures" | "scripts" | "i18n" | "locales" | "lang"))
+        // docs/ 不排除：VitePress / Docusaurus / Starlight 的页面就在 docs 下
+        || file.split('/').any(|s| matches!(s, ".github" | "__tests__" | "tests" | "test" | "fixtures" | "scripts" | "i18n" | "locales"))
 }
 
 /// 按 printf 风格的占位（%s、%d、%v、%5.2f、%-10s…）把字符串切成几段字面文字；%% 是字面的百分号。
@@ -710,7 +740,7 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
                 if w.starts_with("https://") || w.starts_with("http://") {
                     let host = w.trim_start_matches("https://").trim_start_matches("http://").split('/').next().unwrap_or("").trim_start_matches("www.").to_ascii_lowercase();
                     (host == bare).then(|| format!("https://{}", w.trim_start_matches("https://").trim_start_matches("http://")))
-                } else if w.starts_with('/') && w.len() > 1 && !w.contains("//") {
+                } else if w.starts_with('/') && w.len() > 1 && !w.contains("//") && !source_path(w) {
                     Some(format!("https://{bare}{w}"))
                 } else {
                     None
@@ -719,13 +749,18 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
             .take(10)
             .collect()
     };
-    let is_new = |t: &str| ["新页面", "新頁面", "新增页面", "新增頁面", "new pages", "new page"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
-    let is_changed = |t: &str| ["改动的页面", "改動的頁面", "改动页面", "修改的页面", "changed pages", "modified pages", "updated pages"].iter().any(|p| t.to_ascii_lowercase().starts_with(p));
+    // 标题要「关键词 + 冒号」（中间可以有 ** 或空格）：正文里提到「新页面上线后…」的句子不算
+    let heads = |t: &str, ks: &[&str]| { let l = t.to_ascii_lowercase(); ks.iter().any(|p| l.strip_prefix(p).is_some_and(|r| r.trim_start_matches(['*', ' ']).starts_with(['：', ':']))) };
+    let is_new = |t: &str| heads(t, &["新页面", "新頁面", "新增页面", "新增頁面", "new pages", "new page"]);
+    let is_changed = |t: &str| heads(t, &["改动的页面", "改動的頁面", "改动页面", "修改的页面", "changed pages", "modified pages", "updated pages"]);
     let (mut new, mut changed) = (Vec::new(), Vec::new());
     // 「新页面：」后面可能直接跟网址，也可能换行后一行一个（- / * / 1. 开头）：吃到空行或下一个标题为止
     let mut mode: Option<bool> = None;
     for l in reply.lines() {
-        let t = l.trim().trim_start_matches(['-', '*', '#', ' ']).trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ').trim_start_matches("**").trim();
+        let raw = l.trim();
+        // 续行只认列表行（- / * / 1.）：散文里的路径不算
+        let listy = raw.starts_with(['-', '*']) || raw.chars().next().is_some_and(|c| c.is_ascii_digit()) && raw.contains(". ");
+        let t = raw.trim_start_matches(['-', '*', '#', ' ']).trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ').trim_start_matches("**").trim();
         let t = t.trim_start_matches("**");
         let head = t.replace("**", "");
         if is_new(&head) || is_changed(&head) {
@@ -741,7 +776,7 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
             continue;
         }
         if let Some(m) = mode {
-            let urls = pick(&head);
+            let urls = if listy { pick(&head) } else { Vec::new() };
             if urls.is_empty() {
                 mode = None;
             } else if m {
@@ -807,10 +842,17 @@ mod tests {
 
     #[test]
     fn reported_pages_accept_lists_and_relative_paths() {
-        let reply = "改好了。\n\n**新页面：**\n- https://x.com/zh/a/\n- `/zh/b/`\n\n改动的页面：\n1. [首页](https://www.x.com/)\n2. https://evil.com/\n\n谢谢";
+        let reply = "改好了。\n\n**新页面：**\n- https://x.com/zh/a/\n- `/zh/b/`\n- /src/pages/c.astro\n\n改动的页面：\n1. [首页](https://www.x.com/)\n2. https://evil.com/\n新页面上线后记得看 /sitemap.xml\n\n谢谢";
         let (n, c) = reported_pages(reply, "x.com");
         assert_eq!(n, vec!["https://x.com/zh/a/", "https://x.com/zh/b/"]);
         assert_eq!(c, vec!["https://www.x.com/"]);
+        // 模板里的标题 / 描述属性和 frontmatter 赋值照样拿
+        let d3 = "+++ b/src/pages/a.astro\n+const description = \"这是写在 frontmatter 里的页面描述文字\";\n+<Layout title=\"欧易提币教程标题文字\">\n";
+        let s3 = snippets_from_diff(d3);
+        assert!(s3.iter().any(|x| x.contains("frontmatter 里的页面描述")) && s3.iter().any(|x| x.contains("欧易提币教程标题")), "{s3:?}");
+        // Markdown 正文提到 <script> 这个词不会把后面的行吞掉
+        let d4 = "+++ b/src/content/a.md\n+不要在页面里直接写 `<script>` 标签，交给构建处理\n+这一行是正文里真正会显示出来的说明文字\n";
+        assert!(snippets_from_diff(d4).iter().any(|x| x.contains("真正会显示出来")), "{:?}", snippets_from_diff(d4));
         assert!(same_page("https://x.com/a.html", "http://www.x.com/a/"));
         assert!(same_page("https://x.com/a/index.html", "https://x.com/a"));
         assert!(page_has(&visible_text("<p>It’s “fine” – really</p>"), "It's \"fine\" - really"));

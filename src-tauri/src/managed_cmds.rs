@@ -41,7 +41,8 @@ fn set_level(state: &AppState, site_id: &str, level: u8) {
 pub fn sync(state: &AppState) -> ManagedConfig {
     let mut cfg = managed::load(&state.data_dir);
     let sites = state.sites.list();
-    let five: Vec<String> = sites.iter().filter(|s| s.ops.level >= 5).map(|s| s.id.clone()).collect();
+    // 第 5 档却不在任何方案里的站点：只在老数据迁移那一次归进「默认方案」；之后出现的（整份保存带进来的档位）按不在方案处理，下面会压回 1 档
+    let five: Vec<String> = if cfg.levels_migrated { Vec::new() } else { sites.iter().filter(|s| s.ops.level >= 5).map(|s| s.id.clone()).collect() };
     let mut changed = managed::adopt_orphans(&mut cfg, &five);
     let moved = managed::migrate_levels(&mut cfg, &sites);
     changed |= !moved.is_empty() || cfg.levels_migrated != managed::load(&state.data_dir).levels_migrated;

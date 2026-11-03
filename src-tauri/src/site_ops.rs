@@ -703,6 +703,9 @@ pub struct QueueItem {
     /// 后台复查了几次都没找到对照文字
     #[serde(default, skip_serializing_if = "is_zero")]
     pub snippet_misses: u8,
+    /// 上线后复查没通过、但没回滚（整站故障 / 非全自动方案）的次数：两次就不再查，交给你
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub watch_failures: u8,
     /// 上线后复查到第几次：0＝1 小时后，1＝24 小时后，2＝查完了。
     #[serde(default)]
     pub watch_stage: u8,

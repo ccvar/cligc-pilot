@@ -231,6 +231,13 @@ pub(crate) fn validate(site: &mut Site, state: &AppState) -> Result<(), String> 
     if site.default_branch.trim().is_empty() {
         site.default_branch = "main".into();
     }
+    if !crate::site_git::safe_branch(site.default_branch.trim()) {
+        return Err("默认分支名不合法".into());
+    }
+    // 「算网站内容的代码文件」清单：依赖、构建 / 部署配置这类永远不能放行的，不能从整份保存里混进来
+    if let Some(bad) = site.ops.content_code.iter().find(|p| crate::managed::never_allow(p) || p.contains("..") || p.starts_with('/')) {
+        return Err(format!("{bad} 不能算作网站内容文件"));
+    }
     site.deploy.env_file = site.deploy.env_file.trim().to_string();
     let f = &site.deploy.env_file;
     if !f.is_empty() && (!f.starts_with('/') || f.contains("..") || f.ends_with('/') || f.chars().any(|c| c.is_control() || c == '\'')) {
@@ -655,6 +662,8 @@ pub fn save_site(state: tauri::State<'_, AppState>, site: Site) -> Result<Site, 
     let mut next = site;
     next.source = current.source.clone();
     next.repo = if current.source == "github" { current.repo.clone() } else { next.repo };
+    // 档位只由托管方案决定（见 managed_cmds::sync），界面上没有改它的地方：整份保存里带来的档位不接受
+    next.ops.level = current.ops.level;
     next.local_dir = current.local_dir.clone();
     next.build.env_keys = current.build.env_keys.clone();
     // 来源（created / migrating / migrated / 导入）只由建站、迁移流程改，设置里存不动：
