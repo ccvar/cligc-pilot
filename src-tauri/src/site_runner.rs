@@ -600,6 +600,17 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     let site_dir = ctx.site_dir(&site.id);
     refresh_data(ctx, site, job).await;
     job.step("scan", "running", "");
+    // 页面体检（结构化数据、图片）一周才定时跑一次：报告超过一天就先用最近一次上线的产物重查，
+    // 别拿旧报告出任务（xtexe 拿 6 天前的报告派了「缺 datePublished」，其实早修好了）
+    if crate::page_audit::load(&site_dir).checked_at + DAY < now() {
+        if let Ok(out) = crate::syndicate::built_out(&ctx.state(), site) {
+            let closed = crate::page_audit::refresh(site, &site_dir, out).await;
+            if closed > 0 {
+                job.line(&format!("体检报告超过一天，用最近一次上线的产物重查：{closed} 条结构化数据 / 图片任务清单里的页面已经没有问题了，标为完成"));
+                ctx.emit_queue(&site.id);
+            }
+        }
+    }
     let mut opps = crate::site_data::ranked_opportunities(site, &site_dir).await;
     // 内容过时要读页面的标题和更新日期：用最近一次上线的构建产物（没有就用代码目录里的）
     if let Ok(out) = crate::syndicate::built_out(&ctx.state(), site) {

