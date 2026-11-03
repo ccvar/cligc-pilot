@@ -111,7 +111,17 @@ pub fn load_state(site_dir: &Path) -> OpsState {
 /// 这时 AI 改什么都会卡在同一步：白花额度、还记成 AI 的失败，托管先不派任务。
 pub fn site_build_broken(site: &Site, site_dir: &Path) -> Option<String> {
     let r = load_state(site_dir).runs.into_iter().find(|r| r.task == "health" && r.finished > 0)?;
-    (!r.ok && r.error.starts_with("构建或检查没通过") && r.finished > site.updated_at).then(|| r.error.trim_start_matches("构建或检查没通过：").lines().next().unwrap_or("").to_string())
+    if r.ok || !r.error.starts_with("构建或检查没通过") || r.finished <= site.updated_at {
+        return None;
+    }
+    // 卡在一条现在会被跳过的 make 检查上（连服务器的，见 site_deploy::build_and_check）：那次失败不算数，等下次体检
+    if let Some(t) = r.error.split("检查没通过（make ").nth(1).and_then(|x| x.split('）').next()) {
+        let dir = crate::site_git::code_dir(site, None).map(|d| site.app_dir(&d));
+        if dir.is_ok_and(|d| crate::sites::make_target_hits_server(&d, t).is_some()) {
+            return None;
+        }
+    }
+    Some(r.error.trim_start_matches("构建或检查没通过：").lines().next().unwrap_or("").to_string())
 }
 
 fn save_state(site_dir: &Path, s: &OpsState) {
