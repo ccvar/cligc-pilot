@@ -402,7 +402,10 @@ pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str
                 args.push(format!("{k}:{v}"));
             }
         }
-        if !message.is_empty() {
+        // OpenNext 项目：wrangler 会自己转去调 `opennextjs-cloudflare deploy`，转交时参数不加引号，
+        // 带空格的说明会被拆开（「Unknown argument: /en/...」）。这种项目不带说明。
+        let opennext = std::fs::read_to_string(b.dir.join("package.json")).is_ok_and(|t| t.contains("\"@opennextjs/cloudflare\""));
+        if !message.is_empty() && !opennext {
             args.push("--message".into());
             args.push(message.chars().take(100).collect());
         }
