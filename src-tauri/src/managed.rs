@@ -1395,6 +1395,12 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
     verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[], build_scripts: None }).into_iter().map(|b| b.text).collect()
 }
 
+/// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
+fn sitemap_line(l: &str) -> bool {
+    let t = l.trim();
+    t.is_empty() || ["<url>", "</url>", "<loc>", "<lastmod>", "<changefreq>", "<priority>", "<xhtml:link ", "<image:"].iter().any(|p| t.starts_with(p))
+}
+
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let code = rules.code;
@@ -1417,7 +1423,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
         }
-        let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
+        // 手写的 sitemap 里只动了条目（改页面时顺手更新 lastmod、加新页面的 <url>）：按内容算
+        let sitemap_entries = !f.deleted
+            && file.rsplit('/').next().is_some_and(|n| n.starts_with("sitemap") && n.ends_with(".xml"))
+            && f.added.iter().chain(&f.removed).all(|l| sitemap_line(l));
+        let data = sitemap_entries || (data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l)));
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
@@ -1812,6 +1822,19 @@ mod group_tests {
         assert!(!g.active_for("a"));
         assert!(validate_group(&ManagedGroup { name: " ".into(), ..g.clone() }).is_err());
         assert!(validate_group(&ManagedGroup { brain: "codex".into(), model: "gpt-6-sol".into(), ..g }).is_ok(), "Codex 可以用（托管时断网运行）");
+    }
+}
+
+#[cfg(test)]
+mod sitemap_tests {
+    use super::*;
+    #[test]
+    fn sitemap_entry_edits_count_as_content() {
+        let ok = "diff --git a/public/sitemap-legacy.xml b/public/sitemap-legacy.xml\n--- a/public/sitemap-legacy.xml\n+++ b/public/sitemap-legacy.xml\n@@ -225 +225 @@\n-    <lastmod>2026-08-25T14:34:26Z</lastmod>\n+    <lastmod>2026-11-03T02:00:00Z</lastmod>\n";
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
+        assert!(!verdict(ok, &r).iter().any(|b| b.text.contains("sitemap")), "{:?}", verdict(ok, &r).iter().map(|b| b.text.clone()).collect::<Vec<_>>());
+        let bad = ok.replace("+    <lastmod>2026-11-03T02:00:00Z</lastmod>", "+<script>alert(1)</script>");
+        assert!(verdict(&bad, &r).iter().any(|b| b.text.contains("sitemap-legacy.xml")));
     }
 }
 

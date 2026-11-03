@@ -739,7 +739,12 @@ pub struct QueueItem {
 
 /// 这一条要不要人来处理：待确认、失败，或者上线了但线上验收有待核对的问题。
 pub fn needs_you(i: &QueueItem) -> bool {
-    matches!(i.status.as_str(), "proposed" | "failed") || (i.status == "deployed" && !i.attention.is_empty())
+    matches!(i.status.as_str(), "proposed" | "failed") || (i.status == "deployed" && !i.attention.is_empty()) || deploy_stuck(i)
+}
+
+/// 已经合并进主分支、上线那一步失败的（发布命令不对、上传失败…）：不显示的话改动就悄悄躺在主分支里没上线
+pub fn deploy_stuck(i: &QueueItem) -> bool {
+    i.status == "merged" && i.deployed_at == 0 && i.note.starts_with("已合并进主分支，上线没完成")
 }
 
 pub fn queue_path(site_dir: &Path) -> PathBuf {
