@@ -1459,6 +1459,14 @@ fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     }
 }
 
+/// 构建产物里这个页面设了 noindex（不是给人看、也不让收录的页面）。
+fn page_noindex(out: &Path, path: &str) -> bool {
+    let decoded = percent_decode(path.split(['#', '?']).next().unwrap_or(""));
+    let p = decoded.trim_matches('/');
+    let file = if p.is_empty() { out.join("index.html") } else if out.join(p).join("index.html").is_file() { out.join(p).join("index.html") } else { out.join(format!("{p}.html")) };
+    std::fs::read_to_string(file).is_ok_and(|h| crate::site_verify::meta_content(&h, "robots").to_ascii_lowercase().contains("noindex"))
+}
+
 /// 站点所在托管方案的规则（没托管返回 None）。
 fn group_rules(ctx: &Ctx, site: &Site) -> Option<crate::managed::ManagedGroup> {
     crate::managed::load(&ctx.state().data_dir).group_of(&site.id).cloned()
@@ -2096,8 +2104,10 @@ fn derive_new_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, bu
         return item;
     }
     let old: HashSet<String> = crate::site_make::real_pages(&prev).iter().map(|(f, _)| crate::site_make::page_url(&prev, f)).collect();
+    // 设了 noindex 的不算（比如给分享卡片截图用的 /og-card/<slug>/ 内部页面，和新文章同名，但不是给人看的页面）
     let fresh: Vec<String> = crate::site_make::real_pages(out_dir)
         .iter()
+        .filter(|(_, html)| !crate::site_verify::meta_content(html, "robots").to_ascii_lowercase().contains("noindex"))
         .map(|(f, _)| crate::site_make::page_url(out_dir, f))
         .filter(|p| !old.contains(p) && stems.contains(&page_stem(p)))
         .map(|p| format!("https://{}{p}", site.domain))
@@ -2125,13 +2135,25 @@ fn drop_unbuilt_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, 
     for u in &item.pages {
         if exists(&path_of(u)) { keep_p.push(u.clone()) } else { dropped.push(path_of(u)) }
     }
+    let mut hidden = Vec::new();
     for u in &item.new_pages {
-        if exists(&path_of(u)) { keep_n.push(u.clone()) } else { dropped.push(path_of(u)) }
+        if !exists(&path_of(u)) {
+            dropped.push(path_of(u));
+        } else if page_noindex(out_dir, &path_of(u)) {
+            hidden.push(path_of(u));
+        } else {
+            keep_n.push(u.clone());
+        }
     }
-    if dropped.is_empty() {
+    if dropped.is_empty() && hidden.is_empty() {
         return item;
     }
-    job.line(&format!("AI 报的页面里有 {} 个在构建产物里没有（多半是路径写错了），验收时不查它们：{}", dropped.len(), dropped.join("、")));
+    if !dropped.is_empty() {
+        job.line(&format!("AI 报的页面里有 {} 个在构建产物里没有（多半是路径写错了），验收时不查它们：{}", dropped.len(), dropped.join("、")));
+    }
+    if !hidden.is_empty() {
+        job.line(&format!("{} 设了 noindex（分享卡片之类的内部页面），不按新页面查站内链接和 sitemap", hidden.join("、")));
+    }
     item.pages = keep_p.clone();
     item.new_pages = keep_n.clone();
     let _ = site_ops::update_item(&ctx.site_dir(&site.id), &item.id, now(), |i| {

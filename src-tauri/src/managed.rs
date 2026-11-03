@@ -1656,6 +1656,7 @@ fn last_json_block(reply: &str) -> Option<String> {
     Some(reply[i + 7..].split("```").next().unwrap_or("").to_string())
 }
 
+#[cfg(test)]
 pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
     parse_plan_counted(reply).map(|(p, t, _)| (p, t))
 }
@@ -1681,6 +1682,7 @@ pub fn parse_plan_notes(reply: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body.trim()).ok().and_then(|v| v["notes"].as_str().map(|s| s.trim().chars().take(1000).collect())).unwrap_or_default()
 }
 
+#[cfg(test)]
 pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
     parse_plan_with_dropped(reply).map(|(t, _)| t)
 }

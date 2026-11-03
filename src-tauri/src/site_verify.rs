@@ -345,7 +345,7 @@ fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
     out
 }
 
-fn meta_content(html: &str, name: &str) -> String {
+pub(crate) fn meta_content(html: &str, name: &str) -> String {
     tags(html, "meta").into_iter().find(|t| attr(t, "name").eq_ignore_ascii_case(name)).map(|t| decode(&attr(t, "content"))).unwrap_or_default().trim().to_string()
 }
 
