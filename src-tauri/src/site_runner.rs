@@ -686,6 +686,15 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
         }
     }
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
+    // 速度优化上线后、重新测速之前：别的速度任务先放着（多半共用模板，刚上线的改动可能已经顺带修好了），等新的测速结果
+    let last_slow = site_ops::load_queue(&site_dir).iter().filter(|i| i.opp.kind == "slow" && i.deployed_at > 0).map(|i| i.deployed_at).max().unwrap_or(0);
+    if last_slow > crate::speed::load(&site_dir).checked_at {
+        let before = picked.len();
+        picked.retain(|i| i.opp.kind != "slow");
+        if picked.len() < before {
+            job.line(&format!("{} 条页面速度任务等刚上线的速度优化重新测速后再决定", before - picked.len()));
+        }
+    }
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
     // 各类机会的分数量级不可比（计划项固定 1000、修复任务 2000、数据规则几分到几十分）：不按绝对分数排，分四条道——
     // 修复上线后的问题 → 你手动加的 → 计划项和数据机会轮着来（上一条做的是计划项，这次先做数据机会），每条道里再按分数排
@@ -2057,6 +2066,10 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
         i.watched.clear();
     })?
     .ok_or("这条改动不存在")?;
+    // 速度优化上线了：1 小时后重新测速，排着的其它速度任务等新结果出来再决定要不要做
+    if item.opp.kind == "slow" || item.also.iter().any(|o| o.kind == "slow") {
+        crate::speed::recheck_soon(&site_dir);
+    }
     if !attention.is_empty() {
         // 修复任务等 1 小时后的复查还在才开（缓存、CDN 过一会儿多半就好了，见 watch）
         log_item(ctx, site, "attention", &item, &format!("上线了，网站正常；有 {} 项待核对：{attention}", sh.attention.len()));

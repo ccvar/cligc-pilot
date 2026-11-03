@@ -70,6 +70,16 @@ pub fn load(site_dir: &Path) -> SpeedReport {
     std::fs::read(path(site_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
+/// 速度优化刚上线：把报告的时间往前拨，调度大约 1 小时后（CDN 刷新了）就重新测，不用等一周。
+pub fn recheck_soon(site_dir: &Path) {
+    let mut r = load(site_dir);
+    if r.checked_at == 0 {
+        return;
+    }
+    r.checked_at = crate::now_secs().saturating_sub(WEEK - 3600).min(r.checked_at);
+    save(site_dir, &r);
+}
+
 fn save(site_dir: &Path, r: &SpeedReport) {
     let p = path(site_dir);
     if let Some(d) = p.parent() {

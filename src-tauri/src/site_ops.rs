@@ -781,6 +781,9 @@ pub fn should_enqueue(q: &[QueueItem], key: &str, now: u64, cooldown: u64) -> bo
             && (matches!(i.status.as_str(), "open" | "working" | "proposed" | "merged" | "dismissed")
                 // 效果复盘负面被回滚的：这件事做过、证明没用，不再提
                 || (i.status == "rolled_back" && i.review == "negative")
+                // 按数据算的机会（点击率低、排名、下滑…）上线后要等 4 周复盘：复盘出来之前同一个页面不再改，
+                // 不然冷却 21 天一过又改一次，复盘分不清是哪次改动的效果，也可能把刚见效的改回去
+                || (i.status == "deployed" && i.review.is_empty() && DATA_DRIVEN.contains(&i.opp.kind.as_str()) && now < i.deployed_at + 35 * 86_400)
                 || now.saturating_sub(i.updated_at) < cooldown)
     })
 }
@@ -1180,6 +1183,17 @@ pub fn kind_label(k: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_driven_pages_wait_for_the_review_before_another_change() {
+        const D: u64 = 86_400;
+        let now = 100 * D;
+        let mk = |kind: &str, deployed: u64, review: &str| QueueItem { status: "deployed".into(), deployed_at: deployed, updated_at: deployed, review: review.into(), opp: Opportunity { key: "k".into(), kind: kind.into(), ..Default::default() }, ..Default::default() };
+        assert!(!should_enqueue(&[mk("low_ctr", now - 25 * D, "")], "k", now, 21 * D), "冷却过了但复盘还没出来");
+        assert!(should_enqueue(&[mk("low_ctr", now - 25 * D, "neutral")], "k", now, 21 * D), "复盘出来了可以再改");
+        assert!(should_enqueue(&[mk("low_ctr", now - 40 * D, "")], "k", now, 21 * D), "复盘迟迟没出（没数据）也不一直挡着");
+        assert!(should_enqueue(&[mk("schema", now - 25 * D, "")], "k", now, 21 * D), "体检类不等复盘");
+    }
 
     #[test]
     fn same_route_meta_changes_go_to_ai_together() {
