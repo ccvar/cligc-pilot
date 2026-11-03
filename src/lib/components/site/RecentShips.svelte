@@ -26,15 +26,15 @@
   // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）；有回滚 / 待核对 / 没成功的才标出来
   const isBad = (i: OpsItem) => i.status === 'rolled_back' || i.status === 'failed' || !!i.attention;
   const days = $derived.by(() => {
-    if (!byDay) return [{ key: 'all', label: '', n: 0, bad: 0, items: shown }];
-    const out: { key: string; label: string; n: number; bad: number; items: ShipItem[] }[] = [];
+    if (!byDay) return [{ key: 'all', label: '', n: 0, sites: 0, bad: 0, items: shown }];
+    const out: { key: string; label: string; n: number; sites: number; bad: number; items: ShipItem[] }[] = [];
     for (const x of shown) {
       const k = dayOf(at(x));
       const g = out.find((o) => o.key === k);
       if (g) g.items.push(x);
       else {
         const same = items.filter((y) => dayOf(at(y)) === k);
-        out.push({ key: k, label: dayLabel(at(x)), n: same.length, bad: same.filter((y) => isBad(y.item)).length, items: [x] });
+        out.push({ key: k, label: dayLabel(at(x)), n: same.length, sites: new Set(same.map((y) => y.site_id)).size, bad: same.filter((y) => isBad(y.item)).length, items: [x] });
       }
     }
     return out;
@@ -103,7 +103,7 @@
   {#if items.length}
     <ol class="rows">
       {#each days as d (d.key)}
-      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
+      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
       {#each d.items as x (x.item.id)}
         {@const i = x.item}
         {@const st = shipState(i)}

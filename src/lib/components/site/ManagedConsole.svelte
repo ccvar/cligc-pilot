@@ -493,7 +493,7 @@
             <div class="list feed">
               {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k }, n (k)}
                 <!-- 每天一个小标题（条数按这一天全部的算），行尾今天的写「几分钟前」、更早的写时刻 -->
-                {#if n === 0 || dayOf(feed[n - 1].a.ts) !== dayOf(a.ts)}<div class="li dh"><b>{dayLabel(a.ts)}</b><span>{feed.filter((f) => dayOf(f.a.ts) === dayOf(a.ts)).length} 条</span></div>{/if}
+                {#if n === 0 || dayOf(feed[n - 1].a.ts) !== dayOf(a.ts)}{@const same = feed.filter((f) => dayOf(f.a.ts) === dayOf(a.ts))}{@const ns = new Set(same.map((f) => f.a.site_id).filter(Boolean)).size}<div class="li dh"><b>{dayLabel(a.ts)}</b><span>{same.length} 条{#if ns > 1} · {ns} 个站点{/if}</span></div>{/if}
                 <div class="li ev">
                   <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
                   <div class="ev-main">
