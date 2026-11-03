@@ -1958,7 +1958,11 @@ fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify
         let page = o.page.trim();
         if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) && !spec.pages.iter().any(|p| p == page) {
             spec.pages.push(page.to_string());
-            spec.primary.push(page.to_string());
+            // 体检 / 测速这类技术任务的 page 只是这批里的第一页，不是要它排名的页面：
+            // 可能是本来就 noindex 的旧文存档，不按「本页该被收录」查 noindex / canonical
+            if !matches!(o.kind.as_str(), "schema" | "img_audit" | "slow") {
+                spec.primary.push(page.to_string());
+            }
         }
     }
     if !rollback {

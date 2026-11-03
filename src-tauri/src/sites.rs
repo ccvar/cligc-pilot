@@ -1000,7 +1000,7 @@ fn detect_at(dir: &Path) -> Detected {
         let has = |t: &str| mk.lines().any(|l| l.starts_with(&format!("{t}:")));
         if d.build.checks.is_empty() {
             for t in ["check", "test"] {
-                if has(t) {
+                if has(t) && make_target_hits_server(dir, t).is_none() {
                     d.build.checks.push(format!("make {t}"));
                 }
             }
@@ -1131,8 +1131,37 @@ pub fn delete_env(site_id: &str) {
     let _ = crate::keychain::delete_named_secret(&env_account(site_id));
 }
 
+/// `make <目标>` 的命令里有连服务器的步骤（ssh / scp / rsync、发布脚本）时返回那一行：
+/// 比如 `check: ./scripts/publish-production.sh check` 是登正式服务器做健康检查，不是代码检查，
+/// 在工作区里跑只会因为登不上而失败，不能拿来判断改动对不对。
+pub fn make_target_hits_server(dir: &Path, target: &str) -> Option<String> {
+    let mk = fs::read_to_string(dir.join("Makefile")).ok()?;
+    let head = format!("{target}:");
+    let mut lines = mk.lines().skip_while(|l| !l.starts_with(&head));
+    lines.next()?;
+    lines
+        .take_while(|l| l.starts_with('\t'))
+        .map(str::trim)
+        .find(|l| {
+            let w: Vec<&str> = l.split(|c: char| c.is_whitespace() || c == ';' || c == '&' || c == '|').collect();
+            w.iter().any(|x| matches!(*x, "ssh" | "scp" | "rsync" | "sftp"))
+                || ["publish-production.sh", "publish.sh", "deploy.sh"].iter().any(|s| l.contains(s))
+        })
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn make_targets_that_log_into_the_server_are_not_checks() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("Makefile"), "check:\n\t./scripts/publish-production.sh check\n\ntest:\n\tgo test ./...\n\tpython3 scripts/test-deploy.py\n\nsync:\n\tgo build . && ssh root@1.2.3.4 'systemctl restart x'\n").unwrap();
+        assert_eq!(super::make_target_hits_server(t.path(), "check").as_deref(), Some("./scripts/publish-production.sh check"));
+        assert_eq!(super::make_target_hits_server(t.path(), "test"), None);
+        assert!(super::make_target_hits_server(t.path(), "sync").is_some());
+        assert_eq!(super::make_target_hits_server(t.path(), "lint"), None);
+    }
+
     #[test]
     fn origin_github_repo_reads_git_config() {
         let t = tempfile::tempdir().unwrap();

@@ -333,6 +333,11 @@ pub async fn build_and_check(site: &Site, code: &Path, stamp: Option<&Path>, job
         job.step("check", "skipped", "没有配置检查命令");
     } else {
         for (i, c) in site.build.checks.iter().enumerate() {
+            // 早先接入时把连服务器的 make 目标也当成了检查（如 publish-production.sh check）：跳过，不然每次都因为登不上服务器失败
+            if let Some(line) = c.trim().strip_prefix("make ").filter(|t| !t.contains(' ')).and_then(|t| crate::sites::make_target_hits_server(dir, t.trim())) {
+                job.line(&format!("跳过检查 {c}：它会连服务器（{line}），不是代码检查，可以在站点设置里去掉"));
+                continue;
+            }
             job.step("check", "running", &format!("{}/{} {c}", i + 1, site.build.checks.len()));
             job.shell(c, dir, &env, STEP_TIMEOUT).await.map_err(|e| {
                 job.step("check", "failed", c);
