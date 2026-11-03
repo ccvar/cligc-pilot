@@ -952,8 +952,8 @@ async fn recheck(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<Str
         }
         crate::site_git::reattach_worktree(&cb.main, &wt, &item.branch).await?;
         job.line("工作目录挪到了新的构建目录，接着用分支上的改动");
-        crate::site_git::share_node_modules(&cb.main, &wt);
     }
+    crate::site_git::share_node_modules(&cb.main, &wt);
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = "working".into();
         i.note.clear();

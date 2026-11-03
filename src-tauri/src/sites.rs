@@ -953,6 +953,13 @@ fn detect_at(dir: &Path) -> Detected {
         }
         d.env = env;
     }
+    // OpenNext（Next.js 跑在 Cloudflare Workers 上）：`next build` 不出静态目录，要用 opennextjs-cloudflare build
+    // 打包到 .open-next/（Worker 代码 + assets），wrangler deploy 再按 wrangler 配置上传
+    if pkg.as_ref().is_some_and(|p| has_dep(p, "@opennextjs/cloudflare")) {
+        d.build.build = "npx opennextjs-cloudflare build".into();
+        d.build.out_dir = ".open-next/assets".into();
+        d.deploy_kind = "workers".into();
+    }
     // CF 建站会话写的 pilot.json：{ build, out }
     if let Some(p) = &pilot {
         if let Some(b) = p.get("build").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
@@ -1020,6 +1027,13 @@ fn detect_at(dir: &Path) -> Detected {
                     }
                 }
             }
+        }
+    }
+    // 发布脚本要求「publish --confirm <域名>」防误发的：带上域名，不然每次都因为少参数发布失败
+    if d.deploy_command.ends_with("publish-production.sh publish") && !d.domain.is_empty() {
+        let script = d.deploy_command.trim_end_matches(" publish").trim_start_matches("./").to_string();
+        if fs::read_to_string(dir.join(&script)).is_ok_and(|t| t.contains("--confirm")) {
+            d.deploy_command = format!("./{script} publish --confirm {}", d.domain);
         }
     }
     if d.deploy_kind.is_empty() && (pilot.is_some() || !d.cf_project.is_empty()) {
@@ -1152,6 +1166,23 @@ pub fn make_target_hits_server(dir: &Path, target: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opennext_sites_build_with_opennext_and_publish_scripts_get_confirm() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(t.path().join("package.json"), r#"{"scripts":{"build":"next build","deploy":"opennextjs-cloudflare build && opennextjs-cloudflare deploy"},"dependencies":{"next":"16.0.0","@opennextjs/cloudflare":"1.0.0"}}"#).unwrap();
+        let d = super::detect_at(t.path());
+        assert_eq!(d.build.build, "npx opennextjs-cloudflare build");
+        assert_eq!(d.build.out_dir, ".open-next/assets");
+        assert_eq!(d.deploy_kind, "workers");
+
+        let v = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(v.path().join("scripts")).unwrap();
+        std::fs::write(v.path().join("scripts/publish-production.sh"), "usage: publish --confirm <domain>\nssh root@1.2.3.4\n").unwrap();
+        std::fs::write(v.path().join(".env.example"), "BASE_URL=https://coinglee.com\n").unwrap();
+        let d = super::detect_at(v.path());
+        assert_eq!(d.deploy_command, "./scripts/publish-production.sh publish --confirm coinglee.com");
+    }
+
     #[test]
     fn make_targets_that_log_into_the_server_are_not_checks() {
         let t = tempfile::tempdir().unwrap();

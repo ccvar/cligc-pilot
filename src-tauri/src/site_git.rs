@@ -203,6 +203,11 @@ pub async fn remove_worktree(repo: &Path, path: &Path) {
 pub fn share_node_modules(main: &Path, worktree: &Path) {
     let src = main.join("node_modules");
     let dst = worktree.join("node_modules");
+    let next = uses_next(worktree);
+    // 早先挂的软链接（Turbopack 不认）：拆掉，下面换成克隆
+    if next && std::fs::read_link(&dst).is_ok() {
+        let _ = std::fs::remove_file(&dst);
+    }
     if !src.is_dir() || dst.exists() {
         return;
     }
@@ -214,7 +219,7 @@ pub fn share_node_modules(main: &Path, worktree: &Path) {
     }
     // Next.js 的 Turbopack 不认指到项目外面的软链接（「Symlink node_modules is invalid」，构建直接失败）：
     // macOS 上改用 APFS 克隆（写时复制，几秒、不多占空间），克隆不了就不挂，交给安装步骤。
-    if uses_next(worktree) {
+    if next {
         #[cfg(target_os = "macos")]
         {
             let ok = std::process::Command::new("cp").arg("-cR").arg(&src).arg(&dst).status().is_ok_and(|s| s.success());
