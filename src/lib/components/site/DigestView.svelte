@@ -15,6 +15,13 @@
 
   const dateLabel = $derived(/^\d{4}-(\d{2})-(\d{2})$/.test(data.date) ? `${+data.date.slice(5, 7)}月${+data.date.slice(8, 10)}日` : data.date);
   const time = $derived(data.generated_at ? new Date(data.generated_at * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '');
+  // 覆盖的时段：从上一份日报算起（隔天晚开会比 24 小时长）
+  const windowLabel = $derived.by(() => {
+    const h = data.since ? Math.round((data.generated_at - data.since) / 3600) : 24;
+    if (h >= 22 && h <= 26) return '过去 24 小时';
+    if (h >= 48) return `过去 ${Math.round(h / 24)} 天`;
+    return `过去 ${Math.max(1, h)} 小时`;
+  });
   const tiles = $derived([
     { k: 'shipped', l: '自动上线', n: data.shipped, tone: 'ok' },
     { k: 'needs', l: '需要你', n: data.needs.length, tone: 'warn' },
@@ -26,17 +33,19 @@
   // 计划的说明是「；」连起来的任务标题：拆成一条一条
   const parts = (s: string) => s.split(/[；;]\s*/).map((x) => x.trim()).filter(Boolean);
   function delta(now: number, prev: number) {
-    const d = now - prev;
+    // 先取整：差 0.3 算持平；变化不到 1% 只写差值，不出现「0%」
+    const d = Math.round(now - prev);
     if (!d) return { t: '持平', c: 'flat' };
     if (!prev) return { t: `+${d}`, c: 'up' };
     const pct = Math.round((d / prev) * 100);
-    return { t: `${d > 0 ? '+' : ''}${d}（${pct > 0 ? '+' : ''}${pct}%）`, c: d > 0 ? 'up' : 'down' };
+    const sign = d > 0 ? '+' : '';
+    return { t: pct ? `${sign}${d}（${sign}${pct}%）` : `${sign}${d}`, c: d > 0 ? 'up' : 'down' };
   }
   const hasViews = $derived(data.traffic.some((t: DigestTraffic) => t.views || t.views_prev));
 </script>
 
 <div class="dg">
-  <p class="meta"><b>{dateLabel}</b> · 托管 {data.sites_total} 个站点 · 过去 24 小时{#if time} · {time} 生成{/if}</p>
+  <p class="meta"><b>{dateLabel}</b> · 托管 {data.sites_total} 个站点 · {windowLabel}{#if time} · {time} 生成{/if}</p>
 
   <div class="tiles">
     {#each tiles as t (t.k)}
@@ -85,7 +94,7 @@
   {/if}
 
   {#if data.quiet.length}
-    <p class="line"><span>{data.active.length || data.needs.length ? '其余' : '全部'} {data.quiet.length} 个站点今天没有变化</span><button class="link-btn" onclick={() => (showQuiet = !showQuiet)}>{showQuiet ? '收起' : '看名单'}</button></p>
+    <p class="line"><span>{data.active.length || data.needs.length ? '其余' : '全部'} {data.quiet.length} 个站点{windowLabel === '过去 24 小时' ? '今天' : '这段时间'}没有变化</span><button class="link-btn" onclick={() => (showQuiet = !showQuiet)}>{showQuiet ? '收起' : '看名单'}</button></p>
     {#if showQuiet}<p class="names">{data.quiet.join('、')}</p>{/if}
   {/if}
 

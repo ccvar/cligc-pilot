@@ -403,21 +403,14 @@ async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
         if !seen.insert(u.clone()) || fetched >= 30 {
             continue;
         }
-        // 压缩的 sitemap 不解（不下结论），别把它当成页面地址
-        if u.ends_with(".gz") {
-            continue;
-        }
-        let Ok(f) = fetch(client, &u).await else { continue };
-        if !(200..300).contains(&f.status) {
-            continue;
-        }
+        let Some(body) = fetch_sitemap(client, &u).await else { continue };
         fetched += 1;
-        let lower = f.body.to_ascii_lowercase();
+        let lower = body.to_ascii_lowercase();
         let mut from = 0;
         while let Some(i) = lower[from..].find("<loc>") {
             let s = from + i + 5;
             let e = lower[s..].find("</loc>").map(|x| s + x).unwrap_or(s);
-            let loc = decode(f.body[s..e].trim().trim_start_matches("<![CDATA[").trim_end_matches("]]>").trim());
+            let loc = decode(body[s..e].trim().trim_start_matches("<![CDATA[").trim_end_matches("]]>").trim());
             if loc.ends_with(".xml") || loc.ends_with(".xml.gz") {
                 queue.push(loc);
             } else {
@@ -427,6 +420,31 @@ async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
         }
     }
     locs
+}
+
+/// 取一份 sitemap 的文字；`.xml.gz` 按字节取回来解压（服务器没替我们解的话）。打不开或不是 2xx 返回 None。
+async fn fetch_sitemap(client: &reqwest::Client, url: &str) -> Option<String> {
+    if !url.ends_with(".gz") {
+        let f = fetch(client, url).await.ok()?;
+        return (200..300).contains(&f.status).then_some(f.body);
+    }
+    let r = client.get(url).send().await.ok()?;
+    if !r.status().is_success() {
+        return None;
+    }
+    let bytes = r.bytes().await.ok()?;
+    Some(gunzip_text(&bytes))
+}
+
+/// gzip 开头的解压（最多 20MB，防压缩炸弹），不是 gzip 的原样当文字。
+fn gunzip_text(b: &[u8]) -> String {
+    use std::io::Read;
+    if !b.starts_with(&[0x1f, 0x8b]) {
+        return String::from_utf8_lossy(b).into_owned();
+    }
+    let mut out = Vec::new();
+    let _ = flate2::read::GzDecoder::new(b).take(20_000_000).read_to_end(&mut out);
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn decode(s: &str) -> String {
@@ -795,6 +813,16 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gzipped_sitemaps_are_unpacked() {
+        use std::io::Write;
+        let xml = "<urlset><url><loc>https://a.com/x/</loc></url></urlset>";
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(xml.as_bytes()).unwrap();
+        assert_eq!(gunzip_text(&e.finish().unwrap()), xml);
+        assert_eq!(gunzip_text(xml.as_bytes()), xml, "服务器已经解过压的原样用");
+    }
 
     #[test]
     fn parses_head_tags() {

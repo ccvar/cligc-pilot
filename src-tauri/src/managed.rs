@@ -1657,6 +1657,11 @@ fn last_json_block(reply: &str) -> Option<String> {
 }
 
 pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
+    parse_plan_counted(reply).map(|(p, t, _)| (p, t))
+}
+
+/// 同 parse_plan_full，另外返回丢掉了几条（写坏的、没标题的、超过 12 条的），好在作业日志里说一声。
+pub fn parse_plan_counted(reply: &str) -> Result<(String, Vec<PlanTask>, usize), String> {
     let body = if let Some(b) = last_json_block(reply) {
         b
     } else {
@@ -1666,8 +1671,8 @@ pub fn parse_plan_full(reply: &str) -> Result<(String, Vec<PlanTask>), String> {
     };
     let v: serde_json::Value = serde_json::from_str(body.trim()).map_err(|e| format!("计划 JSON 无法解析：{e}"))?;
     let positioning = v["positioning"].as_str().unwrap_or_default().to_string();
-    let tasks = parse_plan(&format!("```json\n{}\n```", if v.is_array() { v.to_string() } else { v["tasks"].to_string() }))?;
-    Ok((positioning, tasks))
+    let (tasks, dropped) = parse_plan_with_dropped(&format!("```json\n{}\n```", if v.is_array() { v.to_string() } else { v["tasks"].to_string() }))?;
+    Ok((positioning, tasks, dropped))
 }
 
 /// 计划回复里给运营人员的说明（notes 字段，没有就是空串）。
@@ -1677,6 +1682,10 @@ pub fn parse_plan_notes(reply: &str) -> String {
 }
 
 pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
+    parse_plan_with_dropped(reply).map(|(t, _)| t)
+}
+
+fn parse_plan_with_dropped(reply: &str) -> Result<(Vec<PlanTask>, usize), String> {
     let body = if let Some(b) = last_json_block(reply) {
         b
     } else {
@@ -1688,6 +1697,7 @@ pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
     let arr = if v.is_array() { v } else { v["tasks"].clone() };
     // 一条写坏了（缺 title、字段类型不对）只丢那一条，不让整份计划作废
     let items = arr.as_array().cloned().ok_or("计划格式不对：tasks 不是数组")?;
+    let total = items.len();
     let mut tasks: Vec<PlanTask> = items.into_iter().filter_map(|t| serde_json::from_value(t).ok()).collect();
     tasks.retain(|t| !t.title.trim().is_empty());
     for t in tasks.iter_mut() {
@@ -1701,7 +1711,8 @@ pub fn parse_plan(reply: &str) -> Result<Vec<PlanTask>, String> {
         t.query = t.query.chars().take(80).collect();
     }
     tasks.truncate(12);
-    Ok(tasks)
+    let dropped = total - tasks.len();
+    Ok((tasks, dropped))
 }
 
 #[cfg(test)]
@@ -2195,6 +2206,8 @@ mod tests {
         assert_eq!(t[0].change, "meta");
         assert_eq!(t[1].change, "content");
         assert_eq!(parse_plan("结论 [{\"title\":\"a\"}] 完").unwrap().len(), 1);
+        let (_, t, dropped) = parse_plan_counted("```json\n{\"tasks\":[{\"title\":\"a\"},{\"title\":\"\"},{\"title\":3},\"x\"]}\n```").unwrap();
+        assert_eq!((t.len(), dropped), (1, 3));
         assert!(parse_plan("没有计划").is_err());
     }
 }

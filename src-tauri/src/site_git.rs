@@ -218,6 +218,25 @@ pub fn share_node_modules(main: &Path, worktree: &Path) {
     let _ = std::os::windows::fs::symlink_dir(&src, &dst);
 }
 
+/// AI 在工作树里动了锁文件（装了包、升了版本）：拆掉共享的 node_modules 软链，让构建按这份锁文件在工作树里重装，
+/// 不然检查用的还是主检出的旧依赖，结果不可信。返回拆没拆。
+pub fn unshare_node_modules_if_changed(worktree: &Path) -> bool {
+    let dst = worktree.join("node_modules");
+    let Ok(src) = std::fs::read_link(&dst) else { return false };
+    let Some(main) = src.parent() else { return false };
+    let same_lock = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "package.json"]
+        .iter()
+        .all(|f| std::fs::read(main.join(f)).ok() == std::fs::read(worktree.join(f)).ok());
+    if same_lock {
+        return false;
+    }
+    #[cfg(unix)]
+    let r = std::fs::remove_file(&dst);
+    #[cfg(windows)]
+    let r = std::fs::remove_dir(&dst);
+    r.is_ok()
+}
+
 /// `base..head` 之间的统一差异（零上下文，供改动分类用）。
 pub async fn diff_zero_context(dir: &Path, base: &str, head: &str) -> Result<String, String> {
     git_ok(dir, &["diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames", &format!("{base}...{head}")], "").await

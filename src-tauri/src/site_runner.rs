@@ -169,7 +169,9 @@ pub fn due(schedule: &str, last: u64, now: u64) -> bool {
     next_due(schedule, last).is_some_and(|t| now >= t)
 }
 
-pub const TASKS: &[&str] = &["scan", "health", "report", "review", "plan"];
+/// 同一轮都到期时按这个顺序起（每站每轮只起一个）：先体检、再出计划，扫描执行时用得上当天的体检报告和新计划
+/// （以前扫描排第一，出计划那天扫描先把上周剩下的做了，新计划要等到第二天）。
+pub const TASKS: &[&str] = &["health", "plan", "scan", "report", "review"];
 
 /// 任务周期。在托管方案里的站点：扫描（一轮：挑几条交给 AI 改、上线）按方案的运营节奏（每天，或每周某一天），
 /// 体检每天，计划、周报、复盘每周；没托管的站点（你自己运营）：不做计划，其它按站点自己的周期（默认每周）。
@@ -1585,6 +1587,9 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.files = files.clone());
     }
     // 检查：构建 + 站点自带的检查命令
+    if crate::site_git::unshare_node_modules_if_changed(&wt) {
+        job.line("AI 改了依赖的锁文件，不用共享的 node_modules，按这份锁文件重新装");
+    }
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
     let snippets = crate::site_verify::snippets_from_diff(&diff);
@@ -2544,8 +2549,16 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
                 pause_site(ctx, site, &format!("回退后重新上线失败：{re}"));
                 return Err(format!("{e}；回退后重新上线也失败了：{re}。已暂停这个站点的托管，请尽快检查线上"));
             }
+            // 一起上线失败算一次：每类改动只判一次降档，而且在给这批条目记回滚次数之前判
+            // （不然同一批里两条同类的，第二条会把第一条刚记的算成「之前又失败过一次」）
+            let mut kinds: Vec<&str> = merged.iter().map(|(i, _)| i.opp.change.as_str()).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            for k in kinds {
+                downgrade_if_repeated(ctx, site, k);
+            }
             for (i, _) in &merged {
-                downgrade_if_repeated(ctx, site, &i.opp.change);
+                log_item(ctx, site, "rolled_back", i, &format!("一起上线后验收没通过（{why}），已全部回退"));
                 let _ = site_ops::update_item(&site_dir, &i.id, now(), |x| {
                     x.status = "failed".into();
                     x.verify_rollbacks += 1;
@@ -3001,7 +3014,9 @@ fn rel(a: f64, b: f64) -> f64 {
 }
 
 fn pct(v: f64) -> String {
-    format!("{}{:.0}%", if v >= 0.0 { "+" } else { "" }, v * 100.0)
+    // 取整后是 0 的写「持平」，不出现「-0%」「+0%」
+    let p = (v * 100.0).round();
+    if p == 0.0 { "持平".into() } else { format!("{}{p:.0}%", if p > 0.0 { "+" } else { "" }) }
 }
 
 /// 按这条改动的预期指标复盘，返回（结论 positive / neutral / negative，给人看的说明）。
@@ -3233,7 +3248,10 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     ));
     let (conv_id, conv) = run_conversation(ctx, site, "plan", "", msg).await?;
     let reply = conv.messages.iter().rev().find(|m| m.role == "assistant").map(|m| m.text.clone()).unwrap_or_default();
-    let (positioning, mut tasks) = crate::managed::parse_plan_full(&reply)?;
+    let (positioning, mut tasks, dropped) = crate::managed::parse_plan_counted(&reply)?;
+    if dropped > 0 {
+        job.line(&format!("计划里有 {dropped} 条没用上（格式写坏了、没写标题，或超过一次最多 12 条）"));
+    }
     let notes = crate::managed::parse_plan_notes(&reply);
     if !notes.is_empty() {
         job.line(&format!("给你的说明：{notes}"));
@@ -3445,6 +3463,9 @@ pub struct DigestTraffic {
 pub struct DigestData {
     pub date: String,
     pub generated_at: u64,
+    /// 这份日报从什么时候算起（上一份日报生成的时间；没有上一份就是 24 小时前）。旧日报没有这个字段
+    #[serde(default)]
+    pub since: u64,
     pub sites_total: usize,
     pub shipped: usize,
     pub planned: usize,
@@ -3452,7 +3473,7 @@ pub struct DigestData {
     pub broken: usize,
     pub needs: Vec<DigestNeed>,
     pub active: Vec<DigestSite>,
-    /// 过去 24 小时没有动静、也不需要你的站点
+    /// 这段时间里没有动静、也不需要你的站点
     pub quiet: Vec<String>,
     /// 有点击或浏览的站点，按变化大小排
     pub traffic: Vec<DigestTraffic>,
@@ -3545,19 +3566,34 @@ pub fn build_digest(sites: &[(Site, PathBuf)], acts: &[crate::managed::Activity]
 }
 
 fn change_text(now: f64, prev: f64) -> String {
-    let diff = now - prev;
+    // 先取整再比：差 0.3 不写成「+0」，变化不到 1% 只写差值不写「+0%」
+    let diff = (now - prev).round();
     if diff == 0.0 {
         "持平".into()
     } else if prev == 0.0 {
         format!("+{diff:.0}（新增）")
     } else {
-        format!("{}{diff:.0}（{:+.0}%）", if diff > 0.0 { "+" } else { "" }, diff / prev * 100.0)
+        let sign = if diff > 0.0 { "+" } else { "" };
+        let p = (diff / prev * 100.0).round();
+        if p == 0.0 { format!("{sign}{diff:.0}") } else { format!("{sign}{diff:.0}（{sign}{p:.0}%）") }
+    }
+}
+
+/// 「过去 24 小时」「过去 30 小时」「过去 3 天」：日报覆盖的时段（从上一份日报算起）。
+fn digest_window(d: &DigestData) -> String {
+    let h = if d.since == 0 { 24 } else { (d.generated_at.saturating_sub(d.since) + 1800) / 3600 };
+    if (22..=26).contains(&h) {
+        "过去 24 小时".into()
+    } else if h >= 48 {
+        format!("过去 {} 天", (h + 12) / 24)
+    } else {
+        format!("过去 {} 小时", h.max(1))
     }
 }
 
 /// 日报的 Markdown 版（存档备查；界面用结构化数据画）。
 pub fn digest_markdown(d: &DigestData) -> String {
-    let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；过去 24 小时自动上线 {} 项、出计划 {} 次、回滚或失败 {} 项，{} 项需要你。\n\n", d.date, d.sites_total, d.shipped, d.planned, d.broken, d.needs.len());
+    let mut md = format!("# 托管日报 · {}\n\n托管 {} 个站点；{}自动上线 {} 项、出计划 {} 次、回滚或失败 {} 项，{} 项需要你。\n\n", d.date, d.sites_total, digest_window(d), d.shipped, d.planned, d.broken, d.needs.len());
     if !d.needs.is_empty() {
         md.push_str("## 需要你\n\n");
         for n in &d.needs {
@@ -3661,14 +3697,38 @@ pub fn parse_old_digest(md: &str) -> Option<DigestData> {
 }
 
 /// 每日摘要：所有托管站点过去 24 小时做了什么、什么需要你。写一份报告（结构化 + Markdown）并发系统通知。
+/// 日报的起点：今天之前最近一份日报的生成时间，夹在 7 天前到 1 小时前之间；没有就是 24 小时前。
+fn digest_since(dir: &Path, today: &str, now: u64) -> u64 {
+    let prev = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let date = name.strip_suffix(".json")?.to_string();
+            (date.as_str() < today).then_some(date)
+        })
+        .max()
+        .and_then(|date| std::fs::read(dir.join(format!("{date}.json"))).ok())
+        .and_then(|b| serde_json::from_slice::<DigestData>(&b).ok())
+        .map(|d| d.generated_at)
+        .filter(|t| *t > 0);
+    match prev {
+        Some(t) => t.clamp(now.saturating_sub(7 * DAY), now.saturating_sub(3600)),
+        None => now.saturating_sub(DAY),
+    }
+}
+
 pub fn digest(app: &tauri::AppHandle) -> Result<String, String> {
     let st = app.state::<crate::AppState>();
-    let since = now().saturating_sub(DAY);
-    let acts: Vec<crate::managed::Activity> = crate::managed::activity(&st.data_dir, 2000).into_iter().filter(|a| a.ts >= since).collect();
+    let d = crate::managed::digests_dir(&st.data_dir);
+    // 从上一份日报接着算：客户端隔天晚开、日报时间改过，都不会漏掉或重复中间的事（最多往前看 7 天）
+    let since = digest_since(&d, &today(), now());
+    let acts: Vec<crate::managed::Activity> = crate::managed::activity(&st.data_dir, 5000).into_iter().filter(|a| a.ts >= since).collect();
     let cfg = crate::managed::load(&st.data_dir);
     let managed: Vec<(Site, PathBuf)> = st.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()).map(|s| { let d = st.sites.data_dir(&s.id); (s, d) }).collect();
-    let data = build_digest(&managed, &acts, &today());
-    let d = crate::managed::digests_dir(&st.data_dir);
+    let mut data = build_digest(&managed, &acts, &today());
+    data.since = since;
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     std::fs::write(d.join(format!("{}.md", data.date)), digest_markdown(&data)).map_err(|e| e.to_string())?;
     std::fs::write(d.join(format!("{}.json", data.date)), serde_json::to_vec_pretty(&data).unwrap_or_default()).map_err(|e| e.to_string())?;
@@ -4427,6 +4487,27 @@ mod tests {
         assert_eq!(change_text(5.0, 0.0), "+5（新增）");
         assert_eq!(change_text(3.0, 4.0), "-1（-25%）");
         assert_eq!(change_text(2.0, 2.0), "持平");
+        assert_eq!(change_text(2.3, 2.0), "持平");
+        assert_eq!(change_text(501.0, 500.0), "+1");
+        assert_eq!(change_text(110.0, 100.0), "+10（+10%）");
+        assert_eq!(pct(-0.004), "持平");
+        assert_eq!(pct(0.126), "+13%");
+        assert_eq!(pct(-0.2), "-20%");
+        let w = |since: u64, at: u64| digest_window(&DigestData { since, generated_at: at, ..Default::default() });
+        assert_eq!(w(0, 100), "过去 24 小时");
+        assert_eq!(w(1_000_000, 1_000_000 + 25 * 3600), "过去 24 小时");
+        assert_eq!(w(1_000_000, 1_000_000 + 30 * 3600), "过去 30 小时");
+        assert_eq!(w(1_000_000, 1_000_000 + 3 * DAY), "过去 3 天");
+        let dir = tempfile::tempdir().unwrap();
+        let t = 30 * DAY;
+        assert_eq!(digest_since(dir.path(), "2026-11-03", t), t - DAY, "没有上一份就看 24 小时");
+        let put = |date: &str, at: u64| std::fs::write(dir.path().join(format!("{date}.json")), serde_json::to_vec(&DigestData { date: date.into(), generated_at: at, ..Default::default() }).unwrap()).unwrap();
+        put("2026-11-01", t - 2 * DAY);
+        put("2026-11-02", t - 30 * 3600);
+        put("2026-11-03", t - 600);
+        assert_eq!(digest_since(dir.path(), "2026-11-03", t), t - 30 * 3600, "从今天之前最近一份接着算，不看今天重出的那份");
+        put("2026-11-02", t - 20 * DAY);
+        assert_eq!(digest_since(dir.path(), "2026-11-03", t), t - 7 * DAY, "最多往前看 7 天");
         let md = digest_markdown(&d);
         assert!(md.contains("其余 1 个站点今天没有变化：c.com"));
     }
