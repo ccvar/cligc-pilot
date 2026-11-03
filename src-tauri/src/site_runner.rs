@@ -676,6 +676,15 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             }
         }
     }
+    // 已经有改好的条目因为本地文件夹不干净上不了线：先别让 AI 接着改新的，不然越堆越多、白花额度；文件夹干净了调度会先把卡住的接着上线
+    if rules.is_some() && site.source == "local" {
+        let stuck = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "proposed" && i.verdict.starts_with("自动上线失败：站点文件夹")).count();
+        if stuck > 0 && !local_ready_now(site).await {
+            let why = format!("站点文件夹有你没提交的改动（或不在 {} 分支），已有 {stuck} 条改好的等着上线，这一轮先不让 AI 改新的", site.default_branch);
+            job.line(&why);
+            return (0, vec![why], None);
+        }
+    }
     let mut picked: Vec<QueueItem> = site_ops::load_queue(&site_dir).into_iter().filter(|i| i.status == "open" && rules.as_ref().is_none_or(|g| g.allows(&i.opp.change))).collect();
     picked.sort_by(|a, b| b.opp.score.total_cmp(&a.opp.score));
     // 各类机会的分数量级不可比（计划项固定 1000、修复任务 2000、数据规则几分到几十分）：不按绝对分数排，分四条道——
@@ -2432,9 +2441,8 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
         }
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
-            let cur = crate::site_git::current_branch(&main).await;
-            if cur != site.default_branch || !settle_build_outputs(site, &main).await {
-                return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再确认（Pilot 不会动你正在改的东西）", site.default_branch));
+            if let Some(why) = local_not_ready(site, &main).await {
+                return Err(format!("{why}。提交或撤销后再上线；托管里自动上线的条目，文件夹干净了 Pilot 会自己接着上线（Pilot 不会动你正在改的东西）"));
             }
             if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
                 // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
@@ -2798,9 +2806,8 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
         }
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
-            let cur = crate::site_git::current_branch(&main).await;
-            if cur != site.default_branch || !settle_build_outputs(site, &main).await {
-                return Err(format!("站点文件夹当前不在 {} 分支，或有未提交的改动。请先处理好再回滚", site.default_branch));
+            if let Some(why) = local_not_ready(site, &main).await {
+                return Err(format!("{why}。请先处理好再回滚"));
             }
             if let Err(e) = crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await {
                 // 回退冲突（这些文件后来又被别的改动改过）：把主分支恢复原样，不能留着冲突标记让之后每次合并都失败
@@ -3844,6 +3851,34 @@ async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
 
 /// 合并 / 回滚前：站点文件夹干净就直接过；只有构建脚本自动重写的数据文件有改动（上次在这里构建上线时写的，
 /// 比如每次构建同步手续费）就把它们还原——下次构建还会再写一遍；别的文件有改动不动它，返回 false。
+/// 本地文件夹合并 / 回滚前的检查不通过时，原因以这个开头（调度靠它认出「等你把文件夹收拾干净」的条目）
+pub const LOCAL_NOT_READY: &str = "站点文件夹没准备好：";
+
+/// 本地文件夹站点合并 / 回滚前：要在默认分支上、没有未提交的改动（构建脚本自动重写的数据文件先还原）。
+/// 不行就返回原因，写明在哪个分支、哪些文件没提交。
+async fn local_not_ready(site: &Site, main: &Path) -> Option<String> {
+    let cur = crate::site_git::current_branch(main).await;
+    if cur != site.default_branch {
+        return Some(format!("{LOCAL_NOT_READY}当前在 {} 上，不在 {} 分支", if cur.is_empty() { "分离 HEAD".to_string() } else { format!("{cur} 分支") }, site.default_branch));
+    }
+    if settle_build_outputs(site, main).await {
+        return None;
+    }
+    let files = dirty_files(site, main).await.map(|(f, _)| f).unwrap_or_default();
+    Some(if files.is_empty() {
+        format!("{LOCAL_NOT_READY}读不到 git 状态")
+    } else {
+        let more = if files.len() > 5 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
+        format!("{LOCAL_NOT_READY}有未提交的改动（{}{more}）", files.iter().take(5).cloned().collect::<Vec<_>>().join("、"))
+    })
+}
+
+/// 不改动文件夹地看一眼：在默认分支上、没有未提交的改动（只有构建脚本重写的数据文件也算干净）。
+async fn local_ready_now(site: &Site) -> bool {
+    let Ok(main) = crate::site_git::code_dir(site, None) else { return false };
+    crate::site_git::current_branch(&main).await == site.default_branch && dirty_files(site, &main).await.is_some_and(|(f, generated)| f.is_empty() || generated)
+}
+
 async fn settle_build_outputs(site: &Site, main: &Path) -> bool {
     match dirty_files(site, main).await {
         Some((files, _)) if files.is_empty() => true,
@@ -4075,6 +4110,15 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                             let _ = site_ops::update_item(&dir, &item, now(), |i| i.auto_retried = true);
                             if let (Ok(site), Some(it)) = (st.sites.get(id), site_ops::load_queue(&dir).into_iter().find(|i| i.id == item)) {
                                 log_item(&ctx, &site, "planned", &it, "AI 的改动还在分支上，自动重新检查一次");
+                            }
+                        }
+                    }
+                    // 自动上线时本地文件夹不干净（有你没提交的改动、不在主分支）卡住的：文件夹收拾好了就自动「重新检查」接着上线
+                    if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| i.status == "proposed" && !i.branch.is_empty() && i.verdict.starts_with("自动上线失败：站点文件夹")) {
+                        if let Ok(site) = st.sites.get(id) {
+                            if site.source == "local" && local_ready_now(&site).await && start(ctx.clone(), id, "recheck", "schedule", Some(it.id.clone())).is_ok() {
+                                log_item(&ctx, &site, "planned", &it, "站点文件夹已经没有未提交的改动，自动接着上线");
+                                continue;
                             }
                         }
                     }
