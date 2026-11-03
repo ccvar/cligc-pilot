@@ -451,8 +451,23 @@ pub fn peek_recheckable(site_dir: &Path) -> Option<String> {
     const RECHECK: [&str; 6] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch "];
     load_queue(site_dir)
         .into_iter()
-        .find(|i| i.status == "failed" && !i.head_sha.is_empty() && !i.branch.is_empty() && i.merge_sha.is_empty() && !i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k)))
+        .find(|i| {
+            i.status == "failed"
+                && !i.head_sha.is_empty()
+                && !i.branch.is_empty()
+                && i.merge_sha.is_empty()
+                && ((!i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k))) || failed_before_env_fix(i))
+        })
         .map(|i| i.id)
+}
+
+/// Pilot 自己的构建 / 检查环境修好的时间（Next.js 工作区的 node_modules 软链接、把连服务器的 make check 当检查）。
+const BUILD_ENV_FIXED_AT: u64 = 1_793_713_223;
+
+/// 在这之前一周内因构建或检查没过而失败的：多半是 Pilot 环境的锅，AI 的改动没问题，自动重新检查一次。
+/// 重新检查会刷新 updated_at，不会反复查。
+fn failed_before_env_fix(i: &QueueItem) -> bool {
+    i.verdict.starts_with("检查没通过") && i.updated_at < BUILD_ENV_FIXED_AT && i.updated_at + 7 * 86_400 > BUILD_ENV_FIXED_AT
 }
 
 /// 撤掉还没开始处理（open）、满足条件的条目（不是驳回：以后还可以再提）。返回撤掉几条。
