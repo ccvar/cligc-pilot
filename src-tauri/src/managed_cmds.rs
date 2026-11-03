@@ -331,13 +331,14 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 stage_manual: !stg.manual.is_empty(),
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
                 active: group.is_some_and(|g| g.active_for(&s.id)),
-                failed: q.iter().filter(|i| i.status == "failed").count(),
+                failed: q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i)).count(),
                 failed_why: {
-                    let mut f: Vec<&crate::site_ops::QueueItem> = q.iter().filter(|i| i.status == "failed").collect();
+                    let mut f: Vec<&crate::site_ops::QueueItem> = q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i)).collect();
                     f.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                     f.iter().take(3).map(|i| (i.opp.title.clone(), i.note.lines().next().unwrap_or("").to_string())).collect()
                 },
-                queued: q.iter().filter(|i| i.status == "open").count(),
+                // 因为站点自己构建不过卡住、等修好再接着查的也算排着
+                queued: q.iter().filter(|i| i.status == "open" || crate::site_ops::env_blocked(i)).count(),
                 plan_date: plan.as_ref().and_then(|p| p["date"].as_str().map(str::to_string)).unwrap_or_default(),
                 plan_count: plan.as_ref().and_then(|p| p["tasks"].as_array().map(|a| a.len())).unwrap_or(0),
                 build_broken: crate::site_runner::site_build_broken(&s, &dir).unwrap_or_default(),

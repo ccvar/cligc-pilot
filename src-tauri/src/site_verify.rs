@@ -40,6 +40,8 @@ pub struct Spec {
     /// 这条任务本身要改的页面：和新页面一起查 noindex / canonical。其它只是顺带改到的页面（比如旧文存档）
     /// 可能本来就设了 noindex、canonical 指向新版，那是站点有意的，不查这两项。
     pub primary: Vec<String>,
+    /// 上线前同一批页面已经有的问题（路径 → 问题）：上线后只报新出现的，本来就有的不算这次改动的（见 `before`）
+    pub before: std::collections::HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -231,25 +233,11 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             continue;
         }
         let p = path_of(u);
-        let mut issues = Vec::new();
-        if html_title(&f.body).is_empty() {
-            issues.push("没有标题".to_string());
-        }
-        if meta_content(&f.body, "description").is_empty() {
-            issues.push("没有描述（meta description）".to_string());
-        }
         let main = spec.new_pages.iter().chain(&spec.primary).any(|x| same_page(x, u));
-        if main && meta_content(&f.body, "robots").to_lowercase().contains("noindex") {
-            issues.push("设置了 noindex，搜索引擎不会收录".to_string());
-        }
-        let canon = canonical(&f.body);
-        // 和跟完跳转后的地址比（旧地址 301 到新地址时，canonical 指向新地址是对的）
-        let landed = if f.final_url.is_empty() { u.clone() } else { f.final_url.clone() };
-        if main && !canon.is_empty() && !same_page(&canon, &landed) {
-            issues.push(format!("canonical 指向了 {canon}"));
-        }
-        if let Some(m) = crate::managed::leak_marker(&visible_text(&f.body)) {
-            issues.push(format!("页面里有内部痕迹「{m}」"));
+        let mut issues = page_issues(f, u, main);
+        // 上线前这一页就有的问题不算这次改动的（旧文本来就 noindex、sitemap 本来就没有标题…）
+        if let Some(old) = spec.before.get(&p) {
+            issues.retain(|x| !old.contains(x));
         }
         rep.checks.push(Check { label: if main { format!("{p} 标题、描述、canonical") } else { format!("{p} 标题和描述") }, ok: issues.is_empty(), detail: issues.join("；"), hard: false });
         if !issues.is_empty() {
@@ -346,6 +334,59 @@ fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
         let end = html[at..].find('>').map(|e| at + e + 1).unwrap_or(html.len());
         out.push(&html[at..end]);
         from = end;
+    }
+    out
+}
+
+/// 一个页面的 SEO 基本项和内部痕迹问题。`main`：这条任务本身要改的页面 / 新页面，另外查 noindex 和 canonical。
+fn page_issues(f: &Fetched, u: &str, main: bool) -> Vec<String> {
+    let mut issues = Vec::new();
+    if html_title(&f.body).is_empty() {
+        issues.push("没有标题".to_string());
+    }
+    if meta_content(&f.body, "description").is_empty() {
+        issues.push("没有描述（meta description）".to_string());
+    }
+    if main && meta_content(&f.body, "robots").to_lowercase().contains("noindex") {
+        issues.push("设置了 noindex，搜索引擎不会收录".to_string());
+    }
+    let canon = canonical(&f.body);
+    // 和跟完跳转后的地址比（旧地址 301 到新地址时，canonical 指向新地址是对的）
+    let landed = if f.final_url.is_empty() { u.to_string() } else { f.final_url.clone() };
+    if main && !canon.is_empty() && !same_page(&canon, &landed) {
+        issues.push(format!("canonical 指向了 {canon}"));
+    }
+    if let Some(m) = crate::managed::leak_marker(&visible_text(&f.body)) {
+        issues.push(format!("页面里有内部痕迹「{m}」"));
+    }
+    issues
+}
+
+/// 上线前先查一遍这次要验收的已有页面（新页面上线前还不存在，不查），记下本来就有的问题：路径 → 问题。
+/// 上线后的验收只报新出现的，不把页面原来的状态算成这次改动的问题。打不开、被防火墙拦住的页面不记。
+pub async fn snapshot(spec: &Spec) -> std::collections::HashMap<String, Vec<String>> {
+    let mut out = std::collections::HashMap::new();
+    if spec.domain.trim().is_empty() {
+        return out;
+    }
+    let client = client();
+    let home = format!("https://{}/", spec.domain);
+    let mut urls: Vec<String> = vec![home];
+    for u in spec.primary.iter().chain(&spec.pages) {
+        if !spec.new_pages.iter().any(|n| same_page(n, u)) && !urls.iter().any(|x| same_page(x, u)) && urls.len() < MAX_PAGES + 1 {
+            urls.push(u.clone());
+        }
+    }
+    for u in &urls {
+        let Ok(f) = fetch(&client, u).await else { continue };
+        if !(200..300).contains(&f.status) || f.challenged || hidden_page(&f.body) || !is_html(&f.body) {
+            continue;
+        }
+        let main = spec.primary.iter().any(|x| same_page(x, u));
+        let issues = page_issues(&f, u, main);
+        if !issues.is_empty() {
+            out.insert(path_of(u), issues);
+        }
     }
     out
 }

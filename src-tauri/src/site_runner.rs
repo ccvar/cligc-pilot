@@ -97,6 +97,18 @@ pub struct OpsState {
     /// 效果复盘里每类改动连续负面的次数（≥2 即自动降档）。
     #[serde(default)]
     pub negatives: HashMap<String, u32>,
+    /// 运营任务里发现站点自己构建不过（改动前的代码在同样环境里也不过）：（时间，原因）。之后有一次构建通过就清掉
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_broken: Option<(u64, String)>,
+}
+
+fn set_env_broken(site_dir: &Path, why: Option<String>) {
+    let mut s = load_state(site_dir);
+    if s.env_broken.is_none() && why.is_none() {
+        return;
+    }
+    s.env_broken = why.map(|w| (now(), w));
+    save_state(site_dir, &s);
 }
 
 fn state_path(site_dir: &Path) -> PathBuf {
@@ -109,19 +121,40 @@ pub fn load_state(site_dir: &Path) -> OpsState {
 
 /// 站点自己的构建 / 检查没通过（最近一次每日体检，不含 AI 的改动）：返回原因。站点设置在那之后改过的不算（等下次体检再判断）。
 /// 这时 AI 改什么都会卡在同一步：白花额度、还记成 AI 的失败，托管先不派任务。
+/// 证据有两种，取最新的一次：每日体检的构建结果，和运营任务里「改动前的代码也构建不过」的记录。
 pub fn site_build_broken(site: &Site, site_dir: &Path) -> Option<String> {
-    let r = load_state(site_dir).runs.into_iter().find(|r| r.task == "health" && r.finished > 0)?;
-    if r.ok || !r.error.starts_with("构建或检查没通过") || r.finished <= site.updated_at {
+    let st = load_state(site_dir);
+    let health = st.runs.iter().find(|r| r.task == "health" && r.finished > 0);
+    let (at, err) = match (&st.env_broken, health) {
+        (Some((t, e)), h) if h.is_none_or(|h| *t >= h.finished) => (*t, e.clone()),
+        (_, Some(h)) if !h.ok && h.error.starts_with("构建或检查没通过") => (h.finished, h.error.trim_start_matches("构建或检查没通过：").to_string()),
+        _ => return None,
+    };
+    if at <= site.updated_at {
         return None;
     }
-    // 卡在一条现在会被跳过的 make 检查上（连服务器的，见 site_deploy::build_and_check）：那次失败不算数，等下次体检
-    if let Some(t) = r.error.split("检查没通过（make ").nth(1).and_then(|x| x.split('）').next()) {
+    // 卡在一条现在会被跳过的 make 检查上（连服务器的，见 site_deploy::build_and_check）：那次失败不算数
+    if let Some(t) = err.split("检查没通过（make ").nth(1).and_then(|x| x.split('）').next()) {
         let dir = crate::site_git::code_dir(site, None).map(|d| site.app_dir(&d));
         if dir.is_ok_and(|d| crate::sites::make_target_hits_server(&d, t).is_some()) {
             return None;
         }
     }
-    Some(r.error.trim_start_matches("构建或检查没通过：").lines().next().unwrap_or("").to_string())
+    Some(err.lines().next().unwrap_or("").to_string())
+}
+
+/// 用改动前的代码（base）在同样的环境里构建、检查一遍：返回失败原因（也不过＝站点自己的问题），能过返回 None。
+async fn base_failure(site: &Site, site_dir: &Path, job: &Job, cb: &CodeBase, base_sha: &str, item_id: &str) -> Option<String> {
+    let dir = crate::sites::build_root(site_dir).join("work").join(format!("{item_id}-base"));
+    crate::site_git::remove_worktree(&cb.main, &dir).await;
+    if crate::site_git::worktree_at(&cb.main, &dir, base_sha, None).await.is_err() {
+        return None;
+    }
+    crate::site_git::share_node_modules(&cb.main, &dir);
+    job.line("构建或检查没过：先用改动前的代码在同样的环境里再跑一遍，看是这次改动的问题还是站点本身的问题");
+    let r = crate::site_deploy::build_and_check(site, &dir, None, job).await;
+    crate::site_git::remove_worktree(&cb.main, &dir).await;
+    r.err().map(|e| e.lines().next().unwrap_or("").to_string())
 }
 
 fn save_state(site_dir: &Path, s: &OpsState) {
@@ -1692,6 +1725,30 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 上线时用最新的条目（带上 AI 报告的页面和这次的文字）
     let item = &site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).unwrap_or_else(|| item.clone());
     let hold = held(&site.id);
+    match &built {
+        Ok(_) => set_env_broken(&site_dir, None),
+        // 先分清是谁的问题：改动前的代码在同样环境里也不过 → 站点自己的构建 / 检查坏了（配置不对、环境缺东西、
+        // 第三方工具变了），不是 AI 改坏的。不交回 AI 修（白花额度），不算失败；改动留在分支上，站点标成构建有问题，
+        // 托管先不派新任务，修好（改站点设置，或下次体检通过）后自动重新检查这条
+        Err(e) if !job.canceled() => {
+            if let Some(base_err) = base_failure(site, &site_dir, job, cb, &base_sha, &item.id).await {
+                let note = format!("{}{base_err}", site_ops::ENV_BLOCKED);
+                job.line(&format!("改动前的代码也过不了（{base_err}）：是站点自己的问题，不是这次改动的，不交给 AI 修；修好站点的构建后会自动接着检查这条"));
+                set_env_broken(&site_dir, Some(base_err));
+                site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                    i.status = "failed".into();
+                    i.head_sha = head_sha.clone();
+                    i.verdict.clear();
+                    i.note = note.clone();
+                })?;
+                ctx.emit_queue(&site.id);
+                return Err(note);
+            }
+            job.line(&format!("改动前的代码能过，是这次改动的问题：{}", e.lines().next().unwrap_or("")));
+            job.step("check", "failed", "改动前的代码能过，是这次改动引起的");
+        }
+        Err(_) => {}
+    }
     // 全托管：构建或检查没过，先把报错交回 AI 修一次（多半是改出来的类型错误、测试里写死的旧数字），修完再走一遍；
     // 还是不过才留给你
     if let Err(e) = &built {
@@ -1911,6 +1968,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         i.pr_number = pr.number;
         i.pr_url = pr.url.clone();
         i.note = if checks_ok { String::new() } else { "构建或检查没通过，改动留在分支上，可以在会话里让 AI 继续修。".into() };
+        i.rules_v = crate::managed::RULES_V;
     })?;
     ctx.emit_queue(&site.id);
     if !checks_ok {
@@ -2006,11 +2064,7 @@ fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify
         let page = o.page.trim();
         if page.starts_with("https://") && !item.new_pages.iter().any(|n| n == page) && !spec.pages.iter().any(|p| p == page) {
             spec.pages.push(page.to_string());
-            // 体检 / 测速这类技术任务的 page 只是这批里的第一页，不是要它排名的页面：
-            // 可能是本来就 noindex 的旧文存档，不按「本页该被收录」查 noindex / canonical
-            if !matches!(o.kind.as_str(), "schema" | "img_audit" | "slow") {
-                spec.primary.push(page.to_string());
-            }
+            spec.primary.push(page.to_string());
         }
     }
     if !rollback {
@@ -2027,7 +2081,41 @@ fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify
 
 /// 合并后让改动上线并做线上验收：直接上传模式由 Pilot 构建上传；Pages 绑定 GitHub 时等 Cloudflare 构建完成。
 /// 验收严重失败返回以 `site_verify::HARD_PREFIX` 开头的错误。
+/// 上线前页面原有问题的记录（路径 → （记下的时间，问题））：上线时验收和之后的复查都拿它对比，只报新出现的。
+fn before_path(site_dir: &Path) -> PathBuf {
+    site_dir.join("verify_before.json")
+}
+
+fn load_before(site_dir: &Path) -> HashMap<String, Vec<String>> {
+    let raw: HashMap<String, (u64, Vec<String>)> = std::fs::read(before_path(site_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    raw.into_iter().map(|(k, (_, v))| (k, v)).collect()
+}
+
+/// 这次拍到的页面覆盖旧的记录；超过 30 天的清掉（复查最晚 24 小时，复盘不看这个）
+fn save_before(site_dir: &Path, snap: &HashMap<String, Vec<String>>, pages: &[String]) {
+    let mut raw: HashMap<String, (u64, Vec<String>)> = std::fs::read(before_path(site_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let t = now();
+    raw.retain(|_, (at, _)| *at + 30 * DAY > t);
+    for p in pages {
+        match snap.get(p) {
+            Some(v) => raw.insert(p.clone(), (t, v.clone())),
+            None => raw.remove(p),
+        };
+    }
+    if let Ok(b) = serde_json::to_vec(&raw) {
+        let _ = std::fs::write(before_path(site_dir), b);
+    }
+}
+
 async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec, commit: &str, trigger: &str) -> Result<Shipped, String> {
+    // 上线前先把要验收的已有页面查一遍：本来就有的问题（旧文 noindex、sitemap 没有标题…）不算这次改动的
+    let mut spec = spec;
+    if trigger != "rollback" {
+        let snap = crate::site_verify::snapshot(&spec).await;
+        let pages: Vec<String> = spec.primary.iter().chain(&spec.pages).map(|u| path_of(u)).collect();
+        save_before(&ctx.site_dir(&site.id), &snap, &pages);
+        spec.before = snap;
+    }
     let st = ctx.state();
     let site_dir = ctx.site_dir(&site.id);
     match site.deploy.mode.as_str() {
@@ -3486,6 +3574,7 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         // 复查不再对照「这次加的文字」：隔了几小时别的改动可能已经改掉那段话，上线时查过一次就够了
         let mut spec = spec_for(site, &i, false);
         spec.snippets.clear();
+        spec.before = load_before(&site_dir);
         let rep = crate::site_verify::run(&spec, job, true).await;
         let stage = i.watch_stage;
         let when = if stage == 0 { "上线 1 小时后" } else { "上线 24 小时后" };
@@ -4228,12 +4317,29 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                             ctx.emit_queue(id);
                         }
                     }
-                    // AI 已经提交到分支、后面推送 / 中断才失败的：自动「重新检查」接着用（每条一次），不用你点
-                    if let Some(item) = site_ops::peek_recheckable(&dir) {
+                    // AI 已经提交到分支、后面推送 / 中断才失败的：自动「重新检查」接着用（每条一次），不用你点；
+                    // 因为站点自己构建不过卡住的，站点修好了也接着查
+                    let env_ok = st.sites.get(id).is_ok_and(|s| site_build_broken(&s, &dir).is_none());
+                    if let Some(item) = site_ops::peek_recheckable(&dir, env_ok) {
+                        let env = site_ops::load_queue(&dir).iter().any(|i| i.id == item && site_ops::env_blocked(i));
                         if start(ctx.clone(), id, "recheck", "schedule", Some(item.clone())).is_ok() {
                             let _ = site_ops::update_item(&dir, &item, now(), |i| i.auto_retried = true);
                             if let (Ok(site), Some(it)) = (st.sites.get(id), site_ops::load_queue(&dir).into_iter().find(|i| i.id == item)) {
-                                log_item(&ctx, &site, "planned", &it, "AI 的改动还在分支上，自动重新检查一次");
+                                log_item(&ctx, &site, "planned", &it, if env { "站点的构建已经没有已知问题，接着检查这条之前卡住的改动" } else { "AI 的改动还在分支上，自动重新检查一次" });
+                            }
+                            continue;
+                        }
+                    }
+                    // 上线判定规则升级了：等你确认的条目按新规则重判一次（不花 AI，只重新构建、检查、判定；
+                    // 你选了「执行但不上线」的不动）。一个站点一次一条，下一轮接着
+                    if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| {
+                        i.status == "proposed" && !i.branch.is_empty() && !i.head_sha.is_empty() && i.rules_v < crate::managed::RULES_V
+                            && !i.verdict.starts_with("自动上线失败") && !i.verdict.contains("这次选了「执行但不上线」")
+                    }) {
+                        if let Ok(site) = st.sites.get(id) {
+                            if start(ctx.clone(), id, "recheck", "schedule", Some(it.id.clone())).is_ok() {
+                                log_item(&ctx, &site, "planned", &it, "上线判定规则更新了，按新规则重新判断这条");
+                                continue;
                             }
                         }
                     }
@@ -4327,6 +4433,30 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn site_build_broken_follows_the_latest_evidence() {
+        let t = tempfile::tempdir().unwrap();
+        let site = serde_json::from_value::<Site>(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 10})).unwrap();
+        let health = |at: u64, ok: bool| super::RunRecord { task: "health".into(), started: at, finished: at, ok, error: if ok { String::new() } else { "构建或检查没通过：构建失败：退出码 1".into() }, ..Default::default() };
+        let save = |runs: Vec<super::RunRecord>, env: Option<(u64, String)>| super::save_state(t.path(), &super::OpsState { runs, env_broken: env, ..Default::default() });
+        // 没有证据
+        save(vec![], None);
+        assert_eq!(super::site_build_broken(&site, t.path()), None);
+        // 体检失败
+        save(vec![health(20, false)], None);
+        assert_eq!(super::site_build_broken(&site, t.path()).as_deref(), Some("构建失败：退出码 1"));
+        // 运营任务里改动前的代码也构建不过（比体检新）
+        save(vec![health(20, true)], Some((30, "构建产物目录 out 不存在".into())));
+        assert_eq!(super::site_build_broken(&site, t.path()).as_deref(), Some("构建产物目录 out 不存在"));
+        // 之后体检通过了：好了
+        save(vec![health(40, true)], Some((30, "构建产物目录 out 不存在".into())));
+        assert_eq!(super::site_build_broken(&site, t.path()), None);
+        // 改过站点设置（updated_at 晚于证据）：先放行
+        let fixed = serde_json::from_value::<Site>(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 50})).unwrap();
+        save(vec![health(20, false)], Some((30, "x".into())));
+        assert_eq!(super::site_build_broken(&fixed, t.path()), None);
+    }
+
     #[test]
     fn lanes_alternate_plan_and_data_after_followups_and_manual() {
         let mk = |id: &str, kind: &str, source: &str, score: f64| QueueItem { id: id.into(), opp: Opportunity { kind: kind.into(), source: source.into(), score, ..Default::default() }, ..Default::default() };

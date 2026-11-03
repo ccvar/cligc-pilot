@@ -92,7 +92,8 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 has_gsc: !s.data.gsc_site.is_empty(),
                 summary: crate::site_data::summary(&dir),
                 proposed: count("proposed"),
-                failed: count("failed"),
+                // 站点自己构建不过、等修好再接着查的不算失败（站点级提示一次）
+                failed: q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i)).count(),
                 open: count("open"),
                 job,
                 last_deploy_ts: last_ts,

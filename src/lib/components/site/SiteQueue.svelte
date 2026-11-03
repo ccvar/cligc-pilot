@@ -43,6 +43,9 @@
   const batchIds = $derived(job?.status === 'running' && job.kind === 'ops:batch' ? (ops.batch[site.id] ?? []) : []);
   const queued = (i: OpsItem) => i.status === 'open' && batchIds.includes(i.id);
   const needItems = $derived(all.filter(needOf));
+  // 站点自己构建不过卡住的（改动前的代码也过不了，不是 AI 改坏的）：上面说一次原因，修好后 Pilot 自动接着检查
+  const ENV_BLOCKED = '站点自己的构建 / 检查没通过，和这次改动无关：';
+  const envItems = $derived(all.filter((i) => i.status === 'failed' && i.note?.startsWith(ENV_BLOCKED)));
   const runningItems = $derived([...all.filter((i) => i.status === 'working'), ...batchIds.map((id) => all.find((i) => i.id === id)).filter((i): i is OpsItem => !!i && queued(i))]);
   const openItems = $derived(all.filter((i) => i.status === 'open' && !queued(i)));
   const shown = $derived(filter === 'todo' ? [] : all.filter((i) => inGroup(i, filter)));
@@ -203,6 +206,10 @@
 
   {#if full && openItems.length && filter === 'todo'}
     <div class="qnote warn"><Icon name="gauge" size={13} /><span>{full}，托管暂停处理这个站点的任务，下面的会一直排着。调高方案里的「每站每周 token」，或等用量滚出最近 7 天后，AI 会接着做；也可以点「让 AI 改」单独做某一条。</span>{#if myPlan}<button class="link-btn" onclick={() => { openManaged('groups'); editGroup(myPlan); }}>调整方案</button>{/if}</div>
+  {/if}
+
+  {#if envItems.length && filter === 'todo'}
+    <div class="qnote warn"><Icon name="info" size={13} /><span>站点自己的构建没通过（{envItems[0].note.slice(ENV_BLOCKED.length)}）：改动前的代码在同样环境里也过不了，不是 AI 改坏的。{envItems.length} 条改好的改动留在分支上等着；在站点设置里修好构建或检查命令后，Pilot 会自动接着检查上线，托管在这之前也不派新任务。</span><button class="link-btn" onclick={() => (sites.tab = 'settings')}>去站点设置</button></div>
   {/if}
 
   <!-- 站点正在跑别的作业时下面的按钮都是灰的：说一声为什么、什么时候能点（只说一次，不每条重复） -->

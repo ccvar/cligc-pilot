@@ -447,7 +447,9 @@ pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) 
 
 /// AI 已经提交到分支上、后面才失败的（推送 / 中断 / 模型层）：挑一条让调度自动「重新检查」。
 /// 作业真的起来了调用方再标 auto_retried（每条只自动查一次；站点正忙起不了就下个 tick 再来）
-pub fn peek_recheckable(site_dir: &Path) -> Option<String> {
+/// `env_ok`：站点自己的构建现在没有已知问题（见 site_runner::site_build_broken）。这时因为环境问题卡住的条目也接着查；
+/// 环境还是坏的，重新检查会再把站点标回去，不会反复跑。
+pub fn peek_recheckable(site_dir: &Path, env_ok: bool) -> Option<String> {
     const RECHECK: [&str; 6] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch "];
     load_queue(site_dir)
         .into_iter()
@@ -456,18 +458,9 @@ pub fn peek_recheckable(site_dir: &Path) -> Option<String> {
                 && !i.head_sha.is_empty()
                 && !i.branch.is_empty()
                 && i.merge_sha.is_empty()
-                && ((!i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k))) || failed_before_env_fix(i))
+                && ((!i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k))) || (env_ok && env_blocked(i)))
         })
         .map(|i| i.id)
-}
-
-/// Pilot 自己的构建 / 检查环境修好的时间（Next.js 工作区的 node_modules 软链接、把连服务器的 make check 当检查）。
-const BUILD_ENV_FIXED_AT: u64 = 1_793_713_223;
-
-/// 在这之前一周内因构建或检查没过而失败的：多半是 Pilot 环境的锅，AI 的改动没问题，自动重新检查一次。
-/// 重新检查会刷新 updated_at，不会反复查。
-fn failed_before_env_fix(i: &QueueItem) -> bool {
-    i.verdict.starts_with("检查没通过") && i.updated_at < BUILD_ENV_FIXED_AT && i.updated_at + 7 * 86_400 > BUILD_ENV_FIXED_AT
 }
 
 /// 撤掉还没开始处理（open）、满足条件的条目（不是驳回：以后还可以再提）。返回撤掉几条。
@@ -712,6 +705,9 @@ pub struct QueueItem {
     /// 托管方案自动重试过一次（中断、环境问题这类失败放回排队过）：再失败就留给你
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_retried: bool,
+    /// 上线判定用的是哪一版规则（managed::RULES_V）：规则升级后，等你确认的条目按新规则自动重判一次
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub rules_v: u32,
     /// 「新内容已生效」没过的，后台复查结束了（找到了，或两次都没找到不再查）
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub snippet_rechecked: bool,
@@ -739,12 +735,24 @@ pub struct QueueItem {
 
 /// 这一条要不要人来处理：待确认、失败，或者上线了但线上验收有待核对的问题。
 pub fn needs_you(i: &QueueItem) -> bool {
-    matches!(i.status.as_str(), "proposed" | "failed") || (i.status == "deployed" && !i.attention.is_empty()) || deploy_stuck(i)
+    (matches!(i.status.as_str(), "proposed" | "failed") && !env_blocked(i)) || (i.status == "deployed" && !i.attention.is_empty()) || deploy_stuck(i)
+}
+
+/// 构建 / 检查没过、改动前的代码在同样环境里也不过：站点自己的环境问题，不是 AI 改坏的。
+pub const ENV_BLOCKED: &str = "站点自己的构建 / 检查没通过，和这次改动无关：";
+
+/// 因为站点环境问题卡住的条目：不算失败、不进「需要你」（站点级提示一次），环境修好后自动重新检查。
+pub fn env_blocked(i: &QueueItem) -> bool {
+    i.status == "failed" && i.note.starts_with(ENV_BLOCKED)
 }
 
 /// 已经合并进主分支、上线那一步失败的（发布命令不对、上传失败…）：不显示的话改动就悄悄躺在主分支里没上线
 pub fn deploy_stuck(i: &QueueItem) -> bool {
     i.status == "merged" && i.deployed_at == 0 && i.note.starts_with("已合并进主分支，上线没完成")
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 pub fn queue_path(site_dir: &Path) -> PathBuf {
@@ -1341,6 +1349,19 @@ mod tests {
     }
 
     #[test]
+    fn env_blocked_items_wait_for_the_site_instead_of_asking_you() {
+        let t = tempfile::tempdir().unwrap();
+        let env = QueueItem { id: "e".into(), status: "failed".into(), note: format!("{ENV_BLOCKED}构建失败"), head_sha: "abc".into(), branch: "pilot/x".into(), auto_retried: true, ..Default::default() };
+        let ai = QueueItem { id: "a".into(), status: "failed".into(), note: "构建或检查没通过，改动留在分支上".into(), head_sha: "def".into(), branch: "pilot/y".into(), ..Default::default() };
+        assert!(!needs_you(&env), "站点自己构建不过：不算失败、不进「需要你」");
+        assert!(needs_you(&ai));
+        save_queue(t.path(), &[env, ai]).unwrap();
+        // 站点还坏着：不查；修好了：接着查（自动重试过也照样查，环境还坏会再标回去）
+        assert_eq!(peek_recheckable(t.path(), false), None);
+        assert_eq!(peek_recheckable(t.path(), true).as_deref(), Some("e"));
+    }
+
+    #[test]
     fn transient_failures_are_requeued_once() {
         let t = tempfile::tempdir().unwrap();
         let item = |id: &str, note: &str, head: &str| QueueItem { id: id.into(), status: "failed".into(), note: note.into(), head_sha: head.into(), ..Default::default() };
@@ -1351,9 +1372,9 @@ mod tests {
         let q = load_queue(t.path());
         assert_eq!(q.iter().map(|i| i.status.as_str()).collect::<Vec<_>>(), vec!["open", "open", "failed", "failed", "failed"], "正文里提到「连接」「超时」的不算瞬时失败");
         // 已经提交到分支的中断条目：不放回排队，交给自动「重新检查」（作业起来后调用方标 auto_retried）
-        assert_eq!(peek_recheckable(t.path()).as_deref(), Some("d"));
+        assert_eq!(peek_recheckable(t.path(), true).as_deref(), Some("d"));
         update_item(t.path(), "d", 2, |i| i.auto_retried = true).unwrap();
-        assert_eq!(peek_recheckable(t.path()), None);
+        assert_eq!(peek_recheckable(t.path(), true), None);
         assert!(q[0].retry_note.contains("中断"));
         // 再失败就不重试了
         update_item(t.path(), "a", 2, |i| { i.status = "failed".into(); i.note = "上次 Pilot 退出或重启时…".into(); }).unwrap();
