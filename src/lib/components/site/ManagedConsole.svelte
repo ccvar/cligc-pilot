@@ -31,7 +31,7 @@
   import { ago, full } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
-  import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, TIERS, tierOf, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
+  import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, AUTONOMY_TONE, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, TIERS, tierOf, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
   import type { ManagedGroup, DayCount, AiCost } from '$lib/types';
 
   const o = $derived(managed.overview);
@@ -355,7 +355,7 @@
         {@const ordered = gq ? orderSites(g).filter((id) => matchSite(id, gq)) : orderSites(g)}
         {@const visible = showAll.has(g.id) || gq ? ordered : ordered.slice(0, SITE_LIMIT)}
         <div class="card grp" class:off={gOff} class:shut={!gOpen}>
-          <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
+          <h3><button class="grp-tg" onclick={() => (grpOpen[g.id] = !gOpen)} aria-expanded={gOpen} data-tip={gOpen ? '收起' : '展开'}><Icon name="sparkles" />{g.name}<span class="pill {AUTONOMY_TONE[g.autonomy] ?? 'ok'}">{AUTONOMY_LABEL[g.autonomy] ?? '全自动'}</span>{#if gOff}<span class="pill warn">已暂停</span>{/if}
             <span class="sub gsum">{g.sites.length} 个站点{#if sum.shipped}{' · '}本周上线 {sum.shipped}{/if}{#if costText(sum.cost)}{' · '}<span data-tip={costTip(sum.cost, sum.shippedMonth, '这个方案')}>本月 AI {costText(sum.cost)}</span>{/if}</span>
             {#if g.sites.length}<PlanSpark days={groupDays(g)} />{/if}
             {#if sum.next}<span class="next-chip" data-tip={`${sum.nextSite} 最先：${NEXT_TIP}`}><Icon name="clock" size={11} />下次 {whenNext(sum.next)}</span>{/if}

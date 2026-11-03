@@ -44,6 +44,8 @@ export const ACTIONS: { key: string; label: string; sub: string }[] = [
 ];
 
 export const AUTONOMY_LABEL: Record<string, string> = { suggest: '只出建议', review: '改好等你确认', auto: '全自动' };
+/** 自主程度的颜色（和全部站点列表里的圆点一致）：全自动绿、改好等你确认蓝、只出建议土黄；用作 .pill 的 class */
+export const AUTONOMY_TONE: Record<string, string> = { suggest: 'sug', review: 'run', auto: 'ok' };
 /** short：卡片上的一句话；sub：悬停看的完整说明 */
 export const AUTONOMY: { key: string; label: string; short: string; sub: string }[] = [
   { key: 'suggest', label: '只出建议', short: '只出计划和建议，不改代码', sub: 'AI 每周读数据和站点，出计划和改进建议，不改代码。想做哪条，在「待处理」里点「让 AI 改」。' },

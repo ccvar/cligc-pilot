@@ -10,6 +10,7 @@
   --su-ok-soft: #e9f5ee; --su-ok-line: #cfe7d7;
   --su-warn-soft: #fbf3dc; --su-warn-ink: #8a5a08;
   --su-run-soft: #eaf0fb; --su-run: #2f5fb8;
+  --su-sug-soft: #f5f0e1; --su-sug: #7a6833;
   --su-ease: cubic-bezier(.2, .7, .2, 1);
   color: var(--text);
 }
@@ -94,6 +95,7 @@
 .su .pill.warn { background: var(--su-warn-soft); color: var(--su-warn-ink); }
 .su .pill.err { background: var(--err-soft); color: var(--err); }
 .su .pill.run { background: var(--su-run-soft); color: var(--su-run); }
+.su .pill.sug { background: var(--su-sug-soft); color: var(--su-sug); }
 .su .pill .spin { width: 9px; height: 9px; }
 .su .pill.line { background: none; box-shadow: inset 0 0 0 1px var(--border2); }
 

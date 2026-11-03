@@ -8,7 +8,7 @@
   import { say } from '$lib/state/app.svelte.js';
   import { refreshSites } from '$lib/state/sites.svelte.js';
   import { STAGE_LABEL, STAGE_FOCUS, setContentCode } from '$lib/state/ops.svelte.js';
-  import { managed, loadManaged, openManaged, editGroup, newGroup, setManagedSites, setSiteActive, AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
+  import { managed, loadManaged, openManaged, editGroup, newGroup, setManagedSites, setSiteActive, AUTONOMY_LABEL, AUTONOMY_TONE } from '$lib/state/managed.svelte.js';
   import { clock } from './fmt';
   import { jev, loadJev } from '$lib/state/typesafe.svelte.js';
 
@@ -86,7 +86,7 @@
   {#if g}
     <div class="row-plan">
       <span>方案 <b>「{g.name}」</b></span>
-      <span class="pill line">{AUTONOMY_LABEL[g.autonomy] ?? g.autonomy}</span>
+      <span class="pill {AUTONOMY_TONE[g.autonomy] ?? 'line'}">{AUTONOMY_LABEL[g.autonomy] ?? g.autonomy}</span>
       <span class="faint">{g.autonomy === 'suggest' ? 'AI 每周出计划和建议，不改代码；你可以在「待处理」里挑一条让 AI 改。' : g.autonomy === 'review' ? 'AI 改好、跑完检查后等你确认再上线。' : 'AI 按方案规则改好并自动上线，上线后检查，变差自动回滚。'}</span>
     </div>
     <div class="grid">

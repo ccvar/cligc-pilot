@@ -222,8 +222,8 @@
       <div class="sec"><Icon name="gauge" size={13} />AI 自主程度</div>
       <div class="auto">
         {#each AUTONOMY as a (a.key)}
-          <button class="au" class:on={g.autonomy === a.key} onclick={() => g && (g.autonomy = a.key)} aria-pressed={g.autonomy === a.key} data-tip={a.sub}>
-            <span class="au-top"><b>{a.label}</b>{#if g.autonomy === a.key}<Icon name="check" size={12} />{/if}</span>
+          <button class="au au-{a.key}" class:on={g.autonomy === a.key} onclick={() => g && (g.autonomy = a.key)} aria-pressed={g.autonomy === a.key} data-tip={a.sub}>
+            <span class="au-top"><b><i class="au-dot"></i>{a.label}</b>{#if g.autonomy === a.key}<Icon name="check" size={12} />{/if}</span>
             <small>{a.short}</small>
           </button>
         {/each}
@@ -381,7 +381,13 @@
   @container page (max-width: 560px) { .auto { grid-template-columns: 1fr; } }
   .au { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border: 1px solid var(--border2); border-radius: 9px; background: #fff; font: inherit; color: var(--text); cursor: pointer; transition: border-color .12s, background-color .12s; }
   .au:hover:not(.on) { background: var(--su-hover); }
-  .au.on { border-color: var(--accent); background: #fcfbf8; box-shadow: inset 0 0 0 .5px var(--accent); }
+  /* 三档各一种颜色（和站点列表、方案卡片上的一致）：只出建议土黄、改好等你确认蓝、全自动绿 */
+  .au-suggest { --au: var(--su-sug); --au-soft: var(--su-sug-soft); }
+  .au-review { --au: var(--su-run); --au-soft: var(--su-run-soft); }
+  .au-auto { --au: var(--ok); --au-soft: var(--su-ok-soft); }
+  .au.on { border-color: var(--au); background: var(--au-soft); box-shadow: inset 0 0 0 .5px var(--au); }
+  .au.on .au-top { color: var(--au); }
+  .au-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--au); margin-right: 6px; vertical-align: 1px; }
   .au-top { display: flex; align-items: center; justify-content: space-between; }
   .au b { font-size: 13px; font-weight: 600; }
   .au small { font-size: 11.5px; color: var(--dim); line-height: 1.5; }
