@@ -28,7 +28,7 @@
   import { fleet, loadPending } from '$lib/state/fleet.svelte.js';
   import { runTask, STAGE_LABEL } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
-  import { ago, full } from './fmt';
+  import { ago, full, dayLabel, hhmm } from './fmt';
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
   import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, AUTONOMY_TONE, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, TIERS, tierOf, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
@@ -487,11 +487,13 @@
             <span class="sub">{histTab === 'ships' ? '近 30 天，所有托管站点' : managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
           </div>
           {#if histTab === 'ships'}
-            <RecentShips items={managed.ships} />
+            <RecentShips items={managed.ships} byDay />
           {:else}
             {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
             <div class="list feed">
-              {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k } (k)}
+              {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k }, n (k)}
+                <!-- 每天一个小标题（条数按这一天全部的算），行尾今天的写「几分钟前」、更早的写时刻 -->
+                {#if n === 0 || dayOf(feed[n - 1].a.ts) !== dayOf(a.ts)}<div class="li dh"><b>{dayLabel(a.ts)}</b><span>{feed.filter((f) => dayOf(f.a.ts) === dayOf(a.ts)).length} 条</span></div>{/if}
                 <div class="li ev">
                   <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
                   <div class="ev-main">
@@ -500,7 +502,7 @@
                     <small>{#if a.site_name}<button class="link-btn plain site-l" onclick={() => openSite(a.site_id)}><SiteIcon id={a.site_id} size={11} />{a.site_name}</button>{/if}{#if a.site_name && a.detail}<span class="sep">·</span>{/if}{a.detail}</small>
                   </div>
                   <span class="ev-r">
-                    <span class="faint t" data-tip={full(a.ts)}>{when(a.ts)}</span>
+                    <span class="faint t" data-tip={full(a.ts)}>{dayOf(a.ts) === dayOf(Date.now() / 1000) ? when(a.ts) : hhmm(a.ts)}</span>
                     {#if a.item_id && a.site_id}<button class="link-btn plain see" onclick={() => openSite(a.site_id, 'queue', '', a.item_id)}>看详情</button>{/if}
                   </span>
                 </div>
@@ -634,6 +636,9 @@
   .site-l { display: inline-flex; align-items: center; gap: 5px; vertical-align: -1px; }
   .sep { margin: 0 6px; color: var(--border2); }
   .ev .t { flex: none; font-size: 11.5px; white-space: nowrap; }
+  .feed > .li.dh { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 8px; padding: 7px 18px 6px; background: #faf9f6; font-size: 11.5px; color: var(--faint); }
+  .feed > .li.dh b { font-size: 12px; font-weight: 600; color: var(--dim); }
+  .feed > .li.dh:hover { background: #faf9f6; }
   .ev-r { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-top: 2px; }
   .see { font-size: 11.5px; opacity: 0; transition: opacity .12s; }
   .ev:hover .see { opacity: 1; }

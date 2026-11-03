@@ -2,6 +2,7 @@
   // 全部站点 →「近期动态」：所有站点交给 AI 处理过、已经有结果的条目（已上线、已处理、已回滚、没成功、你驳回了），按天分组。
   // 能按时间（7 / 30 天）和结果筛；已上线的带上线前后这个页面的点击对比，满 4 周后是复盘结论。每条的列表沿用托管页「最近上线」的样子。
   import RecentShips from './RecentShips.svelte';
+  import { dayLabel } from './fmt';
   import { invoke } from '@tauri-apps/api/core';
   import { say } from '$lib/state/app.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
@@ -39,14 +40,8 @@
     return kind === 'all' || (kind === 'live' ? s === 'deployed' || s === 'done' : kind === 'bad' ? s === 'failed' || s === 'rolled_back' : s === 'dismissed');
   };
   const at = (x: ShipItem) => x.item.deployed_at || x.item.updated_at;
+  // 和后端每天用量（DayUsage.date）同一种写法：年-月-日，不补零
   const dayKey = (t: number) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
-  function dayLabel(t: number) {
-    const d = new Date(t * 1000), today = new Date();
-    const y = new Date(); y.setDate(today.getDate() - 1);
-    if (dayKey(t) === dayKey(today.getTime() / 1000)) return '今天';
-    if (dayKey(t) === dayKey(y.getTime() / 1000)) return '昨天';
-    return `${d.getMonth() + 1}月${d.getDate()}日 · 周${'日一二三四五六'[d.getDay()]}`;
-  }
   const shown = $derived((items ?? []).filter(match));
   const groups = $derived.by(() => {
     const out: { key: string; label: string; items: ShipItem[] }[] = [];

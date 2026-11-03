@@ -9,18 +9,38 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { showDiff, rollbackItem, CHANGE_LABEL } from '$lib/state/ops.svelte.js';
-  import { ago, full, pageUrl } from './fmt';
+  import { ago, full, pageUrl, dayOf, dayLabel, hhmm } from './fmt';
   import { modelName } from '$lib/state/fleet.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
   import type { ShipItem, OpsItem, GscRow } from '$lib/types';
 
-  let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。' }: { items: ShipItem[]; limit?: number; empty?: string } = $props();
+  // byDay：列表里按天插小标题（今天 · 23 条），行尾时间今天的写「36 分钟前」、更早的写时刻（日期已经在标题里）
+  let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。', byDay = false }: { items: ShipItem[]; limit?: number; empty?: string; byDay?: boolean } = $props();
   const LIMIT = $derived(limit);
   let all = $state(false);
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
   const shown = $derived(all ? items : items.slice(0, LIMIT));
+  const at = (x: ShipItem) => x.item.deployed_at || x.item.updated_at;
+  // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）；有回滚 / 待核对 / 没成功的才标出来
+  const isBad = (i: OpsItem) => i.status === 'rolled_back' || i.status === 'failed' || !!i.attention;
+  const days = $derived.by(() => {
+    if (!byDay) return [{ key: 'all', label: '', n: 0, bad: 0, items: shown }];
+    const out: { key: string; label: string; n: number; bad: number; items: ShipItem[] }[] = [];
+    for (const x of shown) {
+      const k = dayOf(at(x));
+      const g = out.find((o) => o.key === k);
+      if (g) g.items.push(x);
+      else {
+        const same = items.filter((y) => dayOf(at(y)) === k);
+        out.push({ key: k, label: dayLabel(at(x)), n: same.length, bad: same.filter((y) => isBad(y.item)).length, items: [x] });
+      }
+    }
+    return out;
+  });
+  const today = $derived(dayOf(Date.now() / 1000));
+  const when = (ts: number) => (byDay && dayOf(ts) !== today ? hhmm(ts) : ago(ts));
   // 「AI 怎么改的」是 Markdown（加粗、列表、代码）：渲染出来看；长的先收成几行，点「展开全文」看完整的
   let fullSum = $state<Set<string>>(new Set());
   function flipSum(id: string) { const n = new Set(fullSum); if (n.has(id)) n.delete(id); else n.add(id); fullSum = n; }
@@ -82,7 +102,9 @@
   {#if !items.length}<p class="hint">{empty}</p>{/if}
   {#if items.length}
     <ol class="rows">
-      {#each shown as x (x.item.id)}
+      {#each days as d (d.key)}
+      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
+      {#each d.items as x (x.item.id)}
         {@const i = x.item}
         {@const st = shipState(i)}
         {@const site = siteOf(x.site_id)}
@@ -105,7 +127,7 @@
             <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
             <span class="how faint" data-tip={!i.deployed_at ? null : i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{!i.deployed_at ? '' : i.auto ? '自动上线' : '人工确认'}</span>
             <span class="pill {st.c}">{st.l}</span>
-            <span class="t faint" data-tip={full(i.deployed_at || i.updated_at)}>{ago(i.deployed_at || i.updated_at)}</span>
+            <span class="t faint" data-tip={full(at(x))}>{when(at(x))}</span>
           </div>
           {#if isOpen}
             {@const sum = i.ai_summary_zh || i.ai_summary}
@@ -136,6 +158,7 @@
           {/if}
         </li>
       {/each}
+      {/each}
     </ol>
     {#if items.length > LIMIT}<button class="all" onclick={() => (all = !all)}>{all ? '收起' : `显示全部 ${items.length} 条`}<svg class="chev" class:open={all} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
   {/if}
@@ -145,6 +168,11 @@
 <style>
   .rows { list-style: none; margin: 0 -18px; padding: 0; }
   .rows > li { border-top: 1px solid var(--border); }
+  /* 每天一个小标题：翻长列表时贴在顶上，随时知道看到哪天了 */
+  .rows > li.dh { position: sticky; top: 0; z-index: 1; display: flex; align-items: baseline; gap: 8px; padding: 7px 18px 6px; background: #faf9f6; font-size: 11.5px; color: var(--faint); }
+  .dh b { font-size: 12px; font-weight: 600; color: var(--dim); }
+  .dh-bad { color: var(--err); }
+  .rows > li.dh:hover { background: #faf9f6; }
   .row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 18px; }
   .rows > li:hover .row { background: #fcfbf9; }
   .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 6px 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }

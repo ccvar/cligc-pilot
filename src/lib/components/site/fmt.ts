@@ -44,6 +44,22 @@ export function full(ts: number): string {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm(d)}`;
 }
 
+/** 按天分组用：同一天同一个 key（本地时区）。秒级时间戳。 */
+export const dayOf = (ts: number) => dayKey(new Date(ts * 1000));
+
+/** 分组小标题：今天 / 昨天 / 11月1日 · 周六（不是今年的带年份）。 */
+export function dayLabel(ts: number): string {
+  const d = new Date(ts * 1000), now = new Date();
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (dayKey(d) === dayKey(now)) return '今天';
+  if (dayKey(d) === dayKey(y)) return '昨天';
+  const md = `${d.getMonth() + 1}月${d.getDate()}日 · 周${'日一二三四五六'[d.getDay()]}`;
+  return d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}年${md}`;
+}
+
+/** 时刻：14:06（日期已经在分组小标题里时用）。 */
+export const hhmm = (ts: number) => (ts ? hm(new Date(ts * 1000)) : '—');
+
 /** ISO 字符串版本的 clock。 */
 export const clockIso = (iso: string) => (iso ? clock(Date.parse(iso) / 1000) : '—');
 
