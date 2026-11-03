@@ -294,6 +294,42 @@ pub fn audit(out: &Path, domain: &str) -> AuditReport {
     r
 }
 
+/// 一条体检任务（schema / img_audit）清单里的页面，在这份报告里还有没有问题（按清单的行认页面，不按 key：
+/// 修好一部分页面后分桶会变、key 跟着变，不代表剩下的页面也好了）。报告被截断（问题太多）时不下结论，算还有。
+pub fn still_has(r: &AuditReport, kind: &str, evidence: &str) -> bool {
+    let lines: Vec<&str> = evidence.lines().map(str::trim).collect();
+    match kind {
+        "schema" => r.schema.len() >= CAP || r.schema.iter().any(|s| lines.iter().any(|l| l.starts_with(&format!("{}：", s.page)))),
+        "img_audit" => {
+            r.broken.len() >= CAP
+                || r.large.len() >= CAP
+                || r.no_alt.len() >= CAP
+                || r.broken.iter().chain(&r.large).chain(&r.no_alt).any(|i| lines.iter().any(|l| l.contains(&format!("：{} 里的 ", i.page)) || l.contains(&format!("（用在 {}）", i.page))))
+        }
+        _ => true,
+    }
+}
+
+/// 用这份构建产物重新体检并保存（上线后、每天体检构建完调用，不用等一周一次的定时体检）。
+/// 体检完顺手收掉清单里页面都已经没问题的体检任务（还没动手的、AI 没改出东西失败的），不在「需要你」里挂着。返回收掉了几条。
+pub async fn refresh(site: &crate::sites::Site, site_dir: &Path, out: PathBuf) -> usize {
+    let Ok(r) = check_site(site, site_dir, out).await else { return 0 };
+    let now = crate::now_secs();
+    let ids: Vec<String> = crate::site_ops::load_queue(site_dir)
+        .into_iter()
+        .filter(|i| matches!(i.opp.kind.as_str(), "schema" | "img_audit") && (i.status == "open" || (i.status == "failed" && i.head_sha.is_empty())) && i.created_at < r.checked_at)
+        .filter(|i| !still_has(&r, &i.opp.kind, &std::iter::once(i.opp.evidence.as_str()).chain(i.also.iter().map(|o| o.evidence.as_str())).collect::<Vec<_>>().join("\n")))
+        .map(|i| i.id)
+        .collect();
+    for id in &ids {
+        let _ = crate::site_ops::update_item(site_dir, id, now, |i| {
+            i.status = "done".into();
+            i.note = "最新的体检里这些页面已经没有问题了（之前的改动已经修好），自动标为完成".into();
+        });
+    }
+    ids.len()
+}
+
 pub async fn check_site(site: &crate::sites::Site, site_dir: &Path, out: PathBuf) -> Result<AuditReport, String> {
     if !out.join("index.html").is_file() {
         return Err("还没有构建产物：上线一次以后再体检".into());
@@ -481,6 +517,24 @@ pub fn llms_txt(name: &str, domain: &str, out: &Path) -> String {
     s.push_str(&lines.join("\n"));
     s.push('\n');
     s
+}
+
+#[cfg(test)]
+mod still_has_tests {
+    use super::*;
+
+    #[test]
+    fn judges_by_listed_pages_not_by_key() {
+        let ev = "体检时发现（只改这 2 个页面）：\n/a/：Article 缺 图片 image\n/b/a/：Article 缺 图片 image\n结构化数据写对了…";
+        let mk = |pages: &[&str]| AuditReport { checked_at: 1, schema: pages.iter().map(|p| SchemaIssue { page: p.to_string(), problem: "x".into() }).collect(), ..Default::default() };
+        assert!(still_has(&mk(&["/b/a/"]), "schema", ev));
+        assert!(!still_has(&mk(&["/c/"]), "schema", ev), "清单里的页面都没问题了");
+        assert!(!still_has(&mk(&["/x/a/"]), "schema", ev), "别的页面路径里含 /a/ 不算");
+        let img = "体检时在构建产物里发现：\n缺替代文字：/p/ 里的 /i.png\n图片太大（900 KB）：/big.png（用在 /q/）";
+        let r = AuditReport { checked_at: 1, large: vec![ImgIssue { page: "/q/".into(), src: "/big.png".into(), bytes: 1 }], ..Default::default() };
+        assert!(still_has(&r, "img_audit", img));
+        assert!(!still_has(&AuditReport { checked_at: 1, ..Default::default() }, "img_audit", img));
+    }
 }
 
 #[cfg(test)]

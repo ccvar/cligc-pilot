@@ -769,9 +769,16 @@ async fn gone_already(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Op
         return None;
     }
     let site_dir = ctx.site_dir(&site.id);
-    // 体检类（结构化数据、图片）看的是体检报告：报告还没有、或比这条任务还旧，不能凭它说「问题没了」
-    if matches!(kind, "schema" | "img_audit") && crate::page_audit::load(&site_dir).checked_at <= item.created_at {
-        return None;
+    // 体检类（结构化数据、图片）看的是体检报告：报告还没有、或比这条任务还旧，不能凭它说「问题没了」；
+    // 报告是新的就按清单里的页面逐个看，这些页面都没问题了才算没了
+    if matches!(kind, "schema" | "img_audit") {
+        let r = crate::page_audit::load(&site_dir);
+        let evidence = std::iter::once(item.opp.evidence.as_str()).chain(item.also.iter().map(|o| o.evidence.as_str())).collect::<Vec<_>>().join("\n");
+        if r.checked_at <= item.created_at || crate::page_audit::still_has(&r, kind, &evidence) {
+            return None;
+        }
+        job.line(&format!("「{}」：最新的体检里这些页面已经没有问题了，不交给 AI", item.opp.title));
+        return Some("动手前按最新的体检确认了一下，这些页面的问题已经修好了，没有交给 AI".into());
     }
     let meta = crate::site_data::refresh(site, &ctx.state().conns, &site_dir, false).await;
     if !crate::site_data::source_ok(kind, &meta) {
@@ -1578,6 +1585,30 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     let (wt, base_sha, branch) = (wt.to_path_buf(), base_sha.to_string(), branch.to_string());
     let commits = crate::site_git::commits_between(&wt, &base_sha, "HEAD").await;
     if commits.is_empty() {
+        // 体检类任务 AI 没改：拿工作区刚构建的产物重查一遍，清单里的页面都没问题了就是之前的改动已经修好了，算完成，不是失败
+        if matches!(item.opp.kind.as_str(), "schema" | "img_audit") {
+            let out = crate::site_make::out_dir(&site.app_dir(&wt), &site.build.out_dir);
+            if out.join("index.html").is_file() {
+                let domain = site.domain.clone();
+                let kind = item.opp.kind.clone();
+                let evidence = std::iter::once(item.opp.evidence.as_str()).chain(item.also.iter().map(|o| o.evidence.as_str())).collect::<Vec<_>>().join("\n");
+                let fixed = tokio::task::spawn_blocking(move || !crate::page_audit::still_has(&crate::page_audit::audit(&out, &domain), &kind, &evidence)).await.unwrap_or(false);
+                if fixed {
+                    crate::site_git::remove_worktree(&cb.main, &wt).await;
+                    let _ = crate::site_git::git(&cb.main, &["branch", "-D", &branch], "").await;
+                    let note = "AI 检查后发现这些页面的问题已经修好了（之前上线的改动已经覆盖），这次不用改；Pilot 用构建产物重查确认过".to_string();
+                    if let Some(d) = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                        i.status = "done".into();
+                        i.note = note.clone();
+                    })? {
+                        log_item(ctx, site, "fixed", &d, &note);
+                    }
+                    ctx.emit_queue(&site.id);
+                    job.step("ship", "skipped", "问题已经修好了，不用改");
+                    return Ok(note);
+                }
+            }
+        }
         crate::site_git::remove_worktree(&cb.main, &wt).await;
         let _ = crate::site_git::git(&cb.main, &["branch", "-D", &branch], "").await;
         return Err("AI 没有做出任何改动（详见会话）".into());
@@ -1941,6 +1972,12 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
     match site.deploy.mode.as_str() {
         "direct" | "workers" | "vps" => {
             let rec = crate::site_deploy::deploy_with(site, &st.conns, &site_dir, job, trigger, Some(spec)).await?;
+            // 上线的这份产物重新做一次页面体检：修好的结构化数据 / 图片问题立刻从报告里消失，排着的同类任务动手前就知道不用改了
+            if let Ok(out) = crate::syndicate::built_out(&st, site) {
+                if crate::page_audit::refresh(site, &site_dir, out).await > 0 {
+                    ctx.emit_queue(&site.id);
+                }
+            }
             Ok(Shipped { url: rec.url, checks: rec.checks, attention: rec.attention })
         }
         "pages_git" => {
@@ -2869,6 +2906,14 @@ async fn health(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     };
     job.step("prepare", "ok", "");
     let built = crate::site_deploy::build_and_check(site, &dir, stamp.as_deref(), job).await;
+    // 刚构建完：页面体检（结构化数据、图片）顺手用这份产物重查，别拿一周前的报告出任务
+    if let Ok(b) = &built {
+        let closed = crate::page_audit::refresh(site, &site_dir, b.out.clone()).await;
+        if closed > 0 {
+            job.line(&format!("重新体检后，{closed} 条结构化数据 / 图片任务清单里的页面已经没有问题了，标为完成"));
+            ctx.emit_queue(&site.id);
+        }
+    }
     job.step("report", "running", "");
     let opps = site_ops::opportunities(site, &site_dir);
     let tech: Vec<&Opportunity> = opps.iter().filter(|o| o.change == "technical").collect();
