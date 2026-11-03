@@ -18,9 +18,11 @@ pub fn site_queue(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<Q
 
 /// 手动把一个机会放进待处理队列（驳回过的也可以重新放进来）。
 #[tauri::command]
-pub fn queue_add(state: tauri::State<'_, AppState>, id: String, opp: Opportunity) -> Result<QueueItem, String> {
+pub fn queue_add(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, opp: Opportunity) -> Result<QueueItem, String> {
     state.sites.get(&id)?;
-    add_to_queue(&state.sites.data_dir(&id), opp)
+    let item = add_to_queue(&state.sites.data_dir(&id), opp)?;
+    ctx(&app).emit_queue(&id);
+    Ok(item)
 }
 
 /// 放进待处理：同一个机会已经在队列里（没上线、没处理完）就返回那一条，不重复建
@@ -221,7 +223,7 @@ pub fn site_content_code(state: tauri::State<'_, AppState>, id: String, path: St
 }
 
 #[tauri::command]
-pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
+pub fn queue_restore(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
     site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| {
         if matches!(i.status.as_str(), "dismissed" | "failed") {
@@ -229,28 +231,32 @@ pub fn queue_restore(state: tauri::State<'_, AppState>, id: String, item_id: Str
             i.note.clear();
         }
     })?;
+    ctx(&app).emit_queue(&id);
     Ok(())
 }
 
 /// 用户在会话里处理完了（第 2 档方案或失败后手动修好）：标记完成。
 #[tauri::command]
-pub fn queue_mark_done(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
+pub fn queue_mark_done(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
     // AI 正在处理的不能标完成：作业结束时会把状态写回去
     let it = site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| if i.status != "working" { i.status = "done".into() })?;
     if it.is_some_and(|i| i.status == "working") {
         return Err("AI 正在处理这条，等它跑完再标".into());
     }
+    // 侧栏的「失败」红点、托管页的「需要你」都靠这个事件刷新
+    ctx(&app).emit_queue(&id);
     Ok(())
 }
 
 /// 上线后验收的待核对问题：你看过了，清掉。
 #[tauri::command]
-pub fn queue_ack(state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
+pub fn queue_ack(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String, item_id: String) -> Result<(), String> {
     let dir = state.sites.data_dir(&id);
     site_ops::update_item(&dir, &item_id, crate::now_secs(), |i| i.attention.clear())?;
     // 你核对过、认为没问题：因为这些问题开出来、还没动的修复任务一起撤掉
     site_runner::dismiss_followups(&dir, &item_id, "上线后验收的问题你已核对过，不用修");
+    ctx(&app).emit_queue(&id);
     Ok(())
 }
 

@@ -254,7 +254,7 @@ impl Ctx {
     fn notify(&self, title: &str, body: &str) {
         crate::push::notify(&self.app, title, body);
     }
-    fn emit_queue(&self, site_id: &str) {
+    pub(crate) fn emit_queue(&self, site_id: &str) {
         let q = site_ops::load_queue(&self.site_dir(site_id));
         let _ = self.app.emit("site-queue", serde_json::json!({ "site_id": site_id, "queue": q }));
     }
