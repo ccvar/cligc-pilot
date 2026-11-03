@@ -227,7 +227,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let mut page_bad: HashSet<usize> = HashSet::new();
     for (i, u) in urls.iter().enumerate().skip(first) {
         let Some(f) = &got[i] else { continue };
-        if f.challenged || hidden_page(&f.body) {
+        if f.challenged || hidden_page(&f.body) || !is_html(&f.body) {
             continue;
         }
         let p = path_of(u);
@@ -348,6 +348,13 @@ fn tags<'a>(html: &'a str, name: &str) -> Vec<&'a str> {
         from = end;
     }
     out
+}
+
+/// 是不是网页：AI 改了生成 sitemap / RSS / llms.txt 的代码时会把 /sitemap.xml 这类报成改到的页面，
+/// 它们本来就没有标题和描述，不按网页查。
+fn is_html(body: &str) -> bool {
+    let head: String = body.chars().take(4000).collect::<String>().to_ascii_lowercase();
+    head.contains("<html") || head.contains("<!doctype html") || head.contains("<head") || head.contains("<title")
 }
 
 /// 同时 noindex、nofollow 的页面：站点有意藏起来的内部页面（比如给分享卡片截图用的 /og-card/），
@@ -842,6 +849,9 @@ mod tests {
         assert_eq!(html_title(html), "AI 视频转场提示词 & 写法");
         assert_eq!(meta_content(html, "description"), "讲清 5 种转场");
         assert!(!meta_content(html, "robots").contains("noindex"));
+        assert!(is_html(html));
+        assert!(!is_html("<?xml version=\"1.0\" encoding=\"UTF-8\"?><urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"><url><loc>https://cpsbee.com/</loc></url></urlset>"));
+        assert!(!is_html("# cpsbee\n\n> 推广计划导航"));
         assert!(same_page(&canonical(html), "https://iosur.com/zh/posts/a"));
         let text = visible_text(html);
         assert!(text.contains("遮挡转场要让前景物体") && !text.contains("TODO"), "{text}");
