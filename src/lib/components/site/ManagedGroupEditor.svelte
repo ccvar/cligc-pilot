@@ -234,11 +234,13 @@
         <div class="seg"><button class:on={g.new_content === 'auto'} onclick={() => g && (g.new_content = 'auto')}>自动发布</button><button class:on={g.new_content === 'review'} onclick={() => g && (g.new_content = 'review')}>人审人发</button></div>
       </div>
       {@const tier = tierOf(g)}
+      {@const tip = TIERS.find((t) => t.key === tier)?.tip ?? ''}
       <div class="field"><span class="lbl">拦截等级<InfoTip label="拦截等级" text={`全自动时，哪些改动要留给你确认。构建没过、新页面没人链接时，先交回 AI 修一次。\n${TIERS.map((t) => `${t.label}：${t.tip}`).join('\n')}\n${TIER_COMMON}`} /></span>
         <div class="seg">
           {#each TIERS as t (t.key)}<button class:on={tier === t.key} onclick={() => g && (g.strictness = t.key)}>{t.label}</button>{/each}
         </div>
-        <small>{TIERS.find((t) => t.key === tier)?.tip}</small>
+        <!-- 人审人发：新页面本来就都等你审，拦截等级只管已有页面和代码的改动，说明里去掉新页面那条 -->
+        <small>{g.new_content === 'review' ? `新页面都等你审，这里只管已有页面和代码的改动：${tip.replace('、AI 补过链接还是孤立的新页面', '')}` : tip}</small>
         {#if g.allow_kinds?.length}
           <div class="allowed"><span>另外单独放行</span>
             {#each g.allow_kinds as k (k)}<span class="chip">{BLOCK_KIND_LABEL[k] ?? k}<button class="chip-x" onclick={() => g && (g.allow_kinds = (g.allow_kinds ?? []).filter((x) => x !== k))} aria-label={`恢复拦截：${BLOCK_KIND_LABEL[k] ?? k}`} data-tip="恢复拦截（保存后生效）"><Icon name="x" size={10} /></button></span>{/each}
