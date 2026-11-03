@@ -222,6 +222,8 @@ pub struct Rules<'a> {
     pub known: &'a [String],
     /// 构建时脚本自动重写的数据文件（文件名，见 `build_outputs`）：AI 跑构建时顺手提交进来的，不算 AI 的改动
     pub generated: &'a [String],
+    /// 站点 package.json 里本来就有的依赖（包名）：代码里新 import 它们不算「引入外部包」
+    pub deps: &'a [String],
     /// 构建和检查会跑到的脚本（文件名，见 `build_scripts`）；None＝读不到 package.json，scripts/ 下一律拦
     pub build_scripts: Option<&'a [String]>,
 }
@@ -334,7 +336,7 @@ impl ManagedGroup {
         }
     }
     pub fn rules<'a>(&'a self, content_code: &'a [String]) -> Rules<'a> {
-        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[], generated: &[], build_scripts: None }
+        Rules { tier: self.tier(), code: &self.code_changes, allow: &self.allow_kinds, new_content: self.new_content == "auto", min_page: self.min_page_chars as usize, content_code, known: &[], generated: &[], build_scripts: None, deps: &[] }
     }
     /// 保存前把等级落定：老方案补上等级，代码改动跟着等级走，放行清单只留认得的类型
     pub fn settle_tier(&mut self) {
@@ -778,6 +780,31 @@ fn template_file(path: &str) -> bool {
     ["astro", "vue", "svelte", "jsx", "tsx"].iter().any(|e| path.ends_with(&format!(".{e}")))
 }
 
+/// 一行 import 引入的外部包名（`next/link` → `next`，`@scope/pkg/x` → `@scope/pkg`）。本地文件、路径别名、
+/// astro 虚拟模块、只引类型的 `import type` 返回 None。
+pub fn import_package(line: &str) -> Option<String> {
+    let t = line.trim();
+    if t.starts_with("import type ") {
+        return None;
+    }
+    let spec = t.strip_prefix("import ").and_then(|r| r.rsplit_once(" from ").map(|x| x.1)).or_else(|| t.strip_prefix("import ").filter(|r| r.starts_with('\'') || r.starts_with('"')))?;
+    let spec = spec.trim().trim_end_matches(';').trim_matches(['\'', '"']);
+    let local = spec.starts_with('.') || spec.starts_with('/') || spec.starts_with("~/") || spec.starts_with("@/") || spec.starts_with("$lib") || spec.starts_with("astro:") || spec.starts_with("astro/") || spec == "astro";
+    if local || spec.is_empty() {
+        return None;
+    }
+    let mut parts = spec.split('/');
+    let first = parts.next()?;
+    Some(if first.starts_with('@') { format!("{first}/{}", parts.next().unwrap_or_default()) } else { first.to_string() })
+}
+
+/// 站点 package.json 里声明的依赖包名（dependencies / devDependencies）。
+pub fn declared_deps(app_dir: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(app_dir.join("package.json")) else { return Vec::new() };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else { return Vec::new() };
+    ["dependencies", "devDependencies"].iter().filter_map(|k| pkg[*k].as_object()).flat_map(|o| o.keys().cloned()).collect()
+}
+
 /// 新加的代码里不该自动上线的写法：读环境变量 / 密钥、调外部服务、执行命令、动态执行、引入新的外部包。
 pub fn risky_code(line: &str) -> Option<&'static str> {
     let t = line.trim();
@@ -826,14 +853,9 @@ pub fn risky_code(line: &str) -> Option<&'static str> {
             return Some(why);
         }
     }
-    // 新引入的外部包（不是本地文件 / 路径别名 / astro: 虚拟模块）
-    let import_from = t.strip_prefix("import ").and_then(|r| r.rsplit_once(" from ").map(|x| x.1)).or_else(|| t.strip_prefix("import ").filter(|r| r.starts_with('\'') || r.starts_with('"')));
-    if let Some(spec) = import_from {
-        let spec = spec.trim().trim_end_matches(';').trim_matches(['\'', '"']);
-        let local = spec.starts_with('.') || spec.starts_with('/') || spec.starts_with("~/") || spec.starts_with("@/") || spec.starts_with("$lib") || spec.starts_with("astro:") || spec.starts_with("astro/") || spec == "astro";
-        if !local && !spec.is_empty() {
-            return Some("引入了外部包");
-        }
+    // 新引入的外部包（不是本地文件 / 路径别名 / astro: 虚拟模块）；只引类型的 `import type` 编译后就没了，不算
+    if import_package(t).is_some() {
+        return Some("引入了外部包");
     }
     if t.contains("require(") {
         return Some("引入了外部包");
@@ -1392,7 +1414,7 @@ const MAX_NEW_FILE_LINES: usize = 3000;
 #[cfg(test)]
 pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, code: &str, content_code: &[String]) -> Vec<String> {
     let tier = if code == "review" { "strict" } else { "standard" };
-    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[], build_scripts: None }).into_iter().map(|b| b.text).collect()
+    verdict(diff, &Rules { tier, code, allow: &[], new_content: allow_new_content, min_page, content_code, known: &[], generated: &[], build_scripts: None, deps: &[] }).into_iter().map(|b| b.text).collect()
 }
 
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
@@ -1477,6 +1499,10 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             let mut seen: Vec<&str> = Vec::new();
             for l in &f.added {
                 let Some(why) = risky_code(l) else { continue };
+                // import 的是站点本来就装了的依赖（比如 Next 站里 import next/link）：不是新引入的外部包
+                if why == "引入了外部包" && import_package(l).is_some_and(|p| rules.deps.contains(&p)) {
+                    continue;
+                }
                 let kind = risky_kind(why);
                 if seen.contains(&why) || rules.lets(kind) {
                     continue;
@@ -1829,9 +1855,22 @@ mod group_tests {
 mod sitemap_tests {
     use super::*;
     #[test]
+    fn imports_of_declared_deps_and_type_imports_are_not_new_packages() {
+        assert_eq!(import_package("import type { Metadata } from \"next\";"), None);
+        assert_eq!(import_package("import Link from 'next/link';").as_deref(), Some("next"));
+        assert_eq!(import_package("import { x } from '@scope/pkg/sub';").as_deref(), Some("@scope/pkg"));
+        assert_eq!(import_package("import a from './a';"), None);
+        let d = "diff --git a/src/views/a.tsx b/src/views/a.tsx\n--- a/src/views/a.tsx\n+++ b/src/views/a.tsx\n@@ -1 +1,2 @@\n+import Link from 'next/link';\n+import fs from 'fs';\n";
+        let deps = vec!["next".to_string()];
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &deps };
+        let v: Vec<String> = verdict(d, &r).into_iter().map(|b| b.text).collect();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("fs"), "{v:?}");
+    }
+    #[test]
     fn sitemap_entry_edits_count_as_content() {
         let ok = "diff --git a/public/sitemap-legacy.xml b/public/sitemap-legacy.xml\n--- a/public/sitemap-legacy.xml\n+++ b/public/sitemap-legacy.xml\n@@ -225 +225 @@\n-    <lastmod>2026-08-25T14:34:26Z</lastmod>\n+    <lastmod>2026-11-03T02:00:00Z</lastmod>\n";
-        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
         assert!(!verdict(ok, &r).iter().any(|b| b.text.contains("sitemap")), "{:?}", verdict(ok, &r).iter().map(|b| b.text.clone()).collect::<Vec<_>>());
         let bad = ok.replace("+    <lastmod>2026-11-03T02:00:00Z</lastmod>", "+<script>alert(1)</script>");
         assert!(verdict(&bad, &r).iter().any(|b| b.text.contains("sitemap-legacy.xml")));
@@ -1921,7 +1960,7 @@ mod tests {
         assert_eq!(outs, vec!["fee-changes.json".to_string(), "withdrawal-fees.json".to_string()]);
         let rows: String = (0..450).map(|i| format!("-  \"a{i}\": 1,\n+  \"a{i}\": 2,\n")).collect();
         let diff = format!("diff --git a/site/src/data/withdrawal-fees.json b/site/src/data/withdrawal-fees.json\n--- a/site/src/data/withdrawal-fees.json\n+++ b/site/src/data/withdrawal-fees.json\n@@ -1 +1 @@\n{rows}");
-        let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g, build_scripts: None };
+        let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g, build_scripts: None, deps: &[] };
         assert!(!verdict(&diff, &r(&[])).is_empty());
         let g: &'static [String] = Box::leak(outs.into_boxed_slice());
         assert!(verdict(&diff, &r(g)).is_empty());
@@ -1937,7 +1976,7 @@ mod tests {
         let b = build_scripts(&dir, &["npm run check".into()]).unwrap();
         assert_eq!(b, vec!["check.mjs".to_string(), "postbuild.mjs".to_string(), "rules.mjs".to_string()]);
         let b: &'static [String] = Box::leak(b.into_boxed_slice());
-        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b) };
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b), deps: &[] };
         let d = |file: &str, line: &str| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -39 +39,2 @@\n+{line}\n");
         // 放截图用的辅助脚本里加一条说明文字：放行
         assert!(verdict(&d("scripts/place-shots.mjs", "  'binance-register-form': '币安网页版注册首屏（2026 年 11 月）',"), &r).is_empty());
@@ -1962,7 +2001,7 @@ mod tests {
     #[test]
     fn new_files_are_checked_for_foreign_referrals() {
         let known: &'static [String] = Box::leak(vec!["/go/binance".to_string()].into_boxed_slice());
-        let rules = |k: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: k, generated: &[], build_scripts: None };
+        let rules = |k: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: k, generated: &[], build_scripts: None, deps: &[] };
         let new = |body: &str| format!("diff --git a/src/content/new.md b/src/content/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/new.md\n@@ -0,0 +1 @@\n+{body}\n");
         let kinds = |v: Vec<Block>| v.into_iter().map(|b| b.kind).collect::<Vec<_>>();
         // 新文章里带了别人的推荐链接：拦；用站点本来就有的（known）：不拦
@@ -1983,14 +2022,14 @@ mod tests {
         assert!(v(&d("public/promo.html", &["<img src=x onerror=\"fetch('https://e')\">"])).iter().any(|r| r.contains("插入脚本")));
         assert!(v(&d("public/logo.svg", &["<a href=\"javascript:alert(1)\">"])).iter().any(|r| r.contains("插入脚本")));
         // iframe 按「直接插入 HTML」（html 类，方案可以放行）
-        assert_eq!(verdict(&d("src/content/a.md", &["<iframe src=\"https://www.youtube.com/embed/x\"></iframe>"]), &Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None }).len(), 0);
+        assert_eq!(verdict(&d("src/content/a.md", &["<iframe src=\"https://www.youtube.com/embed/x\"></iframe>"]), &Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] }).len(), 0);
         // .mdx 的 import / export 是构建期代码
         assert!(v(&d("src/content/a.mdx", &["export const d = await (await import('node:' + 'fs')).promises.readFile('/etc/hosts')"])).iter().any(|r| r.contains("动态加载代码")));
         // 结构化数据的 <script type="application/ld+json"> 不算脚本
         assert!(!v(&d("src/layouts/Base.astro", &["<script type=\"application/ld+json\" set:html={JSON.stringify(ld)} />"])).iter().any(|r| r.contains("插入脚本")));
         assert!(v(&d("public/a.html", &["<script type=\"application/ld+json\" src=\"https://evil/x.js\"></script>"])).iter().any(|r| r.contains("插入脚本")));
         // 模板里的内联 <script> 按「直接插入 HTML」（放开档放行）；引外站脚本任何等级都拦；正文「JavaScript: 基础」不算
-        let open = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
+        let open = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
         assert!(verdict(&d("src/layouts/Base.astro", &["<script>document.body.dataset.ready = '1'</script>"]), &open).is_empty());
         assert!(v(&d("src/layouts/Base.astro", &["<script>x()</script>"])).iter().any(|r| r.contains("内联脚本")));
         assert!(v(&d("src/layouts/Base.astro", &["<script src=\"https://cdn.example/x.js\"></script>"])).iter().any(|r| r.contains("插入脚本")));
@@ -2029,7 +2068,7 @@ mod tests {
         assert!(v(&j).iter().any(|r| r.contains("内部说明")));
         // 构建链里的脚本不管在哪个目录都拦；env 在放开档也不放行
         let b: &'static [String] = Box::leak(vec!["build.mjs".to_string()].into_boxed_slice());
-        let r = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b) };
+        let r = Rules { tier: "open", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b), deps: &[] };
         assert!(verdict(&d("tools/build.mjs", &["const x = 1"]), &r).iter().any(|b| b.text.contains("不自动改")));
         assert!(!r.lets("env"));
         // 等级收紧时清掉放行
@@ -2047,7 +2086,7 @@ mod tests {
 
     #[test]
     fn strictness_tiers_and_allowed_kinds() {
-        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None };
+        let rules = |tier: &'static str, allow: &'static [String]| Rules { tier, code: if tier == "strict" { "review" } else { "all" }, allow, new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
         let d = |file: &str, minus: &[&str], plus: &[&str]| {
             let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
             format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1 @@\n{body}")

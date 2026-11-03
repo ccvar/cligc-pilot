@@ -1709,6 +1709,8 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     let commands: Vec<String> = std::iter::once(site.build.build.clone()).chain(site.build.checks.iter().cloned()).collect();
     let scripts = crate::managed::build_scripts(&site.app_dir(&wt), &commands);
     rules.build_scripts = scripts.as_deref();
+    let deps = crate::managed::declared_deps(&site.app_dir(&wt));
+    rules.deps = &deps;
     let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
