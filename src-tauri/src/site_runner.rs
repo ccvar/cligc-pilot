@@ -463,6 +463,9 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
     let st = ctx.state();
     let site = st.sites.get(site_id)?;
     let job = st.site_jobs.start(Some(ctx.app.clone()), site_id, &format!("ops:{task}"), task_label(task), steps_for(task))?;
+    if let Some(ids) = item_id.as_deref().filter(|s| !s.is_empty() && *s != "hold") {
+        job.set_items(ids.split(',').map(str::to_string).collect());
+    }
     // 一个站点同时只有一个作业，按站点记就够；没指定的作业也要清掉，免得用上一次的
     set_effort_override(site_id, pick.as_ref().map(|(_, _, e)| e.clone()).unwrap_or_default());
     set_model_override(site_id, pick.map(|(b, m, _)| (b, m)));

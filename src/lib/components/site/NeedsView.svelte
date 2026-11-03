@@ -40,6 +40,14 @@
     for (const x of stuck) m.set(x.why, (m.get(x.why) ?? 0) + 1);
     return [...m].sort((a, b) => b[1] - a[1]).map(([w, n]) => `${n} 个${w.replace(/^这个站点的?/, '')}`).join(' · ');
   });
+  // 站点作业正在处理这一条（点了上线、重新检查，或调度自动接着跑）：按钮换成「处理中」，免得以为没反应再点一次
+  const BUSY_LABEL: Record<string, string> = { 'ops:accept': '上线中', 'ops:accept_many': '合并上线中', 'ops:recheck': '重新检查中', 'ops:work': 'AI 改动中', 'ops:batch': 'AI 改动中', 'ops:rollback': '回滚中', 'ops:resolve': '处理中' };
+  function busyOf(siteId: string, itemId: string) {
+    const j = sites.jobs[siteId];
+    if (j?.status !== 'running' || !j.items?.includes(itemId)) return null;
+    const step = j.steps.find((s) => s.status === 'running');
+    return { label: BUSY_LABEL[j.kind] ?? '处理中', step: step?.label ?? '' };
+  }
   const kindOf = (i: OpsItem) => (i.status === 'proposed' ? 'proposed' : i.status === 'failed' ? 'failed' : 'attention');
   const GROUPS = [
     { k: 'proposed', l: '待你确认', c: 'warn', tip: '判定不能自动上线的改动：新页面待审、改到推荐 / 邀请内容、超出每日上限等。看过改动后上线或驳回。' },
@@ -153,11 +161,12 @@
                 {@const site = siteOf(x.site_id)}
                 {@const isOpen = open.has(i.id)}
                 {@const w = why(i)}
+                {@const busy = busyOf(x.site_id, i.id)}
                 <li class:open={isOpen}>
                   <button class="row" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
                     {#if !sel}<span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>{/if}
                     <span class="tt">{i.opp.title}</span>
-                    {#if conflicts.has(i.id)}<span class="pill warn cf" data-tip="和主分支有冲突，要让 AI 在最新代码上重改">有冲突</span>{/if}
+                    {#if busy}<span class="pill run cf"><span class="spin"></span>{busy.label}</span>{:else if conflicts.has(i.id)}<span class="pill warn cf" data-tip="和主分支有冲突，要让 AI 在最新代码上重改">有冲突</span>{/if}
                     <svg class="chev" class:up={isOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
                   {#if isOpen}
@@ -169,7 +178,9 @@
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page || i.new_pages?.length}<span class="mono url">{i.opp.page || i.new_pages?.[0]}</span>{/if}
                       <div class="acts">
-                        {#if site}
+                        {#if site && busy}
+                          <button class="btn tiny primary" disabled><span class="spin"></span>{busy.label}{busy.step ? ` · ${busy.step}` : ''}</button>
+                        {:else if site}
                           {#if i.status === 'proposed'}
                             {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />看改动</button>{/if}
                             {#if conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} data-tip="先试着用 git 把这一版直接接到最新的主分支上（不花钱）；接不上再让 AI 照着这一版在最新代码上重做。好了照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>

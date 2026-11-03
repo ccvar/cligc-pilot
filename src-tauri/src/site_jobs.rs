@@ -40,6 +40,8 @@ pub struct JobState {
     pub log: VecDeque<String>,
     pub url: String,
     pub error: String,
+    /// 这个作业在处理的待处理条目（上线、重新检查…）：前端据此把那几条的按钮换成「处理中」
+    pub items: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -115,6 +117,7 @@ impl Jobs {
             log: VecDeque::new(),
             url: String::new(),
             error: String::new(),
+            items: Vec::new(),
         };
         g.insert(site_id.into(), Slot { state: state.clone(), cancel: cancel.clone(), pid: pid.clone(), conv: Default::default() });
         drop(g);
@@ -253,6 +256,10 @@ impl Job {
                 st.detail = detail;
             }
         });
+    }
+
+    pub fn set_items(&self, items: Vec<String>) {
+        self.with(|s| s.items = items);
     }
 
     /// 批量里换下一条之前：从 `from` 这一步起都回到「未开始」，步骤条不再挂着上一条的勾和转圈

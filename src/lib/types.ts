@@ -299,6 +299,8 @@ export interface SiteJob {
   log: string[];
   url: string;
   error: string;
+  /** 这个作业在处理的待处理条目 id（上线、重新检查…） */
+  items?: string[];
 }
 export interface DeployRecord {
   id: string;

@@ -115,7 +115,7 @@ export async function acceptItem(site: Site, item: OpsItem) {
     : '标记为已处理';
   const then = item.branch && site.deploy.mode !== 'none' ? (site.deploy.mode === 'direct' || site.deploy.mode === 'workers' ? '，然后构建并上线' : '，Cloudflare 会自动构建上线') : '';
   if (!(await confirmDialog(`确认这条改动：${what}${then}？`, { title: '确认改动', kind: 'info', confirmText: '确认' }))) return;
-  try { await invoke('queue_accept', { id: site.id, itemId: item.id }); }
+  try { await invoke('queue_accept', { id: site.id, itemId: item.id }); if (item.branch) say(`${site.name} 开始合并上线，合并后这条会从待处理里移走，上线进度在站点的作业里`); }
   catch (e) { say(String(e), 'err'); }
 }
 // ---- 算网站内容的代码文件（站点级放行清单）----
