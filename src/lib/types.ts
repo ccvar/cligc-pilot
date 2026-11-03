@@ -585,6 +585,8 @@ export interface ManagedSite {
   /** 失败的几条（最新的在前，最多 3 条）：[标题, 原因第一行] */
   failed_why: [string, string][];
   plan_date: string; plan_count: number; job: string;
+  /** 站点自己的构建 / 检查没通过（每日体检）：托管先不派 AI 任务 */
+  build_broken?: string;
   /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
   next_task: string; next_at: number;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };

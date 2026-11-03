@@ -127,6 +127,7 @@
         </span>
         <button class="btn tiny quiet st-see" onclick={() => openSite(x.id, 'queue', 'open')} data-tip="打开任务队列看这些任务">查看</button>
         {#if x.kind === 'site'}<button class="btn tiny" onclick={() => onturnon(x.id)} data-tip="只打开这个站点的托管，排着的任务会接着做"><Icon name="play" size={10} />打开托管</button>{/if}
+        {#if x.kind === 'build'}<button class="btn tiny" onclick={() => openSite(x.id, 'settings')}><Icon name="sliders" size={11} />去站点设置</button>{/if}
         {#if x.kind === 'budget' && x.group}<button class="btn tiny" onclick={() => onbudget(x.group)}><Icon name="gauge" size={11} />调整额度</button>{/if}
         {#if x.hasPlan}<button class="ic-btn ic-sm st-x" onclick={() => clearStuck(x)} aria-label="清除计划" data-tip="清除计划：拿掉这些还没开始的任务"><Icon name="x" size={13} /></button>{/if}
       </div>

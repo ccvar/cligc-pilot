@@ -107,6 +107,13 @@ pub fn load_state(site_dir: &Path) -> OpsState {
     std::fs::read(state_path(site_dir)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
+/// 站点自己的构建 / 检查没通过（最近一次每日体检，不含 AI 的改动）：返回原因。站点设置在那之后改过的不算（等下次体检再判断）。
+/// 这时 AI 改什么都会卡在同一步：白花额度、还记成 AI 的失败，托管先不派任务。
+pub fn site_build_broken(site: &Site, site_dir: &Path) -> Option<String> {
+    let r = load_state(site_dir).runs.into_iter().find(|r| r.task == "health" && r.finished > 0)?;
+    (!r.ok && r.error.starts_with("构建或检查没通过") && r.finished > site.updated_at).then(|| r.error.trim_start_matches("构建或检查没通过：").lines().next().unwrap_or("").to_string())
+}
+
 fn save_state(site_dir: &Path, s: &OpsState) {
     if let Ok(raw) = serde_json::to_vec_pretty(s) {
         let tmp = state_path(site_dir).with_extension("json.tmp");
@@ -677,6 +684,13 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             if !ids.is_empty() {
                 job.line(&format!("{} 条上次因为中断、环境或模型问题失败的，放回排队重做一次", ids.len()));
             }
+        }
+    }
+    if rules.is_some() {
+        if let Some(err) = site_build_broken(site, &site_dir) {
+            let why = format!("站点自己的构建 / 检查没通过（每日体检：{err}），AI 改什么都会卡在这一步，这一轮先不让 AI 改；在站点设置里修好构建或检查命令后会接着做");
+            job.line(&why);
+            return (0, vec![why], None);
         }
     }
     // 已经有改好的条目因为本地文件夹不干净上不了线：先别让 AI 接着改新的，不然越堆越多、白花额度；文件夹干净了调度会先把卡住的接着上线
