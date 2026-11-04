@@ -42,6 +42,8 @@ pub struct Spec {
     pub primary: Vec<String>,
     /// 上线前同一批页面已经有的问题（路径 → 问题）：上线后只报新出现的，本来就有的不算这次改动的（见 `before`）
     pub before: std::collections::HashMap<String, Vec<String>>,
+    /// 托管上线和复查：只报能确定是这次改动造成的问题（已有页面没有上线前的记录时分不清，不报）
+    pub only_new: bool,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -235,9 +237,10 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         let p = path_of(u);
         let main = spec.new_pages.iter().chain(&spec.primary).any(|x| same_page(x, u));
         let mut issues = page_issues(f, u, main);
-        // 上线前这一页就有的问题不算这次改动的（旧文本来就 noindex、sitemap 本来就没有标题…）
-        if let Some(old) = spec.before.get(&p) {
-            issues.retain(|x| !old.contains(x));
+        let is_new = spec.new_pages.iter().any(|x| same_page(x, u));
+        let unknown = caused_by_this(spec, &p, is_new, &mut issues);
+        if !unknown.is_empty() {
+            job.line(&format!("{p}：{}。上线前没有这一页的记录，分不清是不是这次造成的，不算问题", unknown.join("；")));
         }
         rep.checks.push(Check { label: if main { format!("{p} 标题、描述、canonical") } else { format!("{p} 标题和描述") }, ok: issues.is_empty(), detail: issues.join("；"), hard: false });
         if !issues.is_empty() {
@@ -364,6 +367,17 @@ fn page_issues(f: &Fetched, u: &str, main: bool) -> Vec<String> {
 
 /// 上线前先查一遍这次要验收的已有页面（新页面上线前还不存在，不查），记下本来就有的问题：路径 → 问题。
 /// 上线后的验收只报新出现的，不把页面原来的状态算成这次改动的问题。打不开、被防火墙拦住的页面不记。
+/// 只留下这次改动造成的问题，返回分不清的那些（已有页面没有上线前的记录）。
+/// 上线前这一页就有的问题不算这次改动的（旧文本来就 noindex、sitemap 本来就没有标题…）。
+fn caused_by_this(spec: &Spec, page: &str, is_new: bool, issues: &mut Vec<String>) -> Vec<String> {
+    match spec.before.get(page) {
+        Some(old) => issues.retain(|x| !old.contains(x)),
+        None if spec.only_new && !is_new => return std::mem::take(issues),
+        None => {}
+    }
+    Vec::new()
+}
+
 pub async fn snapshot(spec: &Spec) -> std::collections::HashMap<String, Vec<String>> {
     let mut out = std::collections::HashMap::new();
     if spec.domain.trim().is_empty() {
@@ -378,15 +392,14 @@ pub async fn snapshot(spec: &Spec) -> std::collections::HashMap<String, Vec<Stri
         }
     }
     for u in &urls {
+        // 打不开、被防火墙拦住：没有记录。其余的都记（没问题的记空），「上线前没问题」和「不知道」不是一回事
         let Ok(f) = fetch(&client, u).await else { continue };
-        if !(200..300).contains(&f.status) || f.challenged || hidden_page(&f.body) || !is_html(&f.body) {
+        if f.challenged {
             continue;
         }
+        let checkable = (200..300).contains(&f.status) && !hidden_page(&f.body) && is_html(&f.body);
         let main = spec.primary.iter().any(|x| same_page(x, u));
-        let issues = page_issues(&f, u, main);
-        if !issues.is_empty() {
-            out.insert(path_of(u), issues);
-        }
+        out.insert(path_of(u), if checkable { page_issues(&f, u, main) } else { Vec::new() });
     }
     out
 }
@@ -1009,5 +1022,38 @@ mod live {
             eprintln!("{} {} {}", if c.ok { "✓" } else { "✗" }, c.label, c.detail);
         }
         eprintln!("hard={:?}\nsoft={:?}\npassed={:?}\n{:?}", r.hard, r.soft, r.passed, t.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod attribution_tests {
+    use super::*;
+    #[test]
+    fn only_problems_this_change_caused_are_reported() {
+        let noindex = "设置了 noindex，搜索引擎不会收录".to_string();
+        let mut spec = Spec { only_new: true, ..Default::default() };
+        spec.before.insert("/old/".into(), vec![noindex.clone()]);
+        spec.before.insert("/clean/".into(), Vec::new());
+        // 上线前就有：不报
+        let mut i = vec![noindex.clone()];
+        assert!(caused_by_this(&spec, "/old/", false, &mut i).is_empty());
+        assert!(i.is_empty());
+        // 上线前没问题、现在有：是这次造成的
+        let mut i = vec![noindex.clone()];
+        assert!(caused_by_this(&spec, "/clean/", false, &mut i).is_empty());
+        assert_eq!(i, vec![noindex.clone()]);
+        // 没有上线前的记录：分不清，不报
+        let mut i = vec![noindex.clone()];
+        assert_eq!(caused_by_this(&spec, "/unknown/", false, &mut i), vec![noindex.clone()]);
+        assert!(i.is_empty());
+        // 新页面本来就没有「上线前」，有问题都是这次的
+        let mut i = vec![noindex.clone()];
+        assert!(caused_by_this(&spec, "/brand-new/", true, &mut i).is_empty());
+        assert_eq!(i.len(), 1);
+        // 手动上线不做归因，照旧全报
+        let plain = Spec::default();
+        let mut i = vec![noindex.clone()];
+        assert!(caused_by_this(&plain, "/unknown/", false, &mut i).is_empty());
+        assert_eq!(i.len(), 1);
     }
 }

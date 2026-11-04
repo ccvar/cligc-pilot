@@ -2162,6 +2162,7 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
         let pages: Vec<String> = spec.primary.iter().chain(&spec.pages).map(|u| path_of(u)).collect();
         save_before(&ctx.site_dir(&site.id), &snap, &pages);
         spec.before = snap;
+        spec.only_new = true;
     }
     let st = ctx.state();
     let site_dir = ctx.site_dir(&site.id);
@@ -3648,6 +3649,7 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         let mut spec = spec_for(site, &i, false);
         spec.snippets.clear();
         spec.before = load_before(&site_dir);
+        spec.only_new = true;
         let rep = crate::site_verify::run(&spec, job, true).await;
         let stage = i.watch_stage;
         let when = if stage == 0 { "上线 1 小时后" } else { "上线 24 小时后" };
