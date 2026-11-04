@@ -52,8 +52,13 @@ pub struct SchemaIssue {
     pub problem: String,
 }
 
+/// 体检规则的版本：改了算什么问题就加 1，旧版本的报告会先重查（站点的体检一周才定时跑一次）。
+pub const AUDIT_V: u32 = 1;
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AuditReport {
+    #[serde(default)]
+    pub v: u32,
     pub checked_at: u64,
     pub pages: usize,
     pub images: usize,
@@ -201,6 +206,11 @@ fn looks_like_article(html: &str, low: &str) -> bool {
     })
 }
 
+/// 页面自己声明了发布日期（meta 的 article:published_time）
+fn declares_date(html: &str, low: &str) -> bool {
+    tags(html, low, "meta").iter().any(|m| attr(m, "property").or_else(|| attr(m, "name")).is_some_and(|p| p.eq_ignore_ascii_case("article:published_time")))
+}
+
 /// 一个页面的结构化数据问题
 fn schema_problems(html: &str, low: &str) -> (bool, bool, Vec<String>) {
     let blocks = json_ld(html, low);
@@ -222,8 +232,12 @@ fn schema_problems(html: &str, low: &str) -> (bool, bool, Vec<String>) {
         if matches!(t.as_str(), "HowTo" | "Review" | "Report") {
             continue;
         }
+        // 日期是 Google 的建议项，不是必填：页面本来就没有日期（链接页、存档页）时不算问题，不然只会逼 AI 找个差不多的日期填上。
+        // 页面声明了日期、结构化数据却漏了，才算
+        let date_known = declares_date(html, low);
         let missing: Vec<&str> = [("headline", "标题 headline"), ("datePublished", "发布日期 datePublished"), ("author", "作者 author"), ("image", "图片 image")]
             .into_iter()
+            .filter(|(k, _)| *k != "datePublished" || date_known)
             .filter(|(k, _)| a.get(*k).is_none_or(|v| v.is_null() || v.as_str().is_some_and(|s| s.trim().is_empty())))
             .map(|(_, l)| l)
             .collect();
@@ -253,7 +267,7 @@ fn without_scripts(html: &str, low: &str) -> String {
 pub fn audit(out: &Path, domain: &str) -> AuditReport {
     let host = crate::revenue::norm_host(domain);
     let hosts = vec![host.clone()];
-    let mut r = AuditReport { llms: if out.join("llms.txt").is_file() { "own".into() } else { "pilot".into() }, ..Default::default() };
+    let mut r = AuditReport { v: AUDIT_V, llms: if out.join("llms.txt").is_file() { "own".into() } else { "pilot".into() }, ..Default::default() };
     let mut checked: std::collections::HashMap<PathBuf, Option<u64>> = std::collections::HashMap::new();
     for (file, html) in crate::site_make::real_pages(out) {
         let page = crate::site_make::page_url(out, &file);
@@ -538,6 +552,23 @@ mod still_has_tests {
 }
 
 #[cfg(test)]
+mod date_tests {
+    use super::*;
+    fn problems(html: &str) -> Vec<String> {
+        schema_problems(html, &html.to_ascii_lowercase()).2
+    }
+    #[test]
+    fn a_missing_date_only_counts_when_the_page_has_one() {
+        let ld = r#"<script type="application/ld+json">{"@type":"Article","headline":"h","author":"a","image":"i"}</script>"#;
+        // 链接页、存档页：页面本来没有日期，不逼着填
+        assert!(problems(&format!(r#"<html><head><meta property="og:type" content="article">{ld}</head></html>"#)).is_empty());
+        // 页面声明了日期、结构化数据漏了
+        let p = problems(&format!(r#"<html><head><meta property="article:published_time" content="2026-01-01">{ld}</head></html>"#));
+        assert_eq!(p, vec!["Article 缺 发布日期 datePublished".to_string()]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -582,7 +613,7 @@ mod tests {
         assert_eq!(r.article_pages, 2);
         let probs: Vec<&str> = r.schema.iter().map(|s| s.problem.as_str()).collect();
         assert!(probs.iter().any(|p| p.starts_with("结构化数据（JSON-LD）解析不了")));
-        assert!(probs.iter().any(|p| p.starts_with("Article 缺 发布日期 datePublished、作者 author、图片 image")));
+        assert!(probs.iter().any(|p| p.starts_with("Article 缺 作者 author、图片 image")), "{probs:?}");
         assert_eq!(r.llms, "pilot");
         let l = llms_txt("示例站", "www.ex.com", out);
         assert!(l.starts_with("# 示例站\n\n> 站点简介\n\n## Pages\n"));

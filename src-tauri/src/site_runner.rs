@@ -645,7 +645,8 @@ async fn scan(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> Result<String
     job.step("scan", "running", "");
     // 页面体检（结构化数据、图片）一周才定时跑一次：报告超过一天就先用最近一次上线的产物重查，
     // 别拿旧报告出任务（xtexe 拿 6 天前的报告派了「缺 datePublished」，其实早修好了）
-    if crate::page_audit::load(&site_dir).checked_at + DAY < now() {
+    let report = crate::page_audit::load(&site_dir);
+    if report.checked_at + DAY < now() || report.v < crate::page_audit::AUDIT_V {
         if let Ok(out) = crate::syndicate::built_out(&ctx.state(), site) {
             let closed = crate::page_audit::refresh(site, &site_dir, out).await;
             if closed > 0 {
@@ -852,6 +853,12 @@ async fn gone_already(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Op
     // 体检类（结构化数据、图片）看的是体检报告：报告还没有、或比这条任务还旧，不能凭它说「问题没了」；
     // 报告是新的就按清单里的页面逐个看，这些页面都没问题了才算没了
     if matches!(kind, "schema" | "img_audit") {
+        // 报告是旧规则算的：先按新规则重查，排着的任务可能已经不算问题了
+        if crate::page_audit::load(&site_dir).v < crate::page_audit::AUDIT_V {
+            if let Ok(out) = crate::syndicate::built_out(&ctx.state(), site) {
+                crate::page_audit::refresh(site, &site_dir, out).await;
+            }
+        }
         let r = crate::page_audit::load(&site_dir);
         let evidence = std::iter::once(item.opp.evidence.as_str()).chain(item.also.iter().map(|o| o.evidence.as_str())).collect::<Vec<_>>().join("\n");
         if r.checked_at <= item.created_at || crate::page_audit::still_has(&r, kind, &evidence) {
