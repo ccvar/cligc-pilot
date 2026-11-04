@@ -620,7 +620,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
 
 async fn refresh_data(ctx: &Ctx, site: &Site, job: &Job) {
     job.step("data", "running", "");
-    let meta = crate::site_data::refresh(site, &ctx.state().conns, &ctx.site_dir(&site.id), false).await;
+    let meta = crate::site_data::refresh(site, &ctx.state().conns, &ctx.state().sites, &ctx.site_dir(&site.id), false).await;
     let errs: Vec<String> = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)]
         .iter()
         .filter(|(_, e)| !e.is_empty())
@@ -860,7 +860,7 @@ async fn gone_already(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Op
         job.line(&format!("「{}」：最新的体检里这些页面已经没有问题了，不交给 AI", item.opp.title));
         return Some("动手前按最新的体检确认了一下，这些页面的问题已经修好了，没有交给 AI".into());
     }
-    let meta = crate::site_data::refresh(site, &ctx.state().conns, &site_dir, false).await;
+    let meta = crate::site_data::refresh(site, &ctx.state().conns, &ctx.state().sites, &site_dir, false).await;
     if !crate::site_data::source_ok(kind, &meta) {
         return None;
     }
@@ -4015,7 +4015,7 @@ pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
     }).collect();
     crate::site_data::mark_queued(&list.iter().map(|s| s.id.clone()).collect::<Vec<_>>());
     for site in list {
-        let meta = crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&site.id), true).await;
+        let meta = crate::site_data::refresh(&site, &st.conns, &st.sites, &st.sites.data_dir(&site.id), true).await;
         let errors: Vec<String> = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)].iter().filter(|(_, e)| !e.is_empty()).map(|(l, e)| format!("{l}：{e}")).collect();
         let _ = app.emit("site-data", serde_json::json!({ "site_id": site.id, "errors": errors }));
     }

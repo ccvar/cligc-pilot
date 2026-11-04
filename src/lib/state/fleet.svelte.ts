@@ -7,6 +7,7 @@ import { ops } from './ops.svelte.js';
 import { brainLabel, brainTitle, modelIcon } from './models.js';
 import { launcher } from './launcher.svelte.js';
 import { effortLabel } from '$lib/effortStops';
+import { isNoAccess } from '$lib/friendlyError';
 
 export type SiteFilter = 'all' | 'attention' | 'unsafe' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
@@ -43,11 +44,10 @@ export function expiring(r: SiteRow): boolean {
 }
 // 数据源报「没有权限」（连接的账号没有这个站点的 Search Console / GA4 权限，多半是还没在那边添加、验证这个站点）：
 // 算「没接上」，不算出错——不标红、不进「需要你关注」，在「数据源没接上」里列出来
-const NO_ACCESS = /没有权限|sufficient permission|not have permission|permission_denied/i;
 /** 真正的数据源错误（接上了但拉数据出错） */
-export const dataErrors = (r: SiteRow) => r.summary.errors.filter((e) => !NO_ACCESS.test(e));
+export const dataErrors = (r: SiteRow) => r.summary.errors.filter((e) => !isNoAccess(e));
 /** 没权限的数据源（「Search Console：没有权限：…」这样的原文） */
-export const noAccess = (r: SiteRow) => r.summary.errors.filter((e) => NO_ACCESS.test(e));
+export const noAccess = (r: SiteRow) => r.summary.errors.filter(isNoAccess);
 /** 没权限的数据源短名：GSC / GA4 / Bing */
 export const noAccessNames = (r: SiteRow) => noAccess(r).map((e) => { const l = e.split('：')[0]; return l === 'Search Console' ? 'GSC' : l; });
 

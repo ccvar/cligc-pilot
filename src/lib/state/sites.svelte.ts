@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { Connection, Dashboard, CacheMeta, Site, SiteImportPreview, SiteJob, SiteStatus, DeployRecord, PagesDeployment, PagesProject, GhRepo } from '$lib/types';
 import { app, say, confirmDialog, refreshConvos } from './app.svelte.js';
-import { friendly } from '$lib/friendlyError';
+import { friendly, isNoAccess } from '$lib/friendlyError';
 import { connections, selectConn } from './connections.svelte.js';
 
 export const SITE_PREFIX = 'site:';
@@ -260,8 +260,10 @@ export async function refreshSiteData(id: string, force = false) {
   try {
     const meta = await invoke<CacheMeta>('refresh_site_data', { id, force });
     const errs = [meta.ga4.error && `GA4：${meta.ga4.error}`, meta.gsc.error && `Search Console：${meta.gsc.error}`, meta.bing.error && `Bing：${meta.bing.error}`].filter(Boolean);
-    if (force && errs.length) say(errs.join('\n'), 'err');
-    else if (force) say('数据已更新');
+    // 账号看不到这个站点不是同步出错：页面上有灰色提示说怎么接上，这里不弹红
+    const hard = errs.filter((e) => !isNoAccess(e as string));
+    if (force && hard.length) say(hard.join('\n'), 'err');
+    else if (force) say(errs.length ? '数据已更新，还有数据源没接入' : '数据已更新');
     await loadDashboard(id);
   } catch (e) { say(String(e), 'err'); }
   finally { sites.dataBusy = { ...sites.dataBusy, [id]: false }; }

@@ -41,6 +41,13 @@ test('git 身份验证 / 文件不存在 / 没权限 / 钥匙串 / wrangler', ()
   assert.match(explainError('spawn wrangler ENOENT').text, /还没装 wrangler/);
 });
 
+test('Google 数据源没权限不说成文件夹权限', () => {
+  const x = explainError("Search Console：没有权限：User does not have sufficient permission for site 'https://bgvar.com/'.");
+  assert.match(x.text, /Google 账号/);
+  assert.doesNotMatch(x.text, /文件夹/);
+  assert.match(explainError('Permission denied (os error 13)').text, /文件夹/);
+});
+
 test('中文前缀保留，只翻译后面的具体报错', () => {
   const x = explainError('读取仓库失败：GitHub 返回 401');
   assert.ok(x.known);

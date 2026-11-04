@@ -97,6 +97,11 @@ const RULES: { test: (m: string) => boolean; text: (m: string) => string }[] = [
     test: (m) => /No such file or directory|os error 2\b|ENOENT|文件夹不存在|目录不存在/i.test(m),
     text: () => '找不到这个文件或文件夹，可能已被移走、改名或删掉。检查路径后再试。',
   },
+  // Google 数据源没权限（不是本机文件夹的事）
+  {
+    test: (m) => /sufficient permission|not have permission|(Search Console|GA4)：没有权限|^没有权限：请确认已把服务账号/i.test(m),
+    text: () => '这个 Google 账号没有这个站点的数据权限。到 Search Console / GA4 里验证站点或把账号加进去，再同步一次。',
+  },
   // 没权限
   {
     test: (m) => /Permission denied|os error 13\b|EACCES|EPERM|Operation not permitted|权限不足|没有权限/i.test(m),
@@ -108,6 +113,10 @@ const RULES: { test: (m: string) => boolean; text: (m: string) => string }[] = [
     text: () => '磁盘满了，写不进去。清出一些空间再试。',
   },
 ];
+
+/** 数据源报「没有权限」：连接的账号看不到这个站点，算「没接上」，不算出错 */
+const NO_ACCESS = /没有权限|sufficient permission|not have permission|permission_denied/i;
+export const isNoAccess = (e: string) => NO_ACCESS.test(e);
 
 /** 把原文拆成「中文前缀：具体报错」，翻译只针对具体报错那部分，前缀保留（「读取仓库失败：…」） */
 function splitPrefix(raw: string): [string, string] {

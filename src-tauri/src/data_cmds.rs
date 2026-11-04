@@ -146,7 +146,7 @@ pub async fn autodetect_data_bindings(app: tauri::AppHandle, state: tauri::State
                     crate::site_data::unqueue(&id);
                     continue;
                 };
-                crate::site_data::refresh(&site, &st.conns, &st.sites.data_dir(&id), true).await;
+                crate::site_data::refresh(&site, &st.conns, &st.sites, &st.sites.data_dir(&id), true).await;
                 let _ = app2.emit("site-data", serde_json::json!({ "site_id": id }));
             }
         });
@@ -222,7 +222,7 @@ pub fn check_all_sites_health(app: tauri::AppHandle, state: tauri::State<'_, App
 pub async fn refresh_site_data(state: tauri::State<'_, AppState>, id: String, force: bool) -> Result<crate::site_data::CacheMeta, String> {
     let site = state.sites.get(&id)?;
     let dir = state.sites.data_dir(&id);
-    Ok(crate::site_data::refresh(&site, &state.conns, &dir, force).await)
+    Ok(crate::site_data::refresh(&site, &state.conns, &state.sites, &dir, force).await)
 }
 
 #[tauri::command]

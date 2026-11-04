@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::conns::ConnStore;
 use crate::google::{self, SearchRow};
-use crate::sites::Site;
+use crate::sites::{Site, SiteStore};
 
 /// 两次自动拉取的最小间隔（打开看板 / 运营任务开始前会按需拉）。
 pub const STALE_SECS: u64 = 6 * 3600;
@@ -378,8 +378,74 @@ impl Drop for Syncing {
     }
 }
 
+async fn ga4_via(conns: &ConnStore, conn: &str, property: &str, dir: &Path) -> Result<(String, String), String> {
+    let token = google_token(conns, conn, &google::read_scopes()).await?;
+    fetch_ga4(&token, property, dir).await
+}
+
+async fn gsc_via(conns: &ConnStore, conn: &str, url: &str, dir: &Path) -> Result<(String, String), String> {
+    let token = google_token(conns, conn, &google::read_scopes()).await?;
+    fetch_gsc(&token, url, dir).await
+}
+
+/// Google 说这个账号没有这个资源的权限（`google::api` 的 403）：绑定可能已经过期，值得按域名重新找。
+fn no_access(e: &str) -> bool {
+    e.starts_with("没有权限")
+}
+
+/// 所有 Google 账号，站点现在用的排最前。
+fn google_conns(conns: &ConnStore, first: &str) -> Vec<crate::conns::Connection> {
+    let mut list: Vec<_> = conns.list().into_iter().filter(|c| c.kind == "google").collect();
+    list.sort_by_key(|c| c.id != first);
+    list
+}
+
+/// 按域名挑 Search Console 资源，跳过刚报没权限的那个。
+fn pick_gsc(sites: &[google::GscSite], domain: &str, skip: Option<&str>) -> Option<String> {
+    let rest: Vec<google::GscSite> = sites.iter().filter(|s| Some(s.url.as_str()) != skip).cloned().collect();
+    google::match_gsc_site(&rest, domain).map(|g| g.url.clone())
+}
+
+/// 绑定的资源没权限了（换了账号验证、改成了网域资源、账号被移除…）：到所有 Google 账号里按域名重新找。
+async fn find_gsc_binding(conns: &ConnStore, domain: &str, cur_conn: &str, cur_url: &str) -> Option<(String, String)> {
+    if domain.is_empty() {
+        return None;
+    }
+    for c in google_conns(conns, cur_conn) {
+        let Ok(token) = google_token(conns, &c.id, &google::read_scopes()).await else { continue };
+        let Ok(sites) = google::list_gsc_sites(&token).await else { continue };
+        if let Some(url) = pick_gsc(&sites, domain, (c.id == cur_conn).then_some(cur_url)) {
+            return Some((c.id, url));
+        }
+    }
+    None
+}
+
+/// 同上，GA4：按媒体资源里网页数据流的网址匹配域名，名字里带域名的媒体资源先查。
+async fn find_ga4_binding(conns: &ConnStore, domain: &str, cur_conn: &str, cur_prop: &str) -> Option<(String, String, String)> {
+    if domain.is_empty() {
+        return None;
+    }
+    let label = domain.trim_start_matches("www.").split('.').next().unwrap_or_default().to_lowercase();
+    for c in google_conns(conns, cur_conn) {
+        let Ok(token) = google_token(conns, &c.id, &google::read_scopes()).await else { continue };
+        let Ok(mut props) = google::list_ga4_properties(&token).await else { continue };
+        props.sort_by_key(|p| !p.name.to_lowercase().contains(&label));
+        for p in props {
+            if c.id == cur_conn && p.property == cur_prop {
+                continue;
+            }
+            let hosts = google::ga4_stream_hosts(&token, &p.property).await.unwrap_or_default();
+            if hosts.iter().any(|h| google::same_host(h, domain)) {
+                return Some((c.id, p.property, p.name));
+            }
+        }
+    }
+    None
+}
+
 /// 拉取站点配置的全部数据源（各自独立，一个失败不影响其它）。`force=false` 时跳过 6 小时内拉过的源。
-pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: bool) -> CacheMeta {
+pub async fn refresh(site: &Site, conns: &ConnStore, store: &SiteStore, site_dir: &Path, force: bool) -> CacheMeta {
     let dir = cache_dir(site_dir);
     let mut meta = load_meta(site_dir);
     let due = |m: &SourceMeta| force || !m.error.is_empty() || now().saturating_sub(m.fetched_at) > STALE_SECS;
@@ -392,20 +458,46 @@ pub async fn refresh(site: &Site, conns: &ConnStore, site_dir: &Path, force: boo
     }
     // GA4 和 Search Console 各用各的连接（可能是两个 Google 账号）；同一条连接时令牌有缓存，不会重复换取。
     if !d.google_conn_id.is_empty() && !d.ga4_property.is_empty() && due(&meta.ga4) {
-        meta.ga4 = match google_token(conns, &d.google_conn_id, &google::read_scopes()).await {
-            Ok(token) => match fetch_ga4(&token, &d.ga4_property, &dir).await {
-                Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-                Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
-            },
+        let mut res = ga4_via(conns, &d.google_conn_id, &d.ga4_property, &dir).await;
+        if res.as_ref().is_err_and(|e| no_access(e)) {
+            if let Some((cid, prop, name)) = find_ga4_binding(conns, &site.domain, &d.google_conn_id, &d.ga4_property).await {
+                res = ga4_via(conns, &cid, &prop, &dir).await;
+                if res.is_ok() {
+                    let _ = store.update(&site.id, now(), |x| {
+                        // 换 GA4 账号时，原来跟着旧账号的 Search Console 改记成它自己的账号
+                        if x.data.gsc_conn_id.is_empty() && !x.data.gsc_site.is_empty() && x.data.google_conn_id != cid {
+                            x.data.gsc_conn_id = x.data.google_conn_id.clone();
+                        }
+                        x.data.google_conn_id = cid;
+                        x.data.ga4_property = prop;
+                        x.data.ga4_property_name = name;
+                        Ok(())
+                    });
+                }
+            }
+        }
+        meta.ga4 = match res {
+            Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
             Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
         };
     }
     if !d.gsc_conn().is_empty() && !d.gsc_site.is_empty() && due(&meta.gsc) {
-        meta.gsc = match google_token(conns, d.gsc_conn(), &google::read_scopes()).await {
-            Ok(token) => match fetch_gsc(&token, &d.gsc_site, &dir).await {
-                Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-                Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
-            },
+        let mut res = gsc_via(conns, d.gsc_conn(), &d.gsc_site, &dir).await;
+        if res.as_ref().is_err_and(|e| no_access(e)) {
+            if let Some((cid, url)) = find_gsc_binding(conns, &site.domain, d.gsc_conn(), &d.gsc_site).await {
+                res = gsc_via(conns, &cid, &url, &dir).await;
+                if res.is_ok() {
+                    let _ = store.update(&site.id, now(), |x| {
+                        if x.data.google_conn_id.is_empty() { x.data.google_conn_id = cid.clone(); }
+                        x.data.gsc_conn_id = if x.data.google_conn_id == cid { String::new() } else { cid };
+                        x.data.gsc_site = url;
+                        Ok(())
+                    });
+                }
+            }
+        }
+        meta.gsc = match res {
+            Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
             Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
         };
     }
@@ -823,6 +915,31 @@ pub fn tool_prompt(data_dir: &Path, site_dir: &Path) -> String {
         js = js.to_string_lossy(),
         cache = cache.to_string_lossy(),
     )
+}
+
+#[cfg(test)]
+mod rebind_tests {
+    use super::*;
+    use crate::google::GscSite;
+    #[test]
+    fn a_stale_binding_is_replaced_by_what_the_account_can_really_see() {
+        let g = |u: &str| GscSite { url: u.into(), permission: "siteOwner".into() };
+        // 还是旧地址：不算找到（不然会一直拿同一个资源重试）
+        assert_eq!(pick_gsc(&[g("https://bgvar.com/")], "bgvar.com", Some("https://bgvar.com/")), None);
+        // 同账号改成了网域资源
+        let both = [g("https://bgvar.com/"), g("sc-domain:bgvar.com")];
+        assert_eq!(pick_gsc(&both, "bgvar.com", Some("https://bgvar.com/")).as_deref(), Some("sc-domain:bgvar.com"));
+        // 另一个账号下同样的地址（不跳过）
+        assert_eq!(pick_gsc(&[g("https://bgvar.com/")], "bgvar.com", None).as_deref(), Some("https://bgvar.com/"));
+        // 别的站点的资源不会被认错
+        assert_eq!(pick_gsc(&[g("sc-domain:other.com")], "bgvar.com", None), None);
+    }
+    #[test]
+    fn only_a_403_counts_as_a_stale_binding() {
+        assert!(no_access("没有权限：User does not have sufficient permission for site"));
+        assert!(!no_access("对应的 Google API 还没启用：x"));
+        assert!(!no_access("Google 凭据无效或已过期"));
+    }
 }
 
 #[cfg(test)]

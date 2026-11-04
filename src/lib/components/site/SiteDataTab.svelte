@@ -13,6 +13,7 @@
   import GaMark from '$lib/components/icons/GaMark.svelte';
   import { ago as agoTs, full, num, pct as pctF, delta as dlt } from './fmt';
   import { sites, loadDashboard, refreshSiteData } from '$lib/state/sites.svelte.js';
+  import { isNoAccess } from '$lib/friendlyError';
 
   let { site }: { site: Site } = $props();
   const d = $derived(sites.dash[site.id]);
@@ -73,8 +74,8 @@
       <button class="ic-btn" onclick={() => refreshSiteData(site.id, true)} disabled={busy} aria-label="同步数据" data-tip={busy ? '同步中…' : '同步数据：从 Search Console、GA4 和 Bing 重新拉取'}>{#if busy}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if}</button>
     </div>
     <!-- 只显示还接着的数据源的错误（解绑后上次同步留下的报错不再挂着） -->
-    {#if site.data.gsc_site && d?.meta.gsc.error}<div class="err-note src"><GscMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}
-    {#if site.data.ga4_property && d?.meta.ga4.error}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}
+    {#if site.data.gsc_site && d?.meta.gsc.error}{#if isNoAccess(d.meta.gsc.error)}<div class="soft-note src"><GscMark size={13} />Search Console 没接入：已连接的 Google 账号都看不到 {site.domain}。到 Search Console 验证这个站点（或把账号加进去），再点右上角同步，Pilot 会自动接上。</div>{:else}<div class="err-note src"><GscMark size={13} />Search Console：{d.meta.gsc.error}</div>{/if}{/if}
+    {#if site.data.ga4_property && d?.meta.ga4.error}{#if isNoAccess(d.meta.ga4.error)}<div class="soft-note src"><GaMark size={13} />GA4 没接入：已连接的 Google 账号都看不到 {site.domain} 的媒体资源。在 GA4 里把账号加进去，再点右上角同步，Pilot 会自动接上。</div>{:else}<div class="err-note src"><GaMark size={13} />GA4：{d.meta.ga4.error}</div>{/if}{/if}
     {#if site.data.bing_site && d?.meta.bing.error}<div class="err-note src"><BingMark size={13} />Bing：{d.meta.bing.error}</div>{:else if !site.data.bing_site && site.data.bing_auth}<div class="soft-note src"><BingMark size={13} />Bing：已把 {site.domain} 加到 Bing，正在验证，通过后开始拉数据。</div>{/if}
 
     {#if d}
