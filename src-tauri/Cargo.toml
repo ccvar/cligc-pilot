@@ -71,3 +71,7 @@ libc = "0.2"
 windows-native-keyring-store = "1.1.0"
 # 与 Tauri 同版本（0.61.3），保证 hwnd() 的 HWND 类型一致；用于给标题栏上色（DWM）。
 windows = { version = "0.61", features = ["Win32_Graphics_Dwm", "Win32_Foundation", "Win32_System_Power"] }
+
+[dev-dependencies]
+# 测试用内存里的凭据存储，不碰真钥匙串
+keyring-core = { version = "1.0.0", features = ["sample"] }

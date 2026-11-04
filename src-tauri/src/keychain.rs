@@ -45,6 +45,14 @@ struct VaultCache {
 fn ensure_store() -> Result<(), String> {
     static INIT: OnceLock<Result<(), String>> = OnceLock::new();
     INIT.get_or_init(|| {
+        // 测试用内存里的存储：碰真钥匙串会弹授权框等人点（测试程序每次构建签名都变），也可能把测试数据写进真实保险库。
+        // 要测真钥匙串时设 PILOT_TEST_REAL_KEYCHAIN，见 keychain_roundtrip
+        #[cfg(test)]
+        if std::env::var_os("PILOT_TEST_REAL_KEYCHAIN").is_none() {
+            let store = keyring_core::sample::Store::new().map_err(|e| format!("初始化测试存储失败: {e}"))?;
+            keyring_core::set_default_store(store);
+            return Ok(());
+        }
         #[cfg(target_os = "macos")]
         let store = apple_native_keyring_store::keychain::Store::new()
             .map_err(|e| format!("初始化钥匙串存储失败: {e}"))?;
@@ -300,8 +308,19 @@ mod tests {
         assert!(!should_read_legacy(&cache, "recoverable"));
     }
 
+    /// 不设 PILOT_TEST_REAL_KEYCHAIN 时，测试里的密钥读写都走内存，不碰真钥匙串。
+    #[test]
+    fn tests_never_reach_the_real_keychain() {
+        let account = format!("self-test-{}", uuid::Uuid::new_v4());
+        set_key(&account, "memory_only").unwrap();
+        assert_eq!(get_key(&account).unwrap(), "memory_only");
+        delete_key(&account).unwrap();
+        assert!(get_key(&account).is_err());
+        assert_eq!(claude_oauth_token().unwrap(), None);
+    }
+
     /// 真实 Keychain 往返（写→读→删）。默认 ignore，本机手动跑：
-    /// cargo test -- --ignored keychain_roundtrip
+    /// PILOT_TEST_REAL_KEYCHAIN=1 cargo test -- --ignored keychain_roundtrip
     #[test]
     #[ignore]
     fn keychain_roundtrip() {
