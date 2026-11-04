@@ -53,7 +53,7 @@ pub struct SchemaIssue {
 }
 
 /// 体检规则的版本：改了算什么问题就加 1，旧版本的报告会先重查（站点的体检一周才定时跑一次）。
-pub const AUDIT_V: u32 = 1;
+pub const AUDIT_V: u32 = 2;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AuditReport {
@@ -206,6 +206,13 @@ fn looks_like_article(html: &str, low: &str) -> bool {
     })
 }
 
+/// 页面不让搜索引擎收录（meta robots 带 noindex）
+fn noindexed(html: &str, low: &str) -> bool {
+    tags(html, low, "meta").iter().any(|m| {
+        attr(m, "name").is_some_and(|n| n.eq_ignore_ascii_case("robots")) && attr(m, "content").is_some_and(|c| c.to_ascii_lowercase().contains("noindex"))
+    })
+}
+
 /// 页面自己声明了发布日期（meta 的 article:published_time）
 fn declares_date(html: &str, low: &str) -> bool {
     tags(html, low, "meta").iter().any(|m| attr(m, "property").or_else(|| attr(m, "name")).is_some_and(|p| p.eq_ignore_ascii_case("article:published_time")))
@@ -297,6 +304,10 @@ pub fn audit(out: &Path, domain: &str) -> AuditReport {
         let (has, article, problems) = schema_problems(&html, &low);
         r.schema_pages += has as usize;
         r.article_pages += article as usize;
+        // 不收录的页面（站点特意下线的旧页、存档页）结构化数据不起作用，不值得派任务去修
+        if noindexed(&html, &low) {
+            continue;
+        }
         for p in problems {
             if r.schema.len() < CAP {
                 r.schema.push(SchemaIssue { page: page.clone(), problem: p });
@@ -554,6 +565,20 @@ mod still_has_tests {
 #[cfg(test)]
 mod date_tests {
     use super::*;
+    #[test]
+    fn pages_kept_out_of_search_get_no_schema_tasks() {
+        let dir = std::env::temp_dir().join(format!("pilot-audit-noindex-{}", std::process::id()));
+        let ld = r#"<script type="application/ld+json">{"@type":"Article","headline":"h"}</script>"#;
+        for (p, robots) in [("", ""), ("old", r#"<meta name="robots" content="noindex, follow">"#), ("new", "")] {
+            std::fs::create_dir_all(dir.join(p)).unwrap();
+            std::fs::write(dir.join(p).join("index.html"), format!("<html><head><title>t</title>{robots}{ld}</head></html>")).unwrap();
+        }
+        let r = audit(&dir, "ex.com");
+        let pages: Vec<&str> = r.schema.iter().map(|s| s.page.as_str()).collect();
+        assert!(pages.contains(&"/new/"), "{pages:?}");
+        assert!(!pages.contains(&"/old/"), "{pages:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     fn problems(html: &str) -> Vec<String> {
         schema_problems(html, &html.to_ascii_lowercase()).2
     }
