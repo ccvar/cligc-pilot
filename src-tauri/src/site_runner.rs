@@ -1208,6 +1208,15 @@ fn final_summary(reply: &str) -> String {
     pick.join("\n\n").chars().take(600).collect()
 }
 
+/// AI 回复里「不用改：原因」那一行的原因。
+fn no_change_reason(summary: &str) -> Option<String> {
+    summary.lines().rev().find_map(|l| {
+        let t = l.trim().trim_matches(['*', '`', ' ']);
+        let why = t.strip_prefix("不用改：").or_else(|| t.strip_prefix("不用改:"))?.trim().trim_matches(['*', '`']).trim();
+        (!why.is_empty()).then(|| why.to_string())
+    })
+}
+
 fn path_of(url: &str) -> String {
     url.split_once("://")
         .map(|(_, rest)| rest.find('/').map(|i| rest[i..].to_string()).unwrap_or_else(|| "/".into()))
@@ -1600,6 +1609,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 4. 用 `git add` 和 `git commit` 提交到当前分支，提交说明一句话写清改了什么（不要写流量数字）；如果提交因为本机没配 git 身份而失败，保留改动即可，Pilot 会替你提交。\n\
 {web}\n\
 不要推送、不要开 PR、不要部署——这些由 Pilot 在审核规则通过后执行；除上面说的以外需要确认的操作在这里会被自动拒绝。\n\
+如果查下来确实不该改（站点有意这样、问题已经不存在），不要为了交差硬改：不提交，回复的最后一行写「不用改：一句话原因」，不用写下面那两行。\n\
 完成后另起一段，用两三句中文说明改了哪些文件、为什么这样改（{lang}）。然后在最后两行按这个格式写出这次涉及的公开页面（Pilot 上线后会逐个打开验收）：\n\
 新页面：这次新增的页面完整网址，多个用空格分开（没有就写「无」）\n\
 改动的页面：内容有变化的已有页面完整网址（新加的文字会出现在哪些页面，都列上）",
@@ -1706,6 +1716,23 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         }
         crate::site_git::remove_worktree(&cb.main, &wt).await;
         let _ = crate::site_git::git(&cb.main, &["branch", "-D", &branch], "").await;
+        // AI 查完判断不该改：这是结论，不是失败，不用你再处理。修复任务的结论同时清掉那条改动的待核对（开这条任务就是为了它）
+        let summary = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).map(|i| i.ai_summary).unwrap_or_default();
+        if let Some(why) = no_change_reason(&summary) {
+            let note = format!("AI 查完认为不用改：{why}");
+            if let Some(d) = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                i.status = "done".into();
+                i.note = note.clone();
+            })? {
+                log_item(ctx, site, "fixed", &d, &note);
+            }
+            if let Some(parent) = item.opp.key.strip_prefix("followup:") {
+                let _ = site_ops::update_item(&site_dir, parent, now(), |i| i.attention.clear());
+            }
+            ctx.emit_queue(&site.id);
+            job.step("ship", "skipped", "AI 查完认为不用改");
+            return Ok(note);
+        }
         return Err("AI 没有做出任何改动（详见会话）".into());
     }
     // AI 跑构建时顺手提交进来的、构建脚本每次都会重写的数据文件（比如同步手续费）：还原成改动前的样子再往下走，
@@ -4260,7 +4287,8 @@ async fn recheck_snippets(ctx: &Ctx) {
 /// 撤掉一条改动开出来、还没开始的修复任务（key 以 followup:{id} 开头）
 pub(crate) fn dismiss_followups(site_dir: &Path, item_id: &str, note: &str) {
     let prefix = format!("followup:{item_id}");
-    for f in site_ops::load_queue(site_dir).into_iter().filter(|i| i.status == "open" && i.opp.key.starts_with(&prefix)) {
+    // AI 试过没改出东西的（失败、分支上没有提交）也一起撤，不然核对完还留一张红卡
+    for f in site_ops::load_queue(site_dir).into_iter().filter(|i| (i.status == "open" || (i.status == "failed" && i.head_sha.is_empty())) && i.opp.key.starts_with(&prefix)) {
         let _ = site_ops::update_item(site_dir, &f.id, now(), |i| {
             i.status = "dismissed".into();
             i.note = note.to_string();
@@ -4878,6 +4906,21 @@ mod tests {
         assert_eq!((d.traffic[0].clicks, d.traffic[0].clicks_prev), (2.0, 0.0));
         assert_eq!(d.no_traffic, vec!["b.com".to_string()]);
         assert!(parse_old_digest("随便一段文字").is_none());
+    }
+}
+
+#[cfg(test)]
+mod no_change_tests {
+    use super::*;
+    #[test]
+    fn only_an_explicit_conclusion_counts_as_no_change() {
+        assert_eq!(no_change_reason("查了模板。\n\n不用改：这页是站点有意 noindex 的旧页").as_deref(), Some("这页是站点有意 noindex 的旧页"));
+        assert_eq!(no_change_reason("**不用改：** 已经修好了").as_deref(), Some("已经修好了"));
+        assert_eq!(no_change_reason("不用改:问题不存在").as_deref(), Some("问题不存在"));
+        // 没写原因、只是顺嘴提到、或者干脆没做完，都还算失败
+        assert_eq!(no_change_reason("不用改："), None);
+        assert_eq!(no_change_reason("我觉得不用改：但没查完就超时了"), None);
+        assert_eq!(no_change_reason("模型这一轮没有完成"), None);
     }
 }
 
