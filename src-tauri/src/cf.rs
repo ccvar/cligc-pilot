@@ -378,6 +378,12 @@ pub async fn list_worker_deployments(token: &str, account_id: &str, script: &str
         .collect())
 }
 
+/// 让绑定 GitHub 的 Pages 项目按生产分支最新的代码构建一次（推送的通知没到 Cloudflare 时用）。
+pub async fn start_deployment(token: &str, account_id: &str, project: &str) -> Result<PagesDeployment, String> {
+    let body = cf_send(token, reqwest::Method::POST, &format!("/accounts/{account_id}/pages/projects/{project}/deployments"), None).await?;
+    Ok(deployment_from(&body["result"]))
+}
+
 /// 重新跑某次部署（Pages 绑定 GitHub 时＝按该提交重新构建）。
 pub async fn retry_deployment(token: &str, account_id: &str, project: &str, id: &str) -> Result<PagesDeployment, String> {
     let body = cf_send(

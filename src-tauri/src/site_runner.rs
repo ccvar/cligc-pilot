@@ -2107,6 +2107,19 @@ fn save_before(site_dir: &Path, snap: &HashMap<String, Vec<String>>, pages: &[St
     }
 }
 
+/// 推送后等多久 Cloudflare 还没有这次提交的构建，就主动让它构建（平时几十秒内就会出现）。
+const PAGES_NUDGE_AFTER: u64 = 3 * 60;
+
+/// 这次提交在生产环境的构建记录。
+fn commit_deployment<'a>(list: &'a [crate::cf::PagesDeployment], commit: &str) -> Option<&'a crate::cf::PagesDeployment> {
+    list.iter().find(|d| d.environment == "production" && !commit.is_empty() && d.commit.starts_with(&commit[..7.min(commit.len())]))
+}
+
+/// 线上现在跑的那次构建（列表从新到旧，最新一次成功的生产构建）。
+fn latest_live(list: &[crate::cf::PagesDeployment]) -> Option<&crate::cf::PagesDeployment> {
+    list.iter().find(|d| d.environment == "production" && d.status == "success" && d.stage == "deploy" && !d.commit.is_empty())
+}
+
 async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec, commit: &str, trigger: &str) -> Result<Shipped, String> {
     // 上线前先把要验收的已有页面查一遍：本来就有的问题（旧文 noindex、sitemap 没有标题…）不算这次改动的
     let mut spec = spec;
@@ -2144,13 +2157,15 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
             job.step("upload", "running", "等待 Cloudflare 构建");
             let cf = st.conns.get(&site.deploy.cf_conn_id)?;
             let token = crate::keychain::get_key(&cf.id)?;
-            let deadline = now() + 15 * 60;
+            let started = now();
+            let deadline = started + 15 * 60;
+            let (mut nudged, mut nudge_err, mut looked) = (false, String::new(), std::collections::HashSet::new());
             loop {
                 if job.canceled() {
                     return Err("已取消".into());
                 }
                 if let Ok(list) = crate::cf::list_deployments(&token, &cf.account_id, &site.deploy.project).await {
-                    if let Some(d) = list.iter().find(|d| d.environment == "production" && !commit.is_empty() && d.commit.starts_with(&commit[..7.min(commit.len())])) {
+                    if let Some(d) = commit_deployment(&list, commit) {
                         match d.status.as_str() {
                             "success" if d.stage == "deploy" => {
                                 job.step("upload", "ok", &d.url);
@@ -2162,10 +2177,34 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
                             }
                             _ => {}
                         }
+                    } else if !commit.is_empty() {
+                        // 线上已经是更新的提交，这次的改动就在里面（比如之后又合并了一条）：不用再等它自己的构建
+                        if let Some(d) = latest_live(&list).filter(|d| looked.insert(d.commit.clone())) {
+                            if let Ok(main) = crate::site_git::code_dir(site, None) {
+                                let _ = crate::site_git::git(&main, &["fetch", "-q", "origin"], "").await;
+                                if crate::site_git::git(&main, &["merge-base", "--is-ancestor", commit, &d.commit], "").await.is_ok_and(|o| o.ok) {
+                                    job.step("upload", "ok", &d.url);
+                                    break;
+                                }
+                            }
+                        }
+                        // 推送的通知偶尔到不了 Cloudflare，再等也不会开始构建（重新上线时提交没变，推送也不会再通知一次）：主动让它构建
+                        if !nudged && now().saturating_sub(started) >= PAGES_NUDGE_AFTER {
+                            nudged = true;
+                            job.line("Cloudflare 一直没开始构建这次的提交，主动让它构建一次");
+                            if let Err(e) = crate::cf::start_deployment(&token, &cf.account_id, &site.deploy.project).await {
+                                job.line(&format!("没能让 Cloudflare 开始构建：{e}"));
+                                nudge_err = e;
+                            }
+                        }
                     }
                 }
                 if now() > deadline {
-                    return Err("15 分钟内没有等到 Cloudflare 构建完成，请在部署页查看".into());
+                    return Err(if nudge_err.is_empty() {
+                        "15 分钟内没有等到 Cloudflare 构建完成，请在部署页查看".into()
+                    } else {
+                        format!("Cloudflare 一直没开始构建，也没能主动让它开始：{nudge_err}")
+                    });
                 }
                 tokio::time::sleep(Duration::from_secs(20)).await;
             }
@@ -4832,5 +4871,26 @@ mod tests {
         assert_eq!((d.traffic[0].clicks, d.traffic[0].clicks_prev), (2.0, 0.0));
         assert_eq!(d.no_traffic, vec!["b.com".to_string()]);
         assert!(parse_old_digest("随便一段文字").is_none());
+    }
+}
+
+#[cfg(test)]
+mod pages_wait_tests {
+    use super::*;
+    use crate::cf::PagesDeployment;
+    fn dep(env: &str, commit: &str, stage: &str, status: &str) -> PagesDeployment {
+        PagesDeployment { environment: env.into(), commit: commit.into(), stage: stage.into(), status: status.into(), ..Default::default() }
+    }
+    #[test]
+    fn a_commit_without_a_build_is_told_apart_from_one_that_is_building() {
+        let list = [dep("production", "aaaaaaa111", "build", "active"), dep("preview", "bbbbbbb222", "deploy", "success"), dep("production", "ccccccc333", "deploy", "success")];
+        // 短 sha 也认；还在构建的算有记录，不用催
+        assert!(commit_deployment(&list, "aaaaaaa1").is_some());
+        // 预览环境的不算：这次提交在生产环境还没有构建，该催
+        assert!(commit_deployment(&list, "bbbbbbb222").is_none());
+        assert!(commit_deployment(&list, "").is_none());
+        // 线上是最新一次成功的生产构建，还在构建的和预览的都不算
+        assert_eq!(latest_live(&list).unwrap().commit, "ccccccc333");
+        assert!(latest_live(&list[..2]).is_none());
     }
 }
