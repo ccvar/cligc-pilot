@@ -185,9 +185,9 @@ export async function deploySite(id: string, background = false) {
   if (!background && (live || st?.dirty)) {
     const where = !s ? '' : s.deploy.mode === 'vps' ? '你的服务器' : s.deploy.mode === 'workers' ? `Cloudflare Workers「${s.deploy.project}」` : `Cloudflare Pages「${s.deploy.project}」`;
     const target = s?.domain ? `${s.domain}（${where}）` : where || '线上';
-    // 上线成功后 Pilot 会把带上的改动提交进代码（site_deploy::commit_shipped），只在默认分支上、不是迁移中的站点
+    // 上线成功后 Pilot 会把带上的改动提交并推送（site_deploy::commit_shipped），只在默认分支上、不是迁移中的站点
     const commits = live && s?.source === 'local' && st?.branch === s.default_branch;
-    const dirty = st?.dirty ? `${live ? '\n\n注意：' : ''}站点文件夹里有未提交的改动，上线的将是文件夹当前的样子（包括这些改动）。${commits ? '上线成功后，Pilot 会把这些改动提交进代码，和线上保持一致。' : ''}` : '';
+    const dirty = st?.dirty ? `${live ? '\n\n注意：' : ''}站点文件夹里有未提交的改动，上线的将是文件夹当前的样子（包括这些改动）。${commits ? '上线成功后，Pilot 会把这些改动提交进代码，配了 GitHub 的还会推送上去，和线上保持一致。' : ''}` : '';
     const msg = live ? `构建「${s?.name ?? id}」并上线到 ${target}？检查都通过后，线上马上换成新版本。${dirty}` : `${dirty}继续？`;
     const ok = await confirmDialog(msg, { title: '构建并上线', kind: st?.dirty ? 'warning' : 'info', confirmText: live ? '上线' : '继续上线' });
     if (!ok) return;

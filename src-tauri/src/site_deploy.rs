@@ -493,7 +493,7 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
     result.map(|_| rec)
 }
 
-/// 手动上线时确认过带上未提交的改动，上线成功后线上就是这些改动：提交进代码，让代码和线上一致。
+/// 手动上线时确认过带上未提交的改动，上线成功后线上就是这些改动：提交进代码并推到 GitHub（有 origin 才推），让代码和线上一致。
 /// 不提交的话，之后谁撤销了，下次上线就把它们丢了；文件夹不干净还会挡住托管的自动上线。
 /// 不在默认分支（在做别的事）、迁移中（上的只是预览）不动。
 async fn commit_shipped(site: &Site, rec: &mut DeployRecord, job: &Job) {
@@ -518,6 +518,7 @@ async fn commit_shipped(site: &Site, rec: &mut DeployRecord, job: &Job) {
             rec.message = message;
             rec.dirty = !crate::site_git::is_clean(&dir).await;
             job.line(&format!("这次带上的未提交改动已经上线，一并提交进代码：{names}{more}"));
+            crate::site_runner::push_after(site, &dir, job).await;
         }
         Err(e) => job.line(&format!("这次带上的未提交改动已经上线，但没能自动提交，需要你手动提交（{e}）")),
     }

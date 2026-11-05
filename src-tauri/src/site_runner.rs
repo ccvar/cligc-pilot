@@ -2834,7 +2834,7 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
 }
 
 /// 本地主分支合并 / 回退后推到 GitHub（有 origin 才推）；推不上去只在作业里记一行，不耽误上线
-async fn push_after(site: &Site, main: &Path, job: &Job) {
+pub async fn push_after(site: &Site, main: &Path, job: &Job) {
     match crate::site_git::push_origin(main, &site.default_branch).await {
         Ok(true) => job.line("已推送到 GitHub"),
         Ok(false) => {}
