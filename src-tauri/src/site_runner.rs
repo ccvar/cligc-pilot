@@ -1784,6 +1784,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     }
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
+    let diff = if crate::managed::docs_are_published(&site.app_dir(&wt), &site.build.out_dir) { diff } else { crate::managed::without_internal_docs(&diff) };
     let snippets = crate::site_verify::snippets_from_diff(&diff);
     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.snippets = snippets.clone());
     // 上线时用最新的条目（带上 AI 报告的页面和这次的文字）

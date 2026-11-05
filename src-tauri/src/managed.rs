@@ -1049,6 +1049,29 @@ pub fn new_page_files(diff: &str) -> Vec<String> {
     split_diff(diff).into_iter().filter(|f| f.new_file && is_page_file(&f.file)).map(|f| f.file).collect()
 }
 
+/// 这个站的页面是不是就放在根目录 docs/ 下：用文档工具建站（VitePress、Docusaurus 这类），或者直接发布 docs 目录。
+pub fn docs_are_published(app_dir: &Path, out_dir: &str) -> bool {
+    const TOOLS: &[&str] = &["vitepress", "vuepress", "docusaurus", "@docusaurus/core", "nextra", "rspress", "docsify", "docsify-cli", "fumadocs-core"];
+    out_dir.trim_start_matches("./").split('/').next() == Some("docs") || app_dir.join("mkdocs.yml").is_file() || declared_deps(app_dir).iter().any(|d| TOOLS.contains(&d.as_str()))
+}
+
+/// 去掉 diff 里根目录 docs/ 下的 Markdown：别的站点放的是项目自己的说明、计划、核对记录，不会上线，
+/// 上线判定、内容质检、线上验收的文字都不该算它们。从 docs/ 外面挪进来的不去掉（原来的页面没了，要照常判断）。
+pub fn without_internal_docs(diff: &str) -> String {
+    let mut out = String::with_capacity(diff.len());
+    let mut keep = true;
+    for line in diff.split_inclusive('\n') {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let file = rest.trim_end().split(" b/").nth(1).unwrap_or(rest);
+            keep = !(rest.starts_with("a/docs/") && file.starts_with("docs/") && [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e)));
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// 推荐相关的英文词（链接、字段名里出现）
 const MONEY_WORDS: &[&str] = &["referral", "invite", "affiliate", "promo", "coupon", "rebate", "refcode", "ref_code", "kickback"];
 
@@ -1443,7 +1466,7 @@ fn sitemap_line(l: &str) -> bool {
 
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 2;
+pub const RULES_V: u32 = 3;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -1806,6 +1829,37 @@ mod group_tests {
         assert!(g.allows("title") && !g.allows("content"));
         assert!(validate_group(&ManagedGroup { actions: vec![], ..g.clone() }).is_err());
         assert!(validate_group(&ManagedGroup { actions: vec!["deploy".into()], ..g }).is_err());
+    }
+
+    #[test]
+    fn notes_in_the_docs_folder_are_not_pages() {
+        let note = "diff --git a/docs/evidence/guide.md b/docs/evidence/guide.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/evidence/guide.md\n@@ -0,0 +1 @@\n+# US stock perpetuals comparison guide\n";
+        let page = "diff --git a/internal/web/learn/a.html b/internal/web/learn/a.html\n--- a/internal/web/learn/a.html\n+++ b/internal/web/learn/a.html\n@@ -1 +1 @@\n-旧\n+新\n";
+        let both = format!("{note}{page}");
+        assert!(managed_verdict(note, true, 1500, "all", &[]).iter().any(|r| r.contains("低于这个方案的下限")));
+        let kept = without_internal_docs(&both);
+        assert_eq!(kept, page);
+        assert!(managed_verdict(&kept, true, 1500, "all", &[]).is_empty());
+        assert!(new_page_files(&kept).is_empty());
+        assert!(!crate::site_verify::snippets_from_diff(&kept).iter().any(|s| s.contains("US stock")));
+        // docs 下不是 Markdown 的、别的目录里的 docs、从外面挪进 docs 的都照常判断
+        for keep in ["diff --git a/docs/a.html b/docs/a.html\n+x\n", "diff --git a/site/docs/a.md b/site/docs/a.md\n+x\n", "diff --git a/src/content/a.md b/docs/a.md\n-x\n"] {
+            assert_eq!(without_internal_docs(keep), keep);
+        }
+    }
+
+    #[test]
+    fn a_docs_site_publishes_its_docs_folder() {
+        let dir = std::env::temp_dir().join(format!("pilot-docs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!docs_are_published(&dir, "dist"));
+        assert!(docs_are_published(&dir, "docs"));
+        assert!(docs_are_published(&dir, "./docs/.vitepress/dist"));
+        std::fs::write(dir.join("package.json"), r#"{"devDependencies":{"astro":"5"}}"#).unwrap();
+        assert!(!docs_are_published(&dir, "dist"));
+        std::fs::write(dir.join("package.json"), r#"{"devDependencies":{"vitepress":"1"}}"#).unwrap();
+        assert!(docs_are_published(&dir, "dist"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
