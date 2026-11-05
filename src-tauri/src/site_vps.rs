@@ -132,7 +132,7 @@ impl DeployShim {
 
 fn wrapper(real: &str, key: &Path) -> String {
     format!(
-        "#!/bin/sh\n# Cligc Pilot：只用部署密钥、只认已知主机、不交互。\nexec {real} -i '{}' -o IdentitiesOnly=yes -o PubkeyAuthentication=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o BatchMode=yes -o StrictHostKeyChecking=yes \"$@\"\n",
+        "#!/bin/sh\n# Cligc Pilot：只用部署密钥、只认已知主机、不交互。\n# ssh -G 只打印配置、不连接：原样交给 ssh，不然发布脚本自带的测试读到的是这里加的选项。\n[ \"$1\" = \"-G\" ] && exec {real} \"$@\"\nexec {real} -i '{}' -o IdentitiesOnly=yes -o PubkeyAuthentication=yes -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o BatchMode=yes -o StrictHostKeyChecking=yes \"$@\"\n",
         key.display()
     )
 }
@@ -213,10 +213,28 @@ mod tests {
     fn wrapper_forces_key_auth_before_script_options() {
         let w = wrapper("/usr/bin/ssh", Path::new("/tmp/k"));
         let i_key = w.find("-i '/tmp/k'").unwrap();
-        let args = w.find("\"$@\"").unwrap();
+        let args = w.rfind("\"$@\"").unwrap();
         assert!(i_key < args);
         assert!(w.contains("PubkeyAuthentication=yes"));
         assert!(w.contains("BatchMode=yes"));
         assert!(w.contains("StrictHostKeyChecking=yes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wrapper_leaves_option_printing_alone_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("pilot-shim-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (real, ssh) = (dir.join("real"), dir.join("ssh"));
+        std::fs::write(&real, "#!/bin/sh\nprintf '%s ' \"$@\"\n").unwrap();
+        std::fs::write(&ssh, wrapper(real.to_str().unwrap(), Path::new("/tmp/k"))).unwrap();
+        chmod(&real, 0o700);
+        chmod(&ssh, 0o700);
+        let run = |args: &[&str]| String::from_utf8(std::process::Command::new(&ssh).args(args).output().unwrap().stdout).unwrap();
+        assert_eq!(run(&["-G", "-F", "/dev/null", "root@x"]), "-G -F /dev/null root@x ");
+        // 连接时都带上部署密钥，远程命令里碰巧有 -G 也一样
+        assert!(run(&["root@x"]).contains("-i /tmp/k"));
+        assert!(run(&["root@x", "tool", "-G"]).contains("StrictHostKeyChecking=yes"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
