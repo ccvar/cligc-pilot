@@ -225,6 +225,15 @@ export async function deployAllPending() {
     void loadPendingDeploys();
   } catch (e) { say(String(e), 'err'); }
 }
+export type VpsKeyStatus = { has_key: boolean; public_key: string; host: string };
+/** 为部署授权：确认后把 Pilot 专用部署公钥加到服务器并登录验证一次。取消返回 null，失败抛错。 */
+export async function authorizeDeploy(id: string, host = ''): Promise<VpsKeyStatus | null> {
+  const where = host || (await invoke<VpsKeyStatus>('vps_key_status', { id })).host;
+  if (!(await confirmDialog(`通过这条 SSH 连接登录 ${where || '服务器'}，在 ~/.ssh/authorized_keys 里追加一把 Pilot 专用的部署公钥，然后用它登录验证一次。以后发布不用再输密码，随时可以撤销。`, { title: '为部署授权', kind: 'info', confirmText: '授权' }))) return null;
+  const st = await invoke<VpsKeyStatus>('setup_vps_key', { id });
+  say('已授权：部署密钥已加到服务器并验证通过');
+  return st;
+}
 /** 补上线上缺的验证文件：上次上线的构建产物还在就原样补文件再传（不重新构建），否则走完整的构建并上线。 */
 export async function publishFiles(id: string) {
   try { await invoke<string>('site_publish_files', { id, fallback: true }); }

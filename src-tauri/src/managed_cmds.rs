@@ -243,6 +243,8 @@ pub struct ManagedSite {
     pub plan_count: usize,
     /// 站点自己的构建 / 检查没通过（每日体检）：托管先不派 AI 任务，见 site_runner::site_build_broken
     pub build_broken: String,
+    /// 这个站现在发不了（服务器还没授权）：托管先不派 AI 任务，见 site_deploy::deploy_blocker
+    pub deploy_blocked: String,
     pub budget: crate::site_runner::Budget,
     pub job: String,
     /// 下一次自动运行的任务（scan / health / plan / report / review / watch）和到点时间；托管停着就是空 / 0。
@@ -342,6 +344,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 plan_date: plan.as_ref().and_then(|p| p["date"].as_str().map(str::to_string)).unwrap_or_default(),
                 plan_count: plan.as_ref().and_then(|p| p["tasks"].as_array().map(|a| a.len())).unwrap_or(0),
                 build_broken: crate::site_runner::site_build_broken(&s, &dir).unwrap_or_default(),
+                deploy_blocked: crate::site_deploy::deploy_blocker(&s, &state.conns).unwrap_or_default(),
                 budget: crate::site_runner::budget(&s, &dir, &state.convos),
                 job: state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running").map(|j| j.title).unwrap_or_default(),
                 id: s.id,

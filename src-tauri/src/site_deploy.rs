@@ -834,6 +834,20 @@ async fn sync_config(site: &Site, conns: &ConnStore, code: &Path, site_dir: &Pat
 
 /// VPS：准备代码 → 安装 → 构建 → 检查 → 执行项目自带的发布命令（带 Pilot 部署密钥的 ssh / scp 包装）。
 /// 发布脚本自己负责上传、备份、健康检查与失败恢复；IndexNow 通常由服务器上的程序自己推，这里不重复。
+/// 这个站现在发不了：不连服务器就查得出的问题。AI 动手和合并之前先看一眼，不然改动进了主分支才发现发不出去。
+pub const NOT_DEPLOYABLE: &str = "站点还不能上线：";
+pub fn deploy_blocker(site: &Site, conns: &ConnStore) -> Option<String> {
+    if site.deploy.mode != "vps" || crate::site_vps_host::managed(site) {
+        return None;
+    }
+    let why = match conns.get(&site.deploy.ssh_conn_id) {
+        Err(_) => "请先在站点设置里选择部署用的 SSH 连接",
+        Ok(c) if !crate::site_vps::has_key(&c.id) => crate::site_vps::NO_KEY,
+        Ok(_) => return None,
+    };
+    Some(format!("{NOT_DEPLOYABLE}{why}"))
+}
+
 async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, rec: &mut DeployRecord) -> Result<(), String> {
     let ssh = conns.get(&site.deploy.ssh_conn_id).map_err(|_| "请先在站点设置里选择部署用的 SSH 连接".to_string())?;
     job.step("prepare", "running", "");
@@ -926,6 +940,18 @@ mod tests {
         assert_eq!(super::missing_args("./deploy.sh", "退出码 1\nssh: connect to host x port 22: Connection refused"), None);
         // dexgc 的用法没写 ./
         assert_eq!(super::missing_args("./scripts/publish-production.sh publish", "  scripts/publish-production.sh publish --confirm dexgc.com").as_deref(), Some("./scripts/publish-production.sh publish --confirm dexgc.com"));
+    }
+
+    #[test]
+    fn a_site_that_cannot_publish_is_known_before_any_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let conns = crate::conns::ConnStore::new(dir.path()).unwrap();
+        let site = |v: serde_json::Value| serde_json::from_value::<crate::sites::Site>(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 0, "deploy": v})).unwrap();
+        let vps = site(serde_json::json!({"mode": "vps", "command": "./publish.sh"}));
+        assert!(super::deploy_blocker(&vps, &conns).is_some_and(|w| w.starts_with(super::NOT_DEPLOYABLE)));
+        // 别的部署方式、Pilot 托管发布都不看这个
+        assert_eq!(super::deploy_blocker(&site(serde_json::json!({"mode": "direct"})), &conns), None);
+        assert_eq!(super::deploy_blocker(&site(serde_json::json!({"mode": "vps", "command": ""})), &conns), None);
     }
 
     #[test]

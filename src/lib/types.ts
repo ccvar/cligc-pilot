@@ -591,6 +591,8 @@ export interface ManagedSite {
   plan_date: string; plan_count: number; job: string;
   /** 站点自己的构建 / 检查没通过（每日体检）：托管先不派 AI 任务 */
   build_broken?: string;
+  /** 这个站现在发不了（服务器还没授权）：托管先不派 AI 任务 */
+  deploy_blocked?: string;
   /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
   next_task: string; next_at: number;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };

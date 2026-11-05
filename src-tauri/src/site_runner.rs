@@ -748,6 +748,13 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             return (0, vec![why], None);
         }
     }
+    // 这个站现在发不了（服务器还没授权）：改好了也上不了线，先不让 AI 改，也不花额度
+    if rules.is_some() {
+        if let Some(why) = crate::site_deploy::deploy_blocker(site, &ctx.state().conns) {
+            job.line(&why);
+            return (0, vec![why], None);
+        }
+    }
     // 已经有改好的条目因为本地文件夹不干净上不了线：先别让 AI 接着改新的，不然越堆越多、白花额度；文件夹干净了调度会先把卡住的接着上线
     if rules.is_some() && site.source == "local" {
         let stuck = site_ops::load_queue(&site_dir).iter().filter(|i| i.status == "proposed" && i.verdict.starts_with("自动上线失败：站点文件夹")).count();
@@ -2695,6 +2702,11 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
         site_ops::update_item(&site_dir, item_id, now(), |i| i.status = "done".into())?;
         return Ok("已标记为处理完成".into());
     }
+    // 发不了就先别合并：不然改动进了主分支却上不了线。改动留在分支上，授权后调度会接着上线
+    if let Some(why) = crate::site_deploy::deploy_blocker(site, &ctx.state().conns) {
+        job.step("merge", "failed", "");
+        return Err(why);
+    }
     job.step("merge", "running", &item.branch);
     let merge_sha = match merge_item(ctx, site, job, &item).await {
         Ok(sha) => sha,
@@ -2764,6 +2776,10 @@ fn with_riders(site: &Site, spec: crate::site_verify::Spec, ride: &[QueueItem]) 
 
 fn ride_note(ride: &[QueueItem]) -> String {
     if ride.is_empty() { String::new() } else { format!("（之前合并没上线的 {} 条一起上线了）", ride.len()) }
+}
+
+fn waiting_for_deploy(verdict: &str) -> bool {
+    verdict.strip_prefix("自动上线失败：").is_some_and(|v| v.starts_with(crate::site_deploy::NOT_DEPLOYABLE))
 }
 
 /// 这条的改动主分支里都有了（多半包含在先合并的另一条里）：没东西可合，这条就算做完了，不是失败。
@@ -2851,6 +2867,10 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
     let items: Vec<QueueItem> = ids.split(',').filter_map(|id| queue.iter().find(|i| i.id == id && i.status == "proposed" && !i.branch.is_empty()).cloned()).collect();
     if items.is_empty() {
         return Err("没有可以合并的改动（可能已经处理过了）".into());
+    }
+    if let Some(why) = crate::site_deploy::deploy_blocker(site, &ctx.state().conns) {
+        job.step("merge", "failed", "");
+        return Err(why);
     }
     let mut merged: Vec<(QueueItem, String)> = Vec::new();
     let mut already = 0;
@@ -4543,6 +4563,15 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                             }
                         }
                     }
+                    // 自动上线时站点还发不了（服务器没授权）卡住的：授权好了就自动「重新检查」接着上线
+                    if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| i.status == "proposed" && !i.branch.is_empty() && waiting_for_deploy(&i.verdict)) {
+                        if let Ok(site) = st.sites.get(id) {
+                            if crate::site_deploy::deploy_blocker(&site, &st.conns).is_none() && start(ctx.clone(), id, "recheck", "schedule", Some(it.id.clone())).is_ok() {
+                                log_item(&ctx, &site, "planned", &it, "站点可以上线了，自动接着上线");
+                                continue;
+                            }
+                        }
+                    }
                     // 合并了、上线没完成（上线途中 Pilot 退出，或上传失败）超过半小时的：自动再上线一次，不然改动已经在主分支里却没人管
                     if let Ok(site) = st.sites.get(id) {
                         if site.deploy.mode != "none" {
@@ -4624,6 +4653,13 @@ pub fn start_scheduler(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_item_held_back_by_deploy_setup_resumes_later() {
+        assert!(super::waiting_for_deploy(&format!("自动上线失败：{}{}", crate::site_deploy::NOT_DEPLOYABLE, crate::site_vps::NO_KEY)));
+        assert!(!super::waiting_for_deploy("自动上线失败：和主分支上的改动冲突了，合不进去"));
+        assert!(!super::waiting_for_deploy(crate::site_vps::NO_KEY));
+    }
+
     #[test]
     fn site_build_broken_follows_the_latest_evidence() {
         let t = tempfile::tempdir().unwrap();

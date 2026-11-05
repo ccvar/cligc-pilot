@@ -4,11 +4,11 @@
   import type { Site } from '$lib/types';
   import Icon from './Icon.svelte';
   import { say, confirmDialog } from '$lib/state/app.svelte.js';
+  import { authorizeDeploy, type VpsKeyStatus } from '$lib/state/sites.svelte.js';
 
   // VPS 部署授权：Pilot 专用部署密钥是否已加到服务器上。依据的是「已保存」的站点设置。
   let { site }: { site: Site } = $props();
-  type Status = { has_key: boolean; public_key: string; host: string };
-  let st = $state<Status | null>(null);
+  let st = $state<VpsKeyStatus | null>(null);
   let err = $state('');
   let busy = $state(false);
   // 默认收起，只显示一行「已授权 · root@主机」；没授权（要你操作）或出错时直接展开。换站点重新收起
@@ -18,13 +18,12 @@
   async function load() {
     err = '';
     if (!site.deploy.ssh_conn_id) { st = null; return; }
-    try { st = await invoke<Status>('vps_key_status', { id: site.id }); } catch (e) { err = String(e); st = null; }
+    try { st = await invoke<VpsKeyStatus>('vps_key_status', { id: site.id }); } catch (e) { err = String(e); st = null; }
   }
   $effect(() => { void site.deploy.ssh_conn_id; void load(); });
   async function setup() {
-    if (!(await confirmDialog(`通过这条 SSH 连接登录 ${st?.host ?? '服务器'}，在 ~/.ssh/authorized_keys 里追加一把 Pilot 专用的部署公钥，然后用它登录验证一次。以后发布不用再输密码，随时可以撤销。`, { title: '为部署授权', kind: 'info', confirmText: '授权' }))) return;
     busy = true; err = '';
-    try { st = await invoke<Status>('setup_vps_key', { id: site.id }); say('已授权：部署密钥已加到服务器并验证通过'); }
+    try { st = (await authorizeDeploy(site.id, st?.host)) ?? st; }
     catch (e) { err = String(e); }
     finally { busy = false; }
   }

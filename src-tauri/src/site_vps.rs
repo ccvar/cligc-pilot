@@ -18,6 +18,8 @@ struct StoredKey {
     public: String,
 }
 
+pub const NO_KEY: &str = "还没有为部署授权：请在站点设置里点「为部署授权」";
+
 fn account(ssh_conn_id: &str) -> String {
     format!("deploy-key:{ssh_conn_id}")
 }
@@ -144,7 +146,7 @@ fn chmod(p: &Path, mode: u32) {
 }
 
 pub fn shim(ssh_conn_id: &str) -> Result<DeployShim, String> {
-    let k = load(ssh_conn_id).ok_or("还没有为部署授权：请在站点设置里点「为部署授权」")?;
+    let k = load(ssh_conn_id).ok_or(NO_KEY)?;
     let dir = tempfile::Builder::new().prefix("pilot-deploy-").tempdir().map_err(|e| e.to_string())?;
     let key = dir.path().join("id_ed25519");
     std::fs::write(&key, &k.private).map_err(|e| e.to_string())?;

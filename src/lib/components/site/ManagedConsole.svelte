@@ -151,10 +151,11 @@
     const g = groups.find((y) => y.sites.includes(x.id));
     const full = budgetFull(x.budget);
     const broken = x.build_broken ?? '';
-    const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点的托管暂停着' : full ? full : broken ? '站点自己的构建没通过' : '';
-    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : broken ? `每日体检里站点自己就构建不过（${broken}），AI 改什么都会卡在这一步，所以先不交给 AI。到站点设置里修好构建或检查命令，改完就会接着做。` : '';
+    const blocked = x.deploy_blocked ?? '';
+    const why = o?.config.paused ? '托管已全部暂停' : g?.paused ? `方案「${g.name}」已暂停` : g?.stopped.includes(x.id) ? '这个站点的托管暂停着' : full ? full : broken ? '站点自己的构建没通过' : blocked ? (blocked.includes('授权') ? '服务器还没给 Pilot 授权' : '还没选部署用的 SSH 连接') : '';
+    const fix = o?.config.paused ? '点右上角「恢复托管」后会接着做。' : g?.paused ? '恢复这个方案后会接着做。' : g?.stopped.includes(x.id) ? '把它的托管开关打开后会接着做。' : full ? '调高方案里的「每站每周 token」，或等用量滚出最近 7 天。' : broken ? `每日体检里站点自己就构建不过（${broken}），AI 改什么都会卡在这一步，所以先不交给 AI。到站点设置里修好构建或检查命令，改完就会接着做。` : blocked ? '处理好后 Pilot 会接着上线和做任务。' : '';
     // 能就地处理的：站点自己的开关关着 → 打开托管；额度满了 → 编辑方案；构建没过 → 去站点设置。有计划的都可以清除计划
-    const kind = o?.config.paused || g?.paused ? 'paused' : g?.stopped.includes(x.id) ? 'site' : full ? 'budget' : broken ? 'build' : '';
+    const kind = o?.config.paused || g?.paused ? 'paused' : g?.stopped.includes(x.id) ? 'site' : full ? 'budget' : broken ? 'build' : blocked ? (blocked.includes('授权') ? 'deploy' : 'build') : '';
     return { id: x.id, name: x.name, queued: x.queued, why, fix, kind, group: g?.id ?? '', hasPlan: x.plan_count > 0 };
   }).filter((x) => x.why));
   // 暂停只看站点自己的开关：所有站点都关着＝全部已暂停

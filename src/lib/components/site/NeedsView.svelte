@@ -12,7 +12,7 @@
   import BrainIcon from '$lib/BrainIcon.svelte';
   import { ago, full as fullTime } from './fmt';
   import { modelTarget } from '$lib/state/fleet.svelte.js';
-  import { sites, openSite } from '$lib/state/sites.svelte.js';
+  import { sites, openSite, authorizeDeploy } from '$lib/state/sites.svelte.js';
   import { acceptItem, acceptItems, reshipItem, blockedCode, setContentCode, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
@@ -27,6 +27,11 @@
   async function clearStuck(x: Stuck) {
     if (!(await confirmDialog(`清除 ${x.name} 的计划？还没开始的任务会从任务队列里拿掉，已经在处理或上线的保留。\n\n站点的托管打开后，下次自动运行会重新制定一份。`, { title: '清除计划', kind: 'danger', confirmText: '清除计划' }))) return;
     try { const r = await invoke<{ removed: number; kept: number }>('plan_clear', { id: x.id }); say(`已清除计划，拿掉 ${r.removed} 条任务`); await loadManaged(); }
+    catch (e) { say(String(e), 'err'); }
+  }
+
+  async function authorize(id: string) {
+    try { if (await authorizeDeploy(id)) await loadManaged(); }
     catch (e) { say(String(e), 'err'); }
   }
 
@@ -131,6 +136,7 @@
         <button class="btn tiny quiet st-see" onclick={() => openSite(x.id, 'queue', 'open')} data-tip="打开任务队列看这些任务">查看</button>
         {#if x.kind === 'site'}<button class="btn tiny" onclick={() => onturnon(x.id)} data-tip="只打开这个站点的托管，排着的任务会接着做"><Icon name="play" size={10} />打开托管</button>{/if}
         {#if x.kind === 'build'}<button class="btn tiny" onclick={() => openSite(x.id, 'settings')}><Icon name="sliders" size={11} />去站点设置</button>{/if}
+        {#if x.kind === 'deploy'}<button class="btn tiny" onclick={() => authorize(x.id)}><Icon name="key" size={11} />为部署授权</button>{/if}
         {#if x.kind === 'budget' && x.group}<button class="btn tiny" onclick={() => onbudget(x.group)}><Icon name="gauge" size={11} />调整额度</button>{/if}
         {#if x.hasPlan}<button class="ic-btn ic-sm st-x" onclick={() => clearStuck(x)} aria-label="清除计划" data-tip="清除计划：拿掉这些还没开始的任务"><Icon name="x" size={13} /></button>{/if}
       </div>
@@ -179,7 +185,7 @@
                     <div class="more">
                       {#if conflicts.has(i.id)}<p class="why">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。点「让 AI 在最新代码上重改」：先试着直接接上，接不上再让 AI 重做。合并上线以后有这种情况会自动处理。</p>
                       {:else if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
-                      {#if g.k === 'failed' && w}<OpsErrorHint text={w} />{/if}
+                      {#if g.k !== 'attention' && w}<OpsErrorHint text={w} siteId={x.site_id} />{/if}
                       {#if g.k === 'proposed' && site && !conflicts.has(i.id)}{@const plan = managed.overview?.groups.find((p) => p.sites.includes(site.id))}{#if plan?.autonomy === 'auto'}{#each (i.block_kinds ?? []).filter((k) => !plan.allow_kinds?.includes(k)) as k (k)}<button class="link-btn allow" onclick={() => setBlockKind(site.id, k, true, plan.name)} data-tip={`托管方案「${plan.name}」以后遇到这类原因不再留给你确认；别的原因照样拦`}><Icon name="check" size={11} />「{BLOCK_KIND_LABEL[k] ?? k}」以后不拦</button>{/each}{/if}{#if plan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, plan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「拦截等级」判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page || i.new_pages?.length}<span class="mono url">{i.opp.page || i.new_pages?.[0]}</span>{/if}
