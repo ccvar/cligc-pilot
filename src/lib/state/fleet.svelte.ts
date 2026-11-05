@@ -14,7 +14,13 @@ export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'us
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
 export function trafficDown(r: SiteRow): boolean {
-  return r.has_data && r.summary.gsc_clicks_prev >= 20 && r.summary.gsc_clicks < r.summary.gsc_clicks_prev * 0.8;
+  const [now, prev] = steadyClicks(r);
+  // 点击很少时几次的上下只是波动：至少少了 10 次才算（23 → 18 不报）
+  return r.has_data && prev >= 20 && now < prev * 0.8 && prev - now >= 10;
+}
+/** 判断下滑用的点击：近 28 天和前 28 天，各去掉最高的两天（一两天的突发流量不算基数） */
+function steadyClicks(r: SiteRow): [number, number] {
+  return [r.summary.clicks_steady ?? r.summary.gsc_clicks, r.summary.clicks_steady_prev ?? r.summary.gsc_clicks_prev];
 }
 /** 站点列表按选的统计时间段（近 7 / 14 / 28 / 90 天）取数：用户、搜索点击（Google + Bing）、展示、和前一段比、每天会话 */
 export function win(r: SiteRow) {
@@ -168,7 +174,8 @@ function issueSig(r: SiteRow, k: SiteFilter): string {
 }
 /** 搜索点击比前一段掉了多少：1＝两到四成，2＝四到六成，3＝六成以上 */
 function downLevel(r: SiteRow): number {
-  const drop = 1 - r.summary.gsc_clicks / Math.max(1, r.summary.gsc_clicks_prev);
+  const [now, prev] = steadyClicks(r);
+  const drop = 1 - now / Math.max(1, prev);
   return drop >= 0.6 ? 3 : drop >= 0.4 ? 2 : 1;
 }
 function loadIgnored(): Record<string, string> {

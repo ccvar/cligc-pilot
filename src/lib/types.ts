@@ -453,6 +453,8 @@ export interface SiteSummary {
   data_end: string; fetched_at: number; errors: string[];
   /** 近 28 天 GA4 用户 / 前 28 天；近 28 天每天会话（旧的在前） */
   users?: number; users_prev?: number; sessions_trend?: number[];
+  /** Google 近 28 天 / 前 28 天点击，各去掉最高的两天：判断流量下滑用 */
+  clicks_steady?: number; clicks_steady_prev?: number;
   /** Google + Bing 近 28 天搜索点击 / 前 28 天 / 展示 */
   search_clicks?: number; search_clicks_prev?: number; search_impressions?: number;
   /** Google 近 28 天有展示的页面数、站点地图提交的网址数、Bing 索引里的网址数 */

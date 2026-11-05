@@ -555,6 +555,11 @@ pub struct Summary {
     /// 近 28 天每天的会话数（趋势小图用，旧的在前）
     #[serde(default)]
     pub sessions_trend: Vec<f64>,
+    /// Google 近 28 天和前 28 天的点击，各去掉点击最多的两天：判断「流量下滑」用，一两天的突发流量不算基数
+    #[serde(default)]
+    pub clicks_steady: f64,
+    #[serde(default)]
+    pub clicks_steady_prev: f64,
     /// 搜索：Google + Bing 近 28 天点击、前 28 天点击、展示
     #[serde(default)]
     pub search_clicks: f64,
@@ -609,7 +614,7 @@ pub struct Win {
 /// 全部站点列表能选的统计时间段（天）
 pub const WIN_DAYS: [u32; 4] = [7, 14, 28, 90];
 
-pub const SUMMARY_V: u32 = 6;
+pub const SUMMARY_V: u32 = 7;
 
 /// 按天数据够不够覆盖「前一段」：最早一天要早于最新一天往前 2×days−1 天
 fn covers<T>(rows: &[T], date: impl Fn(&T) -> &str, days: i64) -> bool {
@@ -658,6 +663,7 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
     let ai = windows(&ai_rows, |r| &r.key, |r| r.sessions, 28);
     let sessions = windows(&gad, |r| &r.key, |r| r.sessions, 28);
     let g = windows(&gsd, |r| &r.key, |r| r.clicks, 28);
+    let steady = steady_clicks(&gsd);
     let b = windows(&bsd, |r| &r.key, |r| r.clicks, 28);
     let gi = windows(&gsd, |r| &r.key, |r| r.impressions, 28);
     let bi = windows(&bsd, |r| &r.key, |r| r.impressions, 28);
@@ -682,6 +688,8 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
         users: users.0,
         users_prev: users.1,
         sessions_trend: sessions.2.into_iter().map(|(_, v)| v).collect(),
+        clicks_steady: steady.0,
+        clicks_steady_prev: steady.1,
         search_clicks: g.0 + b.0,
         search_clicks_prev: g.1 + b.1,
         search_impressions: gi.0 + bi.0,
@@ -723,6 +731,27 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
         bing_end: bsd.iter().map(|r| r.key.clone()).max().unwrap_or_default(),
         gsc_days: gsd.len(),
     }
+}
+
+/// 近 28 天和前 28 天按天的点击，各去掉最高的两天再加总。按天数据是全部点击，不受隐去的搜索词影响。
+fn steady_clicks(daily: &[Row]) -> (f64, f64) {
+    let trimmed = |mut days: Vec<f64>| -> f64 {
+        days.sort_by(|a, b| b.total_cmp(a));
+        days.iter().skip(2).sum()
+    };
+    let mut keys: Vec<&str> = daily.iter().map(|r| r.key.as_str()).collect();
+    keys.sort_unstable();
+    let Some(end) = keys.last().and_then(|k| chrono::NaiveDate::parse_from_str(k, "%Y-%m-%d").ok()) else { return (0.0, 0.0) };
+    let (mut now, mut prev) = (Vec::new(), Vec::new());
+    for r in daily {
+        let Ok(d) = chrono::NaiveDate::parse_from_str(&r.key, "%Y-%m-%d") else { continue };
+        match (end - d).num_days() {
+            0..=27 => now.push(r.clicks),
+            28..=55 => prev.push(r.clicks),
+            _ => {}
+        }
+    }
+    (trimmed(now), trimmed(prev))
 }
 
 /// 读摘要；还没有（旧缓存）就现算一份存下。
@@ -944,6 +973,22 @@ mod rebind_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_one_or_two_day_spike_does_not_count_as_a_baseline() {
+        let day = |offset: i64, clicks: f64| Row { key: (chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap() - chrono::Duration::days(offset)).format("%Y-%m-%d").to_string(), clicks, ..Default::default() };
+        // coinufo 的样子：前一段两天突发 51 + 28，平时几乎没有点击
+        let mut spike: Vec<Row> = (0..56).map(|i| day(i, if i % 9 == 0 { 1.0 } else { 0.0 })).collect();
+        spike[35].clicks = 51.0;
+        spike[34].clicks = 28.0;
+        let (now, prev) = steady_clicks(&spike);
+        assert!(prev < 20.0, "{prev}");
+        assert!(now < 5.0, "{now}");
+        // 真的掉了：前一段每天 10，这一段每天 2
+        let fall: Vec<Row> = (0..56).map(|i| day(i, if i < 28 { 2.0 } else { 10.0 })).collect();
+        assert_eq!(steady_clicks(&fall), (52.0, 260.0));
+        assert_eq!(steady_clicks(&[]), (0.0, 0.0));
+    }
+
     #[test]
     fn windows_split_last_28_days_from_the_28_before() {
         let rows: Vec<(String, f64)> = (0..60).map(|i| ((chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap() + chrono::Duration::days(i)).format("%Y-%m-%d").to_string(), 1.0)).collect();
