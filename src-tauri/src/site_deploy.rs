@@ -481,6 +481,9 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
     let started = now();
     let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: trigger.into(), ..Default::default() };
     let result = deploy_inner(site, conns, site_dir, job, &mut rec, spec.unwrap_or_default()).await;
+    if result.is_ok() && rec.dirty && trigger == "manual" {
+        commit_shipped(site, &mut rec, job).await;
+    }
     rec.duration = now().saturating_sub(started);
     rec.ok = result.is_ok();
     if let Err(e) = &result {
@@ -488,6 +491,48 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
     }
     push_history(site_dir, &rec);
     result.map(|_| rec)
+}
+
+/// 手动上线时确认过带上未提交的改动，上线成功后线上就是这些改动：提交进代码，让代码和线上一致。
+/// 不提交的话，之后谁撤销了，下次上线就把它们丢了；文件夹不干净还会挡住托管的自动上线。
+/// 不在默认分支（在做别的事）、迁移中（上的只是预览）不动。
+async fn commit_shipped(site: &Site, rec: &mut DeployRecord, job: &Job) {
+    if site.source != "local" || site.origin == "migrating" {
+        return;
+    }
+    let Ok(dir) = crate::site_git::code_dir(site, None) else { return };
+    if crate::site_git::current_branch(&dir).await != site.default_branch {
+        return;
+    }
+    let Some((dirty, _)) = crate::site_runner::dirty_files(site, &dir).await else { return };
+    let files = shipped_files(&dir, dirty, &crate::managed::build_outputs(&site.app_dir(&dir)), rec.ts);
+    if files.is_empty() {
+        return;
+    }
+    let names = files.iter().take(3).cloned().collect::<Vec<_>>().join("、");
+    let more = if files.len() > 3 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
+    let message = format!("提交已上线的改动：{names}{more}");
+    match commit_only(&dir, &files, &message).await {
+        Ok(()) => {
+            rec.commit = crate::site_git::head_sha(&dir).await;
+            rec.message = message;
+            rec.dirty = !crate::site_git::is_clean(&dir).await;
+            job.line(&format!("这次带上的未提交改动已经上线，一并提交进代码：{names}{more}"));
+        }
+        Err(e) => job.line(&format!("这次带上的未提交改动已经上线，但没能自动提交，需要你手动提交（{e}）")),
+    }
+}
+
+/// 这次上线确实带上了的改动：上线开始之后才改的不算（可能根本没进这次构建），构建脚本自动写的数据文件也不算。
+fn shipped_files(dir: &Path, dirty: Vec<String>, outputs: &[String], started: u64) -> Vec<String> {
+    dirty.into_iter().filter(|f| !outputs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())) && !crate::site_git::changed_since(dir, f, started)).collect()
+}
+
+/// 只提交这几个文件（已跟踪的改动和删除），暂存区里别的东西不动。
+async fn commit_only(dir: &Path, files: &[String], message: &str) -> Result<(), String> {
+    let mut args = vec!["commit", "-qm", message, "--only", "--"];
+    args.extend(files.iter().map(String::as_str));
+    crate::site_git::git_commit_ok(dir, &args).await.map(|_| ())
 }
 
 /// 上次上线的构建产物里的全部页面。
@@ -975,6 +1020,46 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn what_a_manual_deploy_shipped_gets_committed_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("pilot-shipped-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let git = |args: &'static [&'static str]| {
+            let dir = dir.clone();
+            async move { assert!(crate::site_git::git(&dir, args, "").await.unwrap().ok, "{args:?}") }
+        };
+        git(&["init", "-q"]).await;
+        for f in ["src/a.css", "src/later.css", "src/gone.css", "src/fees.json"] {
+            std::fs::write(dir.join(f), "old").unwrap();
+        }
+        git(&["add", "-A"]).await;
+        crate::site_git::git_commit_ok(&dir, &["commit", "-qm", "first"]).await.unwrap();
+
+        std::fs::write(dir.join("src/a.css"), "fixed").unwrap();
+        std::fs::remove_file(dir.join("src/gone.css")).unwrap();
+        std::fs::write(dir.join("src/fees.json"), "rebuilt").unwrap();
+        std::fs::write(dir.join("uploads.png"), "untracked").unwrap();
+        let started = now() + 100;
+        // 上线开始之后才改的
+        std::fs::write(dir.join("src/later.css"), "editing").unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(200);
+        std::fs::File::options().write(true).open(dir.join("src/later.css")).unwrap().set_modified(later).unwrap();
+
+        let dirty = vec!["src/a.css".to_string(), "src/fees.json".into(), "src/gone.css".into(), "src/later.css".into()];
+        let files = shipped_files(&dir, dirty, &["fees.json".to_string()], started);
+        assert_eq!(files, vec!["src/a.css", "src/gone.css"]);
+
+        commit_only(&dir, &files, "提交已上线的改动").await.unwrap();
+        let o = crate::site_git::git_ok(&dir, &["show", "--name-status", "--format=%s", "HEAD"], "").await.unwrap();
+        assert!(o.starts_with("提交已上线的改动"), "{o}");
+        assert!(o.contains("M\tsrc/a.css") && o.contains("D\tsrc/gone.css"), "{o}");
+        assert!(!o.contains("later") && !o.contains("fees") && !o.contains("uploads"), "{o}");
+        // 没提交的还留在文件夹里，原样不动
+        assert_eq!(std::fs::read_to_string(dir.join("src/later.css")).unwrap(), "editing");
+        assert!(!crate::site_git::is_clean(&dir).await);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn local_env_drops_server_only_paths() {

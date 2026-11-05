@@ -100,6 +100,13 @@ pub async fn is_clean(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 文件在 `ts`（秒）或之后改过。删掉的文件没有修改时间，看所在目录（删文件会更新目录的修改时间）；读不到时间也算改过。
+pub fn changed_since(dir: &Path, file: &str, ts: u64) -> bool {
+    let p = dir.join(file);
+    let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
+    m.and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_none_or(|d| d.as_secs() >= ts)
+}
+
 /// 分支名只允许 `pilot/` 前缀下的安全字符，避免被拼进命令时出意外。
 pub fn safe_branch(name: &str) -> bool {
     !name.is_empty()

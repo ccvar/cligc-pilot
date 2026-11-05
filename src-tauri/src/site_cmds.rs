@@ -819,13 +819,7 @@ async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[c
         return true;
     }
     let Ok(o) = crate::site_git::git(dir, &["diff", "--name-only", "HEAD"], "").await else { return true };
-    let changed_after = |f: &str| {
-        let p = dir.join(f);
-        // 删掉的文件没有修改时间，看所在目录（删文件会更新目录的修改时间）
-        let m = std::fs::metadata(&p).or_else(|_| std::fs::metadata(p.parent().unwrap_or(dir)));
-        m.and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).is_none_or(|d| d.as_secs() >= r.ts)
-    };
-    o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).any(changed_after)
+    o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).any(|f| crate::site_git::changed_since(dir, f, r.ts))
 }
 
 /// 最新提交的时间和未提交文件的修改时间里较晚的那个（秒）

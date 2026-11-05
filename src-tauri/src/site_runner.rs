@@ -2810,8 +2810,8 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
         }
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
-            if let Some(why) = local_not_ready(site, &main).await {
-                return Err(format!("{why}。提交或撤销后再上线；托管里自动上线的条目，文件夹干净了 Pilot 会自己接着上线（Pilot 不会动你正在改的东西）"));
+            if let Some(why) = local_not_ready(site, &main, &site_dir).await {
+                return Err(format!("{why}。处理好后再上线；托管里自动上线的条目，文件夹干净了 Pilot 会自己接着上线（Pilot 不会动你正在改的东西）"));
             }
             if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
                 // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
@@ -3205,7 +3205,7 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
         }
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
-            if let Some(why) = local_not_ready(site, &main).await {
+            if let Some(why) = local_not_ready(site, &main, &ctx.site_dir(&site.id)).await {
                 return Err(format!("{why}。请先处理好再回滚"));
             }
             if let Err(e) = crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await {
@@ -4248,7 +4248,7 @@ pub async fn sync_all_data(app: tauri::AppHandle) -> bool {
 /// 读不到 git 状态返回 None。
 pub async fn dirty_files(site: &Site, dir: &Path) -> Option<(Vec<String>, bool)> {
     // 用 diff --name-only 拿纯路径：git() 会把输出两头的空白去掉，status --porcelain 第一行开头的空格会被吃掉、路径错一位
-    let o = crate::site_git::git(dir, &["diff", "--name-only", "HEAD"], "").await.ok().filter(|o| o.ok)?;
+    let o = crate::site_git::git(dir, &["-c", "core.quotepath=off", "diff", "--name-only", "HEAD"], "").await.ok().filter(|o| o.ok)?;
     let files: Vec<String> = o.stdout.lines().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
     let outs = crate::managed::build_outputs(&site.app_dir(dir));
     let generated = !files.is_empty() && files.iter().all(|f| outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())));
@@ -4289,7 +4289,7 @@ pub const LOCAL_NOT_READY: &str = "站点文件夹没准备好：";
 
 /// 本地文件夹站点合并 / 回滚前：要在默认分支上、没有未提交的改动（构建脚本自动重写的数据文件先还原）。
 /// 不行就返回原因，写明在哪个分支、哪些文件没提交。
-async fn local_not_ready(site: &Site, main: &Path) -> Option<String> {
+async fn local_not_ready(site: &Site, main: &Path, site_dir: &Path) -> Option<String> {
     let cur = crate::site_git::current_branch(main).await;
     if cur != site.default_branch {
         return Some(format!("{LOCAL_NOT_READY}当前在 {} 上，不在 {} 分支", if cur.is_empty() { "分离 HEAD".to_string() } else { format!("{cur} 分支") }, site.default_branch));
@@ -4301,9 +4301,29 @@ async fn local_not_ready(site: &Site, main: &Path) -> Option<String> {
     Some(if files.is_empty() {
         format!("{LOCAL_NOT_READY}读不到 git 状态")
     } else {
-        let more = if files.len() > 5 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
-        format!("{LOCAL_NOT_READY}有未提交的改动（{}{more}）", files.iter().take(5).cloned().collect::<Vec<_>>().join("、"))
+        // 上次上线带着未提交的改动、这些文件之后没再改过：线上已经是它们了
+        let last = crate::site_deploy::load_history(site_dir).into_iter().find(|r| r.ok && r.trigger != "files").filter(|r| r.dirty);
+        let live: Vec<String> = last.map(|r| files.iter().filter(|f| !crate::site_git::changed_since(main, f, r.ts)).cloned().collect()).unwrap_or_default();
+        format!("{LOCAL_NOT_READY}{}", dirty_advice(&files, &live))
     })
+}
+
+fn file_list(files: &[String]) -> String {
+    let more = if files.len() > 5 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
+    format!("{}{more}", files.iter().take(5).cloned().collect::<Vec<_>>().join("、"))
+}
+
+/// 没提交的文件该怎么处理。已经上线的不能撤销：撤销了，下次上线线上就少了这些改动。
+fn dirty_advice(files: &[String], live: &[String]) -> String {
+    let all = file_list(files);
+    const KEEP: &str = "要提交，别撤销（撤销后下次上线会把它们从线上去掉）";
+    if live.is_empty() {
+        format!("有未提交的改动（{all}），提交或撤销都行")
+    } else if live.len() == files.len() {
+        format!("有未提交的改动（{all}），这些改动已经上线了，{KEEP}")
+    } else {
+        format!("有未提交的改动（{all}），其中 {} 已经上线了，{KEEP}", file_list(live))
+    }
 }
 
 /// 不改动文件夹地看一眼：在默认分支上、没有未提交的改动（只有构建脚本重写的数据文件也算干净）。
@@ -4665,6 +4685,21 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(600)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod dirty_advice_tests {
+    use super::dirty_advice;
+
+    #[test]
+    fn files_already_live_are_not_offered_for_undo() {
+        let (a, b) = ("a.css".to_string(), "b.css".to_string());
+        assert_eq!(dirty_advice(&[a.clone()], &[]), "有未提交的改动（a.css），提交或撤销都行");
+        let all = dirty_advice(&[a.clone()], &[a.clone()]);
+        assert!(all.contains("这些改动已经上线了") && all.contains("别撤销") && !all.contains("提交或撤销"), "{all}");
+        let some = dirty_advice(&[a.clone(), b], &[a]);
+        assert!(some.contains("（a.css、b.css）") && some.contains("其中 a.css 已经上线了") && some.contains("别撤销"), "{some}");
+    }
 }
 
 #[cfg(test)]
