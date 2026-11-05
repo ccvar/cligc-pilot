@@ -10,6 +10,7 @@
   import ModelMenu from './ModelMenu.svelte';
   import OpsErrorHint from './OpsErrorHint.svelte';
   import BrainIcon from '$lib/BrainIcon.svelte';
+  import { ago, full as fullTime } from './fmt';
   import { modelTarget } from '$lib/state/fleet.svelte.js';
   import { sites, openSite } from '$lib/state/sites.svelte.js';
   import { acceptItem, acceptItems, reshipItem, blockedCode, setContentCode, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
@@ -56,6 +57,8 @@
     { k: 'attention', l: '上线后待核对', c: 'warn', tip: '已经上线、网站正常，但线上验收有几项要你看一眼。没问题就点「没问题」，有问题可以回滚。' },
   ];
   // 失败的显示失败原因（note）；verdict 是上线前判定留下的，失败后还在，不能拿来当原因
+  // 这一条什么时候变成现在这样：上线后待核对的看上线时间（之后的复查也会刷新 updated_at）
+  const whenOf = (i: OpsItem) => (i.status === 'deployed' && i.deployed_at) || i.updated_at;
   const why = (i: OpsItem) => (i.status === 'deployed' ? i.attention : i.status === 'failed' || i.status === 'merged' ? i.note : i.verdict && i.verdict !== 'auto' ? i.verdict : i.note) || '';
 
   const bySite = $derived.by(() => {
@@ -168,6 +171,7 @@
                   <button class="row" onclick={() => toggle(i.id)} aria-expanded={isOpen}>
                     {#if !sel}<span class="sn"><SiteIcon id={x.site_id} size={13} />{x.site_name}</span>{/if}
                     <span class="tt">{i.opp.title}</span>
+                    <span class="at" data-tip={fullTime(whenOf(i))}>{ago(whenOf(i))}</span>
                     {#if busy}<span class="pill run cf"><span class="spin"></span>{busy.label}</span>{:else if conflicts.has(i.id)}<span class="pill warn cf" data-tip="和主分支有冲突，要让 AI 在最新代码上重改">有冲突</span>{/if}
                     <svg class="chev" class:up={isOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
                   </button>
@@ -280,6 +284,7 @@
   .sn { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 160px; font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tt { flex: 1; min-width: 0; font-size: 13px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   li.open .tt { white-space: normal; }
+  .at { flex: none; font-size: 12px; color: var(--dim); white-space: nowrap; }
   .chev { flex: none; color: var(--faint); transition: transform .16s; }
   .chev.up { transform: rotate(180deg); }
   .row:hover .chev { color: var(--dim); }
