@@ -21,6 +21,53 @@ pub struct SourceMeta {
     pub start: String,
     pub end: String,
     pub error: String,
+    /// 连续失败了几次（成功清零）、最后一次失败的时间
+    #[serde(default)]
+    pub fails: u32,
+    #[serde(default)]
+    pub last_try: u64,
+}
+
+impl SourceMeta {
+    /// 算不算「数据源出错」：偶尔失败一次（超时、限流）下次多半就好了，连着失败才算；自己好不了的马上算。
+    pub fn alarming(&self) -> bool {
+        !self.error.is_empty() && (self.fails >= 2 || stays_broken(&self.error))
+    }
+    /// 失败过一次、还没确认：隔半小时再拉一次
+    fn retry_due(&self, now: u64) -> bool {
+        !self.error.is_empty() && !stays_broken(&self.error) && self.fails < 2 && now.saturating_sub(self.last_try) >= 1800
+    }
+}
+
+/// 不会自己好的错误：没权限、连接被删、凭据失效，要人处理
+fn stays_broken(e: &str) -> bool {
+    no_access(e) || ["sufficient permission", "not have permission", "permission_denied", "连接已被删除", "拒绝了凭据", "重新登录", "不是 Google"].iter().any(|p| e.contains(p))
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct DataFailure {
+    ts: u64,
+    source: String,
+    error: String,
+}
+
+/// 这次拉取的结果。失败时留着旧数据的区间，把错误记进 data_errors.json（最近 30 条）：成功后 error 就清空了，之后还能查到原因。
+fn settle(dir: &Path, source: &str, old: &SourceMeta, res: Result<(String, String), String>) -> SourceMeta {
+    match res {
+        Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, ..Default::default() },
+        Err(error) => {
+            let mut log: Vec<DataFailure> = read_json(dir, "data_errors.json");
+            log.insert(0, DataFailure { ts: now(), source: source.into(), error: error.clone() });
+            log.truncate(30);
+            let _ = write_json(dir, "data_errors.json", &log);
+            SourceMeta { error, fails: old.fails + 1, last_try: now(), ..old.clone() }
+        }
+    }
+}
+
+/// 这个站有没有失败过一次、到时间再确认的数据源
+pub fn retry_due(meta: &CacheMeta, now: u64) -> bool {
+    [&meta.ga4, &meta.gsc, &meta.bing].iter().any(|m| m.retry_due(now))
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -476,10 +523,7 @@ pub async fn refresh(site: &Site, conns: &ConnStore, store: &SiteStore, site_dir
                 }
             }
         }
-        meta.ga4 = match res {
-            Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-            Err(e) => SourceMeta { error: e, ..meta.ga4.clone() },
-        };
+        meta.ga4 = settle(&dir, "GA4", &meta.ga4, res);
     }
     if !d.gsc_conn().is_empty() && !d.gsc_site.is_empty() && due(&meta.gsc) {
         let mut res = gsc_via(conns, d.gsc_conn(), &d.gsc_site, &dir).await;
@@ -496,19 +540,14 @@ pub async fn refresh(site: &Site, conns: &ConnStore, store: &SiteStore, site_dir
                 }
             }
         }
-        meta.gsc = match res {
-            Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-            Err(e) => SourceMeta { error: e, ..meta.gsc.clone() },
-        };
+        meta.gsc = settle(&dir, "Search Console", &meta.gsc, res);
     }
     if !d.bing_conn_id.is_empty() && !d.bing_site.is_empty() && due(&meta.bing) {
-        meta.bing = match conns.get(&d.bing_conn_id).and_then(|c| crate::keychain::get_key(&c.id)) {
-            Ok(key) => match fetch_bing(&key, &d.bing_site, &dir).await {
-                Ok((start, end)) => SourceMeta { fetched_at: now(), start, end, error: String::new() },
-                Err(e) => SourceMeta { error: e, ..meta.bing.clone() },
-            },
-            Err(_) => SourceMeta { error: "站点的 Bing 连接已被删除".into(), ..meta.bing.clone() },
+        let res = match conns.get(&d.bing_conn_id).and_then(|c| crate::keychain::get_key(&c.id)) {
+            Ok(key) => fetch_bing(&key, &d.bing_site, &dir).await,
+            Err(_) => Err("站点的 Bing 连接已被删除".to_string()),
         };
+        meta.bing = settle(&dir, "Bing", &meta.bing, res);
     }
     let _ = write_json(&dir, "meta.json", &meta);
     // 机会列表跟着数据一起重算，模型的查询工具和看板读的是同一份。
@@ -614,7 +653,7 @@ pub struct Win {
 /// 全部站点列表能选的统计时间段（天）
 pub const WIN_DAYS: [u32; 4] = [7, 14, 28, 90];
 
-pub const SUMMARY_V: u32 = 7;
+pub const SUMMARY_V: u32 = 8;
 
 /// 按天数据够不够覆盖「前一段」：最早一天要早于最新一天往前 2×days−1 天
 fn covers<T>(rows: &[T], date: impl Fn(&T) -> &str, days: i64) -> bool {
@@ -667,10 +706,10 @@ pub fn compute_summary(site_dir: &Path) -> Summary {
     let b = windows(&bsd, |r| &r.key, |r| r.clicks, 28);
     let gi = windows(&gsd, |r| &r.key, |r| r.impressions, 28);
     let bi = windows(&bsd, |r| &r.key, |r| r.impressions, 28);
-    let errors = [("GA4", &meta.ga4.error), ("Search Console", &meta.gsc.error), ("Bing", &meta.bing.error)]
+    let errors = [("GA4", &meta.ga4), ("Search Console", &meta.gsc), ("Bing", &meta.bing)]
         .iter()
-        .filter(|(_, e)| !e.is_empty())
-        .map(|(l, e)| format!("{l}：{e}"))
+        .filter(|(_, m)| m.alarming())
+        .map(|(l, m)| format!("{l}：{}", m.error))
         .collect();
     Summary {
         gsc_clicks: t.clicks,
@@ -968,6 +1007,48 @@ mod rebind_tests {
         assert!(no_access("没有权限：User does not have sufficient permission for site"));
         assert!(!no_access("对应的 Google API 还没启用：x"));
         assert!(!no_access("Google 凭据无效或已过期"));
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[test]
+    fn one_failure_is_not_an_alarm_until_it_happens_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = SourceMeta { start: "a".into(), end: "b".into(), fetched_at: 5, ..Default::default() };
+        let first = settle(dir.path(), "GA4", &ok, Err("请求超时".into()));
+        assert_eq!((first.fails, first.end.as_str()), (1, "b"));
+        assert!(!first.alarming());
+        let meta = CacheMeta { ga4: first.clone(), ..Default::default() };
+        assert!(!retry_due(&meta, first.last_try + 60));
+        assert!(retry_due(&meta, first.last_try + 1800));
+        let second = settle(dir.path(), "GA4", &first, Err("请求超时".into()));
+        assert!(second.alarming());
+        assert!(!second.retry_due(second.last_try + 7200), "确认过了，不再半小时一次");
+        // 成功清零，原因还查得到
+        let back = settle(dir.path(), "GA4", &second, Ok(("c".into(), "d".into())));
+        assert_eq!((back.fails, back.error.as_str(), back.last_try), (0, "", 0));
+        let log: Vec<DataFailure> = read_json(dir.path(), "data_errors.json");
+        assert_eq!(log.len(), 2);
+        assert_eq!((log[0].source.as_str(), log[0].error.as_str()), ("GA4", "请求超时"));
+    }
+
+    #[test]
+    fn what_will_not_fix_itself_alarms_at_once() {
+        for e in ["没有权限：看不到这个资源", "站点的 Bing 连接已被删除", "Google 拒绝了凭据（invalid_grant）", "OAuth 凭据损坏，请重新登录"] {
+            let m = SourceMeta { error: e.into(), fails: 1, ..Default::default() };
+            assert!(m.alarming(), "{e}");
+            assert!(!m.retry_due(u64::MAX), "{e}");
+        }
+    }
+
+    #[test]
+    fn an_error_from_before_this_version_gets_confirmed() {
+        let old = SourceMeta { error: "请求超时".into(), ..Default::default() };
+        assert!(!old.alarming());
+        assert!(old.retry_due(10_000));
     }
 }
 

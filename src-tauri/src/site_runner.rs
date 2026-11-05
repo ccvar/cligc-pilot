@@ -4202,6 +4202,18 @@ pub fn data_syncing() -> bool {
     DATA_SYNCING.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+async fn retry_failed_data(app: tauri::AppHandle) {
+    use tauri::Manager;
+    let st = app.state::<crate::AppState>();
+    for site in st.sites.list() {
+        let dir = st.sites.data_dir(&site.id);
+        if crate::site_data::retry_due(&crate::site_data::load_meta(&dir), now()) {
+            crate::site_data::refresh(&site, &st.conns, &st.sites, &dir, false).await;
+            let _ = app.emit("site-data", serde_json::json!({ "site_id": site.id }));
+        }
+    }
+}
+
 async fn daily_data_sync(ctx: Ctx) {
     sync_all_data(ctx.app.clone()).await;
 }
@@ -4495,6 +4507,10 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 set_last_data_sync(&st.data_dir, &today());
                 // 几十个站点各拉三个数据源要跑好几分钟：放到后台，别把这一轮的任务和上线复查都拖住
                 tauri::async_runtime::spawn(daily_data_sync(ctx.clone()));
+            }
+            // 数据源失败过一次的：隔半小时再拉一次确认（见 SourceMeta::alarming）
+            if !DATA_SYNCING.load(std::sync::atomic::Ordering::SeqCst) {
+                tauri::async_runtime::spawn(retry_failed_data(app.clone()));
             }
             // 内容分发：新上线的文章写摘要、按渠道的发布方式发出去（见 syndicate）
             crate::syndicate::schedule(&app);
