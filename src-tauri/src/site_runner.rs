@@ -818,6 +818,10 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             Err(e) => {
                 // 失败不重放：标记失败、写明原因，等你处理；继续下一个机会。
                 job.line(&format!("「{}」处理失败：{e}", item.opp.title));
+                if e.starts_with(crate::site_verify::DOMAIN_TAKEN) {
+                    stopped = Some(e);
+                    break;
+                }
                 left -= 1;
                 // 已经合并进主分支、只是上线没完成的留在「已合并」（可以重新上线）；验收失败的回滚流程已经写好状态；只有还在处理中的才标失败
                 let (note, head) = failure_note(job, &e, &site_dir, &item, &site.id);
@@ -1120,6 +1124,14 @@ pub fn source_of(o: &Opportunity) -> &str {
 
 async fn process(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, manual: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
+    // 域名指着别的东西：改了也验不了、上不了线，不花 AI 额度。新页面没有网址，拿队列里一个已知的页面查
+    let queue = site_ops::load_queue(&site_dir);
+    let known = if item.opp.page.is_empty() { queue.iter().map(|i| i.opp.page.as_str()).find(|p| !p.is_empty()).unwrap_or_default() } else { item.opp.page.as_str() };
+    if let Some(why) = crate::launch_cmds::domain_taken_at(&ctx.state().conns, site, known).await {
+        pause_for_domain(ctx, site, &why);
+        job.step("work", "failed", &why);
+        return Err(format!("{}{why}", crate::site_verify::DOMAIN_TAKEN));
+    }
     // 动手前先确认问题还在：机会是按某一天的数据算的，过了几天可能已经好了，就不让 AI 去改
     if let Some(note) = gone_already(ctx, site, job, item).await {
         if let Some(d) = site_ops::update_item(&site_dir, &item.id, now(), |i| {
@@ -2155,6 +2167,24 @@ fn latest_live(list: &[crate::cf::PagesDeployment]) -> Option<&crate::cf::PagesD
 }
 
 async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec, commit: &str, trigger: &str) -> Result<Shipped, String> {
+    let r = ship_inner(ctx, site, job, spec, commit, trigger).await;
+    if let Err(e) = &r {
+        if let Some(why) = e.strip_prefix(crate::site_verify::DOMAIN_TAKEN) {
+            pause_for_domain(ctx, site, why);
+        }
+    }
+    r
+}
+
+/// 域名被别的东西占着：托管停下等人处理（再改也验不了、上不了线）。已合并的改动已经在项目里，域名处理好就是线上的。
+fn pause_for_domain(ctx: &Ctx, site: &Site, why: &str) {
+    if group_rules(ctx, site).is_some_and(|g| g.active_for(&site.id)) {
+        pause_site(ctx, site, &format!("{}{why}", crate::site_verify::DOMAIN_TAKEN));
+        ctx.notify(&format!("{} · 域名没指向这个站点，已暂停托管", site.name), why);
+    }
+}
+
+async fn ship_inner(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec, commit: &str, trigger: &str) -> Result<Shipped, String> {
     // 上线前先把要验收的已有页面查一遍：本来就有的问题（旧文 noindex、sitemap 没有标题…）不算这次改动的
     let mut spec = spec;
     if trigger != "rollback" {
@@ -2244,6 +2274,10 @@ async fn ship(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify::Spec,
                 tokio::time::sleep(Duration::from_secs(20)).await;
             }
             let rep = crate::site_verify::run(&spec, job, true).await;
+            if let Some(why) = crate::launch_cmds::domain_taken(&st.conns, site, &rep).await {
+                job.step("verify", "failed", &why);
+                return Err(format!("{}{why}", crate::site_verify::DOMAIN_TAKEN));
+            }
             let shipped = Shipped { url: String::new(), checks: rep.checks.clone(), attention: rep.soft.clone() };
             if !rep.hard.is_empty() {
                 job.step("verify", "failed", &rep.hard.join("；"));
@@ -3056,7 +3090,12 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
     }
     let revert_sha = revert_item(ctx, site, job, &item).await?;
     if site.deploy.mode != "none" {
-        ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await?;
+        match ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await {
+            Err(e) if e.starts_with(crate::site_verify::DOMAIN_TAKEN) => return Ok(format!("已回滚并上传到 Cloudflare 项目。{e}")),
+            r => {
+                r?;
+            }
+        }
     }
     Ok("已回滚并重新上线".into())
 }
@@ -3654,6 +3693,17 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         let stage = i.watch_stage;
         let when = if stage == 0 { "上线 1 小时后" } else { "上线 24 小时后" };
         if !rep.hard.is_empty() {
+            // 上线之后域名被别的东西抢走了：不是这条改动的问题，不回滚；隔几小时再查，域名处理好了接着走复查
+            if let Some(why) = crate::launch_cmds::domain_taken(&ctx.state().conns, site, &rep).await {
+                pause_for_domain(ctx, site, &why);
+                site_ops::update_item(&site_dir, &i.id, now(), |x| {
+                    x.watched = why.clone();
+                    x.checks = rep.checks.clone();
+                    x.watch_due = now() + 6 * 3600;
+                })?;
+                out.push(format!("{} 没复查成：{why}", i.opp.title));
+                continue;
+            }
             let failure = rep.hard.join("；");
             site_ops::update_item(&site_dir, &i.id, now(), |x| {
                 x.watched = failure.clone();

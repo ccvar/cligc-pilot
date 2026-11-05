@@ -13,6 +13,8 @@ use crate::site_jobs::Job;
 
 /// 严重失败时，部署返回的错误以它开头（调用方据此回滚）。
 pub const HARD_PREFIX: &str = "线上验收没通过：";
+/// 域名打开的不是这个站点的项目（别的 Worker / 项目占着）：查的是别人的页面，和这次改动无关。不回滚、不让 AI 重做
+pub const DOMAIN_TAKEN: &str = "域名没指向这个站点：";
 
 #[derive(Clone, Serialize, Deserialize, Default, Debug, PartialEq)]
 pub struct Check {
@@ -57,6 +59,10 @@ pub struct Report {
     pub deploy_issue: bool,
     /// 打开正常、没有页面级问题的网址（可以提交 IndexNow）
     pub passed: Vec<String>,
+    /// 线上打不开的网址（包括上线前就打不开的）
+    pub unopened: Vec<String>,
+    /// 这次加的文字线上没找到
+    pub missing_text: bool,
 }
 
 const MAX_PAGES: usize = 12;
@@ -117,7 +123,7 @@ fn client() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-fn path_of(url: &str) -> String {
+pub(crate) fn path_of(url: &str) -> String {
     url.split_once("://").and_then(|(_, r)| r.find('/').map(|i| r[i..].to_string())).unwrap_or_else(|| "/".into())
 }
 
@@ -158,7 +164,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
     let mut snippets_ok = snippets.is_empty();
     for (n, w) in waits.iter().enumerate() {
         if *w > 0 {
-            let pending = got.iter().filter(|g| g.is_none()).count();
+            let pending = urls.iter().enumerate().filter(|(i, u)| got[*i].is_none() && !broken_before(spec, u, &last[*i])).count();
             let why = if pending > 0 { format!("还有 {pending} 个页面没打开正常，") } else { "新内容还没在线上出现，".into() };
             job.line(&format!("线上验收：{why}{w} 秒后再查一次（第 {}/{} 次）", n + 1, waits.len()));
             // 步骤条下面也写上，不然看起来像卡住了
@@ -187,7 +193,8 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             let text: String = got.iter().skip(first).flatten().map(|f| format!("{}\n{}\n{}", html_title(&f.body), meta_content(&f.body, "description"), visible_text(&f.body))).collect::<Vec<_>>().join("\n");
             snippets_ok = snippets.iter().any(|s| page_has(&text, s));
         }
-        if got.iter().all(|g| g.is_some()) && snippets_ok {
+        // 上线前就打不开的页面不用等：多等也不会变
+        if urls.iter().enumerate().all(|(i, u)| got[i].is_some() || broken_before(spec, u, &last[i])) && snippets_ok {
             break;
         }
     }
@@ -202,6 +209,12 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
         match &got[i] {
             Some(_) => rep.checks.push(Check { label, ok: true, detail: String::new(), hard: true }),
             None => {
+                rep.unopened.push(u.clone());
+                if broken_before(spec, u, &last[i]) {
+                    job.line(&format!("{}：上线前就{}，不是这次造成的", path_of(u), last[i]));
+                    rep.checks.push(Check { label, ok: false, detail: format!("上线前就{}", last[i]), hard: false });
+                    continue;
+                }
                 let msg = if i == 0 { format!("首页 {}", last[i]) } else { format!("{} {}", path_of(u), last[i]) };
                 if i == 0 {
                     rep.home_down = true;
@@ -224,6 +237,7 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
             hard: false,
         });
         if !snippets_ok {
+            rep.missing_text = true;
             rep.soft.push(format!("这次加的内容在验收的页面里没找到（如「{s}」）"));
         }
     }
@@ -397,11 +411,29 @@ pub async fn snapshot(spec: &Spec) -> std::collections::HashMap<String, Vec<Stri
         if f.challenged {
             continue;
         }
-        let checkable = (200..300).contains(&f.status) && !hidden_page(&f.body) && is_html(&f.body);
+        // 上线前就不存在：记下来，上线后还是这样不算这次造成的（比如域名被别的东西占着）。其它错误多半是抖动，不记
+        if matches!(f.status, 404 | 410) {
+            out.insert(path_of(u), vec![format!("返回 {}", f.status)]);
+            continue;
+        }
+        if !(200..300).contains(&f.status) {
+            continue;
+        }
+        let checkable = !hidden_page(&f.body) && is_html(&f.body);
         let main = spec.primary.iter().any(|x| same_page(x, u));
         out.insert(path_of(u), if checkable { page_issues(&f, u, main) } else { Vec::new() });
     }
     out
+}
+
+/// 这个页面现在打不开的样子（「返回 404」）和上线前记下的一样。
+fn broken_before(spec: &Spec, url: &str, now: &str) -> bool {
+    !now.is_empty() && spec.before.get(&path_of(url)).is_some_and(|old| old.iter().any(|x| x == now))
+}
+
+/// 这个网址现在能正常打开（被防火墙拦住的查不了，不算）。
+pub async fn opens(url: &str) -> bool {
+    fetch(&client(), url).await.is_ok_and(|f| (200..300).contains(&f.status) && !f.challenged)
 }
 
 /// 是不是网页：AI 改了生成 sitemap / RSS / llms.txt 的代码时会把 /sitemap.xml 这类报成改到的页面，
@@ -1028,6 +1060,18 @@ mod live {
 #[cfg(test)]
 mod attribution_tests {
     use super::*;
+    #[test]
+    fn a_page_already_missing_before_shipping_is_not_this_changes_fault() {
+        let mut spec = Spec::default();
+        spec.before.insert("/guide/a/".into(), vec!["返回 404".into()]);
+        spec.before.insert("/guide/b/".into(), vec![]);
+        assert!(broken_before(&spec, "https://x.com/guide/a/", "返回 404"));
+        // 上线前能开、现在打不开；上线前没有记录；错误不一样：都算这次的
+        assert!(!broken_before(&spec, "https://x.com/guide/b/", "返回 404"));
+        assert!(!broken_before(&spec, "https://x.com/guide/c/", "返回 404"));
+        assert!(!broken_before(&spec, "https://x.com/guide/a/", "返回 500"));
+        assert!(!broken_before(&spec, "https://x.com/guide/a/", ""));
+    }
     #[test]
     fn only_problems_this_change_caused_are_reported() {
         let noindex = "设置了 noindex，搜索引擎不会收录".to_string();

@@ -732,6 +732,13 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         }
     }
     let mut rep = crate::site_verify::run(&spec, job, true).await;
+    // 项目自己的地址都正常、域名却指着别的东西：验收查的是别人的页面，重新上传也没用
+    if let Some(why) = crate::launch_cmds::domain_taken(conns, site, &rep).await {
+        job.step("verify", "failed", &why);
+        rec.checks = rep.checks.clone();
+        rec.attention = domain_notes;
+        return Err(format!("{}{why}", crate::site_verify::DOMAIN_TAKEN));
+    }
     if !rep.hard.is_empty() && rep.deploy_issue && !job.canceled() {
         // 构建产物里有这个页面，线上却打不开：多半是部署没到位，重新上传一次再验收
         job.line(&format!("构建产物里有这些页面，线上却打不开（{}），像是部署没到位，重新上传一次", rep.hard.join("；")));

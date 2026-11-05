@@ -1256,6 +1256,24 @@ struct FileDiff {
     removed: Vec<String>,
 }
 
+/// 这次真正新加的行。页面里有几段一样的代码时，git 会把没动的行显示成「删掉又加上」，这些不算新加的。
+fn net_added(f: &FileDiff) -> Vec<&String> {
+    let mut gone: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for r in &f.removed {
+        *gone.entry(r.trim()).or_default() += 1;
+    }
+    f.added
+        .iter()
+        .filter(|a| match gone.get_mut(a.trim()) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                false
+            }
+            _ => true,
+        })
+        .collect()
+}
+
 fn split_diff(diff: &str) -> Vec<FileDiff> {
     let mut out: Vec<FileDiff> = Vec::new();
     for line in diff.lines() {
@@ -1425,7 +1443,7 @@ fn sitemap_line(l: &str) -> bool {
 
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 1;
+pub const RULES_V: u32 = 2;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -1477,7 +1495,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查
         if is_page_file(file) || file.ends_with(".svg") {
             let mut seen: Vec<&str> = Vec::new();
-            for l in &f.added {
+            for l in net_added(&f) {
                 let t = l.trim_start();
                 let markdown = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
                 let why = page_risky(l, markdown).or_else(|| if file.ends_with(".mdx") && (t.starts_with("import ") || t.starts_with("export ")) { risky_code(l) } else { None });
@@ -1501,7 +1519,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         if is_code || template_file(file) {
             // 每种危险写法报一条；方案放行的类型跳过
             let mut seen: Vec<&str> = Vec::new();
-            for l in &f.added {
+            for l in net_added(&f) {
                 let Some(why) = risky_code(l) else { continue };
                 // import 的是站点本来就装了的依赖（比如 Next 站里 import next/link）：不是新引入的外部包
                 if why == "引入了外部包" && import_package(l).is_some_and(|p| rules.deps.contains(&p)) {
@@ -1858,6 +1876,23 @@ mod group_tests {
 #[cfg(test)]
 mod sitemap_tests {
     use super::*;
+    #[test]
+    fn lines_git_shows_as_removed_and_added_are_not_new_scripts() {
+        let script = "<script async src=\"https://www.googletagmanager.com/gtag/js?id=G-1\"></script>";
+        let diff = |added: &[&str], removed: &[&str]| {
+            let mut d = String::from("diff --git a/site/a/index.html b/site/a/index.html\n--- a/site/a/index.html\n+++ b/site/a/index.html\n@@ -1 +1 @@\n");
+            removed.iter().for_each(|l| d.push_str(&format!("-{l}\n")));
+            added.iter().for_each(|l| d.push_str(&format!("+{l}\n")));
+            d
+        };
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+        let has_script = |d: &str| verdict(d, &r).iter().any(|b| b.text.contains("脚本"));
+        // 没动的脚本：缩进不同也一样
+        assert!(!has_script(&diff(&[script, "<script>", "<p>新内容</p>"], &[&format!("  {script}"), "<script>", "<p>旧内容</p>"])));
+        // 真的新加了一个，或者比原来多一个：照拦
+        assert!(has_script(&diff(&[script], &["<p>旧内容</p>"])));
+        assert!(has_script(&diff(&[script, script], &[script])));
+    }
     #[test]
     fn imports_of_declared_deps_and_type_imports_are_not_new_packages() {
         assert_eq!(import_package("import type { Metadata } from \"next\";"), None);

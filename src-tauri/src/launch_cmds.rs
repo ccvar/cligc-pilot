@@ -881,6 +881,33 @@ pub(crate) async fn domain_settle(conns: &crate::conns::ConnStore, site: &Site) 
     out
 }
 
+/// 线上打不开（或者找不到新内容）是不是因为域名指着别的东西：这个 Pages 项目自己的地址都能打开、
+/// 域名和项目打开的又不是同一个站。是的话返回一句说明。只查不动，处理要用户在上线向导里确认。
+pub(crate) async fn domain_taken(conns: &crate::conns::ConnStore, site: &Site, rep: &crate::site_verify::Report) -> Option<String> {
+    if (rep.unopened.is_empty() && !rep.missing_text) || site.domain.is_empty() || site.deploy.project.is_empty() || !matches!(site.deploy.mode.as_str(), "direct" | "pages_git") {
+        return None;
+    }
+    let dc = domain_check(conns, site, true).await;
+    if !dc.compared || dc.same {
+        return None;
+    }
+    for u in &rep.unopened {
+        if !crate::site_verify::opens(&format!("{}{}", dc.pages_url, crate::site_verify::path_of(u))).await {
+            return None;
+        }
+    }
+    Some(format!("{} 打开的是「{}」，不是这个项目（{}）的「{}」。到上线向导里检查域名，处理好再恢复托管", site.domain, dc.live_title, dc.pages_url, dc.pages_title))
+}
+
+/// 动手前查一下：拿一个已知的页面看域名是不是被占着。这个页面能打开就不再往下查。
+pub(crate) async fn domain_taken_at(conns: &crate::conns::ConnStore, site: &Site, page: &str) -> Option<String> {
+    if page.is_empty() || crate::site_verify::opens(page).await {
+        return None;
+    }
+    let rep = crate::site_verify::Report { unopened: vec![page.to_string()], ..Default::default() };
+    domain_taken(conns, site, &rep).await
+}
+
 pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, quick: bool) -> DomainCheck {
     let domain = site.domain.to_ascii_lowercase();
     let mut out = DomainCheck { domain: domain.clone(), ..Default::default() };
