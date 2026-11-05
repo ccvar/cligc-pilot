@@ -37,7 +37,7 @@ export interface LaunchStatus {
 }
 
 /** 「上线成功但域名打开还是旧站」的排查结果（site_domain_check）。 */
-export interface DomainIssue { kind: 'zone' | 'route' | 'worker_domain' | 'pages' | 'cache'; text: string; fix: string; conn: string; target: string; auto: boolean }
+export interface DomainIssue { kind: 'zone' | 'dns' | 'route' | 'worker_domain' | 'pages' | 'cache'; text: string; fix: string; conn: string; target: string; auto: boolean }
 export interface DomainCheck {
   domain: string;
   pages_url: string;
@@ -50,6 +50,8 @@ export interface DomainCheck {
   issues: DomainIssue[];
   /** 这次自动处理掉的 */
   fixed: string[];
+  /** www 地址打开的不是这一版时，它显示的标题 */
+  www_title: string;
   notes: string[];
 }
 
@@ -190,6 +192,7 @@ export async function checkDomain(site: Site, quick = false) {
 }
 
 const FIX_CONFIRM: Record<string, string> = {
+  dns: '原来的 DNS 记录会被删掉，这个域名换成指向 Pages。',
   route: '删掉后，这条路由原来交给的 Worker 不再回应这个地址。',
   worker_domain: '解绑后，那个 Worker 不再回应这个域名（Worker 本身不删）。',
   pages: '去掉后，那个 Pages 项目不再用这个域名（项目本身和它的 pages.dev 地址都还在）。',

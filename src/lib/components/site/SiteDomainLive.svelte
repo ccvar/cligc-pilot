@@ -46,6 +46,7 @@
       {/if}
       {#if dc.scanned}{#each dc.notes as n, i (i)}<div class="faint small">{n}</div>{/each}{/if}
     {/if}
+    {#if dc.compared && dc.same && dc.www_title}<div class="small www">www.{dc.domain} 打开的还是「{dc.www_title}」，不是这一版：到 Cloudflare 里看 www 有没有留着 Worker 路由或旧缓存。</div>{/if}
     {#each dc.fixed as f, i (i)}<div class="small fixed"><Icon name="check" size={11} />{f}</div>{/each}
     {#if note}<div class="small" class:err={note.startsWith('失败')}>{note}</div>{/if}
     {#if pending || !dc.compared}<div><button class="link-btn small" onclick={() => checkDomain(site, true)} disabled={checking}>{checking ? '检查中…' : '重新检查'}</button></div>{/if}
@@ -56,6 +57,7 @@
   .dl { min-width: 0; }
   .small { font-size: 11.5px; }
   .err { color: var(--err); }
+  .www { color: var(--warn, #b7791f); }
   .fixed { display: flex; align-items: center; gap: 4px; color: var(--ok); }
   .dfull { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-top: -2px; }
   .dfull:empty { display: none; }

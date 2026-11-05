@@ -754,12 +754,31 @@ pub async fn site_pages_dns_replace(state: tauri::State<'_, AppState>, id: Strin
     let project = crate::cf::get_pages_project(&token, &cf.account_id, &site.deploy.project).await?.ok_or("Pages 项目还没建")?;
     let target = if project.subdomain.is_empty() { format!("{}.pages.dev", site.deploy.project) } else { project.subdomain.clone() };
     let zone = crate::cf::zone_for(&token, &site.domain).await?.ok_or_else(|| format!("在这个 Cloudflare 账号里没找到 {} 的 DNS", site.domain))?;
-    let recs = crate::cf::dns_records(&token, &zone.id, &site.domain).await?;
+    let n = point_dns_at_pages(&token, &zone.id, &site.domain, &target).await?;
+    Ok(format!("已把 {} 换成 CNAME → {target}（删掉了原来的 {n} 条记录）。DNS 生效可能要几分钟", site.domain))
+}
+
+/// 删掉域名现有的 A / AAAA / CNAME，换成指向 Pages 的 CNAME。返回删掉了几条。
+async fn point_dns_at_pages(token: &str, zone_id: &str, domain: &str, target: &str) -> Result<usize, String> {
+    let recs = crate::cf::dns_records(token, zone_id, domain).await?;
     for r in &recs {
-        crate::cf::delete_dns_record(&token, &zone.id, &r.id).await?;
+        crate::cf::delete_dns_record(token, zone_id, &r.id).await?;
     }
-    crate::cf::ensure_dns_record(&token, &zone.id, "CNAME", &site.domain, &target, true).await?;
-    Ok(format!("已把 {} 换成 CNAME → {target}（删掉了原来的 {} 条记录）。DNS 生效可能要几分钟", site.domain, recs.len()))
+    crate::cf::ensure_dns_record(token, zone_id, "CNAME", domain, target, true).await?;
+    Ok(recs.len())
+}
+
+/// 域名有 DNS 记录、却没有指向 Pages：返回这些记录（「A 1.2.3.4」）。没有记录不算，Pilot 会直接补上。
+fn dns_elsewhere(recs: &[crate::cf::DnsRec], target: &str) -> Option<String> {
+    if recs.is_empty() || recs.iter().any(|r| r.kind == "CNAME" && r.content.eq_ignore_ascii_case(target)) {
+        return None;
+    }
+    Some(recs.iter().map(|r| format!("{} {}", r.kind, r.content)).collect::<Vec<_>>().join("、"))
+}
+
+/// 主域名对应的 www 地址。本身就是 www 的不用查。
+fn www_host(domain: &str) -> Option<String> {
+    (!domain.is_empty() && !domain.starts_with("www.")).then(|| format!("www.{domain}"))
 }
 
 /// 「上线成功但域名打开还是旧站」的排查结果：域名实际返回的页面 vs 这次上线的 pages.dev，
@@ -778,13 +797,15 @@ pub struct DomainCheck {
     pub issues: Vec<DomainIssue>,
     /// 这次自动处理掉的（「已删掉 Worker 路由 …」）
     pub fixed: Vec<String>,
+    /// www 地址打开的不是这一版时，它显示的标题（跳到主域名的算一致）
+    pub www_title: String,
     /// 没查成的项（多半是令牌少权限），不算问题
     pub notes: Vec<String>,
 }
 
 #[derive(Serialize, Default, Clone)]
 pub struct DomainIssue {
-    /// zone | route | worker_domain | pages | cache
+    /// zone | dns | route | worker_domain | pages | cache
     pub kind: String,
     pub text: String,
     /// 修复按钮的文字；空 = Pilot 修不了，要去 Cloudflare 后台
@@ -859,6 +880,11 @@ pub(crate) async fn domain_settle(conns: &crate::conns::ConnStore, site: &Site) 
     for is in first.issues.iter().filter(|i| i.auto) {
         match domain_fix(conns, site, &is.kind, &is.conn, &is.target).await {
             Ok(m) => fixed.push(m),
+            // DNS 没换成就别撤后面的路由：撤了域名就打不开了
+            Err(e) if is.kind == "dns" => {
+                failed.push(format!("{}：{e}", is.fix));
+                break;
+            }
             Err(e) => failed.push(format!("{}：{e}", is.fix)),
         }
     }
@@ -943,6 +969,14 @@ pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, q
     }
     out.live_title = live.unwrap_or_default();
     out.pages_title = pages.unwrap_or_default();
+    // 主域名切对了、www 还留在旧站的情况只看主域名发现不了（路由和缓存都是按主机名分开的）
+    if let (true, Some(www)) = (!out.pages_title.is_empty(), www_host(&domain)) {
+        if let Ok(t) = page_title(&format!("https://{www}/")).await {
+            if !t.is_empty() && t != out.pages_title {
+                out.www_title = t;
+            }
+        }
+    }
     // 只比页面（概览上自动检查），或者已经是这次上线的版本：不用再翻 Cloudflare
     if quick || (out.compared && out.same) {
         return out;
@@ -1036,6 +1070,28 @@ pub(crate) async fn domain_check(conns: &crate::conns::ConnStore, site: &Site, q
             Err(e) => out.notes.push(format!("没读到「{label}」的 Pages 项目：{e}")),
         }
     }
+    // DNS 没指向 Pages：占用的东西一撤，请求就落到旧记录上（522 打不开）。排在最前面先换，路由还在时换 DNS 不影响访问。
+    // Worker 自定义域名的 DNS 记录是它自己管的，解绑后 domain_fix 会补 CNAME
+    let cname = out.pages_url.trim_start_matches("https://").to_string();
+    if let (Some((conn, zone)), false) = (&active_zone, cname.is_empty() || out.issues.iter().any(|i| i.kind == "worker_domain")) {
+        if let Ok(token) = crate::keychain::get_key(conn) {
+            match crate::cf::dns_records(&token, zone, &domain).await {
+                Ok(recs) => {
+                    if let Some(old) = dns_elsewhere(&recs, &cname) {
+                        out.issues.insert(0, DomainIssue {
+                            kind: "dns".into(),
+                            text: format!("{domain} 的 DNS 记录（{old}）没有指向 Pages，不换的话域名打不开"),
+                            fix: format!("换成 CNAME → {cname}"),
+                            conn: conn.clone(),
+                            target: format!("{zone}/{cname}"),
+                            auto: true,
+                        });
+                    }
+                }
+                Err(e) => out.notes.push(format!("没读到 {domain} 的 DNS 记录：{e}")),
+            }
+        }
+    }
     // 没找到别的占用、页面却还是旧的：多半是边缘缓存
     if out.compared && !out.same && out.issues.is_empty() {
         if let Some((conn, zone)) = active_zone {
@@ -1067,6 +1123,11 @@ pub(crate) async fn domain_fix(conns: &crate::conns::ConnStore, site: &Site, kin
     }
     let token = crate::keychain::get_key(&c.id)?;
     let msg = match kind {
+        "dns" => {
+            let (zone, cname) = target.split_once('/').ok_or("DNS 参数不对")?;
+            let n = point_dns_at_pages(&token, zone, &domain, cname).await?;
+            format!("已把 {domain} 换成 CNAME → {cname}（删掉了原来的 {n} 条记录）")
+        }
         "route" => {
             let (zone, route) = target.split_once('/').ok_or("路由参数不对")?;
             crate::cf::delete_worker_route(&token, zone, route).await?;
@@ -1320,6 +1381,22 @@ pub async fn ga4_accounts(state: tauri::State<'_, AppState>, conn_id: String) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_that_does_not_point_at_pages_is_reported() {
+        let rec = |kind: &str, content: &str| crate::cf::DnsRec { id: "1".into(), kind: kind.into(), content: content.into(), proxied: true };
+        assert_eq!(dns_elsewhere(&[rec("A", "192.0.2.1"), rec("AAAA", "100::")], "x.pages.dev").as_deref(), Some("A 192.0.2.1、AAAA 100::"));
+        assert_eq!(dns_elsewhere(&[rec("CNAME", "other.example.com")], "x.pages.dev").as_deref(), Some("CNAME other.example.com"));
+        assert_eq!(dns_elsewhere(&[rec("CNAME", "X.pages.dev")], "x.pages.dev"), None);
+        assert_eq!(dns_elsewhere(&[], "x.pages.dev"), None);
+    }
+
+    #[test]
+    fn www_is_checked_only_for_a_domain_that_is_not_www_already() {
+        assert_eq!(www_host("vsvar.com").as_deref(), Some("www.vsvar.com"));
+        assert_eq!(www_host("www.vsvar.com"), None);
+        assert_eq!(www_host(""), None);
+    }
 
     #[test]
     fn bing_dns_record_name_is_not_doubled() {
