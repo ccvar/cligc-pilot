@@ -860,7 +860,12 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     let shim = crate::site_vps::shim(&ssh.id).inspect_err(|_| job.step("upload", "failed", ""))?;
     let mut env = build_env(site, &dir, job);
     env.extend(crate::site_vps::deploy_env(&shim));
-    job.shell(&site.deploy.command, &site.app_dir(&dir), &env, STEP_TIMEOUT).await.map_err(|e| {
+    let app_dir = site.app_dir(&dir);
+    let confirmed = confirmed_command(&site.deploy.command, &site.domain, &script_text(&site.deploy.command, &app_dir));
+    if confirmed.is_some() {
+        job.line(&format!("发布脚本要求确认域名，这次带上 --confirm {}", site.domain));
+    }
+    job.shell(confirmed.as_deref().unwrap_or(&site.deploy.command), &app_dir, &env, STEP_TIMEOUT).await.map_err(|e| {
         job.step("upload", "failed", "");
         match missing_args(&site.deploy.command, &e) {
             Some(full) => format!("发布失败：发布命令少了参数。脚本的用法是「{full}」，现在设的是「{}」。改好发布命令再重新上线（脚本的完整输出见日志）", site.deploy.command.trim()),
@@ -876,20 +881,37 @@ async fn deploy_vps(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, 
     Ok(())
 }
 
+/// 发布命令第一段指向的脚本内容（读不到是空）。
+fn script_text(cmd: &str, app_dir: &Path) -> String {
+    cmd.split_whitespace().next().and_then(|s| std::fs::read_to_string(app_dir.join(s)).ok()).unwrap_or_default()
+}
+
+/// 发布脚本要求 `publish --confirm <域名>` 防误发、命令里没带时（导入时会补，老站点的设置里可能没有）：带上这个站自己的域名。
+/// 脚本里写的必须正好是这个域名，别的都不猜。
+fn confirmed_command(cmd: &str, domain: &str, script: &str) -> Option<String> {
+    let cmd = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let wanted = ["publish", "--confirm", domain];
+    (!domain.is_empty() && cmd.ends_with(" publish") && script.lines().any(|l| l.split_whitespace().collect::<Vec<_>>().windows(3).any(|w| w == wanted))).then(|| format!("{cmd} --confirm {domain}"))
+}
+
 /// 发布脚本因为参数不对打印了用法：用法里有一行是「现在的命令 + 更多参数」，就把那一行当作该用的命令。
 /// 比如命令设成 `./scripts/publish-production.sh publish`，脚本要求 `publish --confirm cexqa.com`。
+/// 开头的 `./` 不算区别：脚本的用法常常不写它。
 fn missing_args(cmd: &str, out: &str) -> Option<String> {
-    let cmd = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let full = cmd.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cmd = full.trim_start_matches("./");
     if cmd.is_empty() {
         return None;
     }
     out.lines()
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|l| l.trim_start_matches("./").to_string())
         .find(|l| {
-            l.len() > cmd.len() && l.starts_with(&cmd) && l[cmd.len()..].starts_with(' ')
+            l.len() > cmd.len() && l.starts_with(cmd) && l[cmd.len()..].starts_with(' ')
                 // 带占位参数的用法（RELEASE_ID、<file>、[options]）要人来填，不当成可以直接用的命令
                 && !l[cmd.len()..].split_whitespace().any(|t| t.contains(['<', '[']) || (t.len() > 1 && t.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')))
         })
+        .map(|l| format!("{full}{}", &l[cmd.len()..]))
 }
 
 #[cfg(test)]
@@ -902,6 +924,22 @@ mod tests {
         // 占位参数（RELEASE_ID）那一行不算；别的失败不猜
         assert_eq!(super::missing_args("./scripts/publish-production.sh rollback", out), None);
         assert_eq!(super::missing_args("./deploy.sh", "退出码 1\nssh: connect to host x port 22: Connection refused"), None);
+        // dexgc 的用法没写 ./
+        assert_eq!(super::missing_args("./scripts/publish-production.sh publish", "  scripts/publish-production.sh publish --confirm dexgc.com").as_deref(), Some("./scripts/publish-production.sh publish --confirm dexgc.com"));
+    }
+
+    #[test]
+    fn a_publish_script_that_asks_for_its_domain_gets_it() {
+        let cmd = "./scripts/publish-production.sh publish";
+        let script = "usage() {\n  scripts/publish-production.sh publish --confirm dexgc.com\n  scripts/publish-production.sh vacuum --confirm dexgc.com\n}";
+        assert_eq!(super::confirmed_command(cmd, "dexgc.com", script).as_deref(), Some("./scripts/publish-production.sh publish --confirm dexgc.com"));
+        // 脚本写的是别的域名、不要求确认、命令已经带了、不是 publish：都不动
+        assert_eq!(super::confirmed_command(cmd, "other.com", script), None);
+        assert_eq!(super::confirmed_command(cmd, "dexgc.com.au", script), None);
+        assert_eq!(super::confirmed_command(cmd, "dexgc.com", "publish) go ;;"), None);
+        assert_eq!(super::confirmed_command("./x.sh publish --confirm dexgc.com", "dexgc.com", script), None);
+        assert_eq!(super::confirmed_command("./x.sh vacuum", "dexgc.com", script), None);
+        assert_eq!(super::confirmed_command(cmd, "", script), None);
     }
 
     #[test]
