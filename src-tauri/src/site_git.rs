@@ -78,6 +78,11 @@ pub async fn head_subject(dir: &Path) -> String {
     git_ok(dir, &["log", "-1", "--format=%s"], "").await.unwrap_or_default()
 }
 
+/// 暂存区和 HEAD 一样：提交不会带来任何改动。
+pub async fn nothing_staged(dir: &Path) -> bool {
+    git(dir, &["diff", "--cached", "--quiet"], "").await.is_ok_and(|o| o.ok)
+}
+
 /// 最新提交的时间（秒）。读不到是 0。
 pub async fn head_time(dir: &Path) -> u64 {
     git_ok(dir, &["log", "-1", "--format=%ct"], "").await.unwrap_or_default().trim().parse().unwrap_or(0)

@@ -14,7 +14,7 @@
   import { openSiteCreate, isMaking } from '$lib/state/siteCreate.svelte.js';
   import { fleet, inPicks, applyFilter, sortRows, change, searchCtr, win, setDays, STAT_DAYS, syncAllData, checkAllHealth, loadPending, PAGE_SIZE, ISSUE_GROUPS, issueRows, ignoreIssues, dataErrors, noAccess, noAccessNames, type SiteSort } from '$lib/state/fleet.svelte.js';
   import { STATUS_LABEL, KIND_LABEL } from '$lib/state/ops.svelte.js';
-  import { AUTONOMY_LABEL } from '$lib/state/managed.svelte.js';
+  import { AUTONOMY_LABEL, openManaged } from '$lib/state/managed.svelte.js';
   import { ago, full, num } from './fmt';
   import BackgroundNotice from './BackgroundNotice.svelte';
   import OppsBoard from './OppsBoard.svelte';
@@ -33,11 +33,14 @@
   $effect(() => { void fleet.query; void fleet.filter; void fleet.tag; void fleet.picks; fleet.page = 0; });
   $effect(() => { if (fleet.tab === 'pending') void loadPending(); });
 
-  const proposedN = $derived(fleet.picks.length ? rows.reduce((n, r) => n + r.proposed, 0) : fleet.pendingCount);
+  const proposedN = $derived(fleet.picks.length ? rows.reduce((n, r) => n + (r.plan ? 0 : r.proposed), 0) : fleet.pendingCount);
   const oppN = $derived(fleet.picks.length ? rows.filter((r) => !r.plan || r.autonomy === 'stopped').reduce((n, r) => n + r.open, 0) : fleet.oppCount);
   // 最近 24 小时 AI 没改成的，下面「运营机会 → AI 没处理成功的」里有（那里能重试、换模型），这里不再列一遍
   const recentFailed = $derived(new Set((fleet.opps?.recent ?? []).filter((x) => x.item.status === 'failed').map((x) => x.item.id)));
-  const pending = $derived(fleet.pending.filter((p) => inPicks(p.site_id) && !recentFailed.has(p.item.id)));
+  // 托管站的事在「托管运营 → 需要你」里处理，这里只列没进托管的站，再留一句话指过去
+  const isManaged = (id: string) => !!fleet.byId.get(id)?.plan;
+  const pending = $derived(fleet.pending.filter((p) => inPicks(p.site_id) && !isManaged(p.site_id) && !recentFailed.has(p.item.id)));
+  const managedNeeds = $derived(fleet.pending.filter((p) => inPicks(p.site_id) && isManaged(p.site_id)).length);
   const n = num;
   // 有站点在记收益（连了 AdSense 或手动记过）才显示「本月收益」这一列
   const showRev = $derived(fleet.rows.some((r) => r.money?.tracked));
@@ -294,6 +297,7 @@
     {:else if fleet.tab === 'history'}
       <HistoryBoard />
     {:else}
+      {#if managedNeeds}<p class="to-managed">托管站点有 {managedNeeds} 件事要你处理 · <button class="link-btn" onclick={() => openManaged('needs')}>去看看</button></p>{/if}
       <!-- 有 AI 改好等你确认的：上下两块（等你确认 / 运营机会）；没有就只显示运营机会，不留空块 -->
       {#if pending.length}
         <section class="blk">
@@ -450,6 +454,8 @@
   .am-none::before { background: #c9c5bb; }
   .when { font-size: 12px; white-space: nowrap; }
   /* 块里：标题和内容隔 8px；两块之间多空一点（加上页面本身的 12px 间距约 28px） */
+  .to-managed { margin: 0 2px 12px; font-size: 12px; color: var(--dim); }
+  .to-managed .link-btn { font-size: inherit; }
   .blk { display: flex; flex-direction: column; gap: 8px; }
   .blk.mt { margin-top: 16px; }
   .sec { margin: 0 2px; display: flex; align-items: baseline; gap: 6px; font-size: 13px; font-weight: 600; }

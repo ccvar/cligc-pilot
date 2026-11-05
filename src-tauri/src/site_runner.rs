@@ -2698,6 +2698,17 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     job.step("merge", "running", &item.branch);
     let merge_sha = match merge_item(ctx, site, job, &item).await {
         Ok(sha) => sha,
+        Err(e) if e == ALREADY_IN_MAIN => {
+            job.step("merge", "skipped", "主分支里都有了");
+            job.step("ship", "skipped", "");
+            continue_batch(ctx, site, item_id);
+            site_ops::update_item(&site_dir, item_id, now(), |i| {
+                i.status = "done".into();
+                i.note = e.clone();
+            })?;
+            ctx.emit_queue(&site.id);
+            return Ok(e);
+        }
         Err(e) => {
             job.step("merge", "failed", "");
             return Err(e);
@@ -2755,6 +2766,9 @@ fn ride_note(ride: &[QueueItem]) -> String {
     if ride.is_empty() { String::new() } else { format!("（之前合并没上线的 {} 条一起上线了）", ride.len()) }
 }
 
+/// 这条的改动主分支里都有了（多半包含在先合并的另一条里）：没东西可合，这条就算做完了，不是失败。
+const ALREADY_IN_MAIN: &str = "这条的改动主分支里都有了，不用再合并，会跟着主分支一起上线";
+
 /// 把一条改动合并进主分支：GitHub 合并 PR（squash），本地分支压缩合并进默认分支。返回合并提交。
 /// 本地合不进去（和主分支上的改动冲突）时把主分支恢复原样，分支和工作目录留着，可以让 AI 在最新代码上重改。
 async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Result<String, String> {
@@ -2787,6 +2801,12 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
                 // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
                 let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
                 return Err(if e.contains("CONFLICT") || e.contains("conflict") { "和主分支上的改动冲突了，合不进去".into() } else { e });
+            }
+            if crate::site_git::nothing_staged(&main).await {
+                let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
+                crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
+                let _ = crate::site_git::git(&main, &["branch", "-D", &item.branch], "").await;
+                return Err(ALREADY_IN_MAIN.into());
             }
             crate::site_git::git_commit_ok(&main, &["commit", "-qm", &title]).await?;
             crate::site_git::remove_worktree(&main, &crate::sites::build_root(&site_dir).join("work").join(&item.id)).await;
@@ -2833,6 +2853,7 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
         return Err("没有可以合并的改动（可能已经处理过了）".into());
     }
     let mut merged: Vec<(QueueItem, String)> = Vec::new();
+    let mut already = 0;
     let mut skipped: Vec<(QueueItem, String)> = Vec::new();
     for (n, item) in items.iter().enumerate() {
         if job.canceled() {
@@ -2845,6 +2866,15 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
                 mark_merged(ctx, site, item, &sha, false)?;
                 merged.push((item.clone(), sha));
             }
+            Err(e) if e == ALREADY_IN_MAIN => {
+                job.line(&format!("「{}」：{e}", item.opp.title));
+                continue_batch(ctx, site, &item.id);
+                site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                    i.status = "done".into();
+                    i.note = e.clone();
+                })?;
+                already += 1;
+            }
             Err(e) => {
                 job.line(&format!("「{}」没合并：{e}", item.opp.title));
                 let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.note = format!("一起合并上线时没合并：{e}。可以让 AI 在最新代码上重改"));
@@ -2852,6 +2882,11 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
             }
         }
         ctx.emit_queue(&site.id);
+    }
+    if merged.is_empty() && skipped.is_empty() && already > 0 {
+        job.step("merge", "skipped", "主分支里都有了");
+        job.step("ship", "skipped", "");
+        return Ok(format!("{already} 条的改动主分支里都有了，不用再合并"));
     }
     if merged.is_empty() {
         job.step("merge", "failed", "");
@@ -4500,10 +4535,10 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                         }
                     }
                     // 自动上线时本地文件夹不干净（有你没提交的改动、不在主分支）卡住的：文件夹收拾好了就自动「重新检查」接着上线
-                    if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| i.status == "proposed" && !i.branch.is_empty() && i.verdict.starts_with("自动上线失败：站点文件夹")) {
+                    if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| i.status == "proposed" && !i.branch.is_empty() && (i.verdict.starts_with("自动上线失败：站点文件夹") || i.verdict.contains("nothing to commit"))) {
                         if let Ok(site) = st.sites.get(id) {
                             if site.source == "local" && local_ready_now(&site).await && start(ctx.clone(), id, "recheck", "schedule", Some(it.id.clone())).is_ok() {
-                                log_item(&ctx, &site, "planned", &it, "站点文件夹已经没有未提交的改动，自动接着上线");
+                                log_item(&ctx, &site, "planned", &it, "站点文件夹准备好了，自动接着上线");
                                 continue;
                             }
                         }
@@ -4842,6 +4877,10 @@ mod tests {
         let merged = g::head_sha(&repo).await;
         assert!(std::fs::read_to_string(repo.join("guide/index.html")).unwrap().contains("冲煮指南：水温"));
         assert!(g::is_clean(&repo).await);
+        // 同样的改动再合并一次：主分支里都有了，没有东西可提交
+        g::git_ok(&repo, &["merge", "--squash", "pilot/ops-guide-abc123"], "").await.unwrap();
+        assert!(g::nothing_staged(&repo).await);
+        g::git_ok(&repo, &["reset", "-q", "--hard", "HEAD"], "").await.unwrap();
         // 回滚：回退那一次提交
         g::git_commit_ok(&repo, &["revert", "--no-edit", &merged]).await.unwrap();
         assert!(std::fs::read_to_string(repo.join("guide/index.html")).unwrap().contains("<title>指南</title>"));

@@ -57,9 +57,12 @@ export const noAccess = (r: SiteRow) => r.summary.errors.filter(isNoAccess);
 /** 没权限的数据源短名：GSC / GA4 / Bing */
 export const noAccessNames = (r: SiteRow) => noAccess(r).map((e) => { const l = e.split('：')[0]; return l === 'Search Console' ? 'GSC' : l; });
 
-/** 需要你关注：被标记为危险网站、有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
+/** 待确认 / 失败的条目：托管站的都在「托管运营 → 需要你」里处理，这里只算没进托管的站 */
+const ownProposed = (r: SiteRow) => (r.plan ? 0 : r.proposed);
+const ownFailed = (r: SiteRow) => (r.plan ? 0 : r.failed);
+/** 需要你关注：被标记为危险网站、没进托管的站有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
-  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || !!r.indexnow_stuck || trafficDown(r) || dataErrors(r).length > 0;
+  return !!r.unsafe_by || !!r.site_down || expiring(r) || ownProposed(r) > 0 || ownFailed(r) > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || !!r.indexnow_stuck || trafficDown(r) || dataErrors(r).length > 0;
 }
 
 // 「待处理」交给 AI 时选的模型记在本机
@@ -111,7 +114,7 @@ class FleetState {
   byId = $derived(new Map(this.rows.map((r) => [r.id, r])));
   tags = $derived([...new Set(this.rows.flatMap((r) => r.tags))].sort((a, b) => a.localeCompare(b, 'zh')));
   attentionCount = $derived(this.rows.filter(needsAttention).length);
-  pendingCount = $derived(this.rows.reduce((n, r) => n + r.proposed, 0));
+  pendingCount = $derived(this.rows.reduce((n, r) => n + ownProposed(r), 0));
   /** 没人自动处理的站点（自己运营的、托管停着的）里还没处理的运营机会；托管且在运行的由 AI 自动处理，不算 */
   oppCount = $derived(this.rows.filter((r) => !r.plan || r.autonomy === 'stopped').reduce((n, r) => n + r.open, 0));
 }
@@ -138,12 +141,12 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
       || (f === 'unsafe' && !!r.unsafe_by)
       || (f === 'offline' && !!r.site_down)
       || (f === 'expiry' && expiring(r))
-      || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
+      || (f === 'failed' && (r.last_deploy_ok === false || ownFailed(r) > 0))
       || (f === 'links' && (r.links_broken ?? 0) > 0)
       || (f === 'indexnow' && !!r.indexnow_stuck)
       || (f === 'dataerr' && dataErrors(r).length > 0)
       || (f === 'down' && trafficDown(r))
-      || (f === 'proposed' && r.proposed > 0)
+      || (f === 'proposed' && ownProposed(r) > 0)
       || (f === 'nodata' && (!r.has_data || noAccess(r).length > 0))));
 }
 /** 右上角提醒里的问题分组（按要紧程度排）；soft＝不算问题，只是提示。 */
@@ -162,7 +165,7 @@ export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
 // 「要看看」里的提醒可以忽略：记下当时的情况（签名），情况变了（又失败一次、出了别的错）会重新提醒。只存在这台电脑上
 const IGNORE_KEY = 'pilot.fleet.ignoredIssues';
 function issueSig(r: SiteRow, k: SiteFilter): string {
-  if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${r.failed}`;
+  if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${ownFailed(r)}`;
   if (k === 'links') return String(r.links_broken ?? 0);
   if (k === 'indexnow') return r.indexnow_stuck ?? '';
   if (k === 'unsafe') return r.unsafe_by ?? '';
@@ -172,7 +175,7 @@ function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'dataerr') return dataErrors(r).join('|');
   // 按掉了多少记（3 档）：数据每天往后挪一天，不能用数据日期，不然忽略了第二天又冒出来
   if (k === 'down') return String(downLevel(r));
-  if (k === 'proposed') return String(r.proposed);
+  if (k === 'proposed') return String(ownProposed(r));
   return 'x';
 }
 /** 搜索点击比前一段掉了多少：1＝两到四成，2＝四到六成，3＝六成以上 */
