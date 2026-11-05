@@ -14,10 +14,10 @@
   // svelte-ignore state_referenced_locally
   let showLog = $state(logOpen);
   let logEl: HTMLPreElement | undefined = $state();
-  const mark = (s: string) => (s === 'ok' ? '✓' : s === 'failed' ? '!' : '');
+  const mark = (s: string) => (s === 'ok' ? '✓' : s === 'failed' ? '!' : s === 'retry' ? '…' : '');
   const elapsed = $derived(job.finished_at ? job.finished_at - job.started_at : 0);
   // 步骤条下面只说一件事：正在做的那一步，或失败的那一步。
-  const focus = $derived(job.steps.find((s) => s.status === 'failed') ?? job.steps.find((s) => s.status === 'running'));
+  const focus = $derived(job.steps.find((s) => s.status === 'failed') ?? job.steps.find((s) => s.status === 'running') ?? job.steps.find((s) => s.status === 'retry'));
   $effect(() => { void job.log.length; if (showLog && logEl) logEl.scrollTop = logEl.scrollHeight; });
   $effect(() => { if (job.status === 'failed') showLog = true; });
   // AI 改动因为模型这边的原因没成（余额、密钥、模型用不了、限流…）：直接在这里换个模型重试那一条。

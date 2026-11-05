@@ -21,6 +21,7 @@
   import { clock } from './fmt';
   import { sites, deploySite, publishFiles, pilotDeploys, DEPLOY_LABEL } from '$lib/state/sites.svelte.js';
   import { ops } from "$lib/state/ops.svelte.js";
+  import { fleet } from '$lib/state/fleet.svelte.js';
   import { app } from '$lib/state/app.svelte.js';
 
   let { site }: { site: Site } = $props();
@@ -39,11 +40,12 @@
   const todos = $derived((siteMake.state[site.id]?.todos ?? []).filter((t) => !(t.id === 'domain' && site.domain)));
   const needConventions = $derived(!making && siteMake.state[site.id]?.conventions === false && !siteMake.hidden.includes(site.id));
   // 数据和收录接到了哪些：一眼看清哪些绑好了、哪些还差（细节在设置里）
+  const indexnowStuck = $derived(fleet.rows.find((r) => r.id === site.id)?.indexnow_stuck ?? '');
   const binds = $derived([
     { k: 'GA4', ok: !!site.data.ga4_property, text: site.data.ga4_property ? (site.data.ga4_property_name || site.data.ga4_property) : '未绑定' },
     { k: 'Search Console', ok: !!site.data.gsc_site, text: site.data.gsc_site || '未绑定' },
     { k: 'Bing', ok: !!site.data.bing_site, pending: !site.data.bing_site && !!site.data.bing_auth, text: site.data.bing_site || (site.data.bing_auth ? '已加到 Bing，正在验证' : '未接入') },
-    { k: 'IndexNow', ok: !!site.data.indexnow_key, text: site.data.indexnow_key ? '上线后自动提交有变化的页面' : '未配置' },
+    { k: 'IndexNow', ok: !!site.data.indexnow_key && !indexnowStuck, pending: !!indexnowStuck, text: indexnowStuck || (site.data.indexnow_key ? '上线后自动提交有变化的页面，没交上的会自动补交' : '未配置') },
   ]);
   const queue = $derived((ops.queue[site.id] ?? []).filter((q) => q.status === 'open' || q.status === 'proposed'));
 </script>

@@ -5,6 +5,7 @@ mod jev_checks;
 mod link_check;
 mod monitor;
 mod index_check;
+mod indexnow;
 mod background;
 mod backup;
 mod push;

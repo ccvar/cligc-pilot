@@ -137,6 +137,7 @@
 .su .step.ok .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
 .su .step.failed .dot { background: var(--err); border-color: var(--err); color: #fff; }
 .su .step.failed { color: var(--err); }
+.su .step.retry .dot { border-color: var(--warn); color: var(--warn); }
 .su .step.running .dot { border-color: var(--su-run); border-top-color: transparent; animation: su-spin .8s linear infinite; }
 .su .step.running { font-weight: 550; }
 .su .step.pending, .su .step.skipped { color: var(--faint); }

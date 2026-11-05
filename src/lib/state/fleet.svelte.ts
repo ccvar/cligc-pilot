@@ -9,7 +9,7 @@ import { launcher } from './launcher.svelte.js';
 import { effortLabel } from '$lib/effortStops';
 import { isNoAccess } from '$lib/friendlyError';
 
-export type SiteFilter = 'all' | 'attention' | 'unsafe' | 'offline' | 'expiry' | 'failed' | 'links' | 'dataerr' | 'down' | 'proposed' | 'nodata';
+export type SiteFilter = 'all' | 'attention' | 'unsafe' | 'offline' | 'expiry' | 'failed' | 'links' | 'indexnow' | 'dataerr' | 'down' | 'proposed' | 'nodata';
 export type SiteSort = 'name' | 'active' | 'clicks' | 'change' | 'pending' | 'users' | 'impr' | 'ctr' | 'indexed' | 'revenue';
 
 /** 点击比前 28 天跌了 20% 以上（且原来至少 20 次）算「流量下滑」。 */
@@ -59,7 +59,7 @@ export const noAccessNames = (r: SiteRow) => noAccess(r).map((e) => { const l = 
 
 /** 需要你关注：被标记为危险网站、有待确认 / 失败的条目、上次上线失败、流量下滑、数据源出错。 */
 export function needsAttention(r: SiteRow): boolean {
-  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || trafficDown(r) || dataErrors(r).length > 0;
+  return !!r.unsafe_by || !!r.site_down || expiring(r) || r.proposed > 0 || r.failed > 0 || r.last_deploy_ok === false || (r.links_broken ?? 0) > 0 || !!r.indexnow_stuck || trafficDown(r) || dataErrors(r).length > 0;
 }
 
 // 「待处理」交给 AI 时选的模型记在本机
@@ -140,6 +140,7 @@ export function applyFilter(rows: SiteRow[], q: string, f: SiteFilter, tag: stri
       || (f === 'expiry' && expiring(r))
       || (f === 'failed' && (r.last_deploy_ok === false || r.failed > 0))
       || (f === 'links' && (r.links_broken ?? 0) > 0)
+      || (f === 'indexnow' && !!r.indexnow_stuck)
       || (f === 'dataerr' && dataErrors(r).length > 0)
       || (f === 'down' && trafficDown(r))
       || (f === 'proposed' && r.proposed > 0)
@@ -152,6 +153,7 @@ export const ISSUE_GROUPS: { k: SiteFilter; l: string; soft?: boolean }[] = [
   { k: 'expiry', l: '证书或域名快到期' },
   { k: 'failed', l: '上线或运营任务失败' },
   { k: 'links', l: '推广链接失效' },
+  { k: 'indexnow', l: 'IndexNow 一直交不上' },
   { k: 'dataerr', l: '数据源出错' },
   { k: 'down', l: '流量明显下滑' },
   { k: 'proposed', l: '有改动等你确认' },
@@ -162,6 +164,7 @@ const IGNORE_KEY = 'pilot.fleet.ignoredIssues';
 function issueSig(r: SiteRow, k: SiteFilter): string {
   if (k === 'failed') return `${r.last_deploy_ok === false ? r.last_deploy_ts : 0}:${r.failed}`;
   if (k === 'links') return String(r.links_broken ?? 0);
+  if (k === 'indexnow') return r.indexnow_stuck ?? '';
   if (k === 'unsafe') return r.unsafe_by ?? '';
   if (k === 'offline') return String(r.down_since ?? 0);
   // 按「哪几样要处理」记：天数每天在变，不能用天数，不然忽略了第二天又冒出来

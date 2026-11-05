@@ -2303,11 +2303,7 @@ async fn ship_inner(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify:
             }
             job.step("verify", if rep.checks.is_empty() { "skipped" } else { "ok" }, &if rep.soft.is_empty() { String::new() } else { format!("网站正常，{} 项待核对", rep.soft.len()) });
             if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !rep.passed.is_empty() {
-                job.step("indexnow", "running", &format!("{} 个网址", rep.passed.len()));
-                match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &rep.passed).await {
-                    Ok(_) => job.step("indexnow", "ok", &format!("已提交 {} 个网址", rep.passed.len())),
-                    Err(e) => job.step("indexnow", "failed", &e),
-                }
+                crate::indexnow::submit_step(site, &site_dir, &rep.passed, job).await;
             } else {
                 job.step("indexnow", "skipped", "");
             }
@@ -4452,6 +4448,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             crate::monitor::schedule(&app);
             // 新页面收录：上线 3 天起用 URL 检查确认 Google 编入索引没有（见 index_check）
             crate::index_check::schedule(&app);
+            // IndexNow 没交上的网址：到时间就补交（见 indexnow）
+            crate::indexnow::schedule(&app);
             // Pilot 自己的数据：每周备份到 GitHub 私有仓库（打开了才备份，见 backup）
             crate::backup::schedule(&app);
             // 收益：连了 AdSense 就每天拉一次报表（见 revenue）

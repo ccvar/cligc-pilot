@@ -286,7 +286,7 @@ export interface PagesDeployment {
   stage: string;
   created_on: string;
 }
-export interface JobStep { key: string; label: string; status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped'; detail: string }
+export interface JobStep { key: string; label: string; status: 'pending' | 'running' | 'ok' | 'failed' | 'skipped' | 'retry'; detail: string }
 export interface SiteJob {
   id: string;
   site_id: string;
@@ -489,6 +489,8 @@ export interface SiteRow {
   channels?: ChannelBrief[];
   /** 上次推广链接检查里失效的个数 */
   links_broken?: number;
+  /** IndexNow 一直交不上的原因（还在正常重试的为空） */
+  indexnow_stuck?: string;
   /** 在线监测：首页连续两次打不开（从什么时候）、证书 / 域名还剩几天、证书出错原因 */
   site_down?: boolean; down_since?: number; down_err?: string; cert_days?: number | null; cert_err?: string; domain_days?: number | null;
   /** 被谁标记为危险网站（Google 安全浏览、Cloudflare、Quad9；没被标记为空） */

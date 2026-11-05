@@ -90,7 +90,7 @@
               <td>{trig(r.trigger)}</td>
               <td class="trunc" title={r.message}><span class="mono faint">{r.commit.slice(0, 7) || '—'}</span>{r.dirty ? '（含未提交改动）' : ''} {r.message}</td>
               <td class="num">{r.ok ? r.changed : '—'}</td>
-              <td>{r.indexnow === 'ok' ? '已提交' : r.indexnow === 'nothing' ? '无变化' : r.indexnow === 'skipped' ? '未配置' : r.indexnow ? '失败' : '—'}</td>
+              <td title={r.indexnow.replace(/^(retry|failed): /, '') || undefined}>{r.indexnow === 'ok' ? '已提交' : r.indexnow === 'nothing' ? '无变化' : r.indexnow === 'skipped' ? '未配置' : r.indexnow.startsWith('retry') ? '等待补交' : r.indexnow ? '失败' : '—'}</td>
               <td class="num">{#if r.ok}<span class="pill ok">成功</span>{:else}<span class="pill err" title={r.error}>失败</span>{/if} <span class="faint">{r.duration} 秒</span></td>
             </tr>
           {/each}

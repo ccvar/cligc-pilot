@@ -44,6 +44,8 @@ pub struct SiteRow {
     pub unsafe_by: String,
     /// 上次推广链接检查里失效的个数
     pub links_broken: usize,
+    /// IndexNow 一直交不上的原因（还在正常重试的为空）
+    pub indexnow_stuck: String,
     /// 分发渠道（站点列表上显示图标）
     pub channels: Vec<crate::syndicate::ChannelBrief>,
     /// 最近活动：会话、上线、站点设置里最晚的那个。
@@ -100,6 +102,7 @@ pub fn sites_overview(state: tauri::State<'_, AppState>) -> Vec<SiteRow> {
                 last_deploy_ok: last.map(|d| d.ok),
                 channels: crate::syndicate::channel_briefs(&dir),
                 links_broken: crate::link_check::load(&dir).broken(),
+                indexnow_stuck: crate::indexnow::stuck(&dir),
                 site_down: mon.down(),
                 down_since: mon.down_since(),
                 down_err: mon.pings.last().map(|p| p.err.clone()).unwrap_or_default(),

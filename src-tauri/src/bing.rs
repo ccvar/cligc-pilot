@@ -7,6 +7,8 @@ use std::time::Duration;
 
 const API: &str = "https://ssl.bing.com/webmaster/api.svc/json";
 const INDEXNOW: &str = "https://api.indexnow.org/indexnow";
+/// 403：密钥没通过验证。文件好好的也可能这样（密钥刚上线），原因由 indexnow::why_failed 查清楚再说。
+pub const INDEXNOW_REJECTED: &str = "IndexNow 没接受这把密钥（403）";
 
 #[derive(Serialize, Clone, Debug, Default)]
 pub struct BingSite {
@@ -221,7 +223,7 @@ pub async fn indexnow_submit(domain: &str, key: &str, urls: &[String]) -> Result
         match resp.status().as_u16() {
             200 | 202 => {}
             400 => return Err("IndexNow：请求格式错误".into()),
-            403 => return Err(format!("IndexNow：密钥无效（确认 https://{domain}/{key}.txt 能访问且内容就是密钥）")),
+            403 => return Err(INDEXNOW_REJECTED.into()),
             422 => return Err("IndexNow：网址与域名或密钥不匹配".into()),
             429 => return Err("IndexNow：提交太频繁，稍后再试".into()),
             c => return Err(format!("IndexNow 返回 {c}")),

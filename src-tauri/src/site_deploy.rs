@@ -68,11 +68,26 @@ pub fn load_history(site_dir: &Path) -> Vec<DeployRecord> {
         .unwrap_or_default()
 }
 
-fn push_history(site_dir: &Path, rec: &DeployRecord) {
+pub(crate) fn push_history(site_dir: &Path, rec: &DeployRecord) {
     let mut all = load_history(site_dir);
     all.insert(0, rec.clone());
     all.truncate(100);
     let _ = crate::sites::write_json(&history_path(site_dir), &all, true);
+}
+
+/// 改部署记录里的 IndexNow 状态（`f` 返回新状态，None＝不改）。
+pub(crate) fn map_indexnow(site_dir: &Path, f: impl Fn(&str) -> Option<String>) {
+    let mut all = load_history(site_dir);
+    let mut changed = false;
+    for r in &mut all {
+        if let Some(v) = f(&r.indexnow) {
+            r.indexnow = v;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = crate::sites::write_json(&history_path(site_dir), &all, true);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +158,7 @@ pub fn load_manifest(site_dir: &Path) -> Manifest {
         .unwrap_or_default()
 }
 
-fn save_manifest(site_dir: &Path, m: &Manifest) {
+pub(crate) fn save_manifest(site_dir: &Path, m: &Manifest) {
     let _ = crate::sites::write_json(&manifest_path(site_dir), m, false);
 }
 
@@ -475,6 +490,11 @@ pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &
     result.map(|_| rec)
 }
 
+/// 上次上线的构建产物里的全部页面。
+pub(crate) fn all_page_urls(site: &Site, site_dir: &Path) -> Vec<String> {
+    load_manifest(site_dir).keys().filter_map(|k| html_to_path(k)).map(|p| format!("https://{}{p}", site.domain)).collect()
+}
+
 /// Pilot 随上线放进构建产物的验证文件（只在这次上传的产物里，不改代码）：IndexNow 密钥文件、Bing 的 BingSiteAuth.xml。
 fn add_verify_files(site: &Site, site_dir: &Path, out: &Path, job: &Job) {
     add_noindex_headers(site, site_dir, out, job);
@@ -584,22 +604,11 @@ pub async fn run_republish(site: Site, conns: ConnStore, site_dir: PathBuf, job:
             job.step("indexnow", "skipped", "站点没有配置 IndexNow 密钥");
             rec.indexnow = "skipped".into();
         } else {
-            let urls: Vec<String> = load_manifest(&site_dir).keys().filter_map(|k| html_to_path(k)).map(|p| format!("https://{}{p}", site.domain)).collect();
+            let urls = all_page_urls(&site, &site_dir);
             job.step("indexnow", "running", &format!("{} 个网址", urls.len()));
             // 刚上传的文件边缘要几秒才看得到
             tokio::time::sleep(Duration::from_secs(5)).await;
-            match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &urls).await {
-                Ok(msg) => {
-                    job.line(&format!("IndexNow：{msg}"));
-                    job.step("indexnow", "ok", &format!("已提交 {} 个网址", urls.len()));
-                    rec.indexnow = "ok".into();
-                }
-                Err(e) => {
-                    job.line(&format!("IndexNow 提交失败：{e}"));
-                    job.step("indexnow", "failed", &e);
-                    rec.indexnow = format!("failed: {e}");
-                }
-            }
+            rec.indexnow = crate::indexnow::submit_step(&site, &site_dir, &urls, &job).await;
         }
         Ok::<(), String>(())
     }
@@ -681,6 +690,8 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         },
     );
     let built = build_and_check(site, &dir, stamp.as_deref(), job).await?;
+    let repo_key = crate::indexnow::use_repo_key(site, &built.dir, job);
+    let site = repo_key.as_ref().unwrap_or(site);
     add_verify_files(site, site_dir, &built.out, job);
     let manifest = build_manifest(&built.out);
     // 上传
@@ -768,20 +779,7 @@ async fn deploy_inner(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job
         job.step("indexnow", "skipped", "没有页面内容变化");
         rec.indexnow = "nothing".into();
     } else {
-        job.step("indexnow", "running", &format!("{} 个网址", changed.len()));
-        match crate::bing::indexnow_submit(&site.domain, &site.data.indexnow_key, &changed).await {
-            Ok(msg) => {
-                job.line(&format!("IndexNow：{msg}"));
-                job.step("indexnow", "ok", &format!("已提交 {} 个网址", changed.len()));
-                rec.indexnow = "ok".into();
-            }
-            Err(e) => {
-                // 上线已经成功，IndexNow 失败不算部署失败，但要让人看得到。
-                job.line(&format!("IndexNow 提交失败：{e}"));
-                job.step("indexnow", "failed", &e);
-                rec.indexnow = format!("failed: {e}");
-            }
-        }
+        rec.indexnow = crate::indexnow::submit_step(site, site_dir, &changed, job).await;
     }
     Ok(())
 }
