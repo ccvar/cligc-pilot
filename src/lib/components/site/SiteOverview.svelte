@@ -130,7 +130,8 @@
             {#if last.ok && last.changed}<div class="faint">{last.changed} 个页面有变化</div>{/if}
           </dd>
         {/if}
-        {#if last?.ok && site.domain && !['none', 'workers', 'vps'].includes(site.deploy.mode)}<SiteDomainLive {site} deployedAt={last.ts} />{/if}
+        <!-- 传上去了、验收没过（比如域名被别的东西占着）也要显示：处理域名的入口就在这一行 -->
+        {#if (last?.ok || last?.url) && site.domain && !['none', 'workers', 'vps'].includes(site.deploy.mode)}<SiteDomainLive {site} deployedAt={last.ts} />{/if}
         {#if launch.status[site.id]?.needs_redeploy?.length && job?.status !== 'running'}
           <dt>待生效</dt>
           <dd class="redeploy"><span>{launch.status[site.id]?.needs_redeploy?.join('、')}还没在线上。Pilot 会自动拿上次上线的构建产物补上再传一次（不重新构建，页面不变）；自动那次没成功的话，也可以现在补上。</span><button class="btn tiny" onclick={() => publishFiles(site.id)}><Icon name="rocket" size={11} />现在补上</button></dd>
