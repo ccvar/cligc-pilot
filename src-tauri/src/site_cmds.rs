@@ -914,6 +914,7 @@ pub fn deploy_site(app: tauri::AppHandle, state: tauri::State<'_, AppState>, id:
 /// 由 Pilot 直接上传部署（direct / workers / vps）、用 Pilot 成功上线过、现在没有作业在跑，
 /// 主分支最新提交不是上次成功上线的那一版。文件夹里有未提交改动的不算（不替你把改到一半的东西传上去）。
 /// GitHub 来源的看远端生产分支（Pilot 上线时也是拉远端最新的）。
+/// 在 Pilot 外面部署过最新版的不算（`deployed_outside`），Pilot 的上线记录里看不到这种部署。
 #[derive(Serialize)]
 pub struct PendingDeploy {
     pub id: String,
@@ -931,13 +932,13 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
         }
         let history = crate::site_deploy::load_history(&state.sites.data_dir(&site.id));
         let Some(last) = history.iter().find(|r| r.ok && r.trigger != "files") else { continue };
-        let (head, subject) = match site.source.as_str() {
+        let (head, subject, head_time) = match site.source.as_str() {
             "local" => {
                 let dir = PathBuf::from(&site.local_dir);
                 if !dir.join(".git").exists() || !crate::site_git::is_clean(&dir).await {
                     continue;
                 }
-                (crate::site_git::head_sha(&dir).await, crate::site_git::head_subject(&dir).await)
+                (crate::site_git::head_sha(&dir).await, crate::site_git::head_subject(&dir).await, crate::site_git::head_time(&dir).await)
             }
             "github" => {
                 let Ok(gh) = state.conns.get(&site.gh_conn_id) else { continue };
@@ -946,15 +947,36 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
                 // 上线记录记的是部署分支（没设就是默认分支）的提交：比的也要是同一条分支
                 let branch = if site.deploy.branch.trim().is_empty() { site.default_branch.as_str() } else { site.deploy.branch.trim() };
                 let r = crate::site_git::git_ok(&dir, &["ls-remote", "origin", &format!("refs/heads/{branch}")], &token).await.unwrap_or_default();
-                (r.split_whitespace().next().unwrap_or("").to_string(), String::new())
+                (r.split_whitespace().next().unwrap_or("").to_string(), String::new(), 0)
             }
             _ => continue,
         };
         if !head.is_empty() && head != last.commit {
-            out.push(PendingDeploy { id: site.id.clone(), name: site.name.clone(), subject });
+            // 只查看上去没上线的站点；查不到（没网、没权限）就还按没上线算
+            let pilot_until = history.iter().map(|r| r.ts + r.duration).max().unwrap_or(0);
+            let deps = if site.deploy.mode == "vps" { Vec::new() } else { cf_deployments(&state, &site).await.unwrap_or_default() };
+            if !deployed_outside(&deps, &head, head_time, pilot_until) {
+                out.push(PendingDeploy { id: site.id.clone(), name: site.name.clone(), subject });
+            }
         }
     }
     Ok(out)
+}
+
+/// 最新提交是不是已经在 Pilot 外面部署上去了（项目自己的部署脚本、命令行）。
+/// 只看 Cloudflare 上最新的那次生产部署，它要晚于 Pilot 最后一次上线的结束时间（否则是 Pilot 自己传的，
+/// 比如验收没过的版本）。Pages 部署带提交号，直接比；Workers 没有提交号，上传时间不早于最新提交才算，回滚和改密钥不算上传。
+fn deployed_outside(deps: &[crate::cf::PagesDeployment], head: &str, head_time: u64, pilot_until: u64) -> bool {
+    let at = |d: &crate::cf::PagesDeployment| chrono::DateTime::parse_from_rfc3339(&d.created_on).map(|t| t.timestamp().max(0) as u64).unwrap_or(0);
+    let Some(d) = deps.iter().filter(|d| d.environment == "production" && d.status == "success").max_by_key(|d| at(d)) else { return false };
+    if at(d) <= pilot_until {
+        return false;
+    }
+    if d.commit.is_empty() {
+        matches!(d.trigger.as_str(), "deployment" | "ad_hoc") && head_time > 0 && at(d) >= head_time
+    } else {
+        head.starts_with(&d.commit)
+    }
 }
 
 /// 「全部上线」的进度：这一批有哪些站点、做到第几个、各自成没成。界面上按钮换成「正在上线 3/14」。
@@ -1157,10 +1179,14 @@ fn cf_for(state: &AppState, site: &Site) -> Result<(String, String), String> {
 #[tauri::command]
 pub async fn site_pages_deployments(state: tauri::State<'_, AppState>, id: String) -> Result<Vec<crate::cf::PagesDeployment>, String> {
     let site = state.sites.get(&id)?;
+    cf_deployments(&state, &site).await
+}
+
+async fn cf_deployments(state: &AppState, site: &Site) -> Result<Vec<crate::cf::PagesDeployment>, String> {
     if site.deploy.project.is_empty() || site.deploy.mode == "vps" {
         return Ok(vec![]);
     }
-    let (token, acct) = cf_for(&state, &site)?;
+    let (token, acct) = cf_for(state, site)?;
     if site.deploy.mode == "workers" {
         return crate::cf::list_worker_deployments(&token, &acct, &site.deploy.project).await;
     }
@@ -1445,5 +1471,56 @@ mod work_dir_tests {
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&elsewhere);
         let _ = std::fs::remove_dir_all(store.build_dir("s1"));
+    }
+}
+
+#[cfg(test)]
+mod undeployed_tests {
+    use super::deployed_outside;
+    use crate::cf::PagesDeployment;
+
+    const COMMIT_AT: u64 = 1793848595; // 2026-11-05T03:16:35Z
+    fn worker(created_on: &str, trigger: &str) -> PagesDeployment {
+        PagesDeployment { environment: "production".into(), status: "success".into(), created_on: created_on.into(), trigger: trigger.into(), ..Default::default() }
+    }
+    fn pages(created_on: &str, commit: &str) -> PagesDeployment {
+        PagesDeployment { commit: commit.into(), trigger: "ad_hoc".into(), ..worker(created_on, "") }
+    }
+
+    #[test]
+    fn a_worker_uploaded_after_the_commit_is_already_live() {
+        let deps = [worker("2026-11-05T02:56:09.299Z", "deployment"), worker("2026-11-05T03:19:24.717Z", "deployment")];
+        assert!(deployed_outside(&deps, "37dbe25", COMMIT_AT, 1793718111));
+        // 没读到提交时间（GitHub 来源）就不下结论
+        assert!(!deployed_outside(&deps, "37dbe25", 0, 1793718111));
+        // 提交比最新部署还晚：确实没上线
+        assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT + 3600, 1793718111));
+    }
+
+    #[test]
+    fn a_rollback_or_secret_change_is_not_a_deploy_of_the_latest_commit() {
+        for t in ["rollback", "secret"] {
+            let deps = [worker("2026-11-05T03:00:00Z", "deployment"), worker("2026-11-05T03:19:24Z", t)];
+            assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT, 1793718111), "{t}");
+        }
+    }
+
+    #[test]
+    fn pages_is_compared_by_commit() {
+        let deps = [pages("2026-11-05T03:19:24Z", "aaaa")];
+        assert!(deployed_outside(&deps, "aaaa", 0, 1793718111));
+        assert!(!deployed_outside(&deps, "bbbb", COMMIT_AT, 1793718111));
+        // 预览部署和失败的部署不算线上
+        let preview = PagesDeployment { environment: "preview".into(), ..pages("2026-11-05T03:19:24Z", "aaaa") };
+        let failed = PagesDeployment { status: "failure".into(), ..pages("2026-11-05T03:19:24Z", "aaaa") };
+        assert!(!deployed_outside(&[preview, failed], "aaaa", 0, 1793718111));
+    }
+
+    #[test]
+    fn what_pilot_uploaded_itself_does_not_count() {
+        // Pilot 传了最新提交、验收没过：上线记录的结束时间晚于这次上传，还算没上线
+        let deps = [pages("2026-11-05T03:19:24Z", "aaaa"), worker("2026-11-05T03:19:24Z", "deployment")];
+        assert!(!deployed_outside(&deps, "aaaa", COMMIT_AT, COMMIT_AT + 600));
+        assert!(!deployed_outside(&[], "aaaa", COMMIT_AT, 0));
     }
 }

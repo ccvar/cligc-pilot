@@ -145,7 +145,8 @@
         {/if}
       {/if}
       {#if pendingDeploys.list.length && !(pendingDeploys.bulk && pendingDeploys.bulk.at < pendingDeploys.bulk.sites.length)}
-        <button class="iss soft" onclick={deployAllPending} data-tip={`这些站点有已经提交、还没上线的改动：\n${pendingDeploys.list.map((p) => p.name).join('、')}\n点一下确认后按顺序构建并上线`}><Icon name="rocket" size={13} />{pendingDeploys.list.length} 个站点有改动没上线 · 全部上线</button>
+        {@const names = pendingDeploys.list.map((p) => p.name)}
+        <button class="iss soft" onclick={deployAllPending} data-tip={`这些站点有已经提交、还没上线的改动：\n${names.join('、')}\n点一下确认后按顺序构建并上线`}><Icon name="rocket" size={13} />{names.length > 2 ? `${names.slice(0, 2).join('、')} 等 ${names.length} 个站点` : `${names.join('、')} `}有改动没上线 · {names.length > 1 ? '全部上线' : '上线'}</button>
       {/if}
       {#if issues.length}
         <div class="iss-wrap">

@@ -330,6 +330,8 @@ pub struct PagesDeployment {
     pub status: String,
     pub stage: String,
     pub created_on: String,
+    /// 怎么产生的。Pages：ad_hoc（上传）/ github:push；Workers：deployment（上传）/ rollback / secret 等
+    pub trigger: String,
 }
 
 fn deployment_from(v: &Value) -> PagesDeployment {
@@ -345,6 +347,7 @@ fn deployment_from(v: &Value) -> PagesDeployment {
         status: s(&v["latest_stage"]["status"]),
         stage: s(&v["latest_stage"]["name"]),
         created_on: s(&v["created_on"]),
+        trigger: s(&v["deployment_trigger"]["type"]),
     }
 }
 
@@ -374,6 +377,7 @@ pub async fn list_worker_deployments(token: &str, account_id: &str, script: &str
             status: "success".into(),
             stage: "deploy".into(),
             created_on: d["created_on"].as_str().unwrap_or_default().into(),
+            trigger: d["annotations"]["workers/triggered_by"].as_str().unwrap_or_default().into(),
         })
         .collect())
 }
