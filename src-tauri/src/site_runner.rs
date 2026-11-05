@@ -1207,7 +1207,7 @@ fn final_summary(reply: &str) -> String {
         .lines()
         .filter(|l| {
             let t = l.trim().trim_start_matches(['-', '*', ' ']).trim_start_matches("**");
-            !["新页面：", "新页面:", "改动的页面：", "改动的页面:"].iter().any(|p| t.starts_with(p))
+            !["新页面：", "新页面:", "改动的页面：", "改动的页面:", "还要改：", "还要改:"].iter().any(|p| t.starts_with(p))
         })
         .collect();
     let text = body.join("\n");
@@ -1600,6 +1600,20 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     if !item.replay.is_empty() {
         plan_brief.push_str(&format!("【上一版】这条你之前改过，但主分支后来也改了同一处（多半是同时改好的另一条先上线了），那一版合不进去。现在的工作区已经是最新的主分支：保留主分支上已有的改动，在它的基础上按上一版的意图重做，不要把别人刚改的改回去，也不要重复加。上一版的改动：\n```diff\n{}\n```\n\n", item.replay));
     }
+    // 计划里的任务可能一次涉及几十个页面（全站改标题）：分批改、分批上线，见 site_ops::next_batch
+    if !item.opp.batch.is_empty() {
+        plan_brief.push_str(&format!(
+            "【分批任务 · 第 {} 批】这条任务分批做，这次只改下面这 {} 个页面，其余的 Pilot 会接着排，不要动，也不用写「还要改」：\n{}\n",
+            item.opp.batch_no,
+            item.opp.batch.len(),
+            item.opp.batch.join("\n")
+        ));
+    } else if item.opp.kind == "plan" {
+        plan_brief.push_str(&format!(
+            "【页面很多时分批做】这条任务如果要改的页面超过 {n} 个（比如全站改标题）：这次只改最重要的 {n} 个，依据里点名的先改，其余的不要动，把它们的路径一个不漏地单独写一行，放在说明之后、最后两行之前：「还要改：/a/ /b/ /c/」（同一篇自动生成的繁体版这类不用列）。Pilot 这批上线后会按清单接着排。不超过 {n} 个就不用写这一行。\n",
+            n = site_ops::BATCH_PAGES
+        ));
+    }
     if !site.ops.content_code.is_empty() {
         plan_brief.push_str(&format!("【页面写在代码里】这个站点的页面内容（标题、描述、文章）写在这些代码文件里，需要时可以直接改，按上面的代码改动规则来：{}。新加的代码不要读环境变量、执行命令、请求外部服务。\n\n", site.ops.content_code.join("、")));
     }
@@ -1657,6 +1671,9 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         i.ai_summary = summary.clone();
         i.pages = pages.clone();
         i.new_pages = new_pages.clone();
+        if i.opp.kind == "plan" && i.opp.batch.is_empty() {
+            i.opp.batch_rest = site_ops::batch_rest_from(&reply, &site.domain);
+        }
     })?;
     // 收尾：没提交的改动由 Pilot 提交；完全没改动就算失败。
     if !crate::site_git::is_clean(&wt).await || crate::site_git::git(&wt, &["status", "--porcelain"], "").await.map(|o| !o.stdout.is_empty()).unwrap_or(false) {
@@ -1731,6 +1748,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         // AI 查完判断不该改：这是结论，不是失败，不用你再处理。修复任务的结论同时清掉那条改动的待核对（开这条任务就是为了它）
         let summary = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).map(|i| i.ai_summary).unwrap_or_default();
         if let Some(why) = no_change_reason(&summary) {
+            continue_batch(ctx, site, &item.id);
             let note = format!("AI 查完认为不用改：{why}");
             if let Some(d) = site_ops::update_item(&site_dir, &item.id, now(), |i| {
                 i.status = "done".into();
@@ -2314,6 +2332,7 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
         i.watched.clear();
     })?
     .ok_or("这条改动不存在")?;
+    continue_batch(ctx, site, item_id);
     // 速度优化上线了：1 小时后重新测速，排着的其它速度任务等新结果出来再决定要不要做
     if item.opp.kind == "slow" || item.also.iter().any(|o| o.kind == "slow") {
         crate::speed::recheck_soon(&site_dir);
@@ -2324,6 +2343,17 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
     }
     ctx.emit_queue(&site.id);
     Ok(())
+}
+
+/// 分批任务这一批结束了：把下一批排进队列，按托管节奏接着做。
+fn continue_batch(ctx: &Ctx, site: &Site, item_id: &str) {
+    let site_dir = ctx.site_dir(&site.id);
+    let Some(item) = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id) else { return };
+    let Some(next) = site_ops::next_batch(&item.opp, &site.domain) else { return };
+    let title = next.title.clone();
+    if site_ops::enqueue(&site_dir, &[next], now(), COOLDOWN).map(|a| !a.is_empty()).unwrap_or(false) {
+        log_item(ctx, site, "planned", &item, &format!("分批任务排上了下一批：{title}"));
+    }
 }
 
 /// 这次构建产物里有、上次上线的构建里没有的 HTML 页面并进 item.new_pages（AI 自报的照旧保留）。最多补 10 个。
@@ -3553,7 +3583,8 @@ async fn plan(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         .iter()
         .filter(|i| !matches!(i.status.as_str(), "open"))
         .take(20)
-        .map(|i| format!("- [{}] {}{}", i.status, i.opp.title, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
+        // 写上实际改了几个文件：标题说批量、其实只改了几个的，计划 AI 才知道还没做完，可以再排一条接着做
+        .map(|i| format!("- [{}] {}{}{}", i.status, i.opp.title, if i.files.is_empty() { String::new() } else { format!("（实际改了 {} 个文件）", i.files.len()) }, if i.review.is_empty() { String::new() } else { format!("（复盘：{}）", i.review) }))
         .collect();
     // 已经排队、还没做的（上周计划剩下的、数据规则找出的）：计划 AI 看得到才不会把同一件事再排一次
     let queued: Vec<String> = q.iter().filter(|i| i.status == "open").take(20).map(|i| format!("- {}", i.opp.title)).collect();

@@ -45,6 +45,15 @@ pub struct Opportunity {
     pub expect_query: String,
     #[serde(default)]
     pub expect_note: String,
+    /// 分批任务：这一批要改的页面路径（空＝第一批，由 AI 自己挑）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch: Vec<String>,
+    /// 分批任务：这一批之后还要改的页面路径
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch_rest: Vec<String>,
+    /// 分批任务：这是第几批（0 / 1＝第一批）
+    #[serde(default, skip_serializing_if = "first_batch")]
+    pub batch_no: u32,
     /// 判断模型（Jev）给的「这组搜索词和站点定位的相关度」0–3；None＝没打（没配 Jev / 站点没写定位 / 技术类机会）。
     /// score 已经按它调整过。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +163,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_query: String::new(),
             expect_note: String::new(),
             relevance: None,
+            batch: Vec::new(),
+            batch_rest: Vec::new(),
+            batch_no: 0,
         });
     }
     // 2) 排名 8–20（第一页边缘 / 第二页）→ 补内容、加内链
@@ -188,6 +200,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_query: String::new(),
             expect_note: String::new(),
             relevance: None,
+            batch: Vec::new(),
+            batch_rest: Vec::new(),
+            batch_no: 0,
         });
     }
     // 3) 点击明显下滑（与前 28 天比）
@@ -221,6 +236,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_query: String::new(),
             expect_note: String::new(),
             relevance: None,
+            batch: Vec::new(),
+            batch_rest: Vec::new(),
+            batch_no: 0,
         });
     }
     // 4) 有需求但没有像样的页面（所有页面都排在 20 名以后）
@@ -256,6 +274,9 @@ pub fn opportunities(site: &Site, site_dir: &Path) -> Vec<Opportunity> {
             expect_query: String::new(),
             expect_note: String::new(),
             relevance: None,
+            batch: Vec::new(),
+            batch_rest: Vec::new(),
+            batch_no: 0,
         });
     }
     // 5) 技术问题：Bing 抓取错误、Search Console sitemap 报错
@@ -951,6 +972,68 @@ pub fn group_same_route(site_dir: &Path, ids: &[String], own_file: impl Fn(&str)
     Ok((out, merged))
 }
 
+fn first_batch(n: &u32) -> bool {
+    *n == 0
+}
+
+/// 一条任务一次最多改几个页面：页面很多的任务分批改、分批上线，出问题时影响的页面也少。
+pub const BATCH_PAGES: usize = 8;
+
+/// AI 回复里「还要改：/a/ /b/」那一行列出的页面路径（去重，只认本站）。
+pub fn batch_rest_from(reply: &str, domain: &str) -> Vec<String> {
+    let bare = domain.trim_start_matches("www.").to_ascii_lowercase();
+    let Some(list) = reply.lines().rev().find_map(|l| {
+        let t = l.trim().trim_start_matches(['-', '*', ' ']).trim_start_matches("**");
+        t.strip_prefix("还要改：").or_else(|| t.strip_prefix("还要改:")).map(str::to_string)
+    }) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for w in list.split(|c: char| c.is_whitespace() || "，,、；;（）()<>`[]*".contains(c)) {
+        let w = w.trim_end_matches(['。', '.']);
+        let path = match w.split_once("://") {
+            Some((_, rest)) => {
+                let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+                if host.trim_start_matches("www.").to_ascii_lowercase() != bare {
+                    continue;
+                }
+                format!("/{path}")
+            }
+            None if w.starts_with('/') && w.len() > 1 && !w.contains("//") => w.to_string(),
+            None => continue,
+        };
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// 分批任务的下一批。这一批上线后才排，出了问题就停在这，不会接着改。
+pub fn next_batch(opp: &Opportunity, domain: &str) -> Option<Opportunity> {
+    if opp.batch_rest.is_empty() {
+        return None;
+    }
+    let n = opp.batch_rest.len().min(BATCH_PAGES);
+    let (batch, rest) = opp.batch_rest.split_at(n);
+    let no = opp.batch_no.max(1) + 1;
+    let base = opp.title.split("（第 ").next().unwrap_or(&opp.title);
+    let left = if rest.is_empty() { "最后一批".to_string() } else { format!("之后还有 {} 页", rest.len()) };
+    Some(Opportunity {
+        key: format!("{}:b{no}", opp.key.split(":b").next().unwrap_or(&opp.key)),
+        title: format!("{base}（第 {no} 批：{n} 页，{left}）"),
+        page: format!("https://{domain}{}", batch[0]),
+        batch: batch.to_vec(),
+        batch_rest: rest.to_vec(),
+        batch_no: no,
+        // 预期效果只跟第一批复盘，每批都复盘一遍是重复的
+        expect_metric: String::new(),
+        expect_query: String::new(),
+        expect_note: String::new(),
+        ..opp.clone()
+    })
+}
+
 pub fn enqueue(site_dir: &Path, opps: &[Opportunity], now: u64, cooldown: u64) -> Result<Vec<QueueItem>, String> {
     with_queue(site_dir, |q| {
         merge_same_page(q);
@@ -959,8 +1042,8 @@ pub fn enqueue(site_dir: &Path, opps: &[Opportunity], now: u64, cooldown: u64) -
             if !should_enqueue(q, &o.key, now, cooldown) {
                 continue;
             }
-            // 同一个页面已经有一条待处理：并进去一起改，不另开一条
-            if let Some(pk) = page_key(o) {
+            // 同一个页面已经有一条待处理：并进去一起改，不另开一条（分批任务不并，并进去就丢了后面的清单）
+            if let Some(pk) = page_key(o).filter(|_| o.batch.is_empty()) {
                 if let Some(it) = q.iter_mut().find(|i| i.status == "open" && page_key(&i.opp).as_deref() == Some(&pk)) {
                     it.also.push(o.clone());
                     it.updated_at = now;
@@ -1205,6 +1288,48 @@ pub fn kind_label(k: &str) -> &'static str {
         "technical" => "技术问题",
         "plan" => "AI 计划",
         _ => "其它",
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn the_rest_of_a_big_task_is_read_from_the_reply() {
+        let r = "改了 8 篇。\n\n还要改：/guide/a/ https://www.x.com/guide/b/、`/guide/c/` /guide/a/ https://other.com/d/ 无\n新页面：无\n改动的页面：/guide/z/";
+        assert_eq!(batch_rest_from(r, "x.com"), vec!["/guide/a/", "/guide/b/", "/guide/c/"]);
+        assert!(batch_rest_from("**还要改：**无", "x.com").is_empty());
+        assert!(batch_rest_from("改完了", "x.com").is_empty());
+    }
+
+    #[test]
+    fn batches_run_until_the_list_is_used_up() {
+        let mut o = Opportunity { key: "plan:abc".into(), title: "把 19 篇教程的标题改短".into(), expect_note: "点击率上升".into(), score: 900.0, ..Default::default() };
+        o.batch_rest = (0..11).map(|i| format!("/guide/{i}/")).collect();
+        let b2 = next_batch(&o, "x.com").unwrap();
+        assert_eq!((b2.batch.len(), b2.batch_rest.len(), b2.batch_no), (8, 3, 2));
+        assert_eq!(b2.key, "plan:abc:b2");
+        assert_eq!(b2.page, "https://x.com/guide/0/");
+        assert_eq!(b2.title, "把 19 篇教程的标题改短（第 2 批：8 页，之后还有 3 页）");
+        assert_eq!(b2.score, 900.0);
+        assert!(b2.expect_note.is_empty());
+        let b3 = next_batch(&b2, "x.com").unwrap();
+        assert_eq!((b3.batch.len(), b3.batch_rest.len(), b3.batch_no), (3, 0, 3));
+        assert_eq!(b3.key, "plan:abc:b3");
+        assert_eq!(b3.title, "把 19 篇教程的标题改短（第 3 批：3 页，最后一批）");
+        assert!(next_batch(&b3, "x.com").is_none());
+    }
+
+    #[test]
+    fn a_batch_is_not_merged_into_another_task_on_the_same_page() {
+        let dir = std::env::temp_dir().join(format!("pilot-batch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let open = Opportunity { key: "low_ctr:a".into(), kind: "low_ctr".into(), page: "https://x.com/guide/0/".into(), ..Default::default() };
+        let batch = Opportunity { key: "plan:abc:b2".into(), kind: "plan".into(), page: "https://x.com/guide/0/".into(), batch: vec!["/guide/0/".into()], ..Default::default() };
+        enqueue(&dir, &[open], 1, 0).unwrap();
+        assert_eq!(enqueue(&dir, &[batch], 2, 0).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
