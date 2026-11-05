@@ -2335,6 +2335,40 @@ async fn ship_inner(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify:
     }
 }
 
+/// 「提交并上线」（Pages 绑定 GitHub 的本地站点）的步骤
+pub const GIT_DEPLOY_STEPS: &[(&str, &str)] = &[("prepare", "提交改动"), ("upload", "推送并等 Cloudflare 构建"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")];
+
+/// Pages 绑定 GitHub 的本地站点上线：Pilot 不构建也不上传，把文件夹里的改动提交、推到 GitHub，等 Cloudflare 构建完再验收（和运营上线同一段，见 ship_inner）。
+pub async fn commit_and_publish(app: tauri::AppHandle, site: Site, job: Job) {
+    let ctx = Ctx { app };
+    let r = commit_and_ship(&ctx, &site, &job).await;
+    ctx.emit_queue(&site.id);
+    job.finish(&r);
+}
+
+async fn commit_and_ship(ctx: &Ctx, site: &Site, job: &Job) -> Result<(), String> {
+    job.step("prepare", "running", "");
+    let head = commit_folder(site).await.inspect_err(|_| job.step("prepare", "failed", ""))?;
+    job.step("prepare", "ok", head.get(..7).unwrap_or_default());
+    let spec = crate::site_verify::Spec { domain: site.domain.clone(), ..Default::default() };
+    ship(ctx, site, job, spec, &head, "manual").await.map(|_| ())
+}
+
+/// 提交文件夹里已跟踪文件的改动（构建脚本写的数据文件不算），返回最新提交。不在主分支不动。
+async fn commit_folder(site: &Site) -> Result<String, String> {
+    let dir = crate::site_git::code_dir(site, None)?;
+    let cur = crate::site_git::current_branch(&dir).await;
+    if cur != site.default_branch {
+        return Err(format!("当前在 {} 上，不在 {} 分支。切回去再上线", if cur.is_empty() { "分离 HEAD".to_string() } else { format!("{cur} 分支") }, site.default_branch));
+    }
+    let (dirty, _) = dirty_files(site, &dir).await.ok_or("读不到 git 状态")?;
+    let files = crate::site_deploy::shipped_files(&dir, dirty, &crate::managed::build_outputs(&site.app_dir(&dir)), now() + 1);
+    if !files.is_empty() {
+        crate::site_deploy::commit_only(&dir, &files, &format!("提交站点改动：{}", crate::site_deploy::file_names(&files))).await?;
+    }
+    Ok(crate::site_git::head_sha(&dir).await)
+}
+
 /// 上线成功后记下验收结果，安排 1 小时后复查；有一般问题就标成待核对（全自动方案顺手开一条后续任务）。
 fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result<(), String> {
     let site_dir = ctx.site_dir(&site.id);

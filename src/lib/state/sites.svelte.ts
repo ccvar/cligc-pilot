@@ -188,8 +188,12 @@ export async function deploySite(id: string, background = false) {
     // 上线成功后 Pilot 会把带上的改动提交并推送（site_deploy::commit_shipped），只在默认分支上、不是迁移中的站点
     const commits = live && s?.source === 'local' && st?.branch === s.default_branch;
     const dirty = st?.dirty ? `${live ? '\n\n注意：' : ''}站点文件夹里有未提交的改动，上线的将是文件夹当前的样子（包括这些改动）。${commits ? '上线成功后，Pilot 会把这些改动提交进代码，配了 GitHub 的还会推送上去，和线上保持一致。' : ''}` : '';
-    const msg = live ? `构建「${s?.name ?? id}」并上线到 ${target}？检查都通过后，线上马上换成新版本。${dirty}` : `${dirty}继续？`;
-    const ok = await confirmDialog(msg, { title: '构建并上线', kind: st?.dirty ? 'warning' : 'info', confirmText: live ? '上线' : '继续上线' });
+    // Pages 绑定 GitHub 的本地站点：Pilot 不构建也不上传，提交并推送后 Cloudflare 构建上线
+    const gitPush = s?.deploy.mode === 'pages_git' && s.source !== 'github';
+    const msg = gitPush
+      ? `把「${s?.name ?? id}」${st?.dirty ? '文件夹里未提交的改动提交，并' : ''}推送到 GitHub？Cloudflare 构建完成后，${s?.domain || '线上'}马上换成新版本。`
+      : live ? `构建「${s?.name ?? id}」并上线到 ${target}？检查都通过后，线上马上换成新版本。${dirty}` : `${dirty}继续？`;
+    const ok = await confirmDialog(msg, { title: gitPush ? '提交并上线' : '构建并上线', kind: st?.dirty && !gitPush ? 'warning' : 'info', confirmText: gitPush || live ? '上线' : '继续上线' });
     if (!ok) return;
   }
   try {

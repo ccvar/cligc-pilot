@@ -23,6 +23,11 @@ pub async fn push_origin(main: &Path, branch: &str) -> Result<bool, String> {
     }
 }
 
+/// 本地有还没推到 origin 这个分支的提交（只看本地记的远端状态，不联网）。没有这个远端分支时返回 false。
+pub async fn ahead_of_origin(dir: &Path, branch: &str) -> bool {
+    git_ok(dir, &["rev-list", "--count", &format!("origin/{branch}..HEAD")], "").await.is_ok_and(|n| n.trim() != "0")
+}
+
 /// 跑一条 git 命令。`token` 非空时注入 GitHub 凭据助手（见 github::git_env），并把输出里的 Token 抹掉。
 pub async fn git(dir: &Path, args: &[&str], token: &str) -> Result<GitOut, String> {
     let mut cmd = tokio::process::Command::new("git");
@@ -346,6 +351,30 @@ pub fn code_dir(site: &crate::sites::Site, gh: Option<&crate::conns::Connection>
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn unpushed_commits_are_noticed() {
+        let t = tempfile::tempdir().unwrap();
+        let (repo, bare) = (t.path().join("site"), t.path().join("origin.git"));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&bare).unwrap();
+        git_ok(&bare, &["init", "-q", "--bare", "-b", "main"], "").await.unwrap();
+        git_ok(&repo, &["init", "-q", "-b", "main"], "").await.unwrap();
+        std::fs::write(repo.join("a"), "1").unwrap();
+        git_ok(&repo, &["add", "-A"], "").await.unwrap();
+        git_commit_ok(&repo, &["commit", "-qm", "one"]).await.unwrap();
+        assert!(!ahead_of_origin(&repo, "main").await, "没有远端分支");
+        git_ok(&repo, &["remote", "add", "origin", bare.to_str().unwrap()], "").await.unwrap();
+        git_ok(&repo, &["push", "-q", "origin", "main"], "").await.unwrap();
+        assert!(!ahead_of_origin(&repo, "main").await);
+        std::fs::write(repo.join("a"), "2").unwrap();
+        git_commit_ok(&repo, &["commit", "-qam", "two"]).await.unwrap();
+        assert!(ahead_of_origin(&repo, "main").await);
+        // 推送带提交号也要更新本地记的远端状态（上线就是这样推的）
+        let head = head_sha(&repo).await;
+        git_ok(&repo, &["push", "-q", "origin", &format!("{head}:refs/heads/main")], "").await.unwrap();
+        assert!(!ahead_of_origin(&repo, "main").await);
+    }
+
     #[tokio::test]
     async fn push_origin_fast_forwards_and_skips_without_remote() {
         let t = tempfile::tempdir().unwrap();

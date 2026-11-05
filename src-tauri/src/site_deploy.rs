@@ -535,28 +535,33 @@ async fn commit_shipped(site: &Site, rec: &mut DeployRecord, job: &Job) {
     if files.is_empty() {
         return;
     }
-    let names = files.iter().take(3).cloned().collect::<Vec<_>>().join("、");
-    let more = if files.len() > 3 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
-    let message = format!("提交已上线的改动：{names}{more}");
+    let names = file_names(&files);
+    let message = format!("提交已上线的改动：{names}");
     match commit_only(&dir, &files, &message).await {
         Ok(()) => {
             rec.commit = crate::site_git::head_sha(&dir).await;
             rec.message = message;
             rec.dirty = !crate::site_git::is_clean(&dir).await;
-            job.line(&format!("这次带上的未提交改动已经上线，一并提交进代码：{names}{more}"));
+            job.line(&format!("这次带上的未提交改动已经上线，一并提交进代码：{names}"));
             crate::site_runner::push_after(site, &dir, job).await;
         }
         Err(e) => job.line(&format!("这次带上的未提交改动已经上线，但没能自动提交，需要你手动提交（{e}）")),
     }
 }
 
+/// 提交说明里写的文件名：最多三个
+pub(crate) fn file_names(files: &[String]) -> String {
+    let more = if files.len() > 3 { format!(" 等 {} 个文件", files.len()) } else { String::new() };
+    format!("{}{more}", files.iter().take(3).cloned().collect::<Vec<_>>().join("、"))
+}
+
 /// 这次上线确实带上了的改动：上线开始之后才改的不算（可能根本没进这次构建），构建脚本自动写的数据文件也不算。
-fn shipped_files(dir: &Path, dirty: Vec<String>, outputs: &[String], started: u64) -> Vec<String> {
+pub(crate) fn shipped_files(dir: &Path, dirty: Vec<String>, outputs: &[String], started: u64) -> Vec<String> {
     dirty.into_iter().filter(|f| !outputs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())) && !crate::site_git::changed_since(dir, f, started)).collect()
 }
 
 /// 只提交这几个文件（已跟踪的改动和删除），暂存区里别的东西不动。
-async fn commit_only(dir: &Path, files: &[String], message: &str) -> Result<(), String> {
+pub(crate) async fn commit_only(dir: &Path, files: &[String], message: &str) -> Result<(), String> {
     let mut args = vec!["commit", "-qm", message, "--only", "--"];
     args.extend(files.iter().map(String::as_str));
     crate::site_git::git_commit_ok(dir, &args).await.map(|_| ())

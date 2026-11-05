@@ -865,7 +865,8 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
     let since = if site.origin == "created" { 0 } else { site.created_at };
     // 只有构建脚本自动重写的数据文件变了（上次在这里构建时写的）不算没上线的改动
     let real_dirty = dirty && !crate::site_runner::dirty_files(&site, &dir).await.is_some_and(|(_, generated)| generated);
-    let undeployed = git && undeployed(&dir, real_dirty, &head, &history, since).await;
+    // 推送到 GitHub 就上线的站点在 Pilot 里没有上线记录：有没提交的改动或没推的提交才算没上线
+    let undeployed = git && if git_deploys(&site) { real_dirty || crate::site_git::ahead_of_origin(&dir, &site.default_branch).await } else { undeployed(&dir, real_dirty, &head, &history, since).await };
     let changed_at = if undeployed { changed_at(&dir, real_dirty).await } else { 0 };
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
@@ -1042,6 +1043,11 @@ pub fn deploy_many(app: tauri::AppHandle, state: tauri::State<'_, AppState>, ids
     Ok(n)
 }
 
+/// 本地文件夹的站点，靠推送到 GitHub 触发 Cloudflare 构建上线
+fn git_deploys(site: &crate::sites::Site) -> bool {
+    site.deploy.mode == "pages_git" && site.source != "github"
+}
+
 pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) -> Result<String, String> {
     let mut site = state.sites.get(&id)?;
     // IndexNow 自动配好：Pilot 构建的站点没有密钥就生成一个，验证文件上线时放进构建产物（不改代码）
@@ -1051,6 +1057,13 @@ pub(crate) fn start_deploy(app: tauri::AppHandle, state: &AppState, id: String) 
             s.data.indexnow_key = key.clone();
             Ok(())
         })?;
+    }
+    // Pages 绑定 GitHub 的本地站点：提交、推送，Cloudflare 构建
+    if git_deploys(&site) {
+        let job = state.site_jobs.start(Some(app.clone()), &id, "deploy", "提交并上线", crate::site_runner::GIT_DEPLOY_STEPS)?;
+        let job_id = job.id.clone();
+        tauri::async_runtime::spawn(crate::site_runner::commit_and_publish(app, site, job));
+        return Ok(job_id);
     }
     if !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
         return Err(if site.deploy.mode == "pages_git" {
@@ -1317,7 +1330,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
         )
     } else {
         "代码就在用户的本地文件夹（当前目录）。改动直接落在这里：除非用户要求，不要自己提交、切分支、改写历史或推送；\
-改完列出改了哪些文件，用户可以在站点页里检查差异、构建并上线。"
+改完列出改了哪些文件，用户可以在站点页里检查差异，再按下面【上线】说的方式上线。"
             .to_string()
     };
     let data = if data_tool.is_empty() {
@@ -1328,7 +1341,7 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
     format!(
         "你是站点「{name}」（{domain}）的运营与维护助手。{flow}\n\
 【站点信息】{root}框架 {framework}；构建 {build}，产物目录 `{out}`；上线前检查：{checks}。\n\
-【上线】上线由 Pilot 负责：用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。\
+【上线】上线由 Pilot 负责：{how_live}\
 你不要自己部署——不要运行 `wrangler pages deploy`、`npm run deploy` 之类的命令，也拿不到 Cloudflare 凭据。\
 用户要你上线时：有 `site_deploy` 工具就调用它（询问 / 自动档 Pilot 先请用户确认，全自动档直接执行；构建并上线、跑完把结果给你）；GitHub 来源先合并进默认分支（`github_merge` 传 deploy=true 可以合并完直接上线）；\
 没有这个工具时：{deploy_btn}\n\
@@ -1338,8 +1351,19 @@ pub fn site_system_prompt(site: &Site, login: &str, data_tool: &str) -> String {
 不要把流量、收入等运营数字写进代码、提交说明或 PR 描述（仓库可能是公开的）。{data}\n\
 用用户所用语言回复，简洁说明做了什么、结果如何、还需要用户确认什么。",
         name = site.name,
-        // 本地站点改完没上线时，对话输入框上方有「构建并上线」按钮（见前端 SiteDeployBar）
-        deploy_btn = if site.source != "github" && matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
+        how_live = if git_deploys(site) {
+            "用户点「提交并上线」，或运营任务审核通过后，Pilot 会提交并推送到 GitHub，由 Cloudflare 构建，Pilot 再做线上验收。"
+        } else if site.deploy.mode == "pages_git" {
+            "合并进默认分支后 Cloudflare 会自动构建，运营任务审核通过后 Pilot 会合并并做线上验收。"
+        } else {
+            "用户在站点页点「构建并上线」，或运营任务审核通过后，Pilot 会构建、跑检查、上传 Cloudflare 并提交 IndexNow。"
+        },
+        // 本地站点改完没上线时，对话输入框上方有上线按钮（见前端 SiteDeployBar）；按钮名字跟部署方式走，不能说站点页有不存在的按钮
+        deploy_btn = if git_deploys(site) {
+            "改完后对话输入框上方会出现「提交并上线」按钮，请用户点它（Pilot 会先确认一次，然后提交、推送到 GitHub，由 Cloudflare 构建）；不要自己提交推送，也不要让用户去站点页找。"
+        } else if site.deploy.mode == "pages_git" {
+            "合并进默认分支后 Cloudflare 会自动构建上线，不用点按钮。"
+        } else if site.source != "github" && matches!(site.deploy.mode.as_str(), "direct" | "workers" | "vps") {
             "改完后对话输入框上方会出现「构建并上线」按钮，请用户点它（Pilot 会先确认一次）；不要说你没有上线工具、也不要让用户去站点页找。"
         } else {
             "请用户在站点页点「构建并上线」。"

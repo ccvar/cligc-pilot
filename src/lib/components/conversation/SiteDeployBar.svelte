@@ -1,6 +1,7 @@
 <script lang="ts">
   // 站点对话输入框上方的「构建并上线」：AI 在站点文件夹里改完、还没上线时出现，点一下走和站点页同一个上线流程（先确认）。
-  // 只管 Pilot 自己构建上传的本地站点；GitHub 来源上线的是仓库默认分支、运营任务的对话在独立工作树里，都不在这里上线。
+  // 只管本地文件夹的站点：Pilot 自己构建上传的，和推送到 GitHub 由 Cloudflare 构建的（这种按钮是「提交并上线」）。
+  // GitHub 来源上线的是仓库默认分支、运营任务的对话在独立工作树里，都不在这里上线。
   import { untrack } from 'svelte';
   import type { Conversation } from '$lib/types';
   import Icon from '$lib/components/site/Icon.svelte';
@@ -10,7 +11,8 @@
 
   const siteId = $derived(conv?.conn_id.startsWith(SITE_PREFIX) && !conv.workspace_dir ? conv.conn_id.slice(SITE_PREFIX.length) : '');
   const site = $derived(siteId ? sites.list.find((s) => s.id === siteId) : undefined);
-  const eligible = $derived(!!site && site.source !== 'github' && pilotDeploys(site.deploy.mode));
+  const gitPush = $derived(site?.deploy.mode === 'pages_git');
+  const eligible = $derived(!!site && site.source !== 'github' && (pilotDeploys(site.deploy.mode) || gitPush));
   // 切到这个对话、或这轮跑完时重新看一眼站点文件夹：AI 刚改的要算进去
   $effect(() => { if (eligible && !busy) { const id = siteId; untrack(() => void loadSiteStatus(id)); } });
   const st = $derived(siteId ? sites.status[siteId] : undefined);
@@ -18,7 +20,7 @@
   const running = $derived(job?.status === 'running');
   // 有没上线的改动（后端判断：上次上线之后又改过，或者提交了但线上还不是这一版）。
   // 没用 Pilot 上线过的导入站点：只认这次对话开始之后的改动，之前的多半已经用别的方式（比如 wrangler）上线了
-  const fresh = $derived(!!st?.last_deploy || site?.origin === 'created' || (st?.changed_at ?? 0) >= (conv?.created_at ?? 0));
+  const fresh = $derived(gitPush || !!st?.last_deploy || site?.origin === 'created' || (st?.changed_at ?? 0) >= (conv?.created_at ?? 0));
   const pending = $derived(!!st?.exists && st.undeployed && fresh);
   const target = $derived(site?.domain || site?.name || '');
 </script>
@@ -27,13 +29,13 @@
   <div class="deploy-bar" class:live={running && job?.kind === 'deploy'} role="status">
     {#if running && job?.kind === 'deploy'}
       <span class="ic"><span class="spin"></span></span>
-      <span class="txt"><b>正在上线 {target}…</b><small>构建、检查、上传，跑完这里会消失</small></span>
+      <span class="txt"><b>正在上线 {target}…</b><small>{gitPush ? '推送、等 Cloudflare 构建、验收' : '构建、检查、上传'}，跑完这里会消失</small></span>
       <button class="db-btn ghost" onclick={() => openSite(site.id, 'deploy')}>看进度</button>
     {:else}
       <span class="ic"><Icon name="rocket" size={15} /></span>
-      <span class="txt"><b>{st?.last_deploy || site.origin !== 'created' ? '改动还没上线' : `${target} 还没上线过`}</b><small>构建、跑检查，通过后上线到 {target}</small></span>
+      <span class="txt"><b>{gitPush || st?.last_deploy || site.origin !== 'created' ? '改动还没上线' : `${target} 还没上线过`}</b><small>{gitPush ? `提交并推送到 GitHub，Cloudflare 构建后上线到 ${target}` : `构建、跑检查，通过后上线到 ${target}`}</small></span>
       <span class="tipwrap" data-tip={running ? `站点正在${job?.title ?? '跑别的任务'}，等它跑完再上线` : '点了会先确认一次'}>
-        <button class="db-btn" onclick={() => void deploySite(site.id)} disabled={running}><Icon name="rocket" size={12} />构建并上线</button>
+        <button class="db-btn" onclick={() => void deploySite(site.id)} disabled={running}><Icon name="rocket" size={12} />{gitPush ? '提交并上线' : '构建并上线'}</button>
       </span>
     {/if}
   </div>
