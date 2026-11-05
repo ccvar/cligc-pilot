@@ -489,7 +489,7 @@ fn internal_links(html: &str, domain: &str) -> Vec<String> {
     out
 }
 
-async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
+pub(crate) async fn sitemap_locs(client: &reqwest::Client, domain: &str) -> Vec<String> {
     // 先看 robots.txt 里声明的 Sitemap:（放在非标准路径的站点只有这里能找到），再试常见路径
     let mut queue: Vec<String> = ["sitemap.xml", "sitemap-index.xml", "sitemap_index.xml"].iter().map(|p| format!("https://{domain}/{p}")).collect();
     if let Ok(r) = fetch(client, &format!("https://{domain}/robots.txt")).await {

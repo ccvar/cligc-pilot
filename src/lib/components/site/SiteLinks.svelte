@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 站点概览里的「推广链接」：每周自动把站内 /go/… 跳转和带邀请参数的站外链接访问一遍，看最后落在哪。
+  // 站点概览里的「推广链接」：每周自动把站内 /go/… 跳转、自家短链和带邀请参数的站外链接访问一遍，看最后落在哪。
   // 失效的排前面、写清原因；被目标网站拦了自动访问的标「没法确认」；正常的收起来，点开看。
   import Icon from './Icon.svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -24,7 +24,7 @@
     try {
       rep = await invoke<LinkReport>('check_site_links', { id: site.id });
       const b = rep.links.filter((l) => l.verdict === 'broken').length;
-      if (!quiet || b) say(rep.links.length ? (b ? `查了 ${rep.links.length} 个推广链接，${b} 个失效` : `查了 ${rep.links.length} 个推广链接，都能用`) : '没找到推广链接', b ? 'err' : undefined);
+      if (!quiet || b) say(rep.links.length ? (b ? `查了 ${rep.links.length} 个推广链接，${b} 个失效` : `查了 ${rep.links.length} 个推广链接，都能用`) : live ? `${coverage}，没发现推广链接` : '没找到推广链接', b ? 'err' : undefined);
     } catch (e) { say(String(e), 'err'); }
     finally { busy = false; }
   }
@@ -32,14 +32,18 @@
   const bad = $derived(rep?.links.filter((l) => l.verdict !== 'ok') ?? []);
   const good = $derived(rep?.links.filter((l) => l.verdict === 'ok') ?? []);
   const broken = $derived(bad.filter((l) => l.verdict === 'broken').length);
+  // 没有构建产物的站是抽查线上页面：说清看了多少，只看了首页时不能说「没有」
+  const live = $derived(rep?.source === 'live');
+  const homeOnly = $derived(live && !rep?.total);
+  const coverage = $derived(homeOnly ? '只看了线上首页' : rep?.scanned === rep?.total ? `看了全部 ${rep?.total} 页` : `抽查了 ${rep?.scanned} / ${rep?.total} 页`);
   const host = (u: string) => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return u; } };
   $effect(() => {
     if (!rep) return;
     const unv = bad.length - broken;
     onsummary?.({
       tone: !rep.checked_at || !rep.links.length ? 'none' : broken ? 'err' : unv ? 'warn' : 'ok',
-      status: !rep.checked_at ? '还没检查' : !rep.links.length ? '没有推广链接' : broken ? `${broken} 个失效` : unv ? `${unv} 个没法确认` : '都能用',
-      sub: rep.links.length ? `共 ${rep.links.length} 个` : '每周检查一次',
+      status: !rep.checked_at ? '还没检查' : !rep.links.length ? (homeOnly ? '可能有漏' : live ? '没发现推广链接' : '没有推广链接') : broken ? `${broken} 个失效` : unv ? `${unv} 个没法确认` : '都能用',
+      sub: live ? (rep.links.length ? `共 ${rep.links.length} 个 · ${coverage}` : coverage) : rep.links.length ? `共 ${rep.links.length} 个` : '每周检查一次',
       checked: rep.checked_at,
     });
   });
@@ -49,9 +53,14 @@
   {#if embedded}<div class="ph">{@render head()}</div>
   {:else}<h3><Icon name="link" />推广链接{@render head()}</h3>{/if}
   {#if !rep?.checked_at}
-    <p class="hint">会找出站内的 <code>/go/…</code> 跳转和带邀请参数的站外链接，真的访问一遍：打不开、404、跳回本站的算失效，发系统通知提醒你。</p>
+    <p class="hint">会找出站内的 <code>/go/…</code> 跳转、<code>g.cligc.com</code> 短链和带邀请参数的站外链接，真的访问一遍：打不开、404、跳回本站的算失效，发系统通知提醒你。</p>
   {:else if !rep.links.length}
-    <p class="hint">没找到推广链接（站内 <code>/go/…</code> 跳转，或带 ref / invite / affiliate 等参数的站外链接）。</p>
+    <p class="hint">
+      {#if homeOnly}这个站没有站点地图，只看了线上首页，别的页面上有推广链接也看不到。
+      {:else if live}{coverage}，没发现推广链接。没抽到的页面上可能还有。
+      {:else}没找到推广链接。{/if}
+      认的是站内 <code>/go/…</code> 跳转、<code>g.cligc.com</code> 短链，和带 ref / invite / affiliate 等参数的站外链接。
+    </p>
   {:else}
     <ul class="rows">
       {#each bad as l (l.url)}
@@ -71,13 +80,13 @@
     <button class="href mono" onclick={() => openUrl(l.url)} data-tip={`在浏览器打开：${l.url}`}>{l.href}</button>
     <span class="to faint" data-tip={l.final_url}>→ {host(l.final_url)}{l.hops ? `（跳了 ${l.hops} 次）` : ''}</span>
     <span class="grow"></span>
-    <span class="pg faint" data-tip={`例如 ${l.sample_page}`}>用在 {l.pages} 个页面</span>
+    <span class="pg faint" data-tip={`例如 ${l.sample_page}`}>{live ? `看过的页面里 ${l.pages} 个用到` : `用在 ${l.pages} 个页面`}</span>
     {#if l.note}<p class="note" class:err-t={l.verdict === 'broken'}>{l.note}</p>{/if}
   </li>
 {/snippet}
 
 {#snippet head()}
-    <span class="sub">{#if !rep?.checked_at}每周自动检查一次{:else}{rep.links.length} 个{#if broken} · <span class="err-t">{broken} 个失效</span>{/if} · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{#if rep.source === 'live'} · 只看了线上首页{/if}{/if}</span>
+    <span class="sub">{#if !rep?.checked_at}每周自动检查一次{:else}{rep.links.length} 个{#if broken} · <span class="err-t">{broken} 个失效</span>{/if} · <span data-tip={full(rep.checked_at)}>{ago(rep.checked_at)}检查</span>{#if live} · {coverage}{/if}{/if}</span>
     <span class="grow"></span>
     <button class="btn tiny" onclick={() => check()} disabled={busy} data-tip="把这个站点的推广链接都访问一遍，跟到最后落地的页面">{#if busy}<span class="spin"></span>检查中…{:else}<Icon name="refresh" size={11} />立即检查{/if}</button>
 {/snippet}

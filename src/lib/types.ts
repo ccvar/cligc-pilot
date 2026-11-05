@@ -484,7 +484,14 @@ export interface SafetyCheck { key: 'google' | 'cf_page' | 'cf_dns' | 'quad9'; s
 export interface SafetyView { checked: number; checks: SafetyCheck[]; flagged_since: number; alerted: boolean }
 /** 推广链接检查（每周一次，见 link_check） */
 export interface LinkResult { href: string; url: string; pages: number; sample_page: string; status: number; final_url: string; hops: number; verdict: 'ok' | 'unverified' | 'broken'; note: string }
-export interface LinkReport { checked_at: number; source: string; links: LinkResult[] }
+export interface LinkReport {
+  checked_at: number;
+  source: string;
+  /** source 为 live：实际看了多少个线上页面、站点地图一共多少页（total 为 0＝没有站点地图，只看了首页） */
+  scanned?: number;
+  total?: number;
+  links: LinkResult[];
+}
 export interface SiteRow {
   channels?: ChannelBrief[];
   /** 上次推广链接检查里失效的个数 */
