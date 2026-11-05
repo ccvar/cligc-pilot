@@ -440,19 +440,24 @@ fn recent_years_in(s: &str) -> Vec<i32> {
     out
 }
 
+/// 只认失败原因的开头：模型层（余额、限流、网络）、Pilot 中断、拉代码 / 推送；别处提到「连接」「超时」的不算
+const TRANSIENT: [&str; 7] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch ", "git clone "];
+
+/// 失败的原因和任务本身无关、Pilot 会自己重做一次：这时候还不用提醒你。
+pub fn retries_by_itself(i: &QueueItem) -> bool {
+    !i.auto_retried && TRANSIENT.iter().any(|k| i.note.starts_with(k))
+}
+
 /// 托管方案里失败的、原因和这条任务本身无关的放回排队，按方案节奏自动重做，不用你手动点：
 /// - 站点的 git 仓库没建好（不是仓库、一次没提交）：等仓库好了（repo_ok，有这类失败时才去查）就放回去，不限次数；
 /// - Pilot 中途退出、模型临时用不了：放回去一次，再失败才留给你。
 /// 改出问题、检查没过这类不重试，照样留给你。
 pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) -> Result<Vec<String>, String> {
     const REPO: [&str; 3] = ["不是 git 仓库", "还没有任何提交", "unknown revision"];
-    // 只认失败原因的开头：模型层（余额、限流、网络）、Pilot 中断、拉代码 / 推送；别处提到「连接」「超时」的不算
-    const TRANSIENT: [&str; 7] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch ", "git clone "];
     let has = |note: &str, ks: &[&str]| ks.iter().any(|k| note.contains(k));
-    let starts = |note: &str, ks: &[&str]| ks.iter().any(|k| note.starts_with(k));
     let ids: Vec<String> = load_queue(site_dir)
         .into_iter()
-        .filter(|i| i.status == "failed" && i.head_sha.is_empty() && if has(&i.note, &REPO) { repo_ok() } else { !i.auto_retried && starts(&i.note, &TRANSIENT) })
+        .filter(|i| i.status == "failed" && i.head_sha.is_empty() && if has(&i.note, &REPO) { repo_ok() } else { retries_by_itself(i) })
         .map(|i| i.id)
         .collect();
     for id in &ids {

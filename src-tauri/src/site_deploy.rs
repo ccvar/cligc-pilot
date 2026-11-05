@@ -393,7 +393,31 @@ mod routes_failure_tests {
 }
 
 /// 用 wrangler 上传构建产物。返回部署地址。
+/// 上传重试后还是连不上 Cloudflare 时，错误以这个开头
+pub const UPLOAD_NETWORK: &str = "上传失败：连不上 Cloudflare";
+
+/// 这次失败是网络抖动（再试一次多半就好），不是配置、权限这类再试也没用的问题。
+fn network_blip(e: &str) -> bool {
+    const SIGNS: [&str; 11] = ["timed out", "etimedout", "econnreset", "enotfound", "eai_again", "socket hang up", "fetch failed", "network connectivity", "connection reset", "error sending request", "bad gateway"];
+    let low = e.to_ascii_lowercase();
+    SIGNS.iter().any(|s| low.contains(s))
+}
+
+/// 上传到 Cloudflare。网络抖动不算失败：等一会儿再传，不用重新构建；都不行才返回错误（原始输出留在作业日志里）。
 pub async fn upload(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str, message: &str, dirty: bool, job: &Job) -> Result<String, String> {
+    for wait in [30, 60] {
+        match upload_once(site, cf, b, commit, message, dirty, job).await {
+            Err(e) if network_blip(&e) && !job.canceled() => {
+                job.line(&format!("上传时网络出了问题，{wait} 秒后重试"));
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+            }
+            done => return done,
+        }
+    }
+    upload_once(site, cf, b, commit, message, dirty, job).await.map_err(|e| if network_blip(&e) { format!("{UPLOAD_NETWORK}（网络超时或连接中断，重试了 2 次也没成功）") } else { e })
+}
+
+async fn upload_once(site: &Site, cf: &Connection, b: &BuildOutcome, commit: &str, message: &str, dirty: bool, job: &Job) -> Result<String, String> {
     let token = crate::keychain::get_key(&cf.id)?;
     job.add_secret(&token);
     if cf.account_id.is_empty() {
@@ -1021,6 +1045,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn network_blips_are_told_apart_from_real_upload_errors() {
+        assert!(network_blip("上传失败：退出码 1 ✘ [ERROR] The request to Cloudflare's API timed out. This is likely due to network connectivity issues"));
+        assert!(network_blip("上传失败：fetch failed") && network_blip("读取项目失败：error sending request for url") && network_blip("read ECONNRESET"));
+        assert!(!network_blip("上传失败：退出码 1 ✘ [ERROR] A request to the Cloudflare API failed. Authentication error [code: 10000]"));
+        assert!(!network_blip("这个 Cloudflare 连接没有账号 id，请重新连接"));
+    }
 
     #[tokio::test]
     async fn what_a_manual_deploy_shipped_gets_committed_and_nothing_else() {

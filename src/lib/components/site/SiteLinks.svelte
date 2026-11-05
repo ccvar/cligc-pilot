@@ -35,7 +35,7 @@
   // 没有构建产物的站是抽查线上页面：说清看了多少，只看了首页时不能说「没有」
   const live = $derived(rep?.source === 'live');
   const homeOnly = $derived(live && !rep?.total);
-  const coverage = $derived(homeOnly ? '只看了线上首页' : rep?.scanned === rep?.total ? `看了全部 ${rep?.total} 页` : `抽查了 ${rep?.scanned} / ${rep?.total} 页`);
+  const coverage = $derived(homeOnly ? '只看了线上首页' : (rep?.scanned ?? 0) >= (rep?.total ?? 0) ? `看了全部 ${rep?.total} 页` : `抽查了 ${rep?.scanned} / ${rep?.total} 页`);
   const host = (u: string) => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return u; } };
   $effect(() => {
     if (!rep) return;

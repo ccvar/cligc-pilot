@@ -304,6 +304,14 @@ impl Ctx {
     fn notify(&self, title: &str, body: &str) {
         crate::push::notify(&self.app, title, body);
     }
+    /// 定时任务里的失败：同样的内容一段时间内只提醒一次（网络断一下午，不能每半小时响一次）
+    fn notify_failure(&self, title: &str, body: &str) {
+        static SENT: std::sync::Mutex<std::collections::BTreeMap<String, u64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+        let due = SENT.lock().map(|mut sent| failure_due(&mut sent, format!("{title}\n{body}"), now())).unwrap_or(true);
+        if due {
+            self.notify(title, body);
+        }
+    }
     pub(crate) fn emit_queue(&self, site_id: &str) {
         let q = site_ops::load_queue(&self.site_dir(site_id));
         let _ = self.app.emit("site-queue", serde_json::json!({ "site_id": site_id, "queue": q }));
@@ -603,7 +611,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
         }
         if let Err(e) = &r {
             if trigger == "schedule" {
-                ctx.notify(&format!("{} · {}失败", site.name, task_label(&task)), e.lines().next().unwrap_or(""));
+                ctx.notify_failure(&format!("{} · {}失败", site.name, task_label(&task)), &brief(e));
             }
         }
         ctx.emit_queue(&site.id);
@@ -832,7 +840,7 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
                 left -= 1;
                 // 已经合并进主分支、只是上线没完成的留在「已合并」（可以重新上线）；验收失败的回滚流程已经写好状态；只有还在处理中的才标失败
                 let (note, head) = failure_note(job, &e, &site_dir, &item, &site.id);
-                let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                let updated = site_ops::update_item(&site_dir, &item.id, now(), |i| {
                     if i.status == "working" {
                         i.status = "failed".into();
                         i.note = note.clone();
@@ -841,6 +849,12 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
                         }
                     }
                 });
+                // 这一条失败了，整轮任务还算成功，外层的「任务失败」提醒轮不到它：在这里提醒你
+                if let (true, false, Ok(Some(i))) = (trigger == "schedule", job.canceled(), &updated) {
+                    if failed_for_you(i, &e) {
+                        ctx.notify_failure(&format!("{} · 改动没完成", site.name), &format!("{}\n{}", i.opp.title, brief(&i.note)));
+                    }
+                }
             }
         }
         ctx.emit_queue(&site.id);
@@ -2686,7 +2700,13 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
         let sh = match ship(ctx, site, job, with_riders(site, spec_for(site, &item, false), &ride), &commit, if auto { "ops" } else { "manual" }).await {
             Ok(sh) => sh,
             Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
-            Err(e) => return Err(e),
+            Err(e) => {
+                // 记下这次的时间：调度隔半小时再试，不是每一轮都试
+                let note = unshipped_note(ctx, site, &e);
+                let _ = site_ops::update_item(&site_dir, item_id, now(), |x| x.note = note);
+                ctx.emit_queue(&site.id);
+                return Err(e);
+            }
         };
         record_shipped(ctx, site, item_id, &sh)?;
         for r in &ride {
@@ -2742,7 +2762,8 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
         Ok(sh) => sh,
         Err(e) if e.starts_with(crate::site_verify::HARD_PREFIX) => return on_verify_failed(ctx, site, job, item_id, &e).await,
         Err(e) => {
-            let _ = site_ops::update_item(&site_dir, item_id, now(), |x| x.note = format!("已合并进主分支，上线没完成：{e}"));
+            let note = unshipped_note(ctx, site, &e);
+            let _ = site_ops::update_item(&site_dir, item_id, now(), |x| x.note = note);
             ctx.emit_queue(&site.id);
             return Err(e);
         }
@@ -2831,6 +2852,41 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
             Ok(crate::site_git::head_sha(&main).await)
         }
     }
+}
+
+/// 合并了、上线没完成的条目写什么。网络问题写人话，托管中的站点会自己再试（见调度循环），不用你动手。
+fn unshipped_note(ctx: &Ctx, site: &Site, e: &str) -> String {
+    let retries = e.starts_with(crate::site_deploy::UPLOAD_NETWORK) && {
+        let cfg = crate::managed::load(&ctx.state().data_dir);
+        !cfg.paused && cfg.group_of(&site.id).is_some_and(|g| g.active_for(&site.id))
+    };
+    format!("已合并进主分支，上线没完成：{e}{}", if retries { "。Pilot 约半小时后会自动再试，也可以现在点「重新上线」" } else { "" })
+}
+
+/// 同样的失败提醒多久内不重复
+const FAILURE_QUIET: u64 = 6 * 3600;
+
+/// 这条提醒该不该发，并记下发过了
+fn failure_due(sent: &mut std::collections::BTreeMap<String, u64>, key: String, now: u64) -> bool {
+    sent.retain(|_, at| now.saturating_sub(*at) < FAILURE_QUIET);
+    if sent.contains_key(&key) {
+        return false;
+    }
+    sent.insert(key, now);
+    true
+}
+
+/// 提醒里放的原因：第一行，太长截断
+fn brief(e: &str) -> String {
+    e.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(200).collect()
+}
+
+/// 定时任务里这条失败要不要提醒：还在等你处理才提醒。回滚的流程自己发过通知；Pilot 会自己重做的、
+/// 站点环境问题（站点级提示一次）不提醒。
+fn failed_for_you(i: &QueueItem, e: &str) -> bool {
+    let told = e.contains("回滚") || e.contains("回退");
+    let waiting = site_ops::deploy_stuck(i) || (i.status == "failed" && !site_ops::env_blocked(i) && !site_ops::retries_by_itself(i));
+    waiting && !told
 }
 
 /// 本地主分支合并 / 回退后推到 GitHub（有 origin 才推）；推不上去只在作业里记一行，不耽误上线
@@ -2973,8 +3029,9 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
             Err(format!("{e}。已把这次合并的 {} 条全部回退", merged.len()))
         }
         Err(e) => {
+            let note = unshipped_note(ctx, site, &e);
             for (i, _) in &merged {
-                let _ = site_ops::update_item(&site_dir, &i.id, now(), |x| x.note = format!("已合并进主分支，上线没完成：{e}"));
+                let _ = site_ops::update_item(&site_dir, &i.id, now(), |x| x.note = note.clone());
             }
             ctx.emit_queue(&site.id);
             Err(e)
@@ -4685,6 +4742,35 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(600)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod failure_notice_tests {
+    use super::*;
+
+    #[test]
+    fn the_same_failure_is_not_repeated_until_the_quiet_time_is_over() {
+        let mut sent = std::collections::BTreeMap::new();
+        assert!(failure_due(&mut sent, "a".into(), 1000));
+        assert!(!failure_due(&mut sent, "a".into(), 1000 + 1800));
+        assert!(failure_due(&mut sent, "b".into(), 1000 + 1800), "别的失败照发");
+        assert!(failure_due(&mut sent, "a".into(), 1000 + FAILURE_QUIET));
+    }
+
+    #[test]
+    fn only_failures_waiting_for_you_are_announced() {
+        let item = |status: &str, note: &str| QueueItem { status: status.into(), note: note.into(), ..Default::default() };
+        assert!(failed_for_you(&item("merged", "已合并进主分支，上线没完成：上传失败"), "上传失败"));
+        assert!(failed_for_you(&item("failed", "构建没过：page.tsx"), "构建没过：page.tsx"));
+        assert!(!failed_for_you(&item("failed", "上线后验收没通过"), "x。已自动回滚"), "回滚流程自己发过");
+        assert!(!failed_for_you(&item("failed", "模型这一轮没有完成：限流"), "模型这一轮没有完成：限流"), "Pilot 会自己重做一次");
+        let mut again = item("failed", "模型这一轮没有完成：限流");
+        again.auto_retried = true;
+        assert!(failed_for_you(&again, "模型这一轮没有完成：限流"), "重做过还失败才提醒");
+        assert!(!failed_for_you(&item("failed", site_ops::ENV_BLOCKED), "构建没过"), "站点环境问题单独提示");
+        assert!(!failed_for_you(&item("open", ""), "x"));
+        assert_eq!(brief("\n  上传失败：退出码 1\n⛅️ wrangler"), "上传失败：退出码 1");
+    }
 }
 
 #[cfg(test)]

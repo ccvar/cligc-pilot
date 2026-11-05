@@ -203,7 +203,9 @@ fn sample_pages(domain: &str, locs: &[String], max: usize) -> (Vec<String>, usiz
         }
     }
     let home = format!("https://{domain}/");
-    let total = if locs.is_empty() { 0 } else { unique.len().max(1) };
+    // 首页一定会看，站点地图里没写也算一页，不然会出现「看了 69 / 68 页」
+    let has_home = unique.iter().any(|u| reqwest::Url::parse(u).is_ok_and(|p| p.path() == "/"));
+    let total = if locs.is_empty() { 0 } else { unique.len() + usize::from(!has_home) };
     let mut sections: BTreeMap<String, Vec<(Vec<u8>, String)>> = BTreeMap::new();
     for url in unique.into_iter().filter(|u| reqwest::Url::parse(u).is_ok_and(|p| p.path() != "/")) {
         let parsed = reqwest::Url::parse(&url).ok();
@@ -464,7 +466,7 @@ mod tests {
 
         let few = vec!["https://www.x.com/a".to_string(), "https://x.com/b.html".to_string()];
         let (pages, total) = sample_pages("x.com", &few, 20);
-        assert_eq!((pages.len(), total), (3, 2));
+        assert_eq!((pages.len(), total), (3, 3), "站点地图没写首页也算一页");
         let (pages, total) = sample_pages("x.com", &[], 20);
         assert_eq!((pages, total), (vec!["https://x.com/".to_string()], 0), "没有站点地图只看首页");
     }
