@@ -2689,6 +2689,17 @@ pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool
     let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
     // 已经合并、上线那一步失败了：不用再合并，直接重新上线
     if item.status == "merged" && !item.merge_sha.is_empty() && site.deploy.mode != "none" {
+        // 上线的是文件夹当前的样子：有改到一半的文件、不在主分支就先不上，不然会一起发到线上
+        if site.source == "local" {
+            let main = crate::site_git::code_dir(site, None)?;
+            if let Some(why) = local_not_ready(site, &main, &site_dir).await {
+                let e = format!("{why}。{FOLDER_WAIT}");
+                let note = unshipped_note(ctx, site, &e);
+                let _ = site_ops::update_item(&site_dir, item_id, now(), |x| x.note = note);
+                ctx.emit_queue(&site.id);
+                return Err(e);
+            }
+        }
         job.step("merge", "ok", "已合并过");
         let ride = riders(ctx, site, &[item_id], job);
         // 本地文件夹上线的是主分支最新的代码（之后合并的也在里面），不是这一条当时的合并提交
@@ -2832,7 +2843,7 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
         _ => {
             let main = crate::site_git::code_dir(site, None)?;
             if let Some(why) = local_not_ready(site, &main, &site_dir).await {
-                return Err(format!("{why}。处理好后再上线；托管里自动上线的条目，文件夹干净了 Pilot 会自己接着上线（Pilot 不会动你正在改的东西）"));
+                return Err(format!("{why}。{FOLDER_WAIT}"));
             }
             if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
                 // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
@@ -2861,6 +2872,11 @@ fn unshipped_note(ctx: &Ctx, site: &Site, e: &str) -> String {
         !cfg.paused && cfg.group_of(&site.id).is_some_and(|g| g.active_for(&site.id))
     };
     format!("已合并进主分支，上线没完成：{e}{}", if retries { "。Pilot 约半小时后会自动再试，也可以现在点「重新上线」" } else { "" })
+}
+
+/// 合并了、上线没完成的这条该不该再试：隔半小时；在等站点文件夹的不用等时间，文件夹好了就试。
+fn reship_due(i: &QueueItem, now: u64) -> bool {
+    i.status == "merged" && i.deployed_at == 0 && !i.merge_sha.is_empty() && (i.note.contains(LOCAL_NOT_READY) || i.updated_at + 1800 < now)
 }
 
 /// 同样的失败提醒多久内不重复
@@ -4343,6 +4359,7 @@ async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
 /// 比如每次构建同步手续费）就把它们还原——下次构建还会再写一遍；别的文件有改动不动它，返回 false。
 /// 本地文件夹合并 / 回滚前的检查不通过时，原因以这个开头（调度靠它认出「等你把文件夹收拾干净」的条目）
 pub const LOCAL_NOT_READY: &str = "站点文件夹没准备好：";
+const FOLDER_WAIT: &str = "处理好后再上线；托管里自动上线的条目，文件夹干净了 Pilot 会自己接着上线（Pilot 不会动你正在改的东西）";
 
 /// 本地文件夹站点合并 / 回滚前：要在默认分支上、没有未提交的改动（构建脚本自动重写的数据文件先还原）。
 /// 不行就返回原因，写明在哪个分支、哪些文件没提交。
@@ -4668,8 +4685,11 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     // 合并了、上线没完成（上线途中 Pilot 退出，或上传失败）超过半小时的：自动再上线一次，不然改动已经在主分支里却没人管
                     if let Ok(site) = st.sites.get(id) {
                         if site.deploy.mode != "none" {
-                            if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| i.status == "merged" && i.deployed_at == 0 && !i.merge_sha.is_empty() && i.updated_at + 1800 < now()) {
-                                let _ = start(ctx.clone(), id, "accept", "schedule", Some(it.id));
+                            if let Some(it) = site_ops::load_queue(&dir).into_iter().find(|i| reship_due(i, now())) {
+                                // 在等你收拾文件夹的：收拾好了才试，不用每半小时失败一次
+                                if !it.note.contains(LOCAL_NOT_READY) || local_ready_now(&site).await {
+                                    let _ = start(ctx.clone(), id, "accept", "schedule", Some(it.id));
+                                }
                             }
                         }
                     }
@@ -4755,6 +4775,17 @@ mod failure_notice_tests {
         assert!(!failure_due(&mut sent, "a".into(), 1000 + 1800));
         assert!(failure_due(&mut sent, "b".into(), 1000 + 1800), "别的失败照发");
         assert!(failure_due(&mut sent, "a".into(), 1000 + FAILURE_QUIET));
+    }
+
+    #[test]
+    fn an_unfinished_ship_waits_half_an_hour_unless_it_waits_for_the_folder() {
+        let item = QueueItem { status: "merged".into(), merge_sha: "abc".into(), updated_at: 1000, note: "已合并进主分支，上线没完成：上传失败".into(), ..Default::default() };
+        assert!(!reship_due(&item, 1000 + 1800));
+        assert!(reship_due(&item, 1000 + 1801));
+        let waiting = QueueItem { note: format!("已合并进主分支，上线没完成：{LOCAL_NOT_READY}有未提交的改动（a.css）"), ..item.clone() };
+        assert!(reship_due(&waiting, 1001), "文件夹好了就接着上线");
+        assert!(site_ops::deploy_stuck(&waiting), "还算上线没完成，留在「需要你」");
+        assert!(!reship_due(&QueueItem { deployed_at: 5, ..item.clone() }, 9999) && !reship_due(&QueueItem { merge_sha: String::new(), ..item }, 9999));
     }
 
     #[test]

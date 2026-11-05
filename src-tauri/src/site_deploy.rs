@@ -504,8 +504,10 @@ pub async fn run_deploy(
 pub async fn deploy_with(site: &Site, conns: &ConnStore, site_dir: &Path, job: &Job, trigger: &str, spec: Option<crate::site_verify::Spec>) -> Result<DeployRecord, String> {
     let started = now();
     let mut rec = DeployRecord { id: uuid::Uuid::new_v4().to_string(), ts: started, trigger: trigger.into(), ..Default::default() };
+    // 只有「构建并上线」（run_deploy，不带 spec）弹过确认框。运营上线也可能记成 manual（调度自动重新上线就是），它没人确认过，不能替你提交
+    let confirmed = spec.is_none() && trigger == "manual";
     let result = deploy_inner(site, conns, site_dir, job, &mut rec, spec.unwrap_or_default()).await;
-    if result.is_ok() && rec.dirty && trigger == "manual" {
+    if result.is_ok() && rec.dirty && confirmed {
         commit_shipped(site, &mut rec, job).await;
     }
     rec.duration = now().saturating_sub(started);
