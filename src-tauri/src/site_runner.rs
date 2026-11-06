@@ -1842,6 +1842,14 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             let first = e.lines().next().unwrap_or("").to_string();
             let tail = job.tail(80).join("\n");
             job.line(&format!("{first}。把报错交回 AI 修一次"));
+    // 从干净的文件夹开始检查：AI 自己跑构建留下的产物和缓存先清掉（依赖留着）。验证的是提交进去的内容，
+    // 和「改动前的代码」那次对比的条件也才一样（那次是全新检出的目录）
+    if !site.build.build.trim().is_empty() {
+        let gone = crate::site_git::clean_ignored(&wt).await;
+        if !gone.is_empty() {
+            job.line(&format!("先清掉文件夹里之前构建留下的产物和缓存（{}），从干净状态开始检查", gone.iter().take(6).cloned().collect::<Vec<_>>().join("、")));
+        }
+    }
             site_ops::update_item(&site_dir, &item.id, now(), |i| i.build_fixed = true)?;
             let msg = format!(
                 "你刚才在当前分支上为「{title}」做的改动，Pilot 上线前跑构建和检查没有通过：{first}\n\n\

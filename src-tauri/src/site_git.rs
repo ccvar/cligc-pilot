@@ -220,6 +220,36 @@ pub async fn remove_worktree(repo: &Path, path: &Path) {
     let _ = git(repo, &["worktree", "prune"], "").await;
 }
 
+/// 工作树里 git 忽略的文件（构建产物、构建缓存）清掉，装好的依赖留着：回到「刚检出、装好依赖」的样子。返回清掉了哪些。
+/// AI 在工作树里自己跑过构建会留下缓存，失败的结果也会被记住（Next.js 没下到字体那次），Pilot 接着在这里构建就跟着失败，
+/// 改动前的代码在干净目录里又能过，账就算到了改动头上。要验证的是提交进去的内容，不是文件夹里剩下的东西。
+/// 只用在 Pilot 自己的工作树上。
+pub async fn clean_ignored(worktree: &Path) -> Vec<String> {
+    let Ok(out) = git_ok(worktree, &["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], "").await else { return Vec::new() };
+    let mut gone = Vec::new();
+    for rel in out.split('\0').map(|p| p.trim_end_matches('/')).filter(|p| !p.is_empty()) {
+        if Path::new(rel).components().any(|c| !matches!(c, std::path::Component::Normal(n) if n != "node_modules")) {
+            continue;
+        }
+        let full = worktree.join(rel);
+        let ok = match std::fs::symlink_metadata(&full) {
+            // 整个目录都没入库时 git 只报最外面那层：里面装着依赖的不动
+            Ok(m) if m.is_dir() => !holds_node_modules(&full) && std::fs::remove_dir_all(&full).is_ok(),
+            Ok(_) => std::fs::remove_file(&full).is_ok(),
+            Err(_) => false,
+        };
+        if ok {
+            gone.push(rel.to_string());
+        }
+    }
+    gone
+}
+
+fn holds_node_modules(dir: &Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(dir) else { return false };
+    rd.flatten().any(|e| e.file_name() == "node_modules" || (e.file_type().is_ok_and(|t| t.is_dir()) && holds_node_modules(&e.path())))
+}
+
 /// 主检出里 node_modules 已装好时，给工作树挂一个软链接，省掉每次运营任务都重新 `npm ci`。
 /// 锁文件不一致就不挂（依赖可能不同），交给安装步骤处理。
 pub fn share_node_modules(main: &Path, worktree: &Path) {
@@ -351,6 +381,31 @@ pub fn code_dir(site: &crate::sites::Site, gh: Option<&crate::conns::Connection>
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn clean_ignored_keeps_dependencies_and_untracked_work() {
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path();
+        let run = |a: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(repo).args(a).output().unwrap().status.success(), "{a:?}");
+        run(&["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join(".gitignore"), "/.next/\n/node_modules\n*.log\n").unwrap();
+        std::fs::write(repo.join("a.txt"), "1").unwrap();
+        run(&["add", "-A"]);
+        run(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "one"]);
+        // AI 跑构建留下的缓存和日志、装好的依赖（根目录的被忽略；子项目那份所在的目录整个没入库，git 只报最外层 apps/）、还没提交的新文件
+        let left = [".next/cache/turbopack/db", "build.log", "node_modules/pkg/debug.log", "apps/web/node_modules/x/y.log", "notes.txt"];
+        for f in left {
+            std::fs::create_dir_all(repo.join(f).parent().unwrap()).unwrap();
+            std::fs::write(repo.join(f), "x").unwrap();
+        }
+        assert_eq!(clean_ignored(repo).await, vec![".next", "build.log"]);
+        assert!(!repo.join(".next").exists() && !repo.join("build.log").exists());
+        for f in &left[2..] {
+            assert!(repo.join(f).exists(), "{f} 要留着");
+        }
+        assert!(repo.join("a.txt").exists());
+        assert!(clean_ignored(repo).await.is_empty(), "清过了就没东西可清");
+    }
+
     #[tokio::test]
     async fn unpushed_commits_are_noticed() {
         let t = tempfile::tempdir().unwrap();
