@@ -608,6 +608,12 @@ pub fn snippets_from_diff(diff: &str) -> Vec<String> {
             in_script = false;
             continue;
         }
+        // 零上下文的差异里看不到没改动的行：新增的 <script> 结束在没改动的 </script> 上时，这一段就到头了。
+        // 换一段改动不接着算脚本，否则后面的正文全被跳过
+        if line.starts_with("@@") {
+            in_script = false;
+            continue;
+        }
         let Some(added) = line.strip_prefix('+') else { continue };
         // 不会出现在页面上的文件：Pilot 自己的记录、README / 文档 / 测试 / 脚本 / 多语言文案（语言未必是验收的页面）
         if added.starts_with("++") || off_page_file(file) {
@@ -1017,6 +1023,17 @@ mod tests {
         assert!(!s.is_empty() && s.iter().all(|x| !x.contains('%')), "{s:?}");
         assert!(s.iter().any(|x| x == "有没有上线、能不能交易"), "{s:?}");
         assert_eq!(split_placeholders("涨了 100% 的币 %d 个 %-5.2f 元"), vec!["涨了 100% 的币 ", " 个 ", " 元"]);
+    }
+
+    #[test]
+    fn script_ending_on_an_unchanged_line_does_not_swallow_the_body() {
+        // bsvar：新增的 <script> 结束在没改动的行上，后面的正文一段都没挑上，只挑到数据文件里不显示的锚点
+        let head = "+++ b/legacy/site/zh/a/index.html\n@@ -60,0 +61,2 @@\n";
+        let next = format!("{head}+<script>\n+  gtag('js', new Date());\n@@ -90 +92 @@\n+<p>储备金证明是交易所公开持有资产的一种方式，可以自己核对</p>\n");
+        assert_eq!(snippets_from_diff(&next), vec!["储备金证明是交易所公开持有资产的一种方式"]);
+        // 同一段改动里的脚本照旧跳过，结束后的正文照旧挑
+        let same = format!("{head}+<script>\n+  const note = '这段文字只在脚本里不会显示在页面上';\n+</script>\n+<p>下一段改动里的正文也要能够挑到才对</p>\n");
+        assert_eq!(snippets_from_diff(&same), vec!["下一段改动里的正文也要能够挑到才对"]);
     }
 
     #[test]
