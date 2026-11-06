@@ -933,8 +933,15 @@ pub fn build_outputs(app_dir: &Path) -> Vec<String> {
     out
 }
 
+/// 构建脚本提到的 JSON 就在 scripts/ 目录里：构建时会读到它，不算闲置的数据
+fn script_json(mention: &str, dirs: [&Path; 2]) -> Option<String> {
+    let name = mention.rsplit('/').next().filter(|n| n.len() > 5 && n.ends_with(".json"))?;
+    dirs.iter().any(|d| d.ends_with("scripts") && d.join(name).is_file()).then(|| name.to_string())
+}
+
 /// 构建、检查、部署会跑到的脚本文件名：package.json 里 build / check / test / lint / deploy 一类命令（连同 pre / post 和
-/// 它们 npm run 到的命令）、站点设置里的构建和检查命令点到的脚本，以及这些脚本 import 的本地脚本。读不到 package.json 返回 None。
+/// 它们 npm run 到的命令）、站点设置里的构建和检查命令点到的脚本，这些脚本 import 的本地脚本，以及读到的 scripts/ 下的 JSON。
+/// 读不到 package.json 返回 None。
 pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>> {
     let raw = std::fs::read_to_string(app_dir.join("package.json")).ok()?;
     let pkg: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -946,6 +953,8 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
             todo.push(v.to_string());
         }
     }
+    let scripts_dir = app_dir.join("scripts");
+    let mut read_json: Vec<String> = Vec::new();
     let (mut seen_cmd, mut files): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     while let Some(cmd) = todo.pop() {
         if seen_cmd.contains(&cmd) || seen_cmd.len() > 50 {
@@ -962,6 +971,7 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
             if ext(t) && !files.contains(&t.to_string()) {
                 files.push(t.to_string());
             }
+            read_json.extend(script_json(t, [&scripts_dir, app_dir]));
         }
     }
     // 这些脚本 import 的本地脚本也算（最多跟三层）
@@ -971,6 +981,7 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
         let base = app_dir.join(&f);
         if let Ok(src) = std::fs::read_to_string(&base) {
             for w in src.split(['"', '\'', '`']).skip(1).step_by(2) {
+                read_json.extend(script_json(w, [&scripts_dir, base.parent().unwrap_or(app_dir)]));
                 if w.starts_with('.') && ext(w) {
                     let p = base.parent().unwrap_or(app_dir).join(w);
                     let rel = p.strip_prefix(app_dir).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| w.to_string());
@@ -983,15 +994,17 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
         i += 1;
     }
     let mut names: Vec<String> = files.iter().map(|f| f.rsplit('/').next().unwrap_or(f).to_string()).collect();
+    names.extend(read_json);
     names.sort();
     names.dedup();
     Some(names)
 }
 
-/// scripts/ 里构建、检查都不会跑到的脚本
+/// scripts/ 里构建、检查都不会跑到的脚本，和它们都没读到的 JSON 数据（比如截图来源清单）
 fn idle_script(file: &str, build: &[String]) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
-    file.split('/').any(|s| s == "scripts") && ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) && !build.iter().any(|b| b == name)
+    let helper = ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) || (name.ends_with(".json") && !hard_forbidden(name));
+    file.split('/').any(|s| s == "scripts") && helper && !build.iter().any(|b| b == name)
 }
 
 fn generated_by_build(file: &str, generated: &[String]) -> bool {
@@ -1466,7 +1479,7 @@ fn sitemap_line(l: &str) -> bool {
 
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 3;
+pub const RULES_V: u32 = 4;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2077,6 +2090,35 @@ mod tests {
         assert!(!verdict(&d("scripts/place-shots.mjs", "  await rm(dir, { recursive: true });"), &r).is_empty());
         assert!(!verdict(&d("scripts/rules.mjs", "  'min': '0',"), &r).is_empty());
         assert!(!verdict(&d("scripts/place-shots.mjs", "  'a': 'b',"), &Rules { build_scripts: None, ..r }).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn json_in_scripts_only_blocks_when_the_build_reads_it() {
+        let dir = std::env::temp_dir().join(format!("pilot-script-json-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::create_dir_all(dir.join("src/data")).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"build":"node scripts/build.mjs --list scripts/args.json","shots":"node scripts/capture.mjs"}}"#).unwrap();
+        std::fs::write(dir.join("scripts/build.mjs"), "const a = new URL('./read.json', import.meta.url); const b = new URL('../src/data/fees.json', import.meta.url);").unwrap();
+        std::fs::write(dir.join("scripts/capture.mjs"), "const a = new URL('./screenshots.json', import.meta.url);").unwrap();
+        for f in ["scripts/read.json", "scripts/args.json", "scripts/screenshots.json", "src/data/fees.json"] {
+            std::fs::write(dir.join(f), "[]").unwrap();
+        }
+        let b = build_scripts(&dir, &[]).unwrap();
+        assert_eq!(b, vec!["args.json".to_string(), "build.mjs".to_string(), "read.json".to_string()]);
+        let b: &'static [String] = Box::leak(b.into_boxed_slice());
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: Some(b), deps: &[] };
+        let d = |file: &str, lines: &[&str]| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -366 +366,{} @@\n{}\n", lines.len(), lines.iter().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
+        // vsvar 登记截图来源的那几行：只有截图工具读，放行
+        let shots = ["  },", "  {", "    \"id\": \"binance-eth-staking\",", "    \"slug\": \"crypto-staking\",", "    \"url\": \"https://www.binance.com/zh-CN/eth2\",", "    \"wait\": 10000,", "    \"hide\": [", "      \"[class*='modal' i]\"", "    ]"];
+        assert!(verdict(&d("scripts/screenshots.json", &shots), &r).is_empty(), "{:?}", verdict(&d("scripts/screenshots.json", &shots), &r));
+        // 构建读到的（脚本里读、命令行传进去）、配置文件、读不到 package.json：照样拦
+        for f in ["scripts/read.json", "scripts/args.json", "scripts/package.json", "scripts/tsconfig.json"] {
+            assert!(!verdict(&d(f, &["  \"a\": 1,"]), &r).is_empty(), "{f}");
+        }
+        assert!(!verdict(&d("scripts/screenshots.json", &shots), &Rules { build_scripts: None, ..r }).is_empty());
+        // 构建读到的 JSON 不在 scripts/ 里：不算构建脚本，和以前一样
+        assert!(!b.iter().any(|n| n == "fees.json"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
