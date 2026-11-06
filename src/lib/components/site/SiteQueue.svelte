@@ -309,6 +309,7 @@
         <span class="grow"></span>
  {#if i.also?.length}<span class="pill line also" data-tip={`同一个页面还有：${i.also.map((o) => o.title).join('；')}\n交给 AI 时一起改`}>+ {i.also.map((o) => KIND_LABEL[o.kind] ?? o.kind).join('、')}</span>{/if}
         {#if i.status === 'open'}<span class="it-meta" data-tip={foundTip(i)}>{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {Date.now() / 1000 - i.created_at > DAY ? `${when(i.created_at)} 的数据` : when(i.created_at)}</span>
+        {:else if i.status === 'deployed' && i.deployed_at}<span class="it-meta" data-tip="上线时间">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.deployed_at)}</span>
         {:else}<span class="it-meta">{KIND_LABEL[i.opp.kind] ?? i.opp.kind} · {when(i.updated_at)}</span>{/if}
       </div>
       {#if !folded(i)}
