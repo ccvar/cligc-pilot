@@ -1479,7 +1479,7 @@ fn sitemap_line(l: &str) -> bool {
 
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 5;
+pub const RULES_V: u32 = 6;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -1854,7 +1854,6 @@ mod group_tests {
         assert_eq!(kept, page);
         assert!(managed_verdict(&kept, true, 1500, "all", &[]).is_empty());
         assert!(new_page_files(&kept).is_empty());
-        assert!(!crate::site_verify::snippets_from_diff(&kept).iter().any(|s| s.contains("US stock")));
         // docs 下不是 Markdown 的、别的目录里的 docs、从外面挪进 docs 的都照常判断
         for keep in ["diff --git a/docs/a.html b/docs/a.html\n+x\n", "diff --git a/site/docs/a.md b/site/docs/a.md\n+x\n", "diff --git a/src/content/a.md b/docs/a.md\n-x\n"] {
             assert_eq!(without_internal_docs(keep), keep);

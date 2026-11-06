@@ -692,9 +692,12 @@ pub struct QueueItem {
     pub pages: Vec<String>,
     #[serde(default)]
     pub new_pages: Vec<String>,
-    /// 这次加的几段文字，用来确认线上已经是新内容。
+    /// 这次构建出来的页面上新出现的几段文字，用来确认线上已经是新内容。
     #[serde(default)]
     pub snippets: Vec<String>,
+    /// `snippets` 是从构建出来的页面里取的（`site_runner::built_snippets`）。早先从源码差异里猜的不可靠，不再拿来验收
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub snippets_built: bool,
     /// 最近一次线上验收的结果。
     #[serde(default)]
     pub checks: Vec<crate::site_verify::Check>,
@@ -734,12 +737,6 @@ pub struct QueueItem {
     /// 上线判定用的是哪一版规则（managed::RULES_V）：规则升级后，等你确认的条目按新规则自动重判一次
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rules_v: u32,
-    /// 「新内容已生效」没过的，后台复查结束了（找到了，或两次都没找到不再查）
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub snippet_rechecked: bool,
-    /// 后台复查了几次都没找到对照文字
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub snippet_misses: u8,
     /// 上线后复查没通过、但没回滚（整站故障 / 非全自动方案）的次数：两次就不再查，交给你
     #[serde(default, skip_serializing_if = "is_zero")]
     pub watch_failures: u8,

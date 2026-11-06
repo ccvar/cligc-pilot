@@ -1579,12 +1579,51 @@ fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     }
 }
 
-/// 构建产物里这个页面设了 noindex（不是给人看、也不让收录的页面）。
-fn page_noindex(out: &Path, path: &str) -> bool {
+/// 构建产物里这个页面的 HTML。
+fn built_html(out: &Path, path: &str) -> Option<String> {
     let decoded = percent_decode(path.split(['#', '?']).next().unwrap_or(""));
     let p = decoded.trim_matches('/');
-    let file = if p.is_empty() { out.join("index.html") } else if out.join(p).join("index.html").is_file() { out.join(p).join("index.html") } else { out.join(format!("{p}.html")) };
-    std::fs::read_to_string(file).is_ok_and(|h| crate::site_verify::meta_content(&h, "robots").to_ascii_lowercase().contains("noindex"))
+    // /a/ → a/index.html；/a.html → a.html；/a → a.html
+    let file = if p.is_empty() {
+        out.join("index.html")
+    } else if out.join(p).join("index.html").is_file() {
+        out.join(p).join("index.html")
+    } else if out.join(p).is_file() {
+        out.join(p)
+    } else {
+        out.join(format!("{p}.html"))
+    };
+    std::fs::read_to_string(file).ok()
+}
+
+/// 构建产物里这个页面设了 noindex（不是给人看、也不让收录的页面）。
+fn page_noindex(out: &Path, path: &str) -> bool {
+    built_html(out, path).is_some_and(|h| crate::site_verify::meta_content(&h, "robots").to_ascii_lowercase().contains("noindex"))
+}
+
+/// 这条改动的对照文字，从构建出来的页面里取（见 `site_verify::snippets_from_build`）：这次构建的页面和
+/// 上次上线的构建比，多出来、这次差异里也有的句子。要验收的页面这次都没构建出来（服务端渲染的站）、
+/// 或者页面上没有这次加的文字（只改了链接、结构化数据、属性）时是空的，这条就不查「新内容已生效」：
+/// 没有渲染后的页面可比，不从源码猜。
+fn built_snippets(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, diff: &str) -> Vec<String> {
+    let prev = crate::syndicate::built_out(&ctx.state(), site).ok().filter(|p| p != out_dir && p.join("index.html").is_file());
+    let mut pages: Vec<(String, String, bool)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let urls = item.new_pages.iter().chain(std::iter::once(&item.opp.page)).chain(item.also.iter().map(|o| &o.page)).chain(&item.pages);
+    for u in urls.filter(|u| u.starts_with("https://")) {
+        let path = path_of(u);
+        if seen.contains(&path) || seen.len() >= 12 {
+            continue;
+        }
+        seen.push(path.clone());
+        let Some(new) = built_html(out_dir, &path) else { continue };
+        let old = prev.as_ref().and_then(|p| built_html(p, &path));
+        let fresh = item.new_pages.iter().any(|n| crate::site_verify::same_page(n, u));
+        // 新页面（或没有上次的构建）：导航、页脚这些每页都有的文字不挑，拿首页当对照
+        pages.push((new, old.or_else(|| built_html(out_dir, "/")).unwrap_or_default(), fresh));
+    }
+    let added: String = diff.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).map(|l| &l[1..]).collect::<Vec<_>>().join("\n");
+    crate::site_verify::snippets_from_build(&pages, &added)
 }
 
 /// 站点所在托管方案的规则（没托管返回 None）。
@@ -1803,12 +1842,18 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if crate::site_git::unshare_node_modules_if_changed(&wt) {
         job.line("AI 改了依赖的锁文件，不用共享的 node_modules，按这份锁文件重新装");
     }
+    // 从干净的文件夹开始检查：AI 自己跑构建留下的产物和缓存先清掉（依赖留着）。验证的是提交进去的内容，
+    // 和「改动前的代码」那次对比的条件也才一样（那次是全新检出的目录）
+    if !site.build.build.trim().is_empty() {
+        let gone = crate::site_git::clean_ignored(&wt).await;
+        if !gone.is_empty() {
+            job.line(&format!("先清掉文件夹里之前构建留下的产物和缓存（{}），从干净状态开始检查", gone.iter().take(6).cloned().collect::<Vec<_>>().join("、")));
+        }
+    }
     let built = crate::site_deploy::build_and_check(site, &wt, None, job).await;
     let diff = crate::site_git::diff_zero_context(&wt, &base_sha, &head_sha).await?;
     let diff = if crate::managed::docs_are_published(&site.app_dir(&wt), &site.build.out_dir) { diff } else { crate::managed::without_internal_docs(&diff) };
-    let snippets = crate::site_verify::snippets_from_diff(&diff);
-    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.snippets = snippets.clone());
-    // 上线时用最新的条目（带上 AI 报告的页面和这次的文字）
+    // 上线时用最新的条目（带上 AI 报告的页面）
     let item = &site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id).unwrap_or_else(|| item.clone());
     let hold = held(&site.id);
     match &built {
@@ -1842,14 +1887,6 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             let first = e.lines().next().unwrap_or("").to_string();
             let tail = job.tail(80).join("\n");
             job.line(&format!("{first}。把报错交回 AI 修一次"));
-    // 从干净的文件夹开始检查：AI 自己跑构建留下的产物和缓存先清掉（依赖留着）。验证的是提交进去的内容，
-    // 和「改动前的代码」那次对比的条件也才一样（那次是全新检出的目录）
-    if !site.build.build.trim().is_empty() {
-        let gone = crate::site_git::clean_ignored(&wt).await;
-        if !gone.is_empty() {
-            job.line(&format!("先清掉文件夹里之前构建留下的产物和缓存（{}），从干净状态开始检查", gone.iter().take(6).cloned().collect::<Vec<_>>().join("、")));
-        }
-    }
             site_ops::update_item(&site_dir, &item.id, now(), |i| i.build_fixed = true)?;
             let msg = format!(
                 "你刚才在当前分支上为「{title}」做的改动，Pilot 上线前跑构建和检查没有通过：{first}\n\n\
@@ -1871,6 +1908,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 孤立页检查、上线后的 sitemap / 站内链接检查就整个跳过了
     let item = &derive_new_pages(ctx, site, item, &out_dir, built.is_ok(), &diff, job);
     let item = &drop_unbuilt_pages(ctx, site, item, &out_dir, built.is_ok(), job);
+    // 上线后拿来确认「新内容已生效」的对照文字：从构建出来的页面里取
+    let snippets = if built.is_ok() { built_snippets(ctx, site, item, &out_dir, &diff) } else { Vec::new() };
+    let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+        i.snippets = snippets.clone();
+        i.snippets_built = true;
+    });
+    let item = &QueueItem { snippets, snippets_built: true, ..item.clone() };
     let cls = site_ops::classify(&diff, &whitelist, &page_exists_in(&out_dir));
     let change_kind = if cls.kinds.is_empty() { "mixed".to_string() } else { cls.kinds.join(",") };
     let checks_ok = built.is_ok();
@@ -2168,7 +2212,10 @@ fn spec_for(site: &Site, item: &QueueItem, rollback: bool) -> crate::site_verify
             }
         }
         spec.new_pages = item.new_pages.clone();
-        spec.snippets = item.snippets.clone();
+        // 早先从源码差异里猜出来的对照文字不可靠，不拿来验收
+        if item.snippets_built {
+            spec.snippets = item.snippets.clone();
+        }
     }
     spec
 }
@@ -2236,10 +2283,11 @@ async fn ship_inner(ctx: &Ctx, site: &Site, job: &Job, spec: crate::site_verify:
     // 上线前先把要验收的已有页面查一遍：本来就有的问题（旧文 noindex、sitemap 没有标题…）不算这次改动的
     let mut spec = spec;
     if trigger != "rollback" {
-        let snap = crate::site_verify::snapshot(&spec).await;
+        let (snap, sigs) = crate::site_verify::snapshot(&spec).await;
         let pages: Vec<String> = spec.primary.iter().chain(&spec.pages).map(|u| path_of(u)).collect();
         save_before(&ctx.site_dir(&site.id), &snap, &pages);
         spec.before = snap;
+        spec.before_sig = sigs;
         spec.only_new = true;
     }
     let st = ctx.state();
@@ -2380,18 +2428,20 @@ async fn commit_folder(site: &Site) -> Result<String, String> {
 /// 上线成功后记下验收结果，安排 1 小时后复查；有一般问题就标成待核对（全自动方案顺手开一条后续任务）。
 fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result<(), String> {
     let site_dir = ctx.site_dir(&site.id);
-    let attention = sh.attention.join("；");
     let item = site_ops::update_item(&site_dir, item_id, now(), |i| {
+        // 「新内容没找到」只挂在自己有对照文字的条目上：一起上线的条目里没有对照文字的，复查时查不了
+        let own = i.snippets_built && !i.snippets.is_empty();
         i.status = "deployed".into();
         i.deployed_at = now();
         i.note.clear();
-        i.checks = sh.checks.clone();
-        i.attention = attention.clone();
+        i.checks = sh.checks.iter().filter(|c| own || c.ok || c.label != "新内容已生效").cloned().collect();
+        i.attention = sh.attention.iter().filter(|a| own || !a.starts_with(SNIPPET_MISS)).cloned().collect::<Vec<_>>().join("；");
         i.watch_due = now() + 3600;
         i.watch_stage = 0;
         i.watched.clear();
     })?
     .ok_or("这条改动不存在")?;
+    let attention = item.attention.clone();
     continue_batch(ctx, site, item_id);
     // 速度优化上线了：1 小时后重新测速，排着的其它速度任务等新结果出来再决定要不要做
     if item.opp.kind == "slow" || item.also.iter().any(|o| o.kind == "slow") {
@@ -2399,7 +2449,7 @@ fn record_shipped(ctx: &Ctx, site: &Site, item_id: &str, sh: &Shipped) -> Result
     }
     if !attention.is_empty() {
         // 修复任务等 1 小时后的复查还在才开（缓存、CDN 过一会儿多半就好了，见 watch）
-        log_item(ctx, site, "attention", &item, &format!("上线了，网站正常；有 {} 项待核对：{attention}", sh.attention.len()));
+        log_item(ctx, site, "attention", &item, &format!("上线了，网站正常；有 {} 项待核对：{attention}", attention.split('；').count()));
     }
     ctx.emit_queue(&site.id);
     Ok(())
@@ -2489,13 +2539,14 @@ fn drop_unbuilt_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, 
     item
 }
 
-/// 一起上线的条目只记自己页面相关的待核对：对照文字只属于提供它的那条，别的条目的页面问题不挂到它头上
+/// 一起上线的条目只记自己页面相关的待核对，别的条目的页面问题不挂到它头上。
+/// 「新内容没找到」先都带上，`record_shipped` 只留给自己有对照文字的条目
 fn shipped_for(rider: &QueueItem, sh: &Shipped) -> Shipped {
     let mut own = sh.clone();
     let paths: Vec<String> = std::iter::once(path_of(&rider.opp.page)).chain(rider.pages.iter().map(|u| path_of(u))).chain(rider.new_pages.iter().map(|u| path_of(u))).filter(|p| p.len() > 1).collect();
     // 路径要按边界匹配（/zh/ 不能把 /zh/guide/ 的问题也认领了）
     let bounded = |a: &str, p: &str| a.match_indices(p).any(|(i, _)| a[i + p.len()..].chars().next().is_none_or(|c| "：:、 ，,；;）)".contains(c)));
-    own.attention.retain(|a| !a.starts_with(SNIPPET_MISS) && !a.starts_with(crate::site_verify::CHALLENGED) && paths.iter().any(|p| bounded(a, p)));
+    own.attention.retain(|a| a.starts_with(SNIPPET_MISS) || (!a.starts_with(crate::site_verify::CHALLENGED) && paths.iter().any(|p| bounded(a, p))));
     own
 }
 
@@ -3882,9 +3933,12 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     let auto_plan = group_rules(ctx, site).is_some_and(|g| g.autonomy == "auto" && g.active_for(&site.id));
     for i in due {
         // 和上线时一样多等几次（最多 5 分钟多）：复查撞上 CDN / 源站抖动不能把当天上线的全回滚。
-        // 复查不再对照「这次加的文字」：隔了几小时别的改动可能已经改掉那段话，上线时查过一次就够了
+        // 上线时「新内容已生效」没过的，复查时再对照一次：线上有了，这条待核对就跟着没了。
+        // 上线时过了的不再对照（隔了几小时别的改动可能已经改掉那段话）
         let mut spec = spec_for(site, &i, false);
-        spec.snippets.clear();
+        if !i.attention.split('；').any(|p| p.starts_with(SNIPPET_MISS)) {
+            spec.snippets.clear();
+        }
         spec.before = load_before(&site_dir);
         spec.only_new = true;
         let rep = crate::site_verify::run(&spec, job, true).await;
@@ -4515,57 +4569,8 @@ fn settle_site_interrupted(dir: &Path, why: &str) -> bool {
     !stuck.is_empty()
 }
 
-/// 上线后验收只差「新内容已生效」、挂着「上线后待核对」的：用现在的对照规则再查一次线上页面（每条只查一次）。
-/// 找到了就去掉这一条待核对，不用你点「没问题」——早先对照文字带 Markdown 记号、站点转繁体时会误报。
+/// 上线后验收「新内容已生效」没过时那条待核对的开头。1 小时、24 小时的复查（`watch`）会再对照一次，线上有了就没了。
 const SNIPPET_MISS: &str = "这次加的内容在验收的页面里没找到";
-async fn recheck_snippets(ctx: &Ctx) {
-    let st = ctx.state();
-    for site in st.sites.list() {
-        let dir = st.sites.data_dir(&site.id);
-        // 上线满 1 小时再查（CDN 多半刷新了）；页面都打不开的不下结论、下次再查；查了两次都没有就当对照文字本身不显示，清掉
-        let due: Vec<QueueItem> = site_ops::load_queue(&dir).into_iter().filter(|i| i.status == "deployed" && !i.snippet_rechecked && i.attention.contains(SNIPPET_MISS) && i.deployed_at + 3600 < now() && i.deployed_at + 14 * 86400 > now()).collect();
-        for it in due {
-            let mut urls: Vec<String> = it.pages.iter().chain(&it.new_pages).cloned().collect();
-            for p in std::iter::once(&it.opp.page).chain(it.also.iter().map(|o| &o.page)) {
-                if p.starts_with("https://") && !urls.iter().any(|u| crate::site_verify::same_page(u, p)) {
-                    urls.push(p.clone());
-                }
-            }
-            // 第二次要等上线满 24 小时（CDN 缓存通常长于 10 分钟）；页面一直打不开（比如被防火墙拦着）查 3 次就不再查，待核对留着
-            if it.snippet_misses >= 1 && it.deployed_at + DAY > now() {
-                continue;
-            }
-            let live = crate::site_verify::snippets_live(&urls, &it.snippets).await;
-            let give_up = live == Some(false) && it.snippet_misses >= 1;
-            let mut cleared = false;
-            let _ = site_ops::update_item(&dir, &it.id, now(), |i| {
-                i.snippet_misses += 1;
-                i.snippet_rechecked = live == Some(true) || give_up || (live.is_none() && i.snippet_misses >= 3);
-                if give_up {
-                    i.attention = i.attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
-                    i.note = "上线后两次都没在线上找到这次的对照文字，多半是不显示在页面上的字段（frontmatter、属性），不再当问题".into();
-                    cleared = i.attention.is_empty();
-                }
-                if live == Some(true) {
-                    // 待核对可能是几条用「；」连起来的：只去掉这一条，别的照样留着
-                    i.attention = i.attention.split('；').filter(|p| !p.starts_with(SNIPPET_MISS)).collect::<Vec<_>>().join("；");
-                    for c in i.checks.iter_mut().filter(|c| c.label == "新内容已生效") {
-                        c.ok = true;
-                        c.detail.clear();
-                    }
-                    cleared = i.attention.is_empty();
-                }
-            });
-            // 待核对都清掉了：因为它开出来、还没动的修复任务一起撤掉（和点「没问题」一样）
-            if cleared {
-                dismiss_followups(&dir, &it.id, "上线后验收是误报（复查时线上已经有这次的内容），不用修");
-            }
-            if live == Some(true) {
-                ctx.emit_queue(&site.id);
-            }
-        }
-    }
-}
 
 /// 撤掉一条改动开出来、还没开始的修复任务（key 以 followup:{id} 开头）
 pub(crate) fn dismiss_followups(site_dir: &Path, item_id: &str, note: &str) {
@@ -4737,7 +4742,6 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     }
                 }
             }
-            recheck_snippets(&ctx).await;
             // 降档过了 60 天自动恢复：当时连续负面的那类改动，隔两个月值得再让它自动上线一次（再负面还会降）
             for site in st.sites.list() {
                 if !site.ops.downgraded.is_empty() && site.ops.downgraded_at > 0 && site.ops.downgraded_at + 60 * DAY < now() {
