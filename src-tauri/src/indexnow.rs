@@ -62,16 +62,18 @@ fn retry_after(tries: u32) -> u64 {
     RETRY_AFTER[(tries.max(1) as usize - 1).min(RETRY_AFTER.len() - 1)]
 }
 
-/// 没交上时说清楚卡在哪。`file_ok`：线上密钥文件对不对，None＝没查成（网络问题）。
-fn why_text(err: &str, key_url: &str, file_ok: Option<bool>) -> String {
+/// 没交上时说清楚卡在哪。`file_ok`：线上密钥文件对不对，None＝没查成（网络问题）；`stuck`：已经连着好几次了。
+fn why_text(err: &str, key_url: &str, file_ok: Option<bool>, stuck: bool) -> String {
     match file_ok {
         Some(false) => format!("线上打不开密钥文件 {key_url}：重新上线一次会放回去；如果这个站还有别的部署（比如 GitHub Actions），要把这个文件加进仓库，不然又会被覆盖"),
-        Some(true) if err == crate::bing::INDEXNOW_REJECTED => "密钥文件能正常打开，但 Bing 没接受这把密钥。新上线的密钥常这样，过一阵就好；一直这样的话，到 Cloudflare 安全事件里看有没有拦 Bing 的请求，或到 Bing Webmaster 看这个站的状态".into(),
+        // 试了一天多还不认，等下去没用：Bing 会一直记着这把密钥第一次没验证过（cexgc 一个月都是 403，换一把当场就过）
+        Some(true) if err == crate::bing::INDEXNOW_REJECTED && stuck => "密钥文件能正常打开，但 Bing 一直不接受这把密钥。换一把新密钥通常就好：站点设置的 IndexNow 一栏把密钥清空保存、重新生成，再上线一次；密钥文件在仓库里的，换掉仓库里那个文件（文件名和内容都是新密钥），Pilot 会自动改用。换了还不行，再到 Cloudflare 安全事件里看有没有拦 Bing 的请求".into(),
+        Some(true) if err == crate::bing::INDEXNOW_REJECTED => "密钥文件能正常打开，但 Bing 没接受这把密钥。新上线的密钥常这样，过一阵会自动再试".into(),
         _ => err.to_string(),
     }
 }
 
-async fn why_failed(site: &Site, err: &str) -> String {
+async fn why_failed(site: &Site, err: &str, stuck: bool) -> String {
     let key = &site.data.indexnow_key;
     let key_url = format!("https://{}/{key}.txt", site.domain);
     let file_ok = match crate::cf::http().get(&key_url).timeout(std::time::Duration::from_secs(15)).send().await {
@@ -81,7 +83,7 @@ async fn why_failed(site: &Site, err: &str) -> String {
         }
         Err(_) => None,
     };
-    why_text(err, &key_url, file_ok)
+    why_text(err, &key_url, file_ok, stuck)
 }
 
 /// 提交这批网址，连同之前没交上的一起。没交上就记下来等补交，返回原因。
@@ -99,7 +101,7 @@ pub async fn submit(site: &Site, site_dir: &Path, urls: &[String]) -> Result<usi
             Ok(all.len())
         }
         Err(e) => {
-            let why = why_failed(site, &e).await;
+            let why = why_failed(site, &e, load(site_dir).tries + 1 >= STUCK_AFTER).await;
             let mut p = load(site_dir);
             p.urls = merged(&p.urls, &all);
             p.tries += 1;
@@ -141,9 +143,14 @@ pub fn key_in_repo(dir: &Path, current: &str) -> Option<String> {
 
 /// 这次上线改用仓库里的密钥（站点设置一起改掉）。不用换时返回 None。
 pub fn use_repo_key(site: &Site, dir: &Path, job: &Job) -> Option<Site> {
+    let site = adopt_repo_key(site, dir)?;
+    job.line(&format!("IndexNow：仓库里已有密钥文件 {}.txt，改用这把", site.data.indexnow_key));
+    Some(site)
+}
+
+fn adopt_repo_key(site: &Site, dir: &Path) -> Option<Site> {
     use tauri::Manager;
     let key = key_in_repo(dir, &site.data.indexnow_key)?;
-    job.line(&format!("IndexNow：仓库里已有密钥文件 {key}.txt，改用这把"));
     if let Some(app) = crate::APP.get() {
         let _ = app.state::<crate::AppState>().sites.update(&site.id, crate::now_secs(), |s| {
             s.data.indexnow_key = key.clone();
@@ -188,6 +195,10 @@ pub fn schedule(app: &tauri::AppHandle) {
             backfill(&site, &dir);
             let p = load(&dir);
             if !p.urls.is_empty() && crate::now_secs() >= p.next_at {
+                // 密钥在站点文件夹里换过（Bing 一直不认、换了一把）：补交前先跟上，不然还拿旧的那把交，线上已经没有它的文件了。
+                // 上线时本来就会换（use_repo_key），这里不用等下一次上线
+                let local = (!site.local_dir.is_empty()).then(|| site.app_dir(Path::new(&site.local_dir))).filter(|d| d.is_dir());
+                let site = local.and_then(|d| adopt_repo_key(&site, &d)).unwrap_or(site);
                 let _ = submit(&site, &dir, &[]).await;
             }
         }
@@ -223,10 +234,14 @@ mod tests {
     #[test]
     fn the_reason_tells_a_missing_key_file_from_a_rejected_key() {
         let url = "https://x.com/k.txt";
-        assert!(why_text(crate::bing::INDEXNOW_REJECTED, url, Some(false)).contains("线上打不开密钥文件 https://x.com/k.txt"));
-        assert!(why_text(crate::bing::INDEXNOW_REJECTED, url, Some(true)).contains("密钥文件能正常打开"));
-        assert_eq!(why_text(crate::bing::INDEXNOW_REJECTED, url, None), crate::bing::INDEXNOW_REJECTED);
-        assert_eq!(why_text("IndexNow 返回 500", url, Some(true)), "IndexNow 返回 500");
+        assert!(why_text(crate::bing::INDEXNOW_REJECTED, url, Some(false), false).contains("线上打不开密钥文件 https://x.com/k.txt"));
+        assert!(why_text(crate::bing::INDEXNOW_REJECTED, url, Some(true), false).contains("过一阵会自动再试"));
+        // 一直不认：不再说「过一阵就好」，写怎么换密钥
+        let stuck = why_text(crate::bing::INDEXNOW_REJECTED, url, Some(true), true);
+        assert!(stuck.contains("换一把新密钥") && !stuck.contains("过一阵"));
+        assert!(why_text(crate::bing::INDEXNOW_REJECTED, url, Some(false), true).contains("线上打不开密钥文件"));
+        assert_eq!(why_text(crate::bing::INDEXNOW_REJECTED, url, None, true), crate::bing::INDEXNOW_REJECTED);
+        assert_eq!(why_text("IndexNow 返回 500", url, Some(true), false), "IndexNow 返回 500");
     }
 
     #[test]
