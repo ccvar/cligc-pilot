@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem, AiCost } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem, ExternalItem, AiCost } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -20,6 +20,8 @@ class ManagedState {
   siteDaily = $state<Record<string, DayCount[]>>({});
   /** 托管页「最近上线」：近 30 天上线的改动（带页面现在的数据，看效果） */
   ships = $state<ShipItem[]>([]);
+  /** 托管页「最近上线」里混着列的外部改动：不经 Pilot 的提交（手改、CI 机器人），近 30 天 */
+  external = $state<ExternalItem[]>([]);
   /** data：新版日报的结构化内容；旧日报只有 Markdown（text） */
   digest = $state<{ name: string; text: string; data: DigestData | null } | null>(null);
   tab = $state<ManagedTab>('groups');
@@ -307,13 +309,14 @@ export async function loadPlans() {
 }
 export async function loadDigests() {
   try {
-    const [v, d, sd, sh] = await Promise.all([
+    const [v, d, sd, sh, ex] = await Promise.all([
       invoke<string[]>('list_digests'),
       invoke<DayCount[]>('managed_daily', { days: 372 }).catch(() => [] as DayCount[]),
       invoke<{ site_id: string; days: DayCount[] }[]>('managed_site_daily', { days: 14 }).catch(() => []),
       invoke<ShipItem[]>('recent_ships', { days: 30 }).catch(() => [] as ShipItem[]),
+      invoke<ExternalItem[]>('external_changes', { days: 30 }).catch(() => [] as ExternalItem[]),
     ]);
-    managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days])); managed.ships = sh;
+    managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days])); managed.ships = sh; managed.external = ex;
   } catch (e) { say(String(e), 'err'); }
 }
 export async function openDigest(name: string) {
@@ -369,6 +372,8 @@ export function initManaged() {
   $effect(() => {
     const un1 = listen('site-queue', soon);
     const un2 = listen<{ status: string }>('site-job', (e) => { if (e.payload.status !== 'running') soon(); });
-    return () => { void un1.then((f) => f()); void un2.then((f) => f()); };
+    // 后台发现了新的外部改动：最近上线列表刷新
+    const un3 = listen('external-changed', () => { if (managed.tab === 'groups') void loadDigests(); });
+    return () => { void un1.then((f) => f()); void un2.then((f) => f()); void un3.then((f) => f()); };
   });
 }

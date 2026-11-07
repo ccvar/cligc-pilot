@@ -3,6 +3,8 @@
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
   // 全部站点 →「近期动态」也用它（每天一组，limit 不限）：那里还有没成功的、你驳回的，时间按处理完的时候算。
+  // external：不经 Pilot 的提交（手改、CI 机器人），按提交时间和上线条目混排，一眼看出线上还有谁在改；
+  // 上线之后碰到同一批文件 / 页面的，那条上线的效果栏标「有外部改动」（效果和复查都看不准了）。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import DiffModal from './DiffModal.svelte';
@@ -13,28 +15,35 @@
   import { modelName } from '$lib/state/fleet.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
-  import type { ShipItem, OpsItem, GscRow } from '$lib/types';
+  import type { ShipItem, OpsItem, GscRow, ExternalItem } from '$lib/types';
 
   // byDay：列表里按天插小标题（今天 · 23 条），行尾时间今天的写「36 分钟前」、更早的写时刻（日期已经在标题里）
-  let { items, limit = 5, empty = '最近 30 天托管站点没有上线改动。', byDay = false }: { items: ShipItem[]; limit?: number; empty?: string; byDay?: boolean } = $props();
+  let { items, external = [], limit = 5, empty = '最近 30 天托管站点没有上线改动。', byDay = false }: { items: ShipItem[]; external?: ExternalItem[]; limit?: number; empty?: string; byDay?: boolean } = $props();
   const LIMIT = $derived(limit);
   let all = $state(false);
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
-  const shown = $derived(all ? items : items.slice(0, LIMIT));
   const at = (x: ShipItem) => x.item.deployed_at || x.item.updated_at;
-  // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）；有回滚 / 待核对 / 没成功的才标出来
+  type Row = { kind: 'ship'; key: string; ts: number; x: ShipItem } | { kind: 'ext'; key: string; ts: number; e: ExternalItem };
+  const rows = $derived.by(() => {
+    const r: Row[] = [...items.map((x) => ({ kind: 'ship' as const, key: x.item.id, ts: at(x), x })), ...external.map((e) => ({ kind: 'ext' as const, key: `x${e.change.sha}`, ts: e.change.at, e }))];
+    r.sort((a, b) => b.ts - a.ts);
+    return r;
+  });
+  const shown = $derived(all ? rows : rows.slice(0, LIMIT));
+  // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）；有回滚 / 待核对 / 没成功的才标出来；外部改动另计
   const isBad = (i: OpsItem) => i.status === 'rolled_back' || i.status === 'failed' || !!i.attention;
   const days = $derived.by(() => {
-    if (!byDay) return [{ key: 'all', label: '', n: 0, sites: 0, bad: 0, items: shown }];
-    const out: { key: string; label: string; n: number; sites: number; bad: number; items: ShipItem[] }[] = [];
-    for (const x of shown) {
-      const k = dayOf(at(x));
+    if (!byDay) return [{ key: 'all', label: '', n: 0, ext: 0, sites: 0, bad: 0, rows: shown }];
+    const out: { key: string; label: string; n: number; ext: number; sites: number; bad: number; rows: Row[] }[] = [];
+    for (const r of shown) {
+      const k = dayOf(r.ts);
       const g = out.find((o) => o.key === k);
-      if (g) g.items.push(x);
+      if (g) g.rows.push(r);
       else {
-        const same = items.filter((y) => dayOf(at(y)) === k);
-        out.push({ key: k, label: dayLabel(at(x)), n: same.length, sites: new Set(same.map((y) => y.site_id)).size, bad: same.filter((y) => isBad(y.item)).length, items: [x] });
+        const same = rows.filter((y) => dayOf(y.ts) === k);
+        const ships = same.filter((y) => y.kind === 'ship') as Extract<Row, { kind: 'ship' }>[];
+        out.push({ key: k, label: dayLabel(r.ts), n: ships.length, ext: same.length - ships.length, sites: new Set(ships.map((y) => y.x.site_id)).size, bad: ships.filter((y) => isBad(y.x.item)).length, rows: [r] });
       }
     }
     return out;
@@ -65,10 +74,16 @@
     // 没上线过的（已处理、没成功、你驳回了）不谈效果
     if (!i.deployed_at) return { t: '', c: '', tip: '' };
     const days = Math.floor((Date.now() / 1000 - i.deployed_at) / DAY);
+    // 上线之后有不经 Pilot 的提交改到同一批文件 / 页面：涨跌分不清是谁的，复盘结论也只能存疑
+    const ext = x.external_after ?? [];
+    const extNote = ext.length ? `
+上线后有 ${ext.length} 次外部改动碰到同一批文件 / 页面，效果分不清是谁的：
+${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
     if (i.review) {
       const l = i.review === 'positive' ? '有效' : i.review === 'negative' ? '负面' : '持平';
-      return { t: l, c: i.review === 'positive' ? 'ok' : i.review === 'negative' ? 'err' : 'line', tip: `上线满 4 周的复盘：${i.review_note}` };
+      return { t: l, c: i.review === 'positive' ? 'ok' : i.review === 'negative' ? 'err' : 'line', tip: `上线满 4 周的复盘：${i.review_note}${extNote}` };
     }
+    if (ext.length && i.status !== 'rolled_back') return { t: '有外部改动', c: 'warn', tip: extNote.trim() };
     if (i.status === 'rolled_back') return { t: '', c: '', tip: '' };
     const now = x.page_now, b = i.before;
     const wait = Math.max(0, 31 - days);
@@ -99,12 +114,41 @@
 </script>
 
 <div class="rs">
-  {#if !items.length}<p class="hint">{empty}</p>{/if}
-  {#if items.length}
+  {#if !rows.length}<p class="hint">{empty}</p>{/if}
+  {#if rows.length}
     <ol class="rows">
       {#each days as d (d.key)}
-      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
-      {#each d.items as x (x.item.id)}
+      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}{#if d.ext} · {d.ext} 条外部改动{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
+      {#each d.rows as r (r.key)}
+      {#if r.kind === 'ext'}
+        {@const e = r.e}
+        {@const c = e.change}
+        {@const isOpen = open.has(r.key)}
+        {@const page = c.pages[0] || ''}
+        <!-- 外部改动：不经 Pilot 的提交。标题是提交说明，效果栏放文件数，「自动上线 / 人工确认」那格放提交人 -->
+        <li class="ext" class:open={isOpen}>
+          <div class="row">
+            <button class="main" onclick={() => toggle(r.key)} aria-expanded={isOpen}>
+              <span class="sn"><SiteIcon id={e.site_id} size={13} />{e.site_name}</span>
+              <span class="tt" data-tip={c.message}>{c.message}</span>
+            </button>
+            {#if page}<button class="url mono" onclick={() => openUrl(page)} data-tip={`在浏览器打开：${page}`}><span class="up">{shortPath(page)}</span><Icon name="external" size={10} /></button>{/if}
+            <span class="eff line" data-tip={c.files.slice(0, 12).join('\n') + (c.files.length > 12 ? `\n… 共 ${c.files.length} 个` : '')}>{c.files.length} 个文件</span>
+            <span class="how faint who" data-tip={`提交人：${c.author}（在 ${c.on} 上）`}>{c.author}</span>
+            <span class="pill line">外部改动</span>
+            <span class="t faint" data-tip={full(c.at)}>{when(c.at)}</span>
+          </div>
+          {#if isOpen}
+            <div class="more">
+              <div class="meta"><span>提交 {c.sha.slice(0, 7)}</span><span>{c.author}</span><span>在 {c.on} 上</span><span>{full(c.at)}</span></div>
+              <div class="blk"><span class="lb">改了的文件</span><p class="files mono">{c.files.join('　')}</p></div>
+              {#if c.pages.length}<div class="blk"><span class="lb">可能影响</span><p>{c.pages.map(shortPath).join('、')}</p></div>{/if}
+              <p class="hint">不经 Pilot 运营流程进到仓库的提交（手改、CI 机器人、别的工具）。它碰到 Pilot 最近改过的页面时，那条上线的效果栏会标「有外部改动」。</p>
+            </div>
+          {/if}
+        </li>
+      {:else}
+        {@const x = r.x}
         {@const i = x.item}
         {@const st = shipState(i)}
         {@const site = siteOf(x.site_id)}
@@ -124,7 +168,7 @@
               {#if site && i.status === 'deployed' && i.merge_sha}<button class="ic-btn ic-sm" onclick={() => rollbackItem(site, i)} aria-label="回滚" data-tip="回滚这次改动（先确认）"><Icon name="undo" size={13} /></button>{/if}
               <button class="ic-btn ic-sm" onclick={() => openSite(x.site_id, 'queue', '', i.id)} aria-label="在任务队列里看" data-tip="在任务队列里看"><Icon name="inbox" size={13} /></button>
             </span>
-            <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
+            <span class="eff {ef.c}" data-tip={ef.tip || null}>{#if ef.c === 'ok' || ef.c === 'err' || ef.c === 'warn' || (ef.c === 'line' && i.review)}<span class="pill {ef.c}">{ef.t}</span>{:else}{ef.t}{/if}</span>
             <span class="how faint" data-tip={!i.deployed_at ? null : i.auto ? '检查都通过后自动上线' : '人工确认后才上线的'}>{!i.deployed_at ? '' : i.auto ? '自动上线' : '人工确认'}</span>
             <span class="pill {st.c}">{st.l}</span>
             <span class="t faint" data-tip={full(at(x))}>{when(at(x))}</span>
@@ -157,10 +201,11 @@
             </div>
           {/if}
         </li>
+      {/if}
       {/each}
       {/each}
     </ol>
-    {#if items.length > LIMIT}<button class="all" onclick={() => (all = !all)}>{all ? '收起' : `显示全部 ${items.length} 条`}<svg class="chev" class:open={all} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
+    {#if rows.length > LIMIT}<button class="all" onclick={() => (all = !all)}>{all ? '收起' : `显示全部 ${rows.length} 条`}<svg class="chev" class:open={all} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}
   {/if}
 </div>
 <DiffModal />
@@ -191,6 +236,10 @@
   /* 效果：复盘前是点击变化（涨绿跌红）或「等数据」，复盘后是 有效 / 持平 / 负面 */
   .eff { flex: none; width: 76px; text-align: right; font-size: 11.5px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .eff.line { color: var(--faint); }
+  /* 外部改动那行：标题用提交说明、不加粗，提交人名字截短 */
+  .ext .tt { font-weight: 450; color: var(--dim); }
+  .who { overflow: hidden; text-overflow: ellipsis; }
+  .files { overflow-wrap: anywhere; font-size: 11.5px !important; }
   .eff.up { color: var(--ok); }
   .eff.down { color: var(--err); }
   .eff-d { white-space: pre-line; }

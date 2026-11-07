@@ -471,7 +471,11 @@ export interface DataSync { running: string[]; queued: string[]; health: boolean
 /** Search Console 一行（页面或查询词）近 28 天的合计 */
 export interface GscRow { key: string; key2?: string; clicks: number; impressions: number; ctr: number; position: number }
 /** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
-export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string; /** 这一条 AI 处理时的用量 */ cost?: AiCost | null }
+export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string; /** 这一条 AI 处理时的用量 */ cost?: AiCost | null; /** 上线之后碰到同一批文件 / 页面的外部改动（不经 Pilot 的提交）：效果看不准 */ external_after?: ExternalBrief[] }
+/** 不经 Pilot 运营流程进到站点仓库的提交（手改、CI 机器人、别的工具），见 external.rs */
+export interface ExternalChange { sha: string; at: number; seen_at: number; author: string; message: string; on: string; files: string[]; pages: string[] }
+export interface ExternalBrief { sha: string; at: number; author: string; message: string }
+export interface ExternalItem { site_id: string; site_name: string; domain: string; change: ExternalChange }
 /** 「近期动态」图表下那一行：某一天所有站点的 AI 运营用量 */
 export interface DayUsage { date: string; cost: AiCost }
 /** 全部站点列表上的一个分发渠道 */

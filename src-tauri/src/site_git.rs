@@ -353,12 +353,40 @@ pub async fn identity_flags(dir: &Path) -> Vec<String> {
     out
 }
 
-/// 以 Pilot 的名义跑一条会产生提交的 git 命令（commit / merge / revert）。
+/// 以 Pilot 的名义跑一条会产生提交的 git 命令（commit / merge / revert）。做出的提交记下来（见 `note_own_commit`）。
 pub async fn git_commit_ok(dir: &Path, args: &[&str]) -> Result<String, String> {
     let flags = identity_flags(dir).await;
     let mut all: Vec<&str> = flags.iter().map(String::as_str).collect();
     all.extend_from_slice(args);
-    git_ok(dir, &all, "").await
+    let out = git_ok(dir, &all, "").await?;
+    note_own_commit(dir).await;
+    Ok(out)
+}
+
+/// Pilot 自己做出的提交：sha 记在仓库的 .git/pilot-commits 里（一行一个；工作树和远端都看不到）。
+/// 仓库配了用户身份时作者名分不出是谁做的，外部改动检测（external）靠这份记录分清。
+pub async fn note_own_commit(dir: &Path) {
+    let sha = head_sha(dir).await;
+    let Some(p) = own_commits_path(dir).await else { return };
+    if sha.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let _ = writeln!(f, "{sha}");
+    }
+}
+
+pub async fn own_commits(dir: &Path) -> std::collections::HashSet<String> {
+    let Some(p) = own_commits_path(dir).await else { return Default::default() };
+    std::fs::read_to_string(p).map(|s| s.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()).unwrap_or_default()
+}
+
+/// 工作树和主仓库共用一份记录（工作树的 .git 只是个指针文件）
+async fn own_commits_path(dir: &Path) -> Option<PathBuf> {
+    let common = git_ok(dir, &["rev-parse", "--git-common-dir"], "").await.ok()?;
+    let common = Path::new(&common);
+    Some(if common.is_absolute() { common.to_path_buf() } else { dir.join(common) }.join("pilot-commits"))
 }
 
 /// 站点主代码目录：本地来源就是用户的文件夹；GitHub 来源是 GitHub 连接工作区里的检出。

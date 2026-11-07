@@ -4,6 +4,7 @@ mod typesafe;
 mod jev_checks;
 mod link_check;
 mod monitor;
+mod external;
 mod index_check;
 mod indexnow;
 mod background;
@@ -5196,6 +5197,7 @@ pub fn run() {
             fleet_cmds::sites_overview,
             fleet_cmds::pending_across_sites,
             fleet_cmds::recent_ships,
+            fleet_cmds::external_changes,
             fleet_cmds::history_across_sites,
             fleet_cmds::ai_usage_daily,
             fleet_cmds::site_links,

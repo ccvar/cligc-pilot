@@ -390,6 +390,32 @@ pub struct ShipItem {
     pub data_end: String,
     /// 这一条 AI 处理时的用量（从交给 AI 到那轮会话结束，含换备用模型重跑）；没交给过 AI 是 None
     pub cost: Option<crate::usage::Cost>,
+    /// 上线之后碰到同一批文件 / 页面的外部改动（不经 Pilot 的提交，最多 5 条）：效果和复查都看不准了
+    #[serde(default)]
+    pub external_after: Vec<crate::external::ExternalBrief>,
+}
+
+/// 「最近上线」里的一条外部改动：不经 Pilot 运营流程进到仓库的提交（手改、CI 机器人、别的工具），见 external
+#[derive(Serialize)]
+pub struct ExternalItem {
+    pub site_id: String,
+    pub site_name: String,
+    pub domain: String,
+    pub change: crate::external::ExternalChange,
+}
+
+/// 托管站点最近 days 天的外部改动，新的在前：托管页「最近上线」和上线条目混在一起列。
+#[tauri::command]
+pub fn external_changes(state: tauri::State<'_, AppState>, days: Option<u64>) -> Vec<ExternalItem> {
+    let since = crate::now_secs().saturating_sub(days.unwrap_or(30).min(90) * 86_400);
+    let cfg = crate::managed::load(&state.data_dir);
+    let mut out: Vec<ExternalItem> = Vec::new();
+    for s in state.sites.list().into_iter().filter(|s| cfg.group_of(&s.id).is_some()) {
+        let log = crate::external::load(&state.sites.data_dir(&s.id));
+        out.extend(log.changes.into_iter().filter(|c| c.at >= since).map(|change| ExternalItem { site_id: s.id.clone(), site_name: s.name.clone(), domain: s.domain.clone(), change }));
+    }
+    out.sort_by(|a, b| b.change.at.cmp(&a.change.at));
+    out
 }
 
 /// 托管站点最近 days 天上线过的改动（含之后被回滚的），新的在前：托管页「最近上线」用。
@@ -426,14 +452,16 @@ fn ships(state: &AppState, site_ok: impl Fn(&crate::sites::Site) -> bool, keep: 
         let cache = crate::site_data::cache_dir(&dir);
         let pages: Vec<crate::site_data::Row> = crate::site_data::read_json(&cache, "gsc_pages.json");
         let data_end = crate::site_data::summary(&dir).data_end;
+        let external = crate::external::load(&dir);
         for item in items {
+            let external_after = crate::external::touching(&external, &item);
             let page = if item.opp.page.starts_with("https://") { item.opp.page.clone() } else { item.new_pages.first().cloned().unwrap_or_default() };
             let page_now = pages.iter().find(|r| r.key == page).cloned();
             let cost = (item.worked_at > 0).then(|| {
                 let end = state.convos.get(&item.conv_id).map(|c| c.updated_at).unwrap_or(item.updated_at).clamp(item.worked_at, item.worked_at + 6 * 3600);
                 crate::usage::site_cost_between(&dir, item.worked_at as i64, end as i64)
             });
-            out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone(), cost });
+            out.push(ShipItem { site_id: s.id.clone(), site_name: s.name.clone(), item, page_now, data_end: data_end.clone(), cost, external_after });
         }
     }
     out.sort_by(|a, b| finished_at(&b.item).cmp(&finished_at(&a.item)));
