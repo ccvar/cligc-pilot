@@ -391,8 +391,15 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
 
 /// 一个运营作业最多跑多久：到点就停掉里面的命令和 AI 回合，按失败收尾，不让站点被一个卡死的作业占着。
 const MAX_JOB_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
-/// 调度同时最多起这么多个运营作业（手动点的不算在内、也不受它限制）
+/// 调度同时最多起这么多个「重」运营作业（要构建站点或跑 AI 的：扫描、体检、计划、上线……）。
+/// 轻任务（见 light_task）不占名额也不受它限制；手动点的不算在内、也不受它限制
 pub(crate) const MAX_PARALLEL_JOBS: usize = 3;
+
+/// 不构建、不跑 AI 的轻任务：周报、复盘只拉数据算一算，上线后检查只看线上页面（要回滚会另起回滚作业）。
+/// 它们几秒到几分钟就完，不占调度的并发名额
+pub fn light_task(task: &str) -> bool {
+    matches!(task, "report" | "review" | "watch")
+}
 
 /// 开一个运营作业（后台跑，立即返回作业 id）。
 pub fn start(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_id: Option<String>) -> Result<String, String> {
@@ -4794,30 +4801,24 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                 prune_worktrees(&st);
             }
             tick += 1;
-            // 同时最多跑这么多个运营作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建
-            let mut busy = st.site_jobs.running_count();
+            // 同时最多跑这么多个重作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建。
+            // 周报、复盘、上线后检查这类轻作业不占名额：满了也照常起，不然两个几秒钟的周报就把别的站的扫描挡到下一轮
+            let mut busy = st.site_jobs.running_heavy();
             for site in st.sites.list() {
-                if busy >= MAX_PARALLEL_JOBS {
-                    break;
-                }
                 if st.site_jobs.running(&site.id) {
                     continue;
                 }
                 let in_plan = mcfg.group_of(&site.id).is_some();
                 // 不在方案里的站点也有上线记录（白名单自动上线、手动确认）：到期的复查照样跑，只查不回滚（见 watch）
                 if !in_plan && site_ops::load_queue(&st.sites.data_dir(&site.id)).iter().any(watch_is_due) {
-                    if start(ctx.clone(), &site.id, "watch", "schedule", None).is_ok() {
-                        busy += 1;
-                    }
+                    let _ = start(ctx.clone(), &site.id, "watch", "schedule", None);
                     continue;
                 }
                 if in_plan {
                     // 上线后检查优先：有到期的就先跑它（停止托管的站点也查，只是不回滚）
                     let site_dir = st.sites.data_dir(&site.id);
                     if site_ops::load_queue(&site_dir).iter().any(watch_is_due) {
-                        if start(ctx.clone(), &site.id, "watch", "schedule", None).is_ok() {
-                            busy += 1;
-                        }
+                        let _ = start(ctx.clone(), &site.id, "watch", "schedule", None);
                         continue;
                     }
                     // 总暂停、所在方案暂停、或这个站点单独停止托管：都不自动运行
@@ -4837,7 +4838,12 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                         continue;
                     }
                     if due(&schedule_of(&site, task, mcfg.group_of(&site.id)), last, now()) {
-                        if start(ctx.clone(), &site.id, task, "schedule", None).is_ok() {
+                        let heavy = !light_task(task);
+                        // 重作业满了：这个站下一轮再说。不跳过它去起排在后面的轻任务，保持「先体检、再计划、再扫描」的顺序
+                        if heavy && busy >= MAX_PARALLEL_JOBS {
+                            break;
+                        }
+                        if start(ctx.clone(), &site.id, task, "schedule", None).is_ok() && heavy {
                             busy += 1;
                         }
                         break; // 每站每轮最多起一个，下一轮再看别的

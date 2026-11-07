@@ -341,7 +341,7 @@ pub fn work_across_sites(app: tauri::AppHandle, batches: Vec<(String, Vec<String
                     if st.sites.get(site_id).is_err() {
                         return false;
                     }
-                    let go = st.site_jobs.running_count() < crate::site_runner::MAX_PARALLEL_JOBS && !st.site_jobs.running(site_id);
+                    let go = st.site_jobs.running_heavy() < crate::site_runner::MAX_PARALLEL_JOBS && !st.site_jobs.running(site_id);
                     if !go {
                         return true;
                     }

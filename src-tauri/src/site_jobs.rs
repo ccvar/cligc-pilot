@@ -76,6 +76,11 @@ pub struct Job {
     secrets: Arc<Mutex<Vec<String>>>,
 }
 
+/// 不构建、不跑 AI 的轻作业（kind 是 ops:<任务>）：不占调度的并发名额，不然两个几秒钟的周报就把别的站的扫描挡到下一轮
+pub fn light_kind(kind: &str) -> bool {
+    kind.strip_prefix("ops:").is_some_and(crate::site_runner::light_task)
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -130,9 +135,16 @@ impl Jobs {
         self.inner.lock().unwrap().get(site_id).map(|s| s.state.clone())
     }
 
-    /// 正在跑的作业数（所有站点）
+    /// 正在跑的作业数（所有站点）；线上只看 running_heavy
+    #[cfg(test)]
     pub fn running_count(&self) -> usize {
         self.inner.lock().unwrap().values().filter(|s| s.state.status == "running").count()
+    }
+
+    /// 正在跑的「重」作业数：要构建站点或跑 AI 的（部署、扫描、体检、上线……）。调度的并发上限只数这些；
+    /// 周报、复盘、上线后检查只拉数据、看线上页面，几秒到几分钟就完，不占名额（见 light_kind）
+    pub fn running_heavy(&self) -> usize {
+        self.inner.lock().unwrap().values().filter(|s| s.state.status == "running" && !light_kind(&s.state.kind)).count()
     }
 
     pub fn running(&self, site_id: &str) -> bool {
@@ -452,6 +464,19 @@ mod tests {
     #[test]
     fn ansi_codes_are_removed() {
         assert_eq!(strip_ansi("\u{1b}[32m✓\u{1b}[0m done\r"), "✓ done");
+    }
+
+    #[tokio::test]
+    async fn only_heavy_jobs_count_toward_the_parallel_cap() {
+        let jobs = Jobs::default();
+        let _a = jobs.start(None, "s1", "ops:report", "周报", &[("report", "生成周报")]).unwrap();
+        let _b = jobs.start(None, "s2", "ops:watch", "上线后检查", &[("watch", "上线后检查")]).unwrap();
+        let _c = jobs.start(None, "s3", "ops:health", "站点体检", &[("build", "构建")]).unwrap();
+        let _d = jobs.start(None, "s4", "deploy", "部署", &[("build", "构建")]).unwrap();
+        assert_eq!(jobs.running_count(), 4);
+        assert_eq!(jobs.running_heavy(), 2, "周报、上线后检查不占名额；体检要构建、部署要构建，算");
+        assert!(light_kind("ops:review"));
+        assert!(!light_kind("ops:scan") && !light_kind("deploy") && !light_kind("report"));
     }
 
     #[tokio::test]
