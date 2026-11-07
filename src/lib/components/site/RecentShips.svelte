@@ -52,11 +52,17 @@
   }
   const shown = $derived(all ? rows : rows.slice(0, LIMIT));
   // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）：「N 条」只数上线条目，有回滚 / 待核对 / 没成功的才标出来；
-  // 外部改动另计，数的是改动次数（合并行里有几次算几次），不是行数
+  // 外部改动另计，数的是改动次数（合并行里有几次算几次），不是行数。
+  // 「显示全部」之后只有最近 3 天全列出来，更早的每天只留小标题当概览，点它才展开那一天（30 天几百行翻不动）
   const isBad = (i: OpsItem) => i.status === 'rolled_back' || i.status === 'failed' || !!i.attention;
+  const RECENT_DAYS = 3;
+  let openDays = $state<Set<string>>(new Set());
+  function toggleDay(k: string) { const n = new Set(openDays); if (n.has(k)) n.delete(k); else n.add(k); openDays = n; }
+  type Day = { key: string; label: string; n: number; ext: number; sites: number; bad: number; rows: Row[]; folded: boolean; foldable: boolean };
   const days = $derived.by(() => {
-    if (!byDay) return [{ key: 'all', label: '', n: 0, ext: 0, sites: 0, bad: 0, rows: shown }];
-    const out: { key: string; label: string; n: number; ext: number; sites: number; bad: number; rows: Row[] }[] = [];
+    if (!byDay) return [{ key: 'all', label: '', n: 0, ext: 0, sites: 0, bad: 0, rows: shown, folded: false, foldable: false }] as Day[];
+    const recent = new Set(Array.from({ length: RECENT_DAYS }, (_, k) => dayOf(Date.now() / 1000 - k * DAY)));
+    const out: Day[] = [];
     for (const r of shown) {
       const k = dayOf(r.ts);
       const g = out.find((o) => o.key === k);
@@ -65,7 +71,8 @@
         const same = rows.filter((y) => dayOf(y.ts) === k);
         const ships = same.filter((y) => y.kind === 'ship') as Extract<Row, { kind: 'ship' }>[];
         const ext = same.reduce((n, y) => n + (y.kind === 'ext' ? y.g.list.length : 0), 0);
-        out.push({ key: k, label: dayLabel(r.ts), n: ships.length, ext, sites: new Set(ships.map((y) => y.x.site_id)).size, bad: ships.filter((y) => isBad(y.x.item)).length, rows: [r] });
+        const foldable = all && !recent.has(k);
+        out.push({ key: k, label: dayLabel(r.ts), n: ships.length, ext, sites: new Set(ships.map((y) => y.x.site_id)).size, bad: ships.filter((y) => isBad(y.x.item)).length, rows: [r], foldable, folded: foldable && !openDays.has(k) });
       }
     }
     return out;
@@ -140,8 +147,20 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
   {#if rows.length}
     <ol class="rows">
       {#each days as d (d.key)}
-      {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}{#if d.ext} · {d.ext} 条外部改动{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
-      {#each d.rows as r (r.key)}
+      {#if d.label}
+        <!-- 最近 3 天之外的日子：小标题就是当天的概览，点它展开 / 收起那一天 -->
+        {#if d.foldable}
+          <li class="dh fold" class:folded={d.folded}>
+            <button class="dh-btn" onclick={() => toggleDay(d.key)} aria-expanded={!d.folded}>
+              <svg class="chev" class:open={!d.folded} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}{#if d.ext} · {d.ext} 条外部改动{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}
+            </button>
+          </li>
+        {:else}
+          <li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}{#if d.ext} · {d.ext} 条外部改动{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>
+        {/if}
+      {/if}
+      {#each d.folded ? [] : d.rows as r (r.key)}
       {#if r.kind === 'ext' && r.g.list.length > 1}
         {@const g = r.g}
         {@const s = extSummary(g)}
@@ -295,6 +314,13 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
   .dh b { font-size: 12px; font-weight: 600; color: var(--dim); }
   .dh-bad { color: var(--err); }
   .rows > li.dh:hover { background: #faf9f6; }
+  /* 能折叠的日子：整行是按钮，收起时稍微密一点 */
+  .rows > li.dh.fold { padding: 0; }
+  .dh-btn { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 7px 18px 6px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+  .dh-btn .chev { flex: none; align-self: center; color: var(--faint); transition: transform .15s; }
+  .dh-btn .chev.open { transform: rotate(180deg); }
+  .rows > li.dh.fold:hover { background: #f5f3ef; }
+  .rows > li.dh.fold:hover .chev { color: var(--dim); }
   .row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 18px; }
   .rows > li:hover .row { background: #fcfbf9; }
   .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: none; padding: 6px 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
