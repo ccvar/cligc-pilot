@@ -391,7 +391,7 @@ pub fn managed_activity(state: tauri::State<'_, AppState>, limit: Option<usize>)
     managed::activity(&state.data_dir, limit.unwrap_or(200).min(2000))
 }
 
-/// 一次定时运行（扫描、体检、计划、周报、复盘）：操作日志里按天只给个数，失败的才逐条列
+/// 一次定时运行（扫描、体检、计划、周报、复盘）：操作日志里按天只给个数，点开才逐条列
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct RoutineRun {
     pub site_id: String,
@@ -403,7 +403,7 @@ pub struct RoutineRun {
     pub error: String,
 }
 
-/// 一天的例行运行概览：各任务跑了几次、涉及几个站点、失败的有哪些
+/// 一天的例行运行概览：各任务跑了几次、涉及几个站点、失败几次；runs 是当天每一次（新的在前），点开才看
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct RoutineDay {
     /// 这一天里任意一次运行的时间：前端用它按本地日期对到操作日志的那一天
@@ -412,7 +412,8 @@ pub struct RoutineDay {
     pub sites: u32,
     /// 任务 → 次数，按 site_runner::TASKS 的顺序
     pub counts: Vec<(String, u32)>,
-    pub failed: Vec<RoutineRun>,
+    pub failed: u32,
+    pub runs: Vec<RoutineRun>,
 }
 
 /// 托管站点最近几天的例行运行，按天汇总（新的在前）。只算定时起的；手动点的在站点自己的运行记录里
@@ -434,7 +435,7 @@ pub fn managed_routine(state: tauri::State<'_, AppState>, days: Option<u32>) -> 
     fold_routine(runs)
 }
 
-/// 按本地日期分天：每天各任务的次数、站点数、失败清单（失败的按时间新的在前）
+/// 按本地日期分天：每天各任务的次数、站点数、失败次数，以及每一次运行（新的在前）
 pub fn fold_routine(mut runs: Vec<RoutineRun>) -> Vec<RoutineDay> {
     use chrono::TimeZone;
     runs.sort_by(|a, b| b.started.cmp(&a.started));
@@ -450,8 +451,9 @@ pub fn fold_routine(mut runs: Vec<RoutineRun>) -> Vec<RoutineDay> {
         x.2.insert(r.site_id.clone());
         *x.3.entry(r.task.clone()).or_default() += 1;
         if !r.ok {
-            x.1.failed.push(r);
+            x.1.failed += 1;
         }
+        x.1.runs.push(r);
     }
     out.into_iter()
         .map(|(_, mut d, sites, counts)| {
@@ -488,10 +490,10 @@ mod routine_tests {
         let today = &days[0];
         assert_eq!((today.total, today.sites), (4, 2));
         assert_eq!(today.counts, vec![("health".to_string(), 2), ("report".to_string(), 2)], "按 TASKS 顺序：先体检再周报");
-        assert_eq!(today.failed.len(), 1);
-        assert_eq!((today.failed[0].site_id.as_str(), today.failed[0].error.as_str()), ("b", "构建失败"));
+        assert_eq!(today.failed, 1);
+        assert_eq!(today.runs.iter().map(|r| (r.site_id.as_str(), r.task.as_str(), r.ok)).collect::<Vec<_>>(), vec![("a", "health", true), ("b", "health", false), ("b", "report", true), ("a", "report", true)], "新的在前");
         assert_eq!(days[1].counts, vec![("scan".to_string(), 1)]);
-        assert!(days[1].failed.is_empty());
+        assert_eq!((days[1].failed, days[1].runs.len()), (0, 1));
     }
 }
 

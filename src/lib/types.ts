@@ -639,10 +639,10 @@ export interface DigestData { date: string; generated_at: number; since?: number
 /** 日报日历里的一天（只有有动静的日子） */
 export interface DayCount { date: string; shipped: number; planned: number; proposed: number; broken: number; ran: number }
 export interface ManagedActivity { ts: number; site_id: string; site_name: string; kind: string; title: string; detail: string; item_id: string; change?: string; source?: string }
-/** 一次定时运行（扫描、体检、计划、周报、复盘）；操作日志里按天只给个数，失败的才逐条列 */
+/** 一次定时运行（扫描、体检、计划、周报、复盘）；操作日志里按天只给个数，点开才逐条列 */
 export interface RoutineRun { site_id: string; site_name: string; task: string; started: number; ok: boolean; summary: string; error: string }
-/** 一天的例行运行概览：ts 是这一天里任意一次运行的时间，用来对到操作日志的那一天 */
-export interface RoutineDay { ts: number; total: number; sites: number; counts: [string, number][]; failed: RoutineRun[] }
+/** 一天的例行运行概览：ts 是这一天里任意一次运行的时间，用来对到操作日志的那一天；runs 新的在前 */
+export interface RoutineDay { ts: number; total: number; sites: number; counts: [string, number][]; failed: number; runs: RoutineRun[] }
 export interface PlanTask { title: string; page: string; change: string; why: string; priority: number; source?: string; query?: string; expect?: { metric?: string; query?: string; note?: string } }
 export interface StageInfo { stage: string; auto_stage: string; reason: string; manual: string }
 /** AI 归纳的站点定位；by=user 表示运营人员改过，AI 不再覆盖。 */

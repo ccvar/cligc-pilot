@@ -531,14 +531,18 @@
                   {@const rt = routineByDay.get(dayOf(a.ts))}
                   {#if rt}
                     <!-- 例行运行只给一行概览：扫描、体检没发现什么就不写进日志；失败的才逐条列 -->
-                    <div class="li ev routine" class:bad={rt.failed.length > 0}>
+                    {@const rtOpen = routineOpen.has(dayOf(a.ts))}
+                    <div class="li ev routine" class:bad={rt.failed > 0}>
                       <span class="pill"><Icon name="clock" size={11} />例行</span>
                       <div class="ev-main">
-                        <small class="rt-sum"><span data-tip="定时起的扫描、体检、计划、周报、复盘；没发现什么、没改什么就不单独记。每个站点的「运营 → 报告」页底部有逐次的运行记录">{rt.sites} 个站点例行运行 {rt.total} 次：{routineText(rt)}</span>{#if rt.failed.length}<button class="link-btn plain rt-fail" onclick={() => toggleRoutine(dayOf(a.ts))} aria-expanded={routineOpen.has(dayOf(a.ts))}>失败 {rt.failed.length}<svg class="chev" class:open={routineOpen.has(dayOf(a.ts))} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}</small>
-                        {#if rt.failed.length && routineOpen.has(dayOf(a.ts))}
+                        <button class="rt-sum" onclick={() => toggleRoutine(dayOf(a.ts))} aria-expanded={rtOpen} data-tip={rtOpen ? null : '定时起的扫描、体检、计划、周报、复盘；没发现什么、没改什么就不单独记。点开看每一次'}>
+                          <span>{rt.sites} 个站点例行运行 {rt.total} 次：{routineText(rt)}</span>{#if rt.failed}<span class="rt-fail">失败 {rt.failed}</span>{/if}
+                          <svg class="chev" class:open={rtOpen} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                        </button>
+                        {#if rtOpen}
                           <ol class="rt-list">
-                            {#each rt.failed as f (f.site_id + f.started)}
-                              <li><span class="faint t">{hhmm(f.started)}</span><button class="link-btn plain site-l" onclick={() => openSite(f.site_id)}><SiteIcon id={f.site_id} size={11} />{f.site_name}</button><span class="sep">·</span>{NEXT_TASK[f.task] ?? f.task}<span class="sep">·</span><span class="rt-err">{f.error || '没有记下原因'}</span></li>
+                            {#each rt.runs as f (f.site_id + f.started)}
+                              <li class:err={!f.ok}><span class="faint t">{hhmm(f.started)}</span><button class="link-btn plain site-l" onclick={() => openSite(f.site_id)}><SiteIcon id={f.site_id} size={11} />{f.site_name}</button><span class="sep">·</span><span class="rt-task">{NEXT_TASK[f.task] ?? f.task}</span><span class="sep">·</span><span class="rt-res" class:rt-err={!f.ok}>{f.ok ? f.summary || '完成' : `失败：${f.error || '没有记下原因'}`}</span></li>
                             {/each}
                           </ol>
                         {/if}
@@ -688,14 +692,18 @@
   .ev.routine { background: #fcfbf9; }
   .ev.routine .pill { color: var(--faint); }
   .ev.routine.bad .pill { color: var(--err); }
-  .rt-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
-  .rt-fail { display: inline-flex; align-items: center; gap: 3px; color: var(--err); font-weight: 550; }
-  .rt-fail .chev { transition: transform .15s; }
-  .rt-fail .chev.open { transform: rotate(180deg); }
-  .rt-list { margin: 6px 0 2px; padding-left: 0; list-style: none; font-size: 11.5px; color: var(--dim); line-height: 1.7; }
+  .rt-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; padding: 0; border: none; background: none; font: inherit; font-size: 11.5px; color: var(--dim); line-height: 1.55; text-align: left; cursor: pointer; }
+  .rt-sum:hover { color: var(--text); }
+  .rt-sum:focus-visible { outline: none; box-shadow: var(--su-ring); border-radius: 4px; }
+  .rt-fail { color: var(--err); font-weight: 550; }
+  .rt-sum .chev { color: var(--faint); transition: transform .15s; }
+  .rt-sum .chev.open { transform: rotate(180deg); }
+  .rt-list { margin: 8px 0 2px; padding-left: 0; list-style: none; font-size: 11.5px; color: var(--dim); line-height: 1.75; }
   .rt-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
   .rt-list .t { min-width: 38px; }
-  .rt-err { color: var(--err); overflow-wrap: anywhere; }
+  .rt-task { flex: none; }
+  .rt-res { min-width: 0; overflow-wrap: anywhere; }
+  .rt-err { color: var(--err); }
   .ev .pill { flex: none; min-width: 76px; justify-content: flex-start; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
   .ev-main b { display: block; font-size: 13px; font-weight: 550; line-height: 1.5; }
