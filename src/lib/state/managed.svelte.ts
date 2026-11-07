@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem, ExternalItem, AiCost } from '$lib/types';
+import type { ManagedConfig, ManagedOverview, ManagedActivity, SitePlan, ManagedGroup, DigestData, DayCount, ShipItem, ExternalItem, AiCost, RoutineDay } from '$lib/types';
 import { app, say, confirmDialog } from './app.svelte.js';
 import { refreshSites } from './sites.svelte.js';
 import { loadFleet, loadPending } from './fleet.svelte.js';
@@ -12,6 +12,8 @@ export type ManagedTab = 'plans' | 'needs' | 'digests' | 'groups';
 class ManagedState {
   overview = $state<ManagedOverview | null>(null);
   activity = $state<ManagedActivity[]>([]);
+  /** 例行运行按天的概览（操作日志每天一行） */
+  routine = $state<RoutineDay[]>([]);
   plans = $state<SitePlan[]>([]);
   digests = $state<string[]>([]);
   /** 日报日历：最近一年每天的动态计数 */
@@ -309,14 +311,15 @@ export async function loadPlans() {
 }
 export async function loadDigests() {
   try {
-    const [v, d, sd, sh, ex] = await Promise.all([
+    const [v, d, sd, sh, ex, rt] = await Promise.all([
       invoke<string[]>('list_digests'),
       invoke<DayCount[]>('managed_daily', { days: 372 }).catch(() => [] as DayCount[]),
       invoke<{ site_id: string; days: DayCount[] }[]>('managed_site_daily', { days: 14 }).catch(() => []),
       invoke<ShipItem[]>('recent_ships', { days: 30 }).catch(() => [] as ShipItem[]),
       invoke<ExternalItem[]>('external_changes', { days: 30 }).catch(() => [] as ExternalItem[]),
+      invoke<RoutineDay[]>('managed_routine', { days: 30 }).catch(() => [] as RoutineDay[]),
     ]);
-    managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days])); managed.ships = sh; managed.external = ex;
+    managed.digests = v; managed.daily = d; managed.siteDaily = Object.fromEntries(sd.map((x) => [x.site_id, x.days])); managed.ships = sh; managed.external = ex; managed.routine = rt;
   } catch (e) { say(String(e), 'err'); }
 }
 export async function openDigest(name: string) {

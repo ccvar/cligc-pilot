@@ -32,7 +32,7 @@
   import ManagedGroupEditor from './ManagedGroupEditor.svelte';
   import WhyChips from './WhyChips.svelte';
   import { managed, cadenceLabel, perWeek, ACTIONS, AUTONOMY_LABEL, AUTONOMY_TONE, loadManaged, loadPlans, loadDigests, openDigest, digestNow, saveManaged, newGroup, editGroup, setSitesActive, setSiteActive, setManagedSites, kTok, budgetFull, costText, costTip, TIERS, tierOf, setGroupRule, GOAL_PRESETS } from '$lib/state/managed.svelte.js';
-  import type { ManagedGroup, DayCount, AiCost } from '$lib/types';
+  import type { ManagedGroup, DayCount, AiCost, RoutineDay } from '$lib/types';
 
   const o = $derived(managed.overview);
   const d = $derived(managed.draft);
@@ -111,6 +111,17 @@
   let logEl = $state<HTMLElement | null>(null);
   const dayOf = (ts: number) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
   const feed = $derived(managed.activity.map((a, i) => ({ a, k: activityKeys[i] })).filter((x) => !logDay || dayOf(x.a.ts) === logDay));
+  // 例行运行（定时的扫描、体检、计划、周报、复盘）不进操作日志，每天只在小标题下给一行概览；失败的点开逐条看
+  const routineByDay = $derived(new Map(managed.routine.map((r) => [dayOf(r.ts), r])));
+  let routineOpen = $state(new Set<string>());
+  function toggleRoutine(day: string) {
+    const s = new Set(routineOpen);
+    if (s.has(day)) s.delete(day); else s.add(day);
+    routineOpen = s;
+  }
+  function routineText(r: RoutineDay) {
+    return r.counts.map(([t, n]) => `${NEXT_TASK[t] ?? t} ${n}`).join('、');
+  }
   function pickDay(date: string, report: boolean) {
     if (report) { managed.tab = 'digests'; void openDigest(date); return; }
     logDay = date; histPick = 'log';
@@ -516,7 +527,24 @@
             <div class="list feed">
               {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k }, n (k)}
                 <!-- 每天一个小标题（条数按这一天全部的算），行尾今天的写「几分钟前」、更早的写时刻 -->
-                {#if n === 0 || dayOf(feed[n - 1].a.ts) !== dayOf(a.ts)}{@const same = feed.filter((f) => dayOf(f.a.ts) === dayOf(a.ts))}{@const ns = new Set(same.map((f) => f.a.site_id).filter(Boolean)).size}<div class="li dh"><b>{dayLabel(a.ts)}</b><span>{same.length} 条{#if ns > 1} · {ns} 个站点{/if}</span></div>{/if}
+                {#if n === 0 || dayOf(feed[n - 1].a.ts) !== dayOf(a.ts)}{@const same = feed.filter((f) => dayOf(f.a.ts) === dayOf(a.ts))}{@const ns = new Set(same.map((f) => f.a.site_id).filter(Boolean)).size}<div class="li dh"><b>{dayLabel(a.ts)}</b><span>{same.length} 条{#if ns > 1} · {ns} 个站点{/if}</span></div>
+                  {@const rt = routineByDay.get(dayOf(a.ts))}
+                  {#if rt}
+                    <!-- 例行运行只给一行概览：扫描、体检没发现什么就不写进日志；失败的才逐条列 -->
+                    <div class="li ev routine" class:bad={rt.failed.length > 0}>
+                      <span class="pill"><Icon name="clock" size={11} />例行</span>
+                      <div class="ev-main">
+                        <small class="rt-sum"><span data-tip="定时起的扫描、体检、计划、周报、复盘；没发现什么、没改什么就不单独记。每个站点的「运营 → 报告」页底部有逐次的运行记录">{rt.sites} 个站点例行运行 {rt.total} 次：{routineText(rt)}</span>{#if rt.failed.length}<button class="link-btn plain rt-fail" onclick={() => toggleRoutine(dayOf(a.ts))} aria-expanded={routineOpen.has(dayOf(a.ts))}>失败 {rt.failed.length}<svg class="chev" class:open={routineOpen.has(dayOf(a.ts))} width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>{/if}</small>
+                        {#if rt.failed.length && routineOpen.has(dayOf(a.ts))}
+                          <ol class="rt-list">
+                            {#each rt.failed as f (f.site_id + f.started)}
+                              <li><span class="faint t">{hhmm(f.started)}</span><button class="link-btn plain site-l" onclick={() => openSite(f.site_id)}><SiteIcon id={f.site_id} size={11} />{f.site_name}</button><span class="sep">·</span>{NEXT_TASK[f.task] ?? f.task}<span class="sep">·</span><span class="rt-err">{f.error || '没有记下原因'}</span></li>
+                            {/each}
+                          </ol>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}{/if}
                 <div class="li ev">
                   <span class="pill {KIND[a.kind]?.c ?? ''}"><Icon name={KIND[a.kind]?.i ?? 'activity'} size={11} />{KIND[a.kind]?.l ?? a.kind}</span>
                   <div class="ev-main">
@@ -657,6 +685,17 @@
   .switch:focus-visible { box-shadow: var(--su-ring); }
   .intro ul { margin: 6px 0 14px; padding-left: 18px; font-size: 12.5px; line-height: 1.8; color: var(--dim); }
   .ev { display: flex; align-items: flex-start; gap: 12px; }
+  .ev.routine { background: #fcfbf9; }
+  .ev.routine .pill { color: var(--faint); }
+  .ev.routine.bad .pill { color: var(--err); }
+  .rt-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .rt-fail { display: inline-flex; align-items: center; gap: 3px; color: var(--err); font-weight: 550; }
+  .rt-fail .chev { transition: transform .15s; }
+  .rt-fail .chev.open { transform: rotate(180deg); }
+  .rt-list { margin: 6px 0 2px; padding-left: 0; list-style: none; font-size: 11.5px; color: var(--dim); line-height: 1.7; }
+  .rt-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
+  .rt-list .t { min-width: 38px; }
+  .rt-err { color: var(--err); overflow-wrap: anywhere; }
   .ev .pill { flex: none; min-width: 76px; justify-content: flex-start; margin-top: 1px; }
   .ev-main { flex: 1; min-width: 0; }
   .ev-main b { display: block; font-size: 13px; font-weight: 550; line-height: 1.5; }

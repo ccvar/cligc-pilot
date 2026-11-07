@@ -5255,6 +5255,7 @@ pub fn run() {
             managed_cmds::set_site_managed_active,
             managed_cmds::managed_overview,
             managed_cmds::managed_activity,
+            managed_cmds::managed_routine,
             managed_cmds::managed_plans,
             managed_cmds::list_digests,
             managed_cmds::managed_daily,

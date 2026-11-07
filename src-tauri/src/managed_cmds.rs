@@ -391,6 +391,110 @@ pub fn managed_activity(state: tauri::State<'_, AppState>, limit: Option<usize>)
     managed::activity(&state.data_dir, limit.unwrap_or(200).min(2000))
 }
 
+/// 一次定时运行（扫描、体检、计划、周报、复盘）：操作日志里按天只给个数，失败的才逐条列
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RoutineRun {
+    pub site_id: String,
+    pub site_name: String,
+    pub task: String,
+    pub started: u64,
+    pub ok: bool,
+    pub summary: String,
+    pub error: String,
+}
+
+/// 一天的例行运行概览：各任务跑了几次、涉及几个站点、失败的有哪些
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+pub struct RoutineDay {
+    /// 这一天里任意一次运行的时间：前端用它按本地日期对到操作日志的那一天
+    pub ts: u64,
+    pub total: u32,
+    pub sites: u32,
+    /// 任务 → 次数，按 site_runner::TASKS 的顺序
+    pub counts: Vec<(String, u32)>,
+    pub failed: Vec<RoutineRun>,
+}
+
+/// 托管站点最近几天的例行运行，按天汇总（新的在前）。只算定时起的；手动点的在站点自己的运行记录里
+#[tauri::command]
+pub fn managed_routine(state: tauri::State<'_, AppState>, days: Option<u32>) -> Vec<RoutineDay> {
+    let cfg = managed::load(&state.data_dir);
+    let since = crate::now_secs().saturating_sub(days.unwrap_or(30).clamp(1, 90) as u64 * 86_400);
+    let mut runs = Vec::new();
+    for s in state.sites.list() {
+        if cfg.group_of(&s.id).is_none() {
+            continue;
+        }
+        for r in crate::site_runner::runs_of(&state.sites.data_dir(&s.id)) {
+            if r.trigger == "schedule" && r.started >= since {
+                runs.push(RoutineRun { site_id: s.id.clone(), site_name: s.name.clone(), task: r.task, started: r.started, ok: r.ok, summary: r.summary, error: r.error });
+            }
+        }
+    }
+    fold_routine(runs)
+}
+
+/// 按本地日期分天：每天各任务的次数、站点数、失败清单（失败的按时间新的在前）
+pub fn fold_routine(mut runs: Vec<RoutineRun>) -> Vec<RoutineDay> {
+    use chrono::TimeZone;
+    runs.sort_by(|a, b| b.started.cmp(&a.started));
+    let day_of = |t: u64| chrono::Local.timestamp_opt(t as i64, 0).single().map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default();
+    let mut out: Vec<(String, RoutineDay, std::collections::BTreeSet<String>, std::collections::BTreeMap<String, u32>)> = Vec::new();
+    for r in runs {
+        let d = day_of(r.started);
+        if out.last().is_none_or(|x| x.0 != d) {
+            out.push((d, RoutineDay { ts: r.started, ..Default::default() }, Default::default(), Default::default()));
+        }
+        let x = out.last_mut().unwrap();
+        x.1.total += 1;
+        x.2.insert(r.site_id.clone());
+        *x.3.entry(r.task.clone()).or_default() += 1;
+        if !r.ok {
+            x.1.failed.push(r);
+        }
+    }
+    out.into_iter()
+        .map(|(_, mut d, sites, counts)| {
+            d.sites = sites.len() as u32;
+            let order = |t: &str| crate::site_runner::TASKS.iter().position(|x| x == &t).unwrap_or(usize::MAX);
+            let mut c: Vec<(String, u32)> = counts.into_iter().collect();
+            c.sort_by_key(|(t, _)| order(t));
+            d.counts = c;
+            d
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod routine_tests {
+    use super::*;
+
+    fn run(site: &str, task: &str, started: u64, ok: bool) -> RoutineRun {
+        RoutineRun { site_id: site.into(), site_name: site.into(), task: task.into(), started, ok, summary: String::new(), error: if ok { String::new() } else { "构建失败".into() } }
+    }
+
+    #[test]
+    fn routine_runs_fold_per_day_with_failures_listed() {
+        use chrono::TimeZone;
+        let day = |d: u32, h: u32| chrono::Local.with_ymd_and_hms(2026, 11, d, h, 0, 0).single().unwrap().timestamp() as u64;
+        let days = fold_routine(vec![
+            run("a", "scan", day(6, 19), true),
+            run("a", "health", day(7, 19), true),
+            run("b", "health", day(7, 18), false),
+            run("b", "report", day(7, 9), true),
+            run("a", "report", day(7, 8), true),
+        ]);
+        assert_eq!(days.len(), 2, "两天");
+        let today = &days[0];
+        assert_eq!((today.total, today.sites), (4, 2));
+        assert_eq!(today.counts, vec![("health".to_string(), 2), ("report".to_string(), 2)], "按 TASKS 顺序：先体检再周报");
+        assert_eq!(today.failed.len(), 1);
+        assert_eq!((today.failed[0].site_id.as_str(), today.failed[0].error.as_str()), ("b", "构建失败"));
+        assert_eq!(days[1].counts, vec![("scan".to_string(), 1)]);
+        assert!(days[1].failed.is_empty());
+    }
+}
+
 #[derive(Serialize)]
 pub struct SitePlan {
     pub site_id: String,
