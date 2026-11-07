@@ -147,6 +147,11 @@ impl Jobs {
         self.inner.lock().unwrap().values().filter(|s| s.state.status == "running" && !light_kind(&s.state.kind)).count()
     }
 
+    /// 正在跑的作业：(站点 id, 作业标题)，按站点 id 排
+    pub fn running_titles(&self) -> Vec<(String, String)> {
+        self.inner.lock().unwrap().iter().filter(|(_, s)| s.state.status == "running").map(|(id, s)| (id.clone(), s.state.title.clone())).collect()
+    }
+
     pub fn running(&self, site_id: &str) -> bool {
         self.snapshot(site_id).is_some_and(|s| s.status == "running")
     }
@@ -225,6 +230,7 @@ impl Job {
     fn broadcast(&self, state: &JobState) {
         if let Some(app) = &self.app {
             let _ = app.emit("site-job", state);
+            crate::tray::refresh(app);
         }
     }
 

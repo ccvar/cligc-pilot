@@ -66,6 +66,7 @@ mod site_stage;
 mod window_memory;
 mod site_github;
 mod site_jobs;
+mod tray;
 mod site_make;
 mod site_migrate;
 mod migrate_extract;
@@ -4735,7 +4736,7 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Cligc Pilot", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
-    let mut builder = TrayIconBuilder::new()
+    let mut builder = TrayIconBuilder::with_id(tray::TRAY_ID)
         .menu(&menu)
         .tooltip("Cligc Pilot")
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -4746,11 +4747,13 @@ fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             }
             _ => {}
         });
-    // macOS 菜单栏用单色模板图标（只有「C」字形），由系统按菜单栏深浅自动染色，
+    // macOS 菜单栏用单色模板图标（只有两道斜杠的字形），由系统按菜单栏深浅自动染色，
     // 与其它菜单栏图标同一风格；应用图标带底色方块和 Dock 边距，缩进菜单栏会显得偏小。
+    // 有作业在跑时它会「呼吸」（见 tray.rs），帧在这里先算好。
     #[cfg(target_os = "macos")]
     {
         let glyph = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+        tray::prepare(&glyph);
         builder = builder.icon(glyph).icon_as_template(true);
     }
     // Windows / Linux 的托盘不支持模板图标，黑色字形在深色任务栏上会看不见，继续用应用图标。
