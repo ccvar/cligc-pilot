@@ -130,12 +130,16 @@ fn site_state(site: &Site, positioning: &str) -> Value {
     json!({ "name": site.name, "domain": site.domain, "positioning": positioning })
 }
 
-/// 给这次改动里的页面做质检。`app_dir` 是工作树里站点代码的目录，`files` 来自 managed::content_page_files。
+/// 给这次改动里的页面做质检。`repo` 是工作树的仓库根目录，`files` 来自 managed::content_page_files。
+/// `page_url` 是任务针对的页面网址，`target` 是它的目标搜索词：「有没有回答目标搜索问题」只问目标页
+/// （一次改好几页的任务里，别的页面答不上目标页的问题是正常的），其它四项每页都查。
 /// 每页一次请求（几个问题一起问）；任何一页调用失败就整体返回 Err，调用方按原规则走。
-pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, target: &str, repo: &Path, files: &[(String, bool)], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
+pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, page_url: &str, target: &str, repo: &Path, files: &[(String, bool)], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
+    let target_file = target_page(page_url, files);
     let mut out = Vec::new();
     for (file, _) in files {
         let Ok(src) = std::fs::read_to_string(repo.join(file)) else { continue };
+        let target = if target_file.as_deref() == Some(file.as_str()) { target } else { "" };
         let Some(mut q) = score_page(jev, site, positioning, target, file, &src).await? else { continue };
         // 已有页面没过：再给改动前的版本打一次分，只拦这次改出来的、或者变差了的问题
         if !q.reasons.is_empty() {
@@ -150,6 +154,41 @@ pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, target: &str
         out.push(q);
     }
     Ok(out)
+}
+
+/// 改动里哪个文件是任务针对的页面：只改了一页就是它；改了几页时，拿网址路径的各段和文件路径的尾部对
+/// （/okx/language/ ↔ src/content/guides-src/okx/language.md 或 …/okx/language/index.md）。
+/// 整条路径对不上就少对几段，但只认唯一能对上的；都对不上返回 None（没有页面问「有没有回答目标搜索问题」）。
+pub fn target_page(page_url: &str, files: &[(String, bool)]) -> Option<String> {
+    if files.len() == 1 {
+        return Some(files[0].0.clone());
+    }
+    let path = page_url.split_once("://").map(|(_, rest)| rest.find('/').map(|i| &rest[i..]).unwrap_or("/")).unwrap_or(page_url);
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let file_segs = |f: &str| -> Vec<String> {
+        let f = f.rsplit_once('.').map(|(a, _)| a).unwrap_or(f);
+        let mut v: Vec<String> = f.split('/').filter(|s| !s.is_empty()).map(|s| s.to_ascii_lowercase()).collect();
+        if v.last().is_some_and(|s| s == "index") {
+            v.pop();
+        }
+        v
+    };
+    let lower: Vec<String> = segs.iter().map(|s| s.to_ascii_lowercase()).collect();
+    for k in (1..=lower.len()).rev() {
+        let tail = &lower[lower.len() - k..];
+        let hits: Vec<&String> = files.iter().map(|(f, _)| f).filter(|f| file_segs(f).ends_with(tail)).collect();
+        if hits.len() == 1 {
+            return Some(hits[0].clone());
+        }
+        if hits.len() > 1 {
+            return None;
+        }
+    }
+    None
 }
 
 /// 给一份页面源文件打分；几乎没有正文（模板 / 跳转页）返回 None。
@@ -315,6 +354,25 @@ pub async fn rank_opportunities(jev: &Jev, site: &Site, site_dir: &Path, opps: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_query_is_only_asked_of_the_tasks_own_page() {
+        let files = |v: &[&str]| v.iter().map(|f| (f.to_string(), false)).collect::<Vec<_>>();
+        // 一次改两页：网址 /okx/language/ 对上 okx/language.md，币安那页不问「有没有回答目标搜索问题」
+        let two = files(&["src/content/guides-src/binance/language.md", "src/content/guides-src/okx/language.md"]);
+        assert_eq!(target_page("https://bnvar.com/okx/language/", &two).as_deref(), Some("src/content/guides-src/okx/language.md"));
+        // 目录式页面 index.md、大小写、网址带参数都能对上
+        let idx = files(&["content/OKX/Language/index.md", "content/okx/fees.md"]);
+        assert_eq!(target_page("https://x.com/okx/language/?utm=1", &idx).as_deref(), Some("content/OKX/Language/index.md"));
+        // 网址比文件路径多一级（/guides/okx/language/ ↔ okx/language.md）：少对一段也行
+        assert_eq!(target_page("/guides/okx/language/", &two).as_deref(), Some("src/content/guides-src/okx/language.md"));
+        // 只剩一段还对上好几个（两家都有 language.md）：认不出来就都不问
+        assert_eq!(target_page("/language/", &two), None);
+        assert_eq!(target_page("https://x.com/", &two), None);
+        // 只改了一页：就是它，网址对不对得上都无所谓（和以前一样）
+        let one = files(&["src/content/a.md"]);
+        assert_eq!(target_page("https://x.com/nothing-like-it/", &one).as_deref(), Some("src/content/a.md"));
+    }
 
     #[test]
     fn existing_problems_that_did_not_get_worse_do_not_block() {

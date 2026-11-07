@@ -2088,6 +2088,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
             job.step("quality", "skipped", "只改了标题、描述、数据或代码，没有成段的页面正文");
         } else {
             job.step("quality", "running", &format!("判断模型（Jev）看 {} 个页面", files.len()));
+            // 「有没有回答目标搜索问题」只问任务针对的那一页；一次改几页时别的页面答不上是正常的
+            if files.len() > 1 {
+                match crate::jev_checks::target_page(&item.opp.page, &files) {
+                    Some(t) => job.line(&format!("改了 {} 个页面，目标搜索词只用来判 {t}，其它页面查信息量、相关度、来源和遗留说明文字", files.len())),
+                    None => job.line(&format!("改了 {} 个页面，没有一页和任务网址 {} 对得上，目标搜索词这次不判，只查信息量、相关度、来源和遗留说明文字", files.len(), item.opp.page)),
+                }
+            }
             job.line("判断模型（Jev）内容质检…");
             let positioning = crate::site_stage::load_positioning(&site_dir).text;
             let target = if item.opp.target.trim().is_empty() { item.opp.queries.first().map(|q| q.key.clone()).unwrap_or_default() } else { item.opp.target.clone() };
@@ -2101,7 +2108,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                 }
             }
             // 差异里的路径是相对仓库根目录的（站点在子目录里时不能拼在 app_dir 后面）
-            match crate::jev_checks::check_pages(&jev, site, &positioning, &target, &wt, &files, &before).await {
+            match crate::jev_checks::check_pages(&jev, site, &positioning, &item.opp.page, &target, &wt, &files, &before).await {
                 Ok(quality) => {
                     let why = crate::jev_checks::gate_verdict(&quality);
                     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
