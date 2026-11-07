@@ -39,6 +39,9 @@ pub struct ManagedConfig {
     pub digest_hour: u8,
     #[serde(default)]
     pub last_digest: String,
+    /// 调度同时最多起几个重作业（要构建站点或跑 AI 的）。0＝按这台电脑的核数和内存自动算，见 site_runner::parallel_jobs
+    #[serde(default)]
+    pub parallel_jobs: u32,
     /// 托管方案。上面的 brain / model / new_content / daily_changes / tokens_per_week 是老版本的全局规则，
     /// 只用于迁移和新建方案时的默认值。
     #[serde(default)]

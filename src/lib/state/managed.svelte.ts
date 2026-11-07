@@ -333,10 +333,11 @@ export async function saveManaged() {
   if (!managed.draft) return;
   managed.saving = true;
   try {
-    const c = await invoke<ManagedConfig>('save_managed_config', { config: managed.draft });
+    // 「同时运行的作业数」清空就是 0（自动算）；数字框清空时绑定的值是 null
+    const c = await invoke<ManagedConfig>('save_managed_config', { config: { ...managed.draft, parallel_jobs: Number(managed.draft.parallel_jobs) || 0 } });
     managed.draft = JSON.parse(JSON.stringify(c));
-    if (managed.overview) managed.overview.config = c;
-    say('日报设置已保存');
+    if (managed.overview) managed.overview = { ...managed.overview, config: c, parallel_cap: c.parallel_jobs || managed.overview.parallel_auto };
+    say('托管设置已保存');
   } catch (e) { say(String(e), 'err'); }
   finally { managed.saving = false; }
 }

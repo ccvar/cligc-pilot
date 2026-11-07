@@ -539,6 +539,8 @@ export interface ManagedConfig {
   digest: boolean;
   digest_hour: number;
   last_digest: string;
+  /** 调度同时最多起几个重作业（要构建站点或跑 AI 的）；0＝按这台电脑自动算 */
+  parallel_jobs: number;
   groups: ManagedGroup[];
 }
 /** 托管方案：一组站点 + 这组站点自己的托管规则。 */
@@ -613,7 +615,13 @@ export interface ManagedSite {
   /** 收益（AdSense + 手动记的） */
   money?: Money;
 }
-export interface ManagedOverview { config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number; cost_month: AiCost; shipped_month: number; revenue_month?: number; revenue_tracked?: boolean }
+export interface ManagedOverview {
+  config: ManagedConfig; sites: ManagedSite[]; groups: ManagedGroup[]; shipped_today: number; waiting: number; cost_month: AiCost; shipped_month: number; revenue_month?: number; revenue_tracked?: boolean;
+  /** 下一轮调度的时间（0＝还没跑过）：到点的任务在这一轮起 */
+  next_round: number;
+  /** 同时最多起几个重作业：现在生效的值、不设时按这台电脑算出来的值、正在跑的重作业数 */
+  parallel_cap: number; parallel_auto: number; busy_heavy: number;
+}
 /** AI 用量：tokens＝折算 token；usd＝能按官方价估出金额的部分（API 连接）；sub_tokens＝走订阅额度的；unpriced_tokens＝按量计费但认不出价格的 */
 export interface AiCost { tokens: number; usd: number; sub_tokens: number; unpriced_tokens: number; rough: boolean; turns: number }
 /** 后台停过的一段：closed＝客户端没开，asleep＝电脑睡着了 */

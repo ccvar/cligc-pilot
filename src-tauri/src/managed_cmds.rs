@@ -16,9 +16,13 @@ pub fn save_managed_config(state: tauri::State<'_, AppState>, config: ManagedCon
     if config.digest_hour > 23 {
         return Err("日报时间应在 0–23 点之间".into());
     }
+    if config.parallel_jobs as usize > crate::site_runner::PARALLEL_JOBS_MAX {
+        return Err(format!("同时运行的作业数最多 {}", crate::site_runner::PARALLEL_JOBS_MAX));
+    }
     let mut c = managed::load(&state.data_dir);
     c.digest = config.digest;
     c.digest_hour = config.digest_hour;
+    c.parallel_jobs = config.parallel_jobs;
     managed::save(&state.data_dir, &c)?;
     Ok(c)
 }
@@ -270,6 +274,12 @@ pub struct ManagedOverview {
     /// 所有托管站点这个月的收益合计；有没有任何站点在记收益
     pub revenue_month: f64,
     pub revenue_tracked: bool,
+    /// 下一轮调度的时间（0＝还没跑过），到点的任务在这一轮起
+    pub next_round: u64,
+    /// 同时最多起几个重作业：现在生效的值、不设时按这台电脑算出来的值、现在正在跑的重作业数
+    pub parallel_cap: usize,
+    pub parallel_auto: usize,
+    pub busy_heavy: usize,
 }
 
 /// 本地时间这个月 1 号零点
@@ -357,7 +367,23 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             }
         })
         .collect();
-    ManagedOverview { groups: cfg.groups.clone(), config: cfg, sites, shipped_today, waiting: waiting_total, cost_month, shipped_month: shipped_month_total, revenue_month, revenue_tracked }
+    let parallel_cap = crate::site_runner::parallel_jobs(&cfg);
+    let parallel_auto = crate::site_runner::parallel_jobs(&managed::ManagedConfig { parallel_jobs: 0, ..cfg.clone() });
+    ManagedOverview {
+        groups: cfg.groups.clone(),
+        config: cfg,
+        sites,
+        shipped_today,
+        waiting: waiting_total,
+        cost_month,
+        shipped_month: shipped_month_total,
+        revenue_month,
+        revenue_tracked,
+        next_round: crate::background::next_round(&state.data_dir),
+        parallel_cap,
+        parallel_auto,
+        busy_heavy: state.site_jobs.running_heavy(),
+    }
 }
 
 #[tauri::command]

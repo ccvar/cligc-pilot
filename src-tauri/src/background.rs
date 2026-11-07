@@ -74,6 +74,12 @@ fn beat(s: &mut State, now: u64, first: bool) {
 }
 
 /// 调度每一轮调用：心跳、按设置挡 / 不挡睡眠。managed_active＝有托管中的站点（没暂停）。
+/// 下一轮调度的时间：上一次心跳 + 10 分钟（调度循环处理完睡 600 秒，误差几秒）。还没心跳过就是 0
+pub fn next_round(data_dir: &Path) -> u64 {
+    let t = load(data_dir).last_tick;
+    if t > 0 { t + 600 } else { 0 }
+}
+
 pub fn tick(data_dir: &Path, managed_active: bool) {
     let mut s = load(data_dir);
     beat(&mut s, now(), FIRST_TICK.swap(false, Ordering::SeqCst));

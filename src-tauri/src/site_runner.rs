@@ -391,9 +391,43 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
 
 /// 一个运营作业最多跑多久：到点就停掉里面的命令和 AI 回合，按失败收尾，不让站点被一个卡死的作业占着。
 const MAX_JOB_DURATION: Duration = Duration::from_secs(3 * 60 * 60);
-/// 调度同时最多起这么多个「重」运营作业（要构建站点或跑 AI 的：扫描、体检、计划、上线……）。
-/// 轻任务（见 light_task）不占名额也不受它限制；手动点的不算在内、也不受它限制
-pub(crate) const MAX_PARALLEL_JOBS: usize = 3;
+/// 调度同时最多起几个「重」运营作业（要构建站点或跑 AI 的：扫描、体检、计划、上线……）的上限的上限：
+/// 再多也是撞模型那边的限流，总量不变只是挤成一段。轻任务（见 light_task）不占名额也不受它限制；手动点的不算在内、也不受它限制
+pub const PARALLEL_JOBS_MAX: usize = 8;
+
+/// 同时最多起几个重作业：托管设置里填了就用填的，没填（0）按这台电脑算（见 auto_parallel）
+pub fn parallel_jobs(cfg: &crate::managed::ManagedConfig) -> usize {
+    if cfg.parallel_jobs > 0 {
+        (cfg.parallel_jobs as usize).clamp(1, PARALLEL_JOBS_MAX)
+    } else {
+        auto_parallel(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4), total_memory_gb())
+    }
+}
+
+/// 按核数和内存算：一个构建占一两个核、一两 GB，留三分之二的核给系统和你自己用；每 8 GB 内存一个。
+/// 两者取小，再压到 2–8 之间（内存查不到就只看核数）
+pub fn auto_parallel(cores: usize, mem_gb: Option<u64>) -> usize {
+    let by_cores = cores / 3;
+    let by_mem = mem_gb.map(|g| (g / 8) as usize).unwrap_or(usize::MAX);
+    by_cores.min(by_mem).clamp(2, PARALLEL_JOBS_MAX)
+}
+
+/// 这台电脑的内存（GB）：macOS 问 sysctl，Linux 读 /proc/meminfo，别的系统查不到
+pub fn total_memory_gb() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl").args(["-n", "hw.memsize"]).output().ok()?;
+        return String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok().map(|b| b >> 30);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let kb = s.lines().find_map(|l| l.strip_prefix("MemTotal:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())?;
+        return Some(kb >> 20);
+    }
+    #[allow(unreachable_code)]
+    None
+}
 
 /// 不构建、不跑 AI 的轻任务：周报、复盘只拉数据算一算，上线后检查只看线上页面（要回滚会另起回滚作业）。
 /// 它们几秒到几分钟就完，不占调度的并发名额
@@ -4804,6 +4838,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             // 同时最多跑这么多个重作业：客户端停了一阵再开，到期的任务一个个补，不会几十个站点一起开始构建。
             // 周报、复盘、上线后检查这类轻作业不占名额：满了也照常起，不然两个几秒钟的周报就把别的站的扫描挡到下一轮
             let mut busy = st.site_jobs.running_heavy();
+            let cap = parallel_jobs(&mcfg);
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;
@@ -4840,7 +4875,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     if due(&schedule_of(&site, task, mcfg.group_of(&site.id)), last, now()) {
                         let heavy = !light_task(task);
                         // 重作业满了：这个站下一轮再说。不跳过它去起排在后面的轻任务，保持「先体检、再计划、再扫描」的顺序
-                        if heavy && busy >= MAX_PARALLEL_JOBS {
+                        if heavy && busy >= cap {
                             break;
                         }
                         if start(ctx.clone(), &site.id, task, "schedule", None).is_ok() && heavy {
@@ -4853,6 +4888,26 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(600)).await;
         }
     });
+}
+
+#[cfg(test)]
+mod parallel_tests {
+    use super::*;
+
+    #[test]
+    fn parallel_cap_follows_the_machine_unless_set() {
+        assert_eq!(auto_parallel(14, Some(64)), 4, "14 核 64 GB：核数定的 4");
+        assert_eq!(auto_parallel(8, Some(16)), 2, "8 核 16 GB：内存定的 2");
+        assert_eq!(auto_parallel(4, Some(8)), 2, "小机器也至少 2 个");
+        assert_eq!(auto_parallel(64, Some(256)), 8, "再大也最多 8 个");
+        assert_eq!(auto_parallel(12, None), 4, "内存查不到只看核数");
+        let mut cfg = crate::managed::ManagedConfig::default();
+        assert!((2..=PARALLEL_JOBS_MAX).contains(&parallel_jobs(&cfg)), "没设就按这台电脑算");
+        cfg.parallel_jobs = 5;
+        assert_eq!(parallel_jobs(&cfg), 5);
+        cfg.parallel_jobs = 99;
+        assert_eq!(parallel_jobs(&cfg), PARALLEL_JOBS_MAX, "填太大压到上限");
+    }
 }
 
 #[cfg(test)]

@@ -219,19 +219,25 @@
     }
     return { shipped, need, failed, next, nextSite, cost, shippedMonth };
   }
-  // 下一次自动运行：到点时间写成「马上 / 今天 15:00 / 明天 14:36 / 周五 16:27 / 11月3日 09:00」
+  // 下一次自动运行：到点时间写成「19:17 这轮 / 今天 15:00 / 明天 14:36 / 周五 16:27 / 11月3日 09:00」。
+  // 已经到点的任务要等调度的下一轮（上一次心跳 + 10 分钟）才起；重作业名额满了还会再滑一轮，标成「排队」
   const NEXT_TASK: Record<string, string> = { scan: '扫描', health: '体检', plan: '制定计划', report: '周报', review: '复盘', watch: '上线后检查' };
   function whenNext(ts: number) {
-    if (ts * 1000 <= Date.now() + 60_000) return '马上';
+    const now = Date.now();
+    if (ts * 1000 <= now + 60_000) {
+      const round = o?.next_round ?? 0;
+      if (round * 1000 <= now) return '马上';
+      return `${hhmm(round)} 这轮${o && o.busy_heavy >= o.parallel_cap ? '排队' : ''}`;
+    }
     const d = new Date(ts * 1000), t = new Date(); t.setHours(0, 0, 0, 0);
     const days = Math.floor((new Date(d).setHours(0, 0, 0, 0) - t.getTime()) / 86_400_000);
-    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const hm = hhmm(ts);
     if (days === 0) return `今天 ${hm}`;
     if (days === 1) return `明天 ${hm}`;
     if (days < 7) return `${'周' + '日一二三四五六'[d.getDay()]} ${hm}`;
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
-  const NEXT_TIP = '按上次运行时间推算的到点时刻；客户端要开着（托盘也行），每 10 分钟检查一次，实际会晚几分钟';
+  const NEXT_TIP = '按上次运行时间推算的到点时刻；客户端要开着（托盘也行），调度每 10 分钟看一次，到点的在下一轮起。「排队」＝同时运行的作业已满，这一轮可能轮不到';
   /** 没放在卡片上的那些规则（「还有 N 项」的悬停说明） */
   function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
@@ -252,9 +258,9 @@
     return { presets, rest: rest.replace(/\s+/g, ' ').trim() };
   }
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
-  // 日报设置（全局）：只比较这两项
+  // 托管设置（全局）：只比较这三项
   let digestSetOpen = $state(false);
-  const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour));
+  const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour || (d.parallel_jobs || 0) !== (o.config.parallel_jobs || 0)));
 
   const KIND: Record<string, { l: string; c: string; i: string }> = {
     shipped: { l: '已上线', c: 'ok', i: 'rocket' }, planned: { l: '计划', c: 'run', i: 'checks' }, proposed: { l: '待你确认', c: 'warn', i: 'bell' }, rolled_back: { l: '已回滚', c: 'err', i: 'undo' },
@@ -341,17 +347,21 @@
       {#if d}
         {@const setOpen = digestSetOpen || dirty}
         <div class="card">
-          <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />日报设置 <span class="sub">{o?.config.digest ? `每天 ${o.config.digest_hour} 点后 · ` : '已关闭 · '}所有托管方案共用</span>
+          <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />托管设置 <span class="sub">日报{o?.config.digest ? `每天 ${o.config.digest_hour} 点后` : '已关闭'} · 同时 {o?.parallel_cap ?? '…'} 个作业 · 所有托管方案共用</span>
             <svg class="chev" class:up={setOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
           {#if setOpen}
           <div class="row">
             <label class="check"><input type="checkbox" bind:checked={d.digest} /><span>每天发一份托管日报（系统通知 + 报告）</span></label>
             {#if d.digest}<span class="faint" style="font-size:12px">时间</span><input class="tin" type="number" min="0" max="23" style="width:70px" bind:value={d.digest_hour} /><span class="faint" style="font-size:12px">点之后</span>{/if}
           </div>
+          <div class="row">
+            <span class="faint" style="font-size:12px">同时运行的作业数</span><input class="tin" type="number" min="0" max="8" style="width:70px" placeholder={String(o?.parallel_auto ?? '')} bind:value={d.parallel_jobs} /><span class="faint" style="font-size:12px">{d.parallel_jobs ? `最多 8；现在正在跑 ${o?.busy_heavy ?? 0} 个` : `空或 0＝按这台电脑自动算，现在是 ${o?.parallel_auto ?? '…'} 个；正在跑 ${o?.busy_heavy ?? 0} 个`}</span>
+          </div>
+          <p class="hint">只限要构建站点或跑 AI 的作业（扫描、体检、计划、上线）；周报、复盘、上线后检查不占名额。开多了主要是撞模型的限流，总花费不变。</p>
           <p class="hint">托管需要客户端在运行（关掉窗口后托盘常驻即可）；电脑关机期间不会运营，开机后补跑一次。</p>
           {/if}
         </div>
-        {#if dirty}<div class="savebar"><span>日报设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
+        {#if dirty}<div class="savebar"><span>托管设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
       {/if}
     {:else}
       <BackgroundNotice />
