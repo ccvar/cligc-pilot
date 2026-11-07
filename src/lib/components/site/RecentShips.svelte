@@ -124,26 +124,39 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
         {@const e = r.e}
         {@const c = e.change}
         {@const isOpen = open.has(r.key)}
-        {@const page = c.pages[0] || ''}
-        <!-- 外部改动：不经 Pilot 的提交。标题是提交说明，效果栏放文件数，「自动上线 / 人工确认」那格放提交人 -->
+        {@const isDeploy = c.kind === 'deploy'}
+        {@const page = isDeploy ? c.url : c.pages[0] || ''}
+        <!-- 外部改动：不经 Pilot 的提交，标题是提交说明，效果栏放文件数，「自动上线 / 人工确认」那格放提交人。
+             外部部署：Cloudflare 上不经 Pilot 的一次生产部署，没有文件清单，效果栏写「整站」，那格放触发方式 -->
         <li class="ext" class:open={isOpen}>
           <div class="row">
             <button class="main" onclick={() => toggle(r.key)} aria-expanded={isOpen}>
               <span class="sn"><SiteIcon id={e.site_id} size={13} />{e.site_name}</span>
               <span class="tt" data-tip={c.message}>{c.message}</span>
             </button>
-            {#if page}<button class="url mono" onclick={() => openUrl(page)} data-tip={`在浏览器打开：${page}`}><span class="up">{shortPath(page)}</span><Icon name="external" size={10} /></button>{/if}
-            <span class="eff line" data-tip={c.files.slice(0, 12).join('\n') + (c.files.length > 12 ? `\n… 共 ${c.files.length} 个` : '')}>{c.files.length} 个文件</span>
-            <span class="how faint who" data-tip={`提交人：${c.author}（在 ${c.on} 上）`}>{c.author}</span>
-            <span class="pill line">外部改动</span>
+            {#if page}<button class="url mono" onclick={() => openUrl(page)} data-tip={`在浏览器打开：${page}`}><span class="up">{isDeploy ? page.replace(/^https:\/\//, '') : shortPath(page)}</span><Icon name="external" size={10} /></button>{/if}
+            {#if isDeploy}
+              <span class="eff line" data-tip="不经 Pilot 的一次生产部署：整个站点都换成了它传上去的版本，Pilot 不知道它改了什么">整站</span>
+              <span class="how faint who" data-tip={`触发方式：${c.trigger || '不详'}（${c.on}）`}>{c.author}</span>
+              <span class="pill line">外部部署</span>
+            {:else}
+              <span class="eff line" data-tip={c.files.slice(0, 12).join('\n') + (c.files.length > 12 ? `\n… 共 ${c.files.length} 个` : '')}>{c.files.length} 个文件</span>
+              <span class="how faint who" data-tip={`提交人：${c.author}（在 ${c.on} 上）`}>{c.author}</span>
+              <span class="pill line">外部改动</span>
+            {/if}
             <span class="t faint" data-tip={full(c.at)}>{when(c.at)}</span>
           </div>
           {#if isOpen}
             <div class="more">
-              <div class="meta"><span>提交 {c.sha.slice(0, 7)}</span><span>{c.author}</span><span>在 {c.on} 上</span><span>{full(c.at)}</span></div>
-              <div class="blk"><span class="lb">改了的文件</span><p class="files mono">{c.files.join('　')}</p></div>
-              {#if c.pages.length}<div class="blk"><span class="lb">可能影响</span><p>{c.pages.map(shortPath).join('、')}</p></div>{/if}
-              <p class="hint">不经 Pilot 运营流程进到仓库的提交（手改、CI 机器人、别的工具）。它碰到 Pilot 最近改过的页面时，那条上线的效果栏会标「有外部改动」。</p>
+              {#if isDeploy}
+                <div class="meta"><span>部署 {c.sha.slice(0, 8)}</span><span>{c.on}</span><span>触发：{c.trigger || '不详'}</span><span>{full(c.at)}</span></div>
+                <p class="hint">不经 Pilot 上线流程的一次生产部署（Cloudflare 后台、别处的 wrangler、CI 直传）。它换掉的是整个站点，在它之前上线的条目效果栏都会标「有外部改动」。Pilot 自己上线的、你在 Pilot 里回滚 / 重跑的不算。</p>
+              {:else}
+                <div class="meta"><span>提交 {c.sha.slice(0, 7)}</span><span>{c.author}</span><span>在 {c.on} 上</span><span>{full(c.at)}</span>{#if c.deploy_id}<span>Cloudflare 已部署 {c.deploy_id.slice(0, 8)}</span>{/if}</div>
+                <div class="blk"><span class="lb">改了的文件</span><p class="files mono">{c.files.join('　')}</p></div>
+                {#if c.pages.length}<div class="blk"><span class="lb">可能影响</span><p>{c.pages.map(shortPath).join('、')}</p></div>{/if}
+                <p class="hint">不经 Pilot 运营流程进到仓库的提交（手改、CI 机器人、别的工具）。它碰到 Pilot 最近改过的页面时，那条上线的效果栏会标「有外部改动」。</p>
+              {/if}
             </div>
           {/if}
         </li>

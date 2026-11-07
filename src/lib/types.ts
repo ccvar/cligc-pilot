@@ -473,7 +473,8 @@ export interface GscRow { key: string; key2?: string; clicks: number; impression
 /** 「最近上线」的一条：改动 + 这个页面现在近 28 天的数据 */
 export interface ShipItem extends PendingItem { page_now?: GscRow | null; data_end: string; /** 这一条 AI 处理时的用量 */ cost?: AiCost | null; /** 上线之后碰到同一批文件 / 页面的外部改动（不经 Pilot 的提交）：效果看不准 */ external_after?: ExternalBrief[] }
 /** 不经 Pilot 运营流程进到站点仓库的提交（手改、CI 机器人、别的工具），见 external.rs */
-export interface ExternalChange { sha: string; at: number; seen_at: number; author: string; message: string; on: string; files: string[]; pages: string[] }
+/** kind 空＝仓库里的提交；deploy＝Cloudflare 上不经 Pilot 的一次生产部署（sha 是部署 id，没有文件清单） */
+export interface ExternalChange { sha: string; at: number; seen_at: number; author: string; message: string; on: string; files: string[]; pages: string[]; kind: string; deploy_id: string; url: string; trigger: string }
 export interface ExternalBrief { sha: string; at: number; author: string; message: string }
 export interface ExternalItem { site_id: string; site_name: string; domain: string; change: ExternalChange }
 /** 「近期动态」图表下那一行：某一天所有站点的 AI 运营用量 */

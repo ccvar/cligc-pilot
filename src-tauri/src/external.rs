@@ -8,7 +8,11 @@
 //!
 //! 哪些是 Pilot 做的：`site_git::git_commit_ok` 每次提交都把 sha 记在仓库的 .git/pilot-commits 里（见 `own_commits`），
 //! 加上队列里记的合并提交、部署记录里的提交；更早的历史没有这份记录，按 Pilot 固定的提交说明兜底（`own_message`）。
-//! 只看 git：不走 git 的发布（Cloudflare 后台、手动 wrangler）这里看不到，以后可以再加部署列表来源。
+//!
+//! 不走 git 的发布（Cloudflare 后台、别处的 wrangler、CI 直传）仓库里看不到：每 30 分钟再看一遍 Cloudflare 上这个
+//! 站点（Pages 项目或 Worker）的生产部署列表，不是 Pilot 上线作业传的、也不是 Pilot 界面上回滚 / 重跑的，记成一条
+//! 「外部部署」（见 `check_deploys`）。这种部署换掉的是整个站点，Pilot 不知道它改了什么，所以它之前上线的条目都算碰到了。
+//! VPS 站点没有部署列表，只有 git 来源。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -24,6 +28,12 @@ const KEEP: u64 = 90 * DAY;
 const MAX: usize = 300;
 /// 一条提交最多记多少个文件
 const MAX_FILES: usize = 200;
+/// Cloudflare 部署列表多久看一遍（部署比提交少，也别老打接口）
+const CF_EVERY: u64 = 30 * 60;
+/// Pilot 上线作业结束后这么久之内出现的部署还算 Pilot 的（上传完 Cloudflare 记上要一会儿，作业时长也只是大概）
+const DEPLOY_SLACK: u64 = 10 * 60;
+/// Pilot 界面上回滚 / 重跑产生的部署 id 留多少个
+const MAX_OWN_DEPLOYS: usize = 50;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ExternalChange {
@@ -41,12 +51,28 @@ pub struct ExternalChange {
     pub files: Vec<String>,
     /// 按文件路径猜的页面网址（只认常见的内容目录，见 `guess_pages`）；猜不出就空
     pub pages: Vec<String>,
+    /// 空＝仓库里的提交（sha 是提交号）；deploy＝Cloudflare 上不经 Pilot 的一次生产部署（sha 是部署 id，没有文件清单）
+    #[serde(default)]
+    pub kind: String,
+    /// Cloudflare 部署的 id、地址、触发方式。提交记录被部署列表对上了也填上：说明这个提交已经上线
+    #[serde(default)]
+    pub deploy_id: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub trigger: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ExternalLog {
     pub checked_at: u64,
     pub changes: Vec<ExternalChange>,
+    /// 上次看 Cloudflare 部署列表的时间
+    #[serde(default)]
+    pub cf_checked_at: u64,
+    /// Pilot 界面上回滚 / 重跑产生的部署 id：不在上线记录里，别算成外部的
+    #[serde(default)]
+    pub own_deploys: Vec<String>,
 }
 
 /// 「最近上线」里标在上线条目上的一条外部改动
@@ -70,9 +96,22 @@ fn save(site_dir: &Path, log: &ExternalLog) {
     let _ = crate::sites::write_json(&path(site_dir), log, true);
 }
 
+/// Pilot 界面上回滚 / 重跑了一次部署：记下它的 id，部署列表里再看到不算外部的
+pub fn note_own_deploy(site_dir: &Path, id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    let mut log = load(site_dir);
+    if !log.own_deploys.iter().any(|d| d == id) {
+        log.own_deploys.insert(0, id.to_string());
+        log.own_deploys.truncate(MAX_OWN_DEPLOYS);
+        save(site_dir, &log);
+    }
+}
+
 static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// 调度循环每分钟叫一次；每个站点隔 `EVERY` 真的看一遍，看完有新记录就通知前端刷新。
+/// 调度循环每分钟叫一次；每个站点隔 `EVERY` 真的看一遍仓库、隔 `CF_EVERY` 看一遍 Cloudflare 的部署列表，看完有新记录就通知前端刷新。
 pub fn schedule(app: &tauri::AppHandle) {
     use tauri::Manager;
     if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -85,11 +124,17 @@ pub fn schedule(app: &tauri::AppHandle) {
         let mut found = 0usize;
         for site in st.sites.list() {
             let site_dir = st.sites.data_dir(&site.id);
-            if load(&site_dir).checked_at + EVERY > now {
-                continue;
+            let log = load(&site_dir);
+            let repo = repo_of(&st, &site).await;
+            if log.checked_at + EVERY <= now {
+                if let Some((dir, token)) = &repo {
+                    found += check_site(&site_dir, dir, token, &site.default_branch, &site.domain).await;
+                }
             }
-            let Some((dir, token)) = repo_of(&st, &site).await else { continue };
-            found += check_site(&site_dir, &dir, &token, &site.default_branch, &site.domain).await;
+            // 仓库先看、部署列表后看：带提交号的部署先能对上刚记下的外部提交
+            if log.cf_checked_at + CF_EVERY <= now {
+                found += check_deploys(&st, &site, &site_dir, repo.as_ref().map(|(d, _)| d.as_path())).await;
+            }
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
         if found > 0 {
@@ -128,10 +173,10 @@ async fn check_site(site_dir: &Path, dir: &Path, token: &str, branch: &str, doma
     let since = if log.checked_at == 0 { now.saturating_sub(FIRST_WINDOW) } else { log.checked_at.saturating_sub(DAY) };
     log.checked_at = now;
     let branch = if branch.is_empty() { "main" } else { branch };
-    let known = known_commits(site_dir, dir).await;
+    let known = known_commits(site_dir, Some(dir)).await;
     // 已记下的按现在的规则再过一遍：Pilot 的提交、建站的首个提交、只动 .pilot/ 的，规则收紧后不用等它老化
     let roots: HashSet<String> = crate::site_git::git_ok(dir, &["rev-list", "--max-parents=0", "--all"], "").await.map(|s| s.lines().map(str::to_string).collect()).unwrap_or_default();
-    log.changes.retain(|c| !known.contains(&c.sha) && !roots.contains(&c.sha) && !own_message(&c.message) && !c.files.iter().all(|f| f.starts_with(".pilot/") || f.contains("/.pilot/")));
+    log.changes.retain(|c| c.kind == "deploy" || (!known.contains(&c.sha) && !roots.contains(&c.sha) && !own_message(&c.message) && !c.files.iter().all(|f| f.starts_with(".pilot/") || f.contains("/.pilot/"))));
     let seen: HashSet<String> = log.changes.iter().map(|c| c.sha.clone()).collect();
     let fresh = scan(dir, token, branch, since, &known, &seen, domain).await;
     let n = fresh.len();
@@ -143,9 +188,134 @@ async fn check_site(site_dir: &Path, dir: &Path, token: &str, branch: &str, doma
     n
 }
 
-/// Pilot 自己做的提交：仓库里记的（.git/pilot-commits）、队列里的合并提交、部署记录里的提交
-async fn known_commits(site_dir: &Path, dir: &Path) -> HashSet<String> {
-    let mut known = crate::site_git::own_commits(dir).await;
+/// Cloudflare 上这个站点的生产部署：不是 Pilot 的记成外部部署。返回新记的（含对上了提交记录的）条数。
+/// 查不到（没网、没权限、项目没了）不记时间，下次再看。
+async fn check_deploys(st: &crate::AppState, site: &crate::sites::Site, site_dir: &Path, dir: Option<&Path>) -> usize {
+    if site.deploy.project.is_empty() || !matches!(site.deploy.mode.as_str(), "direct" | "workers" | "pages_git") {
+        return 0;
+    }
+    let Ok(cf) = st.conns.get(&site.deploy.cf_conn_id) else { return 0 };
+    let Ok(token) = crate::keychain::get_key_async(&cf.id).await else { return 0 };
+    let deps = if site.deploy.mode == "workers" {
+        crate::cf::list_worker_deployments(&token, &cf.account_id, &site.deploy.project).await
+    } else {
+        crate::cf::list_deployments(&token, &cf.account_id, &site.deploy.project).await
+    };
+    let Ok(deps) = deps else { return 0 };
+    let now = crate::now_secs();
+    let mut log = load(site_dir);
+    let since = if log.cf_checked_at == 0 { now.saturating_sub(FIRST_WINDOW) } else { log.cf_checked_at.saturating_sub(DAY) };
+    log.cf_checked_at = now;
+    let known = known_commits(site_dir, dir).await;
+    let history = crate::site_deploy::load_history(site_dir);
+    let n = fold_deploys(&mut log, &deps, &history, &known, since, now, &site.deploy.mode);
+    log.changes.sort_by(|a, b| b.at.cmp(&a.at));
+    log.changes.retain(|c| c.at + KEEP > now);
+    log.changes.truncate(MAX);
+    save(site_dir, &log);
+    n
+}
+
+/// 把部署列表并进记录：生产环境、成功了的、`since` 之后的；Pilot 的跳过（见 `own_deploy`）；带提交号、提交已经记为
+/// 外部提交的，补到那条记录上（它已经上线了），不另记；其余记成一条「外部部署」。
+fn fold_deploys(log: &mut ExternalLog, deps: &[crate::cf::PagesDeployment], history: &[crate::site_deploy::DeployRecord], known: &HashSet<String>, since: u64, now: u64, mode: &str) -> usize {
+    let mut n = 0;
+    for d in deps {
+        let at = parse_time(&d.created_on);
+        if d.id.is_empty() || at < since || d.environment != "production" || d.status != "success" {
+            continue;
+        }
+        if log.own_deploys.iter().any(|x| x == &d.id) || own_deploy(d, at, history, known) {
+            continue;
+        }
+        if log.changes.iter().any(|c| c.sha == d.id || c.deploy_id == d.id) {
+            continue;
+        }
+        if !d.commit.is_empty() {
+            if let Some(c) = log.changes.iter_mut().find(|c| c.kind.is_empty() && same_commit(&c.sha, &d.commit)) {
+                c.deploy_id = d.id.clone();
+                c.url = d.url.clone();
+                c.trigger = d.trigger.clone();
+                n += 1;
+                continue;
+            }
+        }
+        let (author, message) = describe_deploy(d, mode);
+        log.changes.push(ExternalChange {
+            sha: d.id.clone(),
+            at,
+            seen_at: now,
+            author,
+            message,
+            on: if mode == "workers" { "Cloudflare Workers".into() } else { "Cloudflare Pages".into() },
+            files: Vec::new(),
+            pages: Vec::new(),
+            kind: "deploy".into(),
+            deploy_id: d.id.clone(),
+            url: d.url.clone(),
+            trigger: d.trigger.clone(),
+        });
+        n += 1;
+    }
+    n
+}
+
+/// 是不是 Pilot 自己上线的：Pages 直传的部署地址带部署 id 的前 8 位，上线记录里记着；绑定 GitHub 的看提交号是不是
+/// Pilot 合并 / 提交的；都对不上再按时间——落在 Pilot 某次上线作业开始到结束后 `DEPLOY_SLACK` 之内的（Workers 只有这一条）。
+fn own_deploy(d: &crate::cf::PagesDeployment, at: u64, history: &[crate::site_deploy::DeployRecord], known: &HashSet<String>) -> bool {
+    let short = d.id.get(..8).unwrap_or(&d.id);
+    if history.iter().any(|r| !r.url.is_empty() && r.url.trim_start_matches("https://").starts_with(&format!("{short}."))) {
+        return true;
+    }
+    if !d.commit.is_empty() && known.iter().any(|k| same_commit(k, &d.commit)) {
+        return true;
+    }
+    history.iter().any(|r| at + 60 >= r.ts && at <= r.ts + r.duration + DEPLOY_SLACK)
+}
+
+/// 提交号一个是另一个的前缀就算同一个（部署列表里的可能是短的）
+fn same_commit(a: &str, b: &str) -> bool {
+    !a.is_empty() && !b.is_empty() && (a.starts_with(b) || b.starts_with(a))
+}
+
+fn parse_time(rfc3339: &str) -> u64 {
+    chrono::DateTime::parse_from_rfc3339(rfc3339).map(|t| t.timestamp().max(0) as u64).unwrap_or(0)
+}
+
+/// 外部部署在列表里怎么写：（「提交人」那格放触发方式，标题放提交说明或一句说明）
+fn describe_deploy(d: &crate::cf::PagesDeployment, mode: &str) -> (String, String) {
+    let msg = d.message.trim();
+    if mode == "workers" {
+        // Workers 的 message 没有注记时是 source（api / dash / wrangler / terraform）
+        // 拉丁字母后面留个空格，拼出来的句子才读得通
+        let src = match msg {
+            "dash" => "在 Cloudflare 后台",
+            "wrangler" => "用 wrangler ",
+            "api" => "通过 API ",
+            "terraform" => "用 Terraform ",
+            _ => "",
+        };
+        let known_src = !src.is_empty();
+        let src = if known_src { src } else { "在 Cloudflare 上" };
+        return match d.trigger.as_str() {
+            "rollback" => ("回滚".into(), format!("{src}把 Worker 回滚到之前的版本")),
+            _ if !msg.is_empty() && !known_src => ("上传".into(), msg.chars().take(200).collect()),
+            _ => ("上传".into(), format!("{src}部署了一次 Worker")),
+        };
+    }
+    match d.trigger.as_str() {
+        "github:push" => ("GitHub 推送".into(), if msg.is_empty() { "Cloudflare 从 GitHub 拉代码构建了一次".into() } else { msg.chars().take(200).collect() }),
+        "ad_hoc" => ("上传".into(), if msg.is_empty() { "直接上传到 Cloudflare Pages 的一次部署（wrangler 或后台）".into() } else { msg.chars().take(200).collect() }),
+        t => (if t.is_empty() { "部署".into() } else { t.to_string() }, if msg.is_empty() { "Cloudflare Pages 上的一次部署".into() } else { msg.chars().take(200).collect() }),
+    }
+}
+
+/// Pilot 自己做的提交：仓库里记的（.git/pilot-commits；没有仓库就没有这份）、队列里的合并提交、部署记录里的提交
+async fn known_commits(site_dir: &Path, dir: Option<&Path>) -> HashSet<String> {
+    let mut known = match dir {
+        Some(d) => crate::site_git::own_commits(d).await,
+        None => HashSet::new(),
+    };
     known.extend(crate::site_ops::load_queue(site_dir).into_iter().flat_map(|i| [i.merge_sha, i.head_sha]).filter(|s| !s.is_empty()));
     known.extend(crate::site_deploy::load_history(site_dir).into_iter().map(|d| d.commit).filter(|s| !s.is_empty()));
     known
@@ -206,6 +376,7 @@ async fn scan(dir: &Path, token: &str, branch: &str, since: u64, known: &HashSet
                 on: r.clone(),
                 pages: guess_pages(&files, domain),
                 files,
+                ..Default::default()
             });
         }
     }
@@ -242,7 +413,8 @@ pub fn guess_pages(files: &[String], domain: &str) -> Vec<String> {
     out
 }
 
-/// 一条上线之后、碰到它改过的文件或页面的外部改动（新的在前，最多 5 条）：效果就看不准了
+/// 一条上线之后、碰到它改过的文件或页面的外部改动（新的在前，最多 5 条）：效果就看不准了。
+/// 外部部署没有文件清单、换的是整个站点，在它之前上线的都算碰到。
 pub fn touching(log: &ExternalLog, item: &crate::site_ops::QueueItem) -> Vec<ExternalBrief> {
     if item.deployed_at == 0 {
         return Vec::new();
@@ -251,7 +423,7 @@ pub fn touching(log: &ExternalLog, item: &crate::site_ops::QueueItem) -> Vec<Ext
     log.changes
         .iter()
         .filter(|c| c.at > item.deployed_at)
-        .filter(|c| c.files.iter().any(|f| item.files.contains(f)) || c.pages.iter().any(|p| pages.iter().any(|q| crate::site_verify::same_page(p, q))))
+        .filter(|c| (c.kind == "deploy" && c.files.is_empty()) || c.files.iter().any(|f| item.files.contains(f)) || c.pages.iter().any(|p| pages.iter().any(|q| crate::site_verify::same_page(p, q))))
         .take(5)
         .map(|c| ExternalBrief { sha: c.sha.clone(), at: c.at, author: c.author.clone(), message: c.message.clone() })
         .collect()
@@ -278,10 +450,58 @@ mod tests {
         let log = ExternalLog {
             checked_at: 0,
             changes: vec![c(3000, &["src/content/posts/a.md"], &[]), c(2000, &["src/content/posts/c.md"], &["https://x.com/posts/b"]), c(1500, &["src/content/posts/z.md"], &["https://x.com/posts/z/"]), c(500, &["src/content/posts/a.md"], &[])],
+            ..Default::default()
         };
         let hit: Vec<String> = touching(&log, &item).iter().map(|b| b.sha.clone()).collect();
         assert_eq!(hit, vec!["3000", "2000"]);
         assert!(touching(&log, &crate::site_ops::QueueItem::default()).is_empty(), "没上线的不谈");
+        // 外部部署换的是整个站点：在它之前上线的都算碰到，之前的部署不算
+        let mut log = log;
+        log.changes.push(ExternalChange { sha: "dep".into(), at: 2500, kind: "deploy".into(), ..Default::default() });
+        log.changes.push(ExternalChange { sha: "old-dep".into(), at: 900, kind: "deploy".into(), ..Default::default() });
+        let hit: Vec<String> = touching(&log, &item).iter().map(|b| b.sha.clone()).collect();
+        assert_eq!(hit, vec!["3000", "2000", "dep"]);
+    }
+
+    #[test]
+    fn cloudflare_deploys_outside_pilot_are_recorded() {
+        use crate::cf::PagesDeployment;
+        use crate::site_deploy::DeployRecord;
+        let iso = |t: u64| chrono::DateTime::from_timestamp(t as i64, 0).unwrap().to_rfc3339();
+        let dep = |id: &str, at: u64, trigger: &str, commit: &str| PagesDeployment { id: id.into(), url: format!("https://{}.bgvar.pages.dev", &id[..8]), environment: "production".into(), commit: commit.into(), message: if commit.is_empty() { String::new() } else { "Update fees".into() }, status: "success".into(), stage: "deploy".into(), created_on: iso(at), trigger: trigger.into(), ..Default::default() };
+        let history = vec![
+            DeployRecord { ts: 1000, duration: 100, url: "https://892f5f47.bgvar.pages.dev".into(), ok: true, ..Default::default() },
+            DeployRecord { ts: 5000, duration: 60, url: String::new(), ok: false, ..Default::default() },
+        ];
+        let known: HashSet<String> = ["pilot000000000000000000000000000000000000".to_string()].into_iter().collect();
+        let mut log = ExternalLog { changes: vec![ExternalChange { sha: "abc1234567890000000000000000000000000000".into(), at: 9400, files: vec!["a.md".into()], ..Default::default() }], own_deploys: vec!["uirollbk-0000".into()], ..Default::default() };
+        let deps = vec![
+            dep("892f5f47-aaaa", 1050, "ad_hoc", ""),               // Pilot 直传：地址对得上
+            dep("deadbeef-1111", 5030, "ad_hoc", ""),               // 落在 Pilot 作业时间里（没成功的那次）
+            dep("cafe0001-2222", 9000, "ad_hoc", ""),               // 外部直传
+            PagesDeployment { status: "failure".into(), ..dep("fa11ed00-3333", 9100, "ad_hoc", "") }, // 没成功，线上没变
+            PagesDeployment { environment: "preview".into(), ..dep("preview0-4444", 9200, "github:push", "") },
+            dep("gh000000-5555", 9500, "github:push", "abc1234567890000000000000000000000000000"), // 对上已记的外部提交
+            dep("gh000000-6666", 9600, "github:push", "pilot000000000000000000000000000000000000"), // Pilot 合并的
+            dep("uirollbk-0000", 9700, "ad_hoc", ""),               // 界面上回滚的
+            dep("00000000-7777", 100, "ad_hoc", ""),                // 太早
+        ];
+        let n = fold_deploys(&mut log, &deps, &history, &known, 500, 10_000, "direct");
+        assert_eq!(n, 2);
+        let mut ids: Vec<(&str, &str)> = log.changes.iter().map(|c| (c.sha.as_str(), c.kind.as_str())).collect();
+        ids.sort();
+        assert_eq!(ids, vec![("abc1234567890000000000000000000000000000", ""), ("cafe0001-2222", "deploy")]);
+        let c = log.changes.iter().find(|c| c.sha.starts_with("abc")).unwrap();
+        assert_eq!(c.deploy_id, "gh000000-5555", "提交记录补上了部署");
+        let d = log.changes.iter().find(|c| c.kind == "deploy").unwrap();
+        assert_eq!((d.author.as_str(), d.on.as_str(), d.url.as_str()), ("上传", "Cloudflare Pages", "https://cafe0001.bgvar.pages.dev"));
+        // 再看一遍不重复
+        assert_eq!(fold_deploys(&mut log, &deps, &history, &known, 500, 10_000, "direct"), 0);
+        // Workers：回滚和后台上传的说法
+        let w = |trigger: &str, msg: &str| PagesDeployment { trigger: trigger.into(), message: msg.into(), ..Default::default() };
+        assert_eq!(describe_deploy(&w("rollback", "dash"), "workers"), ("回滚".into(), "在 Cloudflare 后台把 Worker 回滚到之前的版本".into()));
+        assert_eq!(describe_deploy(&w("upload", "wrangler"), "workers"), ("上传".into(), "用 wrangler 部署了一次 Worker".into()));
+        assert_eq!(describe_deploy(&w("upload", "fix nav"), "workers"), ("上传".into(), "fix nav".into()));
     }
 
     #[tokio::test]

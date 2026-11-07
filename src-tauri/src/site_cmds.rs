@@ -1208,14 +1208,18 @@ async fn cf_deployments(state: &AppState, site: &Site) -> Result<Vec<crate::cf::
 pub async fn retry_pages_deployment(state: tauri::State<'_, AppState>, id: String, deployment_id: String) -> Result<crate::cf::PagesDeployment, String> {
     let site = state.sites.get(&id)?;
     let (token, acct) = cf_for(&state, &site)?;
-    crate::cf::retry_deployment(&token, &acct, &site.deploy.project, &deployment_id).await
+    let d = crate::cf::retry_deployment(&token, &acct, &site.deploy.project, &deployment_id).await?;
+    crate::external::note_own_deploy(&state.sites.data_dir(&id), &d.id);
+    Ok(d)
 }
 
 #[tauri::command]
 pub async fn rollback_pages_deployment(state: tauri::State<'_, AppState>, id: String, deployment_id: String) -> Result<crate::cf::PagesDeployment, String> {
     let site = state.sites.get(&id)?;
     let (token, acct) = cf_for(&state, &site)?;
-    crate::cf::rollback_deployment(&token, &acct, &site.deploy.project, &deployment_id).await
+    let d = crate::cf::rollback_deployment(&token, &acct, &site.deploy.project, &deployment_id).await?;
+    crate::external::note_own_deploy(&state.sites.data_dir(&id), &d.id);
+    Ok(d)
 }
 
 // ---------------------------------------------------------------------------
