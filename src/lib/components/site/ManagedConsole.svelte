@@ -89,6 +89,10 @@
   let histPick = $state<'' | 'ships' | 'log'>((() => { try { const v = localStorage.getItem(HIST_KEY); return v === 'ships' || v === 'log' ? v : ''; } catch { return ''; } })());
   const histTab = $derived(histPick || (managed.ships.length ? 'ships' : 'log'));
   function setHist(t: 'ships' | 'log') { histPick = t; try { localStorage.setItem(HIST_KEY, t); } catch { /* 存不了就只在这次有效 */ } }
+  // 「最近上线」里要不要混排外部改动（默认显示；记住选择）
+  const EXT_KEY = 'pilot.managed.showExt';
+  let showExt = $state((() => { try { return localStorage.getItem(EXT_KEY) !== '0'; } catch { return true; } })());
+  function toggleExt() { showExt = !showExt; try { localStorage.setItem(EXT_KEY, showExt ? '1' : '0'); } catch { /* 存不了就只在这次有效 */ } }
   const LOG_LIMIT = 20;
   let logAll = $state(false);
   $effect(() => { void loadJev(); });
@@ -485,10 +489,15 @@
             </div>
             {#if histTab === 'log' && logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<button class="x" aria-label="看全部" data-tip="看全部" onclick={() => (logDay = '')}>×</button></span>{/if}
             <span class="grow"></span>
-            <span class="sub">{histTab === 'ships' ? `近 30 天，所有托管站点${managed.external.length ? `，含 ${managed.external.length} 条外部改动` : ''}` : managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
+            {#if histTab === 'ships'}
+              <!-- 外部改动比上线多好几倍，可以整体收起：收起后上线条目上的「有外部改动」标记照旧 -->
+              <span class="sub">近 30 天，所有托管站点{#if managed.external.length}，<button class="link-btn ext-toggle" onclick={toggleExt} aria-pressed={showExt} data-tip={showExt ? '列表里只留 Pilot 的上线条目；上线条目上的「有外部改动」标记不受影响' : '把不经 Pilot 的提交和部署按时间混进列表'}>{showExt ? '收起' : '显示'} {managed.external.length} 条外部改动</button>{/if}</span>
+            {:else}
+              <span class="sub">{managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
+            {/if}
           </div>
           {#if histTab === 'ships'}
-            <RecentShips items={managed.ships} external={managed.external} byDay />
+            <RecentShips items={managed.ships} external={showExt ? managed.external : []} byDay />
           {:else}
             {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
             <div class="list feed">
@@ -525,6 +534,8 @@
   .hist-h .seg button { display: inline-flex; align-items: center; gap: 5px; }
   .hist-h .hc { font-size: 11px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
   .hist-h .sub { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  .hist-h .ext-toggle { font-size: 12px; color: var(--dim); text-decoration-color: var(--border); text-underline-offset: 3px; }
+  .hist-h .ext-toggle:hover { color: var(--text); }
   .hist-h .grow { flex: 1; }
   .day-chip .x { border: 0; background: none; padding: 0; font: inherit; color: inherit; }
   .log-more { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }

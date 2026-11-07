@@ -3,8 +3,10 @@
   // 每条：站点、标题、动作、页面链接（在浏览器打开线上页面）、现在的状态（验收通过 / 待核对 / 已回滚）、自动上线还是人工确认；
   // 点开看 AI 的说明和线上验收；悬停可以看改动、回滚、去任务队列。
   // 全部站点 →「近期动态」也用它（每天一组，limit 不限）：那里还有没成功的、你驳回的，时间按处理完的时候算。
-  // external：不经 Pilot 的提交（手改、CI 机器人），按提交时间和上线条目混排，一眼看出线上还有谁在改；
+  // external：不经 Pilot 的提交（手改、CI 机器人）和 Cloudflare 上的部署，按时间和上线条目混排，一眼看出线上还有谁在改；
   // 上线之后碰到同一批文件 / 页面的，那条上线的效果栏标「有外部改动」（效果和复查都看不准了）。
+  // 外部改动比上线多得多（30 天 900 比 150），同一个站同一天的并成一行（几次提交、多少文件、谁改的），点开才列每一次；
+  // 要整体收起由上层把 external 传空（托管页副标题上有开关）。
   import Icon from './Icon.svelte';
   import SiteIcon from '$lib/components/site/SiteIcon.svelte';
   import DiffModal from './DiffModal.svelte';
@@ -15,7 +17,7 @@
   import { modelName } from '$lib/state/fleet.svelte.js';
   import { kTok } from '$lib/state/managed.svelte.js';
   import { mdRender, mdClick } from '$lib/state/messages.svelte.js';
-  import type { ShipItem, OpsItem, GscRow, ExternalItem } from '$lib/types';
+  import type { ShipItem, OpsItem, GscRow, ExternalItem, ExternalChange } from '$lib/types';
 
   // byDay：列表里按天插小标题（今天 · 23 条），行尾时间今天的写「36 分钟前」、更早的写时刻（日期已经在标题里）
   let { items, external = [], limit = 5, empty = '最近 30 天托管站点没有上线改动。', byDay = false }: { items: ShipItem[]; external?: ExternalItem[]; limit?: number; empty?: string; byDay?: boolean } = $props();
@@ -24,14 +26,33 @@
   let open = $state<Set<string>>(new Set());
   function toggle(id: string) { const n = new Set(open); if (n.has(id)) n.delete(id); else n.add(id); open = n; }
   const at = (x: ShipItem) => x.item.deployed_at || x.item.updated_at;
-  type Row = { kind: 'ship'; key: string; ts: number; x: ShipItem } | { kind: 'ext'; key: string; ts: number; e: ExternalItem };
+  // 外部改动一行：同一个站同一天的全部（新的在前），只有一条时照单条显示
+  type ExtGroup = { key: string; ts: number; site_id: string; site_name: string; domain: string; list: ExternalChange[] };
+  type Row = { kind: 'ship'; key: string; ts: number; x: ShipItem } | { kind: 'ext'; key: string; ts: number; g: ExtGroup };
   const rows = $derived.by(() => {
-    const r: Row[] = [...items.map((x) => ({ kind: 'ship' as const, key: x.item.id, ts: at(x), x })), ...external.map((e) => ({ kind: 'ext' as const, key: `x${e.change.sha}`, ts: e.change.at, e }))];
+    const groups = new Map<string, ExtGroup>();
+    for (const e of [...external].sort((a, b) => b.change.at - a.change.at)) {
+      const k = `x${e.site_id}@${dayOf(e.change.at)}`;
+      const g = groups.get(k);
+      if (g) g.list.push(e.change);
+      else groups.set(k, { key: k, ts: e.change.at, site_id: e.site_id, site_name: e.site_name, domain: e.domain, list: [e.change] });
+    }
+    const r: Row[] = [...items.map((x) => ({ kind: 'ship' as const, key: x.item.id, ts: at(x), x })), ...[...groups.values()].map((g) => ({ kind: 'ext' as const, key: g.key, ts: g.ts, g }))];
     r.sort((a, b) => b.ts - a.ts);
     return r;
   });
+  // 合并行上的汇总：几次提交 / 部署、改了多少个不同的文件、谁改的
+  function extSummary(g: ExtGroup) {
+    const deploys = g.list.filter((c) => c.kind === 'deploy').length;
+    const commits = g.list.length - deploys;
+    const files = new Set(g.list.flatMap((c) => c.files));
+    const who = [...new Set(g.list.map((c) => c.author).filter(Boolean))];
+    const parts = [commits ? `${commits} 次提交` : '', deploys ? `${deploys} 次部署` : ''].filter(Boolean).join('、');
+    return { deploys, commits, files: [...files], who, title: `${parts}：${g.list[0].message}` };
+  }
   const shown = $derived(all ? rows : rows.slice(0, LIMIT));
-  // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）；有回滚 / 待核对 / 没成功的才标出来；外部改动另计
+  // 小标题上的条数按这一天全部的算（收起时只露前几条也照样是当天总数）：「N 条」只数上线条目，有回滚 / 待核对 / 没成功的才标出来；
+  // 外部改动另计，数的是改动次数（合并行里有几次算几次），不是行数
   const isBad = (i: OpsItem) => i.status === 'rolled_back' || i.status === 'failed' || !!i.attention;
   const days = $derived.by(() => {
     if (!byDay) return [{ key: 'all', label: '', n: 0, ext: 0, sites: 0, bad: 0, rows: shown }];
@@ -43,7 +64,8 @@
       else {
         const same = rows.filter((y) => dayOf(y.ts) === k);
         const ships = same.filter((y) => y.kind === 'ship') as Extract<Row, { kind: 'ship' }>[];
-        out.push({ key: k, label: dayLabel(r.ts), n: ships.length, ext: same.length - ships.length, sites: new Set(ships.map((y) => y.x.site_id)).size, bad: ships.filter((y) => isBad(y.x.item)).length, rows: [r] });
+        const ext = same.reduce((n, y) => n + (y.kind === 'ext' ? y.g.list.length : 0), 0);
+        out.push({ key: k, label: dayLabel(r.ts), n: ships.length, ext, sites: new Set(ships.map((y) => y.x.site_id)).size, bad: ships.filter((y) => isBad(y.x.item)).length, rows: [r] });
       }
     }
     return out;
@@ -120,9 +142,51 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
       {#each days as d (d.key)}
       {#if d.label}<li class="dh"><b>{d.label}</b><span>{d.n} 条{#if d.sites > 1} · {d.sites} 个站点{/if}{#if d.ext} · {d.ext} 条外部改动{/if}</span>{#if d.bad}<span class="dh-bad">{d.bad} 条回滚 / 待核对 / 没成功</span>{/if}</li>{/if}
       {#each d.rows as r (r.key)}
-      {#if r.kind === 'ext'}
-        {@const e = r.e}
-        {@const c = e.change}
+      {#if r.kind === 'ext' && r.g.list.length > 1}
+        {@const g = r.g}
+        {@const s = extSummary(g)}
+        {@const isOpen = open.has(r.key)}
+        <!-- 同一个站同一天好几次外部改动并成一行：几次提交 / 部署 + 最新一条的说明，效果栏放不同文件的总数（有整站部署就写「整站」），
+             「自动上线 / 人工确认」那格放改的人；点开按时间列每一次 -->
+        <li class="ext" class:open={isOpen}>
+          <div class="row">
+            <button class="main" onclick={() => toggle(r.key)} aria-expanded={isOpen}>
+              <span class="sn"><SiteIcon id={g.site_id} size={13} />{g.site_name}</span>
+              <span class="tt" data-tip={g.list.map((c) => `${hhmm(c.at)}　${c.message}`).join('\n')}><b class="cnt">{s.title.slice(0, s.title.indexOf('：'))}</b>：{g.list[0].message}</span>
+            </button>
+            {#if s.deploys}
+              <span class="eff line" data-tip={`其中 ${s.deploys} 次是不经 Pilot 的生产部署，整个站点都换成了传上去的版本${s.files.length ? `；提交改了 ${s.files.length} 个文件` : ''}`}>整站</span>
+            {:else}
+              <span class="eff line" data-tip={s.files.slice(0, 12).join('\n') + (s.files.length > 12 ? `\n… 共 ${s.files.length} 个` : '')}>{s.files.length} 个文件</span>
+            {/if}
+            <span class="how faint who" data-tip={s.who.length ? `改的人：${s.who.join('、')}` : null}>{s.who.slice(0, 2).join('、')}</span>
+            <span class="pill line">{s.commits ? '外部改动' : '外部部署'}</span>
+            <span class="t faint" data-tip={`最近一次 ${full(g.ts)}`}>{when(g.ts)}</span>
+          </div>
+          {#if isOpen}
+            <div class="more">
+              <ol class="sub">
+                {#each g.list as c (c.sha)}
+                  {@const isDeploy = c.kind === 'deploy'}
+                  {@const page = isDeploy ? c.url : c.pages[0] || ''}
+                  <li>
+                    <div class="sub-row">
+                      <span class="sub-t">{hhmm(c.at)}</span>
+                      <span class="sub-m" data-tip={c.message}>{c.message}</span>
+                      {#if page}<button class="url mono" onclick={() => openUrl(page)} data-tip={`在浏览器打开：${page}`}><span class="up">{isDeploy ? page.replace(/^https:\/\//, '') : shortPath(page)}</span><Icon name="external" size={10} /></button>{/if}
+                      <span class="sub-n faint">{isDeploy ? `整站 · ${c.author}` : `${c.files.length} 个文件 · ${c.author}`}</span>
+                    </div>
+                    {#if !isDeploy && c.files.length}<p class="files mono">{c.files.slice(0, 30).join('　')}{c.files.length > 30 ? `　… 共 ${c.files.length} 个` : ''}</p>{/if}
+                  </li>
+                {/each}
+              </ol>
+              <p class="hint">不经 Pilot 的提交和部署，同一天的并在一起。它们碰到 Pilot 最近改过的页面时，那条上线的效果栏会标「有外部改动」。</p>
+            </div>
+          {/if}
+        </li>
+      {:else if r.kind === 'ext'}
+        {@const g = r.g}
+        {@const c = g.list[0]}
         {@const isOpen = open.has(r.key)}
         {@const isDeploy = c.kind === 'deploy'}
         {@const page = isDeploy ? c.url : c.pages[0] || ''}
@@ -131,7 +195,7 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
         <li class="ext" class:open={isOpen}>
           <div class="row">
             <button class="main" onclick={() => toggle(r.key)} aria-expanded={isOpen}>
-              <span class="sn"><SiteIcon id={e.site_id} size={13} />{e.site_name}</span>
+              <span class="sn"><SiteIcon id={g.site_id} size={13} />{g.site_name}</span>
               <span class="tt" data-tip={c.message}>{c.message}</span>
             </button>
             {#if page}<button class="url mono" onclick={() => openUrl(page)} data-tip={`在浏览器打开：${page}`}><span class="up">{isDeploy ? page.replace(/^https:\/\//, '') : shortPath(page)}</span><Icon name="external" size={10} /></button>{/if}
@@ -251,7 +315,15 @@ ${ext.map((c) => `${full(c.at)} ${c.author}：${c.message}`).join('\n')}` : '';
   .eff.line { color: var(--faint); }
   /* 外部改动那行：标题用提交说明、不加粗，提交人名字截短 */
   .ext .tt { font-weight: 450; color: var(--dim); }
+  .ext .tt .cnt { font-weight: 550; color: var(--text); }
   .who { overflow: hidden; text-overflow: ellipsis; }
+  /* 合并行点开后每一次改动一行：时刻、说明、页面、文件数和人 */
+  .sub { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .sub-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .sub-t { flex: none; width: 36px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .sub-m { min-width: 0; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub-n { flex: none; margin-left: auto; font-size: 11px; white-space: nowrap; }
+  .sub .files { margin: 2px 0 0 46px; color: var(--faint); }
   .files { overflow-wrap: anywhere; font-size: 11.5px !important; }
   .eff.up { color: var(--ok); }
   .eff.down { color: var(--err); }
