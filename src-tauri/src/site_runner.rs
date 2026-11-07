@@ -1579,6 +1579,27 @@ fn page_exists_in(out: &Path) -> impl Fn(&str) -> bool + '_ {
     }
 }
 
+/// 构建产物里所有文件的相对路径（`a/index.html`、`b.html`、`c.png`），最多几千个
+fn built_files(out: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if out.len() > 20_000 {
+                return;
+            }
+            if p.is_dir() {
+                walk(&p, root, out);
+            } else if let Ok(rel) = p.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut v = Vec::new();
+    walk(out, out, &mut v);
+    v
+}
+
 /// 构建产物里这个页面的 HTML。
 fn built_html(out: &Path, path: &str) -> Option<String> {
     let decoded = percent_decode(path.split(['#', '?']).next().unwrap_or(""));
@@ -1945,6 +1966,21 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
     let mut reasons: Vec<String> = if level >= 5 { blocks.into_iter().map(|b| b.text).collect() } else { cls.reasons.clone() };
+    // 新加的跳转规则对照构建产物：目标页面要存在、来源不能盖住已有页面。精确地址的旧网址加进验收页面，上线后真的打开一遍
+    let redirects = if level >= 5 && built.is_ok() { crate::managed::redirects_added(&diff) } else { Vec::new() };
+    if !redirects.is_empty() {
+        let files = built_files(&out_dir);
+        let problems = crate::managed::redirect_problems(&redirects, &files);
+        if problems.is_empty() {
+            let olds: Vec<String> = redirects.iter().filter(|r| !r.from.contains(':')).map(|r| format!("https://{}{}", site.domain, r.from)).filter(|u| !item.pages.contains(u)).take(10).collect();
+            job.line(&format!("新加了 {} 条跳转规则，目标都在构建产物里、没盖住已有页面；上线后打开旧地址验收：{}", redirects.len(), olds.iter().map(|u| path_of(u)).collect::<Vec<_>>().join("、")));
+            if !olds.is_empty() {
+                site_ops::update_item(&site_dir, &item.id, now(), |i| i.pages.extend(olds.clone()))?;
+            }
+        } else {
+            reasons.extend(problems.into_iter().map(|p| format!("{p}，留给你确认")));
+        }
+    }
     // 新页面要有别的页面链到它，不然上线就是孤立页（搜索引擎很难发现）：AI 漏加了就不自动上线
     if built.is_ok() && !item.new_pages.is_empty() {
         let inbound = crate::site_make::inbound_links(&out_dir);
@@ -2509,7 +2545,8 @@ fn drop_unbuilt_pages(ctx: &Ctx, site: &Site, item: &QueueItem, out_dir: &Path, 
     let exists = page_exists_in(out_dir);
     let (mut dropped, mut keep_p, mut keep_n) = (Vec::new(), Vec::new(), Vec::new());
     for u in &item.pages {
-        if exists(&path_of(u)) { keep_p.push(u.clone()) } else { dropped.push(path_of(u)) }
+        // 旧地址被构建产物里的 _redirects 接住：线上打得开（跳到新页面），照样验收
+        if exists(&path_of(u)) || crate::managed::redirected_in(out_dir, &path_of(u)) { keep_p.push(u.clone()) } else { dropped.push(path_of(u)) }
     }
     let mut hidden = Vec::new();
     for u in &item.new_pages {

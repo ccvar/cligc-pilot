@@ -683,6 +683,7 @@ pub fn digests_dir(data_dir: &Path) -> PathBuf {
 
 /// 任何代码设置下都不自动改的文件：依赖、构建 / 部署配置、CI、Worker / 函数 / 服务端、脚本、密钥配置，
 /// 以及站点代码以外的后端语言。后端目录里的页面模板和测试文件除外（见 `backend_template_or_test`）。
+/// 托管平台的跳转文件 `_redirects` 不在这里：按每条规则的内容判（见 `redirect_rules`）。
 pub fn hard_forbidden(path: &str) -> bool {
     let p = path.trim_start_matches("./");
     let name = p.rsplit('/').next().unwrap_or(p);
@@ -694,7 +695,7 @@ pub fn hard_forbidden(path: &str) -> bool {
     matches!(
         name,
         "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json"
-            | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_redirects" | "_worker.js" | "tsconfig.json" | "middleware.ts" | "middleware.js"
+            | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_worker.js" | "tsconfig.json" | "middleware.ts" | "middleware.js"
     ) || name.starts_with(".env")
         || name.starts_with("astro.config")
         || name.starts_with("vite.config")
@@ -743,12 +744,127 @@ pub fn never_allow(path: &str) -> bool {
     hard_forbidden(p)
         && (matches!(
             name,
-            "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json" | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_redirects" | "_worker.js" | "tsconfig.json"
+            "package.json" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock" | "bun.lock" | "bun.lockb" | "wrangler.toml" | "wrangler.json" | "wrangler.jsonc" | "pilot.json" | ".env" | ".dev.vars" | "_headers" | "_worker.js" | "tsconfig.json"
                 | "go.mod" | "go.sum" | "Makefile" | "Dockerfile" | "Cargo.toml" | "Cargo.lock" | "requirements.txt" | "pyproject.toml"
         ) || name.starts_with(".env")
             || ["astro.config", "vite.config", "next.config", "svelte.config", "tailwind.config"].iter().any(|x| name.starts_with(x))
             || matches!(first, ".github" | "node_modules" | "deploy" | "migrations" | "scripts" | "bin")
             || ["sh", "toml", "yml", "yaml", "sql"].iter().any(|e| name.ends_with(&format!(".{e}"))))
+}
+
+// ---------------------------------------------------------------------------
+// 托管平台的跳转文件（Cloudflare Pages / Netlify 的 _redirects）：按每条规则的内容判，不按文件名一刀切。
+// 运营任务本来就会让 AI 给旧地址加 301（旧站网址、合并弱页），以前一律留给人确认，等于这类任务永远自动不了。
+// ---------------------------------------------------------------------------
+
+/// `_redirects` 里的一条规则
+#[derive(Clone, Debug, PartialEq)]
+pub struct Redirect {
+    pub from: String,
+    pub to: String,
+    pub status: u16,
+}
+
+pub fn redirect_file(path: &str) -> bool {
+    path.rsplit('/').next() == Some("_redirects")
+}
+
+fn short(l: &str) -> String {
+    l.trim().chars().take(60).collect()
+}
+
+/// 一行规则：`来源 目标 [状态码]`，空行和注释返回 Ok(None)。能自动上线的只有：站内精确地址（可以带 `:lang` 这种
+/// 占位段，不能带 `*` 通配、查询串）301 / 302 / 307 / 308 跳到站内路径。改写（200）、代理、跳外站、带条件参数的不行。
+fn parse_redirect(line: &str) -> Result<Option<Redirect>, String> {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    let (Some(from), Some(to)) = (parts.first(), parts.get(1)) else { return Err(format!("「{}」不是「来源 目标 状态码」的写法", short(t))) };
+    if parts.len() > 3 || parts.get(2).is_some_and(|s| s.ends_with('!')) {
+        return Err(format!("「{}」带了强制标记或条件参数", short(t)));
+    }
+    let status = match parts.get(2) {
+        None => 301,
+        Some(s) => s.parse::<u16>().map_err(|_| format!("「{}」的状态码不是数字", short(t)))?,
+    };
+    if !matches!(status, 301 | 302 | 307 | 308) {
+        return Err(format!("「{}」不是跳转（{status} 是改写 / 代理，会把别的内容当成这个地址）", short(t)));
+    }
+    if !from.starts_with('/') || from.contains('*') || from.contains('?') {
+        return Err(format!("「{}」的来源不是站内的精确地址", short(t)));
+    }
+    if !to.starts_with('/') || to.starts_with("//") || to.contains("://") || to.contains('*') || to.contains(":splat") {
+        return Err(format!("「{}」的目标不是站内路径", short(t)));
+    }
+    Ok(Some(Redirect { from: from.to_string(), to: to.to_string(), status }))
+}
+
+/// 这次差异里 `_redirects` 的改动：只许新加规则（删掉或改了已有的规则，老地址就会失效）。
+/// 返回新加的规则；不能自动上线时返回原因。
+fn redirect_rules(f: &FileDiff) -> Result<Vec<Redirect>, String> {
+    if f.deleted {
+        return Err("删掉了跳转文件".into());
+    }
+    if let Some(l) = f.removed.iter().find(|l| parse_redirect(l) != Ok(None)) {
+        return Err(format!("删掉或改了已有的跳转规则「{}」", short(l)));
+    }
+    let mut out = Vec::new();
+    for l in &f.added {
+        if let Some(r) = parse_redirect(l)? {
+            out.push(r);
+        }
+    }
+    Ok(out)
+}
+
+/// 整份差异里新加的跳转规则（`redirect_rules` 没通过的文件跳过，它们已经在判定里拦下了）
+pub fn redirects_added(diff: &str) -> Vec<Redirect> {
+    split_diff(diff).iter().filter(|f| redirect_file(&f.file)).filter_map(|f| redirect_rules(f).ok()).flatten().collect()
+}
+
+/// 把构建产物里的文件路径（`a/index.html`、`b.html`、`c.png`）和网址路径统一成比较用的形式：去掉 index.html 和末尾的 /
+fn url_key(p: &str) -> String {
+    let p = p.split(['?', '#']).next().unwrap_or("").trim_start_matches('/');
+    let p = p.strip_suffix("index.html").unwrap_or(p).trim_end_matches('/');
+    format!("/{p}")
+}
+
+/// `/:lang/kyc.html` 这种带占位段的来源和一个具体路径对不对得上（`.html` 结尾的文件不带后缀也能打开）
+fn redirect_hits(from: &str, built_key: &str) -> bool {
+    let seg = |p: &str| p.trim_matches('/').split('/').map(str::to_string).collect::<Vec<_>>();
+    let a = seg(from);
+    let fits = |b: &str| { let b = seg(b); a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x.starts_with(':') || x == y) };
+    fits(built_key) || built_key.strip_suffix(".html").is_some_and(|b| fits(b))
+}
+
+/// 新加的跳转规则对照构建产物：目标得是构建出来的页面（不然跳过去就是 404），来源不能是已有页面（跳转会把它盖住）。
+/// `built` 是构建产物里的文件路径。返回不能自动上线的原因。
+pub fn redirect_problems(rules: &[Redirect], built: &[String]) -> Vec<String> {
+    let keys: Vec<String> = built.iter().map(|b| url_key(b)).collect();
+    let exists = |p: &str| { let k = url_key(p); keys.iter().any(|b| *b == k || b.strip_suffix(".html").is_some_and(|s| s == k)) };
+    let mut out = Vec::new();
+    for r in rules {
+        if r.to.contains(':') {
+            out.push(format!("跳转目标 {} 带占位符，查不了页面存不存在", r.to));
+        } else if !exists(&r.to) && !rules.iter().any(|o| o.from == r.to) {
+            out.push(format!("跳转目标 {} 在构建产物里没有这个页面", r.to));
+        }
+        if let Some(b) = keys.iter().find(|b| redirect_hits(&r.from, b)) {
+            out.push(format!("跳转来源 {} 会盖住已有页面 {b}", r.from));
+        }
+    }
+    out
+}
+
+/// 构建产物的 `_redirects` 里有规则接住这个网址路径（旧地址 301 到新页面：线上能打开，验收时按页面查）
+pub fn redirected_in(out: &Path, path: &str) -> bool {
+    let Ok(txt) = std::fs::read_to_string(out.join("_redirects")) else { return false };
+    let p = url_key(path);
+    crate::migrate_extract::parse_redirects(&txt).iter().any(|(from, _, _)| {
+        redirect_hits(&url_key(from), &p) || from.strip_suffix('*').is_some_and(|pre| p.starts_with(pre.trim_end_matches('/')))
+    })
 }
 
 /// 线上直接跑请求的代码：Worker、Pages Functions、中间件、API 路由。页面验收测不到它们坏没坏，
@@ -1472,20 +1588,15 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 }
 
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
-fn sitemap_line(l: &str) -> bool {
-    let t = l.trim();
-    t.is_empty() || ["<url>", "</url>", "<loc>", "<lastmod>", "<changefreq>", "<priority>", "<xhtml:link ", "<image:"].iter().any(|p| t.starts_with(p))
-}
-
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 6;
+pub const RULES_V: u32 = 7;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let code = rules.code;
     let mut reasons: Vec<Block> = Vec::new();
-    let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "png", "jpg", "jpeg", "webp", "avif"];
+    let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "xml", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
     let (mut code_lines, mut code_files) = (0usize, 0usize);
     // 已有文件里删掉 / 加上的推荐内容（文件，行），最后整份比较
@@ -1503,11 +1614,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
         }
-        // 手写的 sitemap 里只动了条目（改页面时顺手更新 lastmod、加新页面的 <url>）：按内容算
-        let sitemap_entries = !f.deleted
-            && file.rsplit('/').next().is_some_and(|n| n.starts_with("sitemap") && n.ends_with(".xml"))
-            && f.added.iter().chain(&f.removed).all(|l| sitemap_line(l));
-        let data = sitemap_entries || (data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l)));
+        let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
@@ -1518,6 +1625,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
             reasons.push(block("", format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改")));
+        } else if redirect_file(file) {
+            // 跳转文件：只加站内精确地址的 301 这类按内容算（目标存不存在、盖不盖住已有页面，构建完再对照产物查，见 redirect_problems）
+            if let Err(why) = redirect_rules(&f) {
+                reasons.push(block("", format!("{file}：{why}，跳转规则留给你确认")));
+            }
         } else if is_code {
             code_files += 1;
             code_lines += f.added.len() + f.removed.len();
@@ -1528,8 +1640,9 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
             reasons.push(block("", format!("{file}：不是页面内容文件")));
         }
-        // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查
-        if is_page_file(file) || file.ends_with(".svg") {
+        // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查。
+        // SVG 和 XML（sitemap、RSS / Atom 订阅源）是发布出去的内容，没有东西执行它们，但里面一样能写 <script>
+        if is_page_file(file) || file.ends_with(".svg") || file.ends_with(".xml") {
             let mut seen: Vec<&str> = Vec::new();
             for l in net_added(&f) {
                 let t = l.trim_start();
@@ -1971,6 +2084,59 @@ mod sitemap_tests {
         let v: Vec<String> = verdict(d, &r).into_iter().map(|b| b.text).collect();
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].contains("fs"), "{v:?}");
+    }
+    #[test]
+    fn feeds_and_manifests_are_published_content() {
+        // RSS 里跟着页面改标题：发布出去的内容，不是「不是页面内容文件」
+        let rss = "diff --git a/legacy/site/en/rss.xml b/legacy/site/en/rss.xml\n--- a/legacy/site/en/rss.xml\n+++ b/legacy/site/en/rss.xml\n@@ -105 +105 @@\n-      <title>OKX vs Binance for Beginners: How to Compare</title>\n+      <title>OKX vs Binance for Beginners: Fees, KYC and Which to Pick (2026)</title>\n";
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+        assert!(verdict(rss, &r).is_empty(), "{:?}", verdict(rss, &r).iter().map(|b| b.text.clone()).collect::<Vec<_>>());
+        let bad = rss.replace("+      <title>OKX vs Binance for Beginners: Fees, KYC and Which to Pick (2026)</title>", "+      <description><![CDATA[<script src=\"https://evil.example/x.js\"></script>]]></description>");
+        assert!(verdict(&bad, &r).iter().any(|b| b.text.contains("rss.xml") && b.text.contains("脚本")));
+    }
+    #[test]
+    fn redirect_rules_are_judged_by_content() {
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+        let diff = |lines: &str| format!("diff --git a/public/_redirects b/public/_redirects\n--- a/public/_redirects\n+++ b/public/_redirects\n@@ -1,2 +1,5 @@\n{lines}");
+        let texts = |d: &str| verdict(d, &r).into_iter().map(|b| b.text).collect::<Vec<_>>();
+        // 只加站内精确地址的 301：按内容算，不拦
+        let ok = diff("+# 老站 .html 旧地址\n+/zh/kyc.html   /posts/kyc-failed/   301\n+/:lang/kyc.html   /en/posts/kyc-failed/   301\n+/zh   /\n /vi/about /vi/gioi-thieu/ 301\n");
+        assert!(texts(&ok).is_empty(), "{:?}", texts(&ok));
+        assert_eq!(redirects_added(&ok).len(), 3);
+        assert_eq!(redirects_added(&ok)[2], Redirect { from: "/zh".into(), to: "/".into(), status: 301 });
+        // 删改已有规则、改写 / 代理、通配、跳外站、带条件：留给人
+        for (bad, why) in [
+            ("-/vi/about /vi/gioi-thieu/ 301\n+/vi/about /vi/about-us/ 301\n", "删掉或改了已有"),
+            ("+/feed/ /feed.xml 200\n", "改写"),
+            ("+/old/* /new/:splat 301\n", "精确地址"),
+            ("+/promo https://evil.example/ 301\n", "站内路径"),
+            ("+/promo //evil.example/ 301\n", "站内路径"),
+            ("+/a /b 301!\n", "强制标记"),
+            ("+/a /b 301 Country=us\n", "条件参数"),
+        ] {
+            let t = texts(&diff(bad));
+            assert!(t.iter().any(|x| x.contains("_redirects") && x.contains(why)), "{bad}: {t:?}");
+        }
+        // 跳转去推荐链接：按推荐内容的规则拦
+        assert!(texts(&diff("+/old /go/binance 301\n")).iter().any(|x| x.contains("推荐")), "{:?}", texts(&diff("+/old /go/binance 301\n")));
+        // 对照构建产物：目标要存在，来源不能盖住已有页面；占位段按每段对
+        let built: Vec<String> = ["index.html", "posts/kyc-failed/index.html", "en/kyc.html", "vi/posts/x/index.html"].iter().map(|s| s.to_string()).collect();
+        let rules = redirects_added(&ok);
+        let p = redirect_problems(&rules, &built);
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert!(p[0].contains("/en/posts/kyc-failed/") && p[0].contains("没有这个页面"), "{p:?}");
+        assert!(p[1].contains("/:lang/kyc.html") && p[1].contains("盖住已有页面 /en/kyc.html"), "{p:?}");
+        assert!(redirect_problems(&[Redirect { from: "/en/kyc".into(), to: "/vi/posts/x".into(), status: 301 }], &built)[0].contains("盖住"));
+        // 目标是另一条新规则的来源（链式）、目标带占位符
+        assert!(redirect_problems(&[Redirect { from: "/a".into(), to: "/b".into(), status: 301 }, Redirect { from: "/b".into(), to: "/".into(), status: 301 }], &built).is_empty());
+        assert!(redirect_problems(&[Redirect { from: "/a/:x".into(), to: "/b/:x".into(), status: 301 }], &built)[0].contains("占位符"));
+        // 构建产物里的 _redirects 接住的网址
+        let dir = std::env::temp_dir().join(format!("pilot-redir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("_redirects"), "/zh/kyc.html /posts/kyc-failed/ 301\n/:lang/old.html /en/ 301\n/legacy/* /new/:splat 301\n").unwrap();
+        assert!(redirected_in(&dir, "/zh/kyc.html") && redirected_in(&dir, "/vi/old.html") && redirected_in(&dir, "/legacy/a/b.html"));
+        assert!(!redirected_in(&dir, "/zh/kyc") && !redirected_in(&dir, "/posts/kyc-failed/"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn sitemap_entry_edits_count_as_content() {
