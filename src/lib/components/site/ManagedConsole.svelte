@@ -183,14 +183,17 @@
   // 方案里的站点搜索（每个方案各自一个）
   let siteQ = $state<Record<string, string>>({});
   const matchSite = (id: string, q: string) => { const k = q.toLowerCase(); const s = sitesById.get(id); return siteName(id).toLowerCase().includes(k) || !!s?.domain?.toLowerCase().includes(k); };
+  /** 方案里的站点顺序：正在跑的最前；然后按下次执行时间由近到远（列表就是时间表，方案标题上的「下次」正好是第一行）；
+   *  还没排上日程的（没有下次）在后；停掉的垫底；同一档按方案里的原顺序 */
   function orderSites(g: ManagedGroup) {
     const rank = (id: string) => {
       const s = sitesById.get(id);
       if (s?.job || sites.jobs[id]?.status === 'running') return 0;
-      return g.stopped.includes(id) ? 2 : 1;
+      if (g.stopped.includes(id)) return 3;
+      return s?.next_at ? 1 : 2;
     };
-    const last = (id: string) => sitesById.get(id)?.last_active ?? 0;
-    return [...g.sites].map((id, i) => ({ id, i, r: rank(id), t: last(id) })).sort((a, b) => a.r - b.r || b.t - a.t || a.i - b.i).map((x) => x.id);
+    const next = (id: string) => sitesById.get(id)?.next_at ?? 0;
+    return [...g.sites].map((id, i) => ({ id, i, r: rank(id), t: next(id) })).sort((a, b) => a.r - b.r || a.t - b.t || a.i - b.i).map((x) => x.id);
   }
   /** 方案里各站点最近 14 天的计数按天加起来（站点按现在所在的方案算） */
   function groupDays(g: ManagedGroup) {
