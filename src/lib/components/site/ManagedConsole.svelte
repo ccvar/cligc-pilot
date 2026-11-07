@@ -604,6 +604,9 @@
   .gs:hover .gs-more, .gs-more:focus-within, .gs-more.on { opacity: 1; }
   .gs-all { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; padding: 9px 18px; border: 0; border-top: 1px solid var(--border); background: none; font: inherit; font-size: 12px; color: var(--dim); text-align: center; cursor: pointer; }
   .gs-all:hover { color: var(--text); background: #fcfbf9; }
+  /* 列表是卡片最后一块时（.su .card > .list:last-child 已经抵掉 8px 卡片内边距），按钮再抵掉剩下的 8px 贴到卡片底边，
+     不然文字上面 10px、下面 18px，看着偏上；圆角跟着卡片 */
+  .card > .list:last-child > .gs-all:last-child { margin-bottom: -8px; border-radius: 0 0 11px 11px; }
   .gs-all .chev { transition: transform .15s; }
   .gs-all .chev.open { transform: rotate(180deg); }
   .grp.shut > h3 { margin-bottom: 0; }
