@@ -1207,6 +1207,18 @@ pub fn without_internal_docs(diff: &str) -> String {
 /// 推荐相关的英文词（链接、字段名里出现）
 const MONEY_WORDS: &[&str] = &["referral", "invite", "affiliate", "promo", "coupon", "rebate", "refcode", "ref_code", "kickback"];
 
+/// 交易所官网上的说明页：帮助中心、常见问题、公告、博客、学院、条款。讲返佣规则的文章必然引用
+/// 「推荐计划规则」这类页面，网址里天然带 referral / affiliate，但它们是给读者核对规则的来源，不是推荐链接。
+const INFO_PATHS: &[&str] = &["/help", "/support", "/faq", "/learn", "/blog", "/academy", "/announcement", "/news", "/terms", "/legal", "/docs", "/rules", "/zendesk", "/hc/"];
+
+/// 外部链接是不是说明页（见 INFO_PATHS）：只看路径，不看域名和查询参数
+fn info_page_url(url: &str) -> bool {
+    let path = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let path = path.find('/').map(|i| &path[i..]).unwrap_or("/");
+    let path = path.split(['?', '#']).next().unwrap_or("/").to_lowercase();
+    INFO_PATHS.iter().any(|p| path.contains(p))
+}
+
 /// 一行里真正带钱的部分：推荐 / 跳转链接（?ref=、/go/、带推荐词的外部链接）、data-ref 属性、写着的码（邀请码：GATE8888）、
 /// 带推荐词的字段 / 变量 / 组件名（refCode、bn.inviteeKickback、ReferralBox）。空＝这行和钱无关。
 /// 改动前后比较的就是这些：同样的链接和码只是挪了位置、换了旁边的说法，不算改动推荐内容；
@@ -1216,7 +1228,8 @@ pub fn money_atoms(line: &str) -> Vec<String> {
     let seps = |c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | '`' | ',' | '，' | '。' | '）' | '（' | '{' | '}');
     for t in line.split(seps).filter(|t| !t.is_empty()) {
         let l = t.to_lowercase();
-        if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && MONEY_WORDS.iter().any(|w| l.contains(w))) {
+        // 带推荐词的外部链接算推荐链接，但帮助中心、常见问题这类说明页不算（带 ?ref= 的照样算，不管路径）
+        if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && MONEY_WORDS.iter().any(|w| l.contains(w)) && !info_page_url(&l)) {
             out.push(t.trim_end_matches(['.', ';', ':', '!']).to_string());
         }
     }
@@ -1682,7 +1695,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 7;
+pub const RULES_V: u32 = 8;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2483,6 +2496,14 @@ mod tests {
         assert!(!data_line("* (0, eval)('1')"));
         // 只换推荐码的值也算改动
         assert!(money_atoms("  inviteCode: \"ABC123\",").iter().any(|a| a == "inviteCode=ABC123"), "{:?}", money_atoms("  inviteCode: \"ABC123\","));
+        // 官方帮助中心的「推荐计划规则」页是来源链接，不是推荐链接（htxneo 返佣页引用欧易规则页被误拦）
+        for u in ["https://www.okx.com/help/okx-affiliate-program-rules", "https://www.okx.com/zh-hans/help/what-is-okx-referral-program", "https://www.binance.com/zh-CN/support/faq/detail/6233094e540b4ea4ac50387d1518911b", "https://www.gate.io/zh/announcements/article/referral-upgrade", "https://support.bybit.com/hc/en-us/articles/referral-program"] {
+            assert!(money_atoms(&format!("规则依据：[说明]({u})（更新于 2026-08-06）")).is_empty(), "{u}");
+        }
+        // 真正的推荐链接照样算：路径带码、带 ?ref=（哪怕在帮助域名下）、/go/ 跳转
+        for u in ["https://www.okx.com/join/ABC123?channelId=referral", "https://accounts.binance.com/register?ref=XYZ789", "https://www.okx.com/help/x?ref=ABC", "https://example.com/affiliate/landing", "/go/binance"] {
+            assert!(!money_atoms(&format!("[注册]({u})")).is_empty(), "{u}");
+        }
         // Pilot 自己的记录文件不算改动，也不会被当成太薄的新页面
         let pilot = "diff --git a/.pilot/todo.json b/.pilot/todo.json\nnew file mode 100644\n--- /dev/null\n+++ b/.pilot/todo.json\n@@ -0,0 +1 @@\n+[{\"title\": \"缺截图\"}]\n";
         assert!(managed_verdict(pilot, true, 1500, "all", &[]).is_empty());
