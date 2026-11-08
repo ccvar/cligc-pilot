@@ -93,6 +93,11 @@ pub async fn head_time(dir: &Path) -> u64 {
     git_ok(dir, &["log", "-1", "--format=%ct"], "").await.unwrap_or_default().trim().parse().unwrap_or(0)
 }
 
+/// 上一次提交（HEAD 的父提交）的时间（秒）；只有一次提交时为 0
+pub async fn parent_time(dir: &Path) -> u64 {
+    git_ok(dir, &["log", "-1", "--format=%ct", "HEAD~1"], "").await.unwrap_or_default().trim().parse().unwrap_or(0)
+}
+
 pub async fn current_branch(dir: &Path) -> String {
     git_ok(dir, &["branch", "--show-current"], "").await.unwrap_or_default()
 }

@@ -949,8 +949,9 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
         if !head.is_empty() && head != last.commit {
             // 只查看上去没上线的站点；查不到（没网、没权限）就还按没上线算
             let pilot_until = history.iter().map(|r| r.ts + r.duration).max().unwrap_or(0);
+            let prev_time = if site.source == "local" { crate::site_git::parent_time(std::path::Path::new(&site.local_dir)).await } else { 0 };
             let deps = if site.deploy.mode == "vps" { Vec::new() } else { cf_deployments(&state, &site).await.unwrap_or_default() };
-            if !deployed_outside(&deps, &head, head_time, pilot_until) {
+            if !deployed_outside(&deps, &head, head_time, prev_time, pilot_until) {
                 out.push(PendingDeploy { id: site.id.clone(), name: site.name.clone(), subject });
             }
         }
@@ -958,17 +959,23 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
     Ok(out)
 }
 
+/// Workers 上传可以比最新提交早这么多（秒）还算是这次提交的：部署脚本写进仓库的文件（IndexNow 记录、种子数据、
+/// 版本号）要部署完才能提交，「先部署、后提交」差个几十秒到几分钟。上传还得晚于上一次提交，不然是更早的版本。
+const DEPLOY_BEFORE_COMMIT_GRACE: u64 = 10 * 60;
+
 /// 最新提交是不是已经在 Pilot 外面部署上去了（项目自己的部署脚本、命令行）。
 /// 只看 Cloudflare 上最新的那次生产部署，它要晚于 Pilot 最后一次上线的结束时间（否则是 Pilot 自己传的，
-/// 比如验收没过的版本）。Pages 部署带提交号，直接比；Workers 没有提交号，上传时间不早于最新提交才算，回滚和改密钥不算上传。
-fn deployed_outside(deps: &[crate::cf::PagesDeployment], head: &str, head_time: u64, pilot_until: u64) -> bool {
+/// 比如验收没过的版本）。Pages 部署带提交号，直接比；Workers 没有提交号，按时间：上传不早于最新提交，
+/// 或早不过 `DEPLOY_BEFORE_COMMIT_GRACE` 且晚于上一次提交（`prev_time`），回滚和改密钥不算上传。
+fn deployed_outside(deps: &[crate::cf::PagesDeployment], head: &str, head_time: u64, prev_time: u64, pilot_until: u64) -> bool {
     let at = |d: &crate::cf::PagesDeployment| chrono::DateTime::parse_from_rfc3339(&d.created_on).map(|t| t.timestamp().max(0) as u64).unwrap_or(0);
     let Some(d) = deps.iter().filter(|d| d.environment == "production" && d.status == "success").max_by_key(|d| at(d)) else { return false };
     if at(d) <= pilot_until {
         return false;
     }
     if d.commit.is_empty() {
-        matches!(d.trigger.as_str(), "deployment" | "ad_hoc") && head_time > 0 && at(d) >= head_time
+        let t = at(d);
+        matches!(d.trigger.as_str(), "deployment" | "ad_hoc") && head_time > 0 && (t >= head_time || (t + DEPLOY_BEFORE_COMMIT_GRACE >= head_time && t > prev_time))
     } else {
         head.starts_with(&d.commit)
     }
@@ -1509,40 +1516,55 @@ mod undeployed_tests {
         PagesDeployment { commit: commit.into(), trigger: "ad_hoc".into(), ..worker(created_on, "") }
     }
 
+    const PREV_AT: u64 = COMMIT_AT - 86_400;
+
     #[test]
     fn a_worker_uploaded_after_the_commit_is_already_live() {
         let deps = [worker("2026-11-05T02:56:09.299Z", "deployment"), worker("2026-11-05T03:19:24.717Z", "deployment")];
-        assert!(deployed_outside(&deps, "37dbe25", COMMIT_AT, 1793718111));
+        assert!(deployed_outside(&deps, "37dbe25", COMMIT_AT, PREV_AT, 1793718111));
         // 没读到提交时间（GitHub 来源）就不下结论
-        assert!(!deployed_outside(&deps, "37dbe25", 0, 1793718111));
-        // 提交比最新部署还晚：确实没上线
-        assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT + 3600, 1793718111));
+        assert!(!deployed_outside(&deps, "37dbe25", 0, 0, 1793718111));
+        // 提交比最新部署晚一小时：确实没上线
+        assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT + 3600, PREV_AT, 1793718111));
+    }
+
+    #[test]
+    fn a_worker_uploaded_just_before_the_commit_counts_as_that_commit() {
+        // cpsbee：部署脚本写完 IndexNow 记录和种子数据才提交，上传比提交早 35 秒
+        let deps = [worker("2026-11-05T03:16:00Z", "deployment")];
+        assert!(deployed_outside(&deps, "37dbe25", COMMIT_AT, PREV_AT, 1793718111));
+        // 早了 11 分钟：不算
+        assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT + 11 * 60, PREV_AT, 1793718111));
+        // 早了 1 分钟但上一次提交更晚（部署的是上一个版本）：不算
+        assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT + 60, COMMIT_AT + 30, 1793718111));
+        // 回滚不算上传
+        assert!(!deployed_outside(&[worker("2026-11-05T03:16:00Z", "rollback")], "37dbe25", COMMIT_AT, PREV_AT, 1793718111));
     }
 
     #[test]
     fn a_rollback_or_secret_change_is_not_a_deploy_of_the_latest_commit() {
         for t in ["rollback", "secret"] {
             let deps = [worker("2026-11-05T03:00:00Z", "deployment"), worker("2026-11-05T03:19:24Z", t)];
-            assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT, 1793718111), "{t}");
+            assert!(!deployed_outside(&deps, "37dbe25", COMMIT_AT, PREV_AT, 1793718111), "{t}");
         }
     }
 
     #[test]
     fn pages_is_compared_by_commit() {
         let deps = [pages("2026-11-05T03:19:24Z", "aaaa")];
-        assert!(deployed_outside(&deps, "aaaa", 0, 1793718111));
-        assert!(!deployed_outside(&deps, "bbbb", COMMIT_AT, 1793718111));
+        assert!(deployed_outside(&deps, "aaaa", 0, 0, 1793718111));
+        assert!(!deployed_outside(&deps, "bbbb", COMMIT_AT, PREV_AT, 1793718111));
         // 预览部署和失败的部署不算线上
         let preview = PagesDeployment { environment: "preview".into(), ..pages("2026-11-05T03:19:24Z", "aaaa") };
         let failed = PagesDeployment { status: "failure".into(), ..pages("2026-11-05T03:19:24Z", "aaaa") };
-        assert!(!deployed_outside(&[preview, failed], "aaaa", 0, 1793718111));
+        assert!(!deployed_outside(&[preview, failed], "aaaa", 0, 0, 1793718111));
     }
 
     #[test]
     fn what_pilot_uploaded_itself_does_not_count() {
         // Pilot 传了最新提交、验收没过：上线记录的结束时间晚于这次上传，还算没上线
         let deps = [pages("2026-11-05T03:19:24Z", "aaaa"), worker("2026-11-05T03:19:24Z", "deployment")];
-        assert!(!deployed_outside(&deps, "aaaa", COMMIT_AT, COMMIT_AT + 600));
-        assert!(!deployed_outside(&[], "aaaa", COMMIT_AT, 0));
+        assert!(!deployed_outside(&deps, "aaaa", COMMIT_AT, PREV_AT, COMMIT_AT + 600));
+        assert!(!deployed_outside(&[], "aaaa", COMMIT_AT, PREV_AT, 0));
     }
 }
