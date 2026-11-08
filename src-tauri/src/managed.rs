@@ -1308,6 +1308,28 @@ fn is_page_file(f: &str) -> bool {
     ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro"].iter().any(|e| f.ends_with(&format!(".{e}")))
 }
 
+/// 去掉一行里的模板指令（Go 模板 / Nunjucks / Liquid 的 {{ … }} 和 {% … %}）：它们不是给读者看的文字
+fn strip_template_tags(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    loop {
+        let open = [rest.find("{{"), rest.find("{%")].into_iter().flatten().min();
+        let Some(i) = open else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..i]);
+        let close = if rest[i..].starts_with("{{") { "}}" } else { "%}" };
+        match rest[i + 2..].find(close) {
+            Some(j) => {
+                out.push(' ');
+                rest = &rest[i + 2 + j + 2..];
+            }
+            None => return out,
+        }
+    }
+}
+
 /// 去掉 frontmatter 分隔、HTML / JSX 标签、代码围栏后的正文文字。
 fn prose_of(line: &str) -> String {
     let mut out = String::new();
@@ -1341,6 +1363,73 @@ pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
         .filter(|f| !f.deleted && is_page_file(&f.file))
         .filter(|f| f.new_file || f.added.iter().map(|l| text_units(&prose_of(l))).sum::<usize>() >= 200)
         .map(|f| (f.file, f.new_file))
+        .take(5)
+        .collect()
+}
+
+/// 模板页：正文不在模板里、在代码文件里的站点（Go 模板站把页面写在 internal/*/templates/*.gohtml，文字在 *.go 里）。
+pub fn template_page_file(f: &str) -> bool {
+    f.ends_with(".gohtml") || f.ends_with(".tmpl") || (f.split('/').any(|s| s == "templates") && (f.ends_with(".html") || f.ends_with(".htm")))
+}
+
+/// 一行代码里字符串字面量的文字（"…"、'…'、`…`），只留像正文的（中日韩文字 4 个字起；拉丁文字带空格、6 个词起）：
+/// 页面正文写在 Go 文件、语言包 JSON 里的站点，质检靠这个拿到真正给读者看的文字。
+pub fn literal_prose(line: &str) -> String {
+    let mut out = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if !matches!(c, '"' | '`' | '\'') {
+            continue;
+        }
+        let q = c;
+        let mut s = String::new();
+        let mut closed = false;
+        while let Some(d) = chars.next() {
+            if d == '\\' && q != '`' {
+                if let Some(e) = chars.next() {
+                    s.push(if matches!(e, 'n' | 't') { ' ' } else { e });
+                }
+                continue;
+            }
+            if d == q {
+                closed = true;
+                break;
+            }
+            s.push(d);
+        }
+        let t = s.trim();
+        let cjk = t.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c) || ('\u{3040}'..='\u{30ff}').contains(&c) || ('\u{ac00}'..='\u{d7af}').contains(&c));
+        // 中日韩文字 4 个字起算；拉丁文字要像句子（带空格、至少 6 个词），"text/plain; charset=utf-8" 这类不算
+        if closed && ((cjk && text_units(t) >= 4) || (t.contains(' ') && text_units(t) >= 6)) {
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out.trim().to_string()
+}
+
+fn content_code_ext(f: &str) -> bool {
+    ["go", "json", "ts", "tsx", "js", "jsx", "mjs", "cjs", "yml", "yaml", "toml", "py", "rb", "php"].iter().any(|e| f.ends_with(&format!(".{e}")))
+}
+
+/// 依赖清单、锁文件、工具配置：里面的文字（包描述、脚本）不是页面正文
+fn manifest_file(f: &str) -> bool {
+    let name = f.rsplit('/').next().unwrap_or(f);
+    matches!(name, "package.json" | "package-lock.json" | "tsconfig.json" | "composer.json" | "go.mod" | "go.sum" | "Cargo.toml" | "Cargo.lock" | "pyproject.toml" | "pnpm-lock.yaml")
+        || name.starts_with("wrangler")
+        || name.contains(".config.")
+}
+
+/// 这次改动里新写进代码文件的正文：Go 文件、语言包 JSON 这类里新加行的字符串文字，加起来成段（≥ 200 字 / 词）的文件。
+/// 返回（文件路径，新加的正文），最多 5 个。页面文件（见 content_page_files）不算在这里。
+pub fn content_code_prose(diff: &str) -> Vec<(String, String)> {
+    split_diff(diff)
+        .into_iter()
+        .filter(|f| !f.deleted && content_code_ext(&f.file) && !is_page_file(&f.file) && !manifest_file(&f.file) && !f.file.starts_with(".pilot/") && !f.file.contains("/.pilot/"))
+        .filter_map(|f| {
+            let text = f.added.iter().map(|l| literal_prose(l)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+            (text_units(&text) >= 200).then_some((f.file, text))
+        })
         .take(5)
         .collect()
 }
@@ -1381,7 +1470,7 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
         if in_code || t.starts_with("import ") || t.starts_with("export ") {
             continue;
         }
-        let text = prose_of(t);
+        let text = prose_of(&strip_template_tags(t));
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -2298,6 +2387,27 @@ mod tests {
         // 构建读到的 JSON 不在 scripts/ 里：不算构建脚本，和以前一样
         assert!(!b.iter().any(|n| n == "fees.json"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prose_written_into_code_files_is_found_for_the_quality_check() {
+        // Go 内容文件里的字符串：正文留下，标识符、短字符串、格式串不要
+        assert_eq!(literal_prose("\t\t\tHeading:   \"香港持牌虚拟资产交易所名单与查询方法\","), "香港持牌虚拟资产交易所名单与查询方法");
+        assert_eq!(literal_prose("\tw.Header().Set(\"Content-Type\", \"text/plain; charset=utf-8\")"), "");
+        assert_eq!(literal_prose("\treturn l.T(\"fees.title.venue\", heading)"), "");
+        // 语言包 JSON：键不要，值要；转义的引号和换行处理掉
+        assert_eq!(literal_prose("  \"fees.desc\": \"Maker fees start at {0} and taker at {1}, so a \\\"$10,000\\\" order costs {2}.\","), "Maker fees start at {0} and taker at {1}, so a \"$10,000\" order costs {2}.");
+        // 模板里的指令不算正文
+        assert_eq!(strip_template_tags("<p>{{ .Lede }} 本页最后更新：{{ .Updated | date }}</p>").trim(), "<p>  本页最后更新： </p>");
+
+        let d = |file: &str, lines: &[&str]| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1,{} @@\n{}\n", lines.len(), lines.iter().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
+        let long: Vec<String> = (0..12).map(|i| format!("\t\t\tP{i}: \"第 {i} 段：香港证监会持牌的虚拟资产交易平台名单按官网核对，入金前请自己再打开一次官方名录确认平台状态没有变化。\",")).collect();
+        let long: Vec<&str> = long.iter().map(String::as_str).collect();
+        let diff = d("internal/webapp/region_content.go", &long) + &d("internal/webapp/handlers.go", &["\tif x == nil {", "\t\treturn l.T(\"a.b\", y)", "\t}"]) + &d("internal/webapp/templates/region.gohtml", &["<h1>{{ .Heading }}</h1>"]) + &d("package.json", &["  \"description\": \"这个字段的文字也不少，但 package.json 一律不算页面正文，不该出现在质检里。\","]);
+        let got = content_code_prose(&diff);
+        assert_eq!(got.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), vec!["internal/webapp/region_content.go"]);
+        assert!(got[0].1.starts_with("第 0 段：香港证监会"));
+        assert!(template_page_file("internal/webapp/templates/region-regulation.gohtml") && template_page_file("views/templates/page.html") && !template_page_file("src/content/a.md"));
     }
 
     #[test]

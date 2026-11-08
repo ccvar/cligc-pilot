@@ -2084,15 +2084,27 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         job.step("quality", "skipped", "已经有别的原因要留给你确认");
     } else if let Some(jev) = crate::typesafe::client() {
         let files = crate::managed::content_page_files(&diff);
-        if files.is_empty() {
+        // 正文写在代码文件里的站点（Go 模板 + 内容 .go、语言包 JSON）：代码文件里新写的正文也要判
+        let code = crate::managed::content_code_prose(&diff);
+        let pages = crate::jev_checks::plan_pages(&files, &code);
+        let names: Vec<(String, bool)> = pages.iter().map(|p| (p.file.clone(), p.new_file)).collect();
+        if pages.is_empty() {
             job.step("quality", "skipped", "只改了标题、描述、数据或代码，没有成段的页面正文");
         } else {
-            job.step("quality", "running", &format!("判断模型（Jev）看 {} 个页面", files.len()));
+            job.step("quality", "running", &format!("判断模型（Jev）看 {} 个页面", pages.len()));
+            if !code.is_empty() {
+                let from = code.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>().join("、");
+                if pages.iter().any(|p| !p.extra.is_empty() && !p.synthetic) {
+                    job.line(&format!("页面正文写在 {from} 里，并进模板页一起判"));
+                } else {
+                    job.line(&format!("页面正文写在 {from} 里，按文件各算一页判"));
+                }
+            }
             // 「有没有回答目标搜索问题」只问任务针对的那一页；一次改几页时别的页面答不上是正常的
-            if files.len() > 1 {
-                match crate::jev_checks::target_page(&item.opp.page, &files) {
-                    Some(t) => job.line(&format!("改了 {} 个页面，目标搜索词只用来判 {t}，其它页面查信息量、相关度、来源和遗留说明文字", files.len())),
-                    None => job.line(&format!("改了 {} 个页面，没有一页和任务网址 {} 对得上，目标搜索词这次不判，只查信息量、相关度、来源和遗留说明文字", files.len(), item.opp.page)),
+            if pages.len() > 1 {
+                match crate::jev_checks::target_page(&item.opp.page, &names) {
+                    Some(t) => job.line(&format!("改了 {} 个页面，目标搜索词只用来判 {t}，其它页面查信息量、相关度、来源和遗留说明文字", pages.len())),
+                    None => job.line(&format!("改了 {} 个页面，没有一页和任务网址 {} 对得上，目标搜索词这次不判，只查信息量、相关度、来源和遗留说明文字", pages.len(), item.opp.page)),
                 }
             }
             job.line("判断模型（Jev）内容质检…");
@@ -2108,14 +2120,14 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                 }
             }
             // 差异里的路径是相对仓库根目录的（站点在子目录里时不能拼在 app_dir 后面）
-            match crate::jev_checks::check_pages(&jev, site, &positioning, &item.opp.page, &target, &wt, &files, &before).await {
+            match crate::jev_checks::check_pages(&jev, site, &positioning, &item.opp.page, &target, &wt, &pages, &before).await {
                 Ok(quality) => {
                     let why = crate::jev_checks::gate_verdict(&quality);
                     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.quality = quality.clone());
                     let inherited: Vec<String> = quality.iter().flat_map(|q| q.inherited.iter().map(move |r| format!("{}：{r}", q.page))).collect();
                     if why.is_empty() {
                         let note = if inherited.is_empty() { String::new() } else { format!("（改动前就有、这次没变差的不算：{}）", inherited.join("；")) };
-                        job.step("quality", "ok", &format!("{} 个页面都通过{note}", files.len()));
+                        job.step("quality", "ok", &format!("{} 个页面都通过{note}", quality.len()));
                         job.line(&format!("内容质检通过{note}"));
                     } else if hold {
                         job.step("quality", "failed", &format!("没过：{why}（这次不上线，只记分数）"));
@@ -2123,7 +2135,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                     } else if managed.jev_rewrite && !item.jev_rewritten {
                         // 先不留给你：把原因交回 AI 重写一次，再走一遍检查和质检
                         job.step("quality", "failed", &format!("没过：{why}，交回 AI 重写一次"));
-                        rewrite = Some((why, files.iter().map(|(f, _)| f.clone()).collect()));
+                        // 没过的页面；模板页并进了代码文件的正文时，正文所在的代码文件也要改
+                        let mut fix: Vec<String> = quality.iter().filter(|q| !q.reasons.is_empty()).map(|q| q.page.clone()).collect();
+                        if pages.iter().any(|p| !p.synthetic && !p.extra.is_empty() && fix.contains(&p.file)) {
+                            let more: Vec<String> = code.iter().map(|(f, _)| f.clone()).filter(|f| !fix.contains(f)).collect();
+                            fix.extend(more);
+                        }
+                        rewrite = Some((why, fix));
                     } else if rules.lets("jev") {
                         job.step("quality", "failed", &format!("没过：{why}（方案的拦截等级放行这类，照样上线，分数记在条目上）"));
                         job.line(&format!("内容质检没过：{why}。方案放行质检没过的改动，照样上线"));

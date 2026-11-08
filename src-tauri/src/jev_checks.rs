@@ -130,19 +130,64 @@ fn site_state(site: &Site, positioning: &str) -> Value {
     json!({ "name": site.name, "domain": site.domain, "positioning": positioning })
 }
 
-/// 给这次改动里的页面做质检。`repo` 是工作树的仓库根目录，`files` 来自 managed::content_page_files。
+/// 质检要看的一「页」。正文写在代码文件里的站点（Go 模板 + 内容 .go、语言包 JSON）：
+/// - 改动里有模板页：代码文件里新写的正文并进模板页一起判（模板本身只有导航和免责声明这类骨架，单看必然「空话多」）；
+/// - 改动里没有页面文件：每个代码文件里新写的正文单独算一页来判（文件名就是页名）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Planned {
+    pub file: String,
+    pub new_file: bool,
+    /// 并进来的正文（代码文件里新写的）；`synthetic` 时就是全部正文
+    pub extra: String,
+    /// 不是页面文件，正文全在 `extra` 里，不读文件
+    pub synthetic: bool,
+}
+
+/// 把页面文件（managed::content_page_files）和代码文件里的新正文（managed::content_code_prose）排成要判的页。
+pub fn plan_pages(files: &[(String, bool)], code: &[(String, String)]) -> Vec<Planned> {
+    let has_template = files.iter().any(|(f, _)| crate::managed::template_page_file(f));
+    let joined = code.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
+    let mut out: Vec<Planned> = files
+        .iter()
+        .map(|(f, new_file)| Planned {
+            file: f.clone(),
+            new_file: *new_file,
+            extra: if has_template && crate::managed::template_page_file(f) { joined.clone() } else { String::new() },
+            synthetic: false,
+        })
+        .collect();
+    if !has_template {
+        out.extend(code.iter().map(|(f, t)| Planned { file: f.clone(), new_file: true, extra: t.clone(), synthetic: true }));
+    }
+    out
+}
+
+/// 给这次改动里的页面做质检。`repo` 是工作树的仓库根目录，`pages` 来自 plan_pages。
 /// `page_url` 是任务针对的页面网址，`target` 是它的目标搜索词：「有没有回答目标搜索问题」只问目标页
 /// （一次改好几页的任务里，别的页面答不上目标页的问题是正常的），其它四项每页都查。
 /// 每页一次请求（几个问题一起问）；任何一页调用失败就整体返回 Err，调用方按原规则走。
-pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, page_url: &str, target: &str, repo: &Path, files: &[(String, bool)], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
-    let target_file = target_page(page_url, files);
+pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, page_url: &str, target: &str, repo: &Path, pages: &[Planned], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
+    let names: Vec<(String, bool)> = pages.iter().map(|p| (p.file.clone(), p.new_file)).collect();
+    let target_file = target_page(page_url, &names);
     let mut out = Vec::new();
-    for (file, _) in files {
-        let Ok(src) = std::fs::read_to_string(repo.join(file)) else { continue };
+    for p in pages {
+        let file = &p.file;
         let target = if target_file.as_deref() == Some(file.as_str()) { target } else { "" };
-        let Some(mut q) = score_page(jev, site, positioning, target, file, &src).await? else { continue };
-        // 已有页面没过：再给改动前的版本打一次分，只拦这次改出来的、或者变差了的问题
-        if !q.reasons.is_empty() {
+        let (title, text) = if p.synthetic {
+            (String::new(), p.extra.clone())
+        } else {
+            let Ok(src) = std::fs::read_to_string(repo.join(file)) else { continue };
+            let (title, mut text) = crate::managed::page_prose(&src, PAGE_CHARS);
+            if !p.extra.is_empty() {
+                text.push('\n');
+                text.extend(p.extra.chars().take(PAGE_CHARS.saturating_sub(text.chars().count())));
+            }
+            (title, text)
+        };
+        let Some(mut q) = score_text(jev, site, positioning, target, file, &title, &text).await? else { continue };
+        // 已有页面没过：再给改动前的版本打一次分，只拦这次改出来的、或者变差了的问题。
+        // 并进了代码文件正文的模板页不比：比的是骨架，没意义，并进来的正文本来就是这次新写的
+        if !q.reasons.is_empty() && p.extra.is_empty() {
             if let Some(old) = before.get(file) {
                 if let Some(o) = score_page(jev, site, positioning, target, file, old).await? {
                     let (worse, kept) = compare(&q, &o);
@@ -194,7 +239,12 @@ pub fn target_page(page_url: &str, files: &[(String, bool)]) -> Option<String> {
 /// 给一份页面源文件打分；几乎没有正文（模板 / 跳转页）返回 None。
 async fn score_page(jev: &Jev, site: &Site, positioning: &str, target: &str, file: &str, src: &str) -> Result<Option<PageQuality>, String> {
     let (title, text) = crate::managed::page_prose(src, PAGE_CHARS);
-    if crate::managed::text_units(&text) < 100 {
+    score_text(jev, site, positioning, target, file, &title, &text).await
+}
+
+/// 给一页的标题和正文打分；几乎没有正文返回 None。
+async fn score_text(jev: &Jev, site: &Site, positioning: &str, target: &str, file: &str, title: &str, text: &str) -> Result<Option<PageQuality>, String> {
+    if crate::managed::text_units(text) < 100 {
         return Ok(None);
     }
     let state = json!({
@@ -354,6 +404,25 @@ pub async fn rank_opportunities(jev: &Jev, site: &Site, site_dir: &Path, opps: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prose_in_code_files_is_merged_into_template_pages_or_judged_on_its_own() {
+        let files = |v: &[&str]| v.iter().map(|f| (f.to_string(), false)).collect::<Vec<_>>();
+        let code = vec![("internal/webapp/region_content.go".to_string(), "香港证监会持牌的虚拟资产交易平台共 13 家".to_string())];
+        // vibcg：模板页 + 内容 .go：正文并进模板页，.go 不单独算一页
+        let p = plan_pages(&files(&["internal/webapp/templates/region-regulation.gohtml"]), &code);
+        assert_eq!(p.len(), 1);
+        assert!(!p[0].synthetic && p[0].extra.contains("13 家"));
+        // vibgg：没有页面文件，正文全在语言包里：每个文件单独算一页
+        let locales = vec![("internal/i18n/locales/en.json".to_string(), "Fees are charged on position value".to_string()), ("internal/i18n/locales/zh-Hant.json".to_string(), "按倉位價值收費".to_string())];
+        let p = plan_pages(&[], &locales);
+        assert_eq!(p.iter().map(|x| (x.file.as_str(), x.synthetic, x.extra.as_str())).collect::<Vec<_>>(), vec![("internal/i18n/locales/en.json", true, "Fees are charged on position value"), ("internal/i18n/locales/zh-Hant.json", true, "按倉位價值收費")]);
+        // 普通 Markdown 站顺手改了个 .ts：页面照常，代码正文单独一页，不往 Markdown 里并
+        let p = plan_pages(&files(&["src/content/a.md"]), &[("src/data/topics.ts".to_string(), "x".to_string())]);
+        assert_eq!((p.len(), p[0].extra.as_str(), p[1].synthetic), (2, "", true));
+        // 没有代码正文：和以前一样
+        assert_eq!(plan_pages(&files(&["a.md"]), &[]), vec![Planned { file: "a.md".into(), new_file: false, extra: String::new(), synthetic: false }]);
+    }
 
     #[test]
     fn target_query_is_only_asked_of_the_tasks_own_page() {
