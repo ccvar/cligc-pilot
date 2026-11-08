@@ -323,7 +323,10 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             let group = cfg.group_of(&s.id);
             let stg = crate::site_stage::stage_of(&s, &dir);
             let running = !cfg.paused && group.is_some_and(|g| g.active_for(&s.id));
-            let (next_task, next_at) = if running { crate::site_runner::next_run(&s, &dir, group).unwrap_or_default() } else { Default::default() };
+            // 正在跑的运营任务（ops:scan 这类）：算下次时当作已经开始了
+            let job = state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running");
+            let busy = job.as_ref().and_then(|j| j.kind.strip_prefix("ops:").map(|t| (t, j.started_at)));
+            let (next_task, next_at) = if running { crate::site_runner::next_run(&s, &dir, group, busy).unwrap_or_default() } else { Default::default() };
             let conn_id = crate::site_cmds::site_conn_id(&s.id);
             crate::usage::backfill_site(&dir, &convs.iter().filter(|c| c.origin == "ops" && c.conn_id == conn_id).collect::<Vec<_>>());
             let cost = crate::usage::site_cost(&dir, month);

@@ -73,12 +73,27 @@ fn beat(s: &mut State, now: u64, first: bool) {
     s.gaps.retain(|g| g.to + 30 * DAY >= now);
 }
 
-/// 调度每一轮调用：心跳、按设置挡 / 不挡睡眠。managed_active＝有托管中的站点（没暂停）。
-/// 下一轮调度的时间：上一次心跳 + 10 分钟（调度循环处理完睡 600 秒，误差几秒）。还没心跳过就是 0
+/// 调度每轮之间的间隔（秒）。轮次对齐到整 10 分钟（:00、:10、:20…，按 UTC 算，时区偏移是整 10 分的地方就是本地的整点），
+/// 重启、睡眠醒来都回到同一套时间点上，任何任务的开始时间都能推出来。
+pub const ROUND_SECS: u64 = 600;
+
+/// t 之后（不含 t）的第一个整 10 分
+pub fn round_after(t: u64) -> u64 {
+    (t / ROUND_SECS + 1) * ROUND_SECS
+}
+
+/// 到点时刻 t 的任务在哪一轮开始：t 当时或之后的第一个整 10 分
+pub fn round_for(t: u64) -> u64 {
+    t.div_ceil(ROUND_SECS) * ROUND_SECS
+}
+
+/// 下一轮调度的时间：上一次心跳之后的第一个整 10 分。还没心跳过就是 0
 pub fn next_round(data_dir: &Path) -> u64 {
     let t = load(data_dir).last_tick;
-    if t > 0 { t + 600 } else { 0 }
+    if t > 0 { round_after(t) } else { 0 }
 }
+
+/// 调度每一轮调用：心跳、按设置挡 / 不挡睡眠。managed_active＝有托管中的站点（没暂停）。
 
 pub fn tick(data_dir: &Path, managed_active: bool) {
     let mut s = load(data_dir);
@@ -358,6 +373,19 @@ pub mod autostart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounds_sit_on_whole_ten_minutes() {
+        // 2026-11-08 22:10:00 +0800 = 1794147000
+        let r = 1_794_147_000;
+        assert_eq!(r % ROUND_SECS, 0);
+        assert_eq!(round_after(r - 1), r);
+        assert_eq!(round_after(r), r + ROUND_SECS, "正好在整 10 分跑完的这一轮，下一轮是 10 分钟后");
+        assert_eq!(round_after(r + 2), r + ROUND_SECS);
+        // 22:11 到点的任务在 22:20 那轮开始；正好 22:10:00 到点就是 22:10 那轮
+        assert_eq!(round_for(r + 60), r + ROUND_SECS);
+        assert_eq!(round_for(r), r);
+    }
 
     #[test]
     fn long_silence_between_beats_is_recorded_as_a_gap() {

@@ -246,19 +246,28 @@ pub fn schedule_of(site: &Site, task: &str, plan: Option<&crate::managed::Manage
 /// 这个站点下一次自动运行什么、什么时候（和调度循环同一套规则：每项任务上次运行 + 周期，没跑过的从导入时间算；
 /// 没有数据源的只做体检和计划；上线后检查到期的优先）。托管暂停或站点停了就没有下一次。
 /// 时间是「到点」的时刻：调度每 10 分钟看一次、客户端要开着，实际会晚几分钟。
-pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::ManagedGroup>) -> Option<(String, u64)> {
+/// `busy`：这个站点正在跑的运营任务和开始时间（任务做完才记「上次运行」，正在跑的这一次要当作已经开始了，
+/// 不然下次还显示它自己）。
+pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::ManagedGroup>, busy: Option<(&str, u64)>) -> Option<(String, u64)> {
     let state = load_state(site_dir);
     let has_data = !site.data.gsc_site.is_empty() || !site.data.ga4_property.is_empty() || !site.data.bing_site.is_empty();
+    let watching = busy.is_some_and(|(t, _)| t == "watch");
     let mut best: Option<(String, u64)> = site_ops::load_queue(site_dir)
         .iter()
-        .filter(|i| i.status == "deployed" && i.watch_due > 0 && (i.watched.is_empty() || i.watch_stage == 1))
+        .filter(|i| !watching && i.status == "deployed" && i.watch_due > 0 && (i.watched.is_empty() || i.watch_stage == 1))
         .map(|i| ("watch".to_string(), i.watch_due))
         .min_by_key(|x| x.1);
     for task in TASKS {
         if !matches!(*task, "health" | "plan") && !has_data {
             continue;
         }
-        let Some(at) = next_due(&schedule_of(site, task, plan), state.last.get(*task).copied().unwrap_or(0).max(site.created_at)) else { continue };
+        let mut last = state.last.get(*task).copied().unwrap_or(0).max(site.created_at);
+        if let Some((t, started)) = busy {
+            if t == *task {
+                last = last.max(started);
+            }
+        }
+        let Some(at) = next_due(&schedule_of(site, task, plan), last) else { continue };
         if best.as_ref().is_none_or(|b| at < b.1) {
             best = Some((task.to_string(), at));
         }
@@ -4910,7 +4919,12 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_secs(600)).await;
+            // 等到下一个整 10 分（:00、:10…）。按墙上时钟每 15 秒看一次，不一口气睡 600 秒：
+            // 电脑睡眠时计时器不走，醒来照样在最近的整 10 分接上；重启后也回到同一套时间点
+            let next = crate::background::round_after(now());
+            while now() < next {
+                tokio::time::sleep(Duration::from_secs(15u64.min(next.saturating_sub(now()).max(1)))).await;
+            }
         }
     });
 }
