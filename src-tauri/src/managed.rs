@@ -1612,7 +1612,8 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             continue;
         }
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
-        if rules.build_scripts.is_some_and(|b| idle_script(file, b)) && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l)) {
+        let idle = rules.build_scripts.is_some_and(|b| idle_script(file, b));
+        if idle && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l)) {
             changed += f.added.len().min(f.removed.len()) + f.removed.len();
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
@@ -1627,7 +1628,15 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         let forbidden = (hard_forbidden(file) && !allowed) || in_build_chain;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
-            reasons.push(block("", format!("{file}：依赖、构建 / 部署配置、服务端代码不自动改")));
+            // 原因写准：构建会跑到的脚本、辅助脚本改了代码、其它一律不改的文件，分开说
+            let why = if in_build_chain {
+                "构建 / 检查 / 部署会跑到的脚本，构建时在本机执行，不自动改"
+            } else if idle {
+                "辅助脚本改了代码（只加截图清单这类数据行才放行），不自动上线"
+            } else {
+                "依赖、构建 / 部署配置、服务端代码不自动改"
+            };
+            reasons.push(block("", format!("{file}：{why}")));
         } else if redirect_file(file) {
             // 跳转文件：只加站内精确地址的 301 这类按内容算（目标存不存在、盖不盖住已有页面，构建完再对照产物查，见 redirect_problems）
             if let Err(why) = redirect_rules(&f) {
@@ -2254,10 +2263,11 @@ mod tests {
         let d = |file: &str, line: &str| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -39 +39,2 @@\n+{line}\n");
         // 放截图用的辅助脚本里加一条说明文字：放行
         assert!(verdict(&d("scripts/place-shots.mjs", "  'binance-register-form': '币安网页版注册首屏（2026 年 11 月）',"), &r).is_empty());
-        // 加的是代码、或者是构建 / 检查会跑的脚本：照样拦
-        assert!(!verdict(&d("scripts/place-shots.mjs", "  await rm(dir, { recursive: true });"), &r).is_empty());
-        assert!(!verdict(&d("scripts/rules.mjs", "  'min': '0',"), &r).is_empty());
-        assert!(!verdict(&d("scripts/place-shots.mjs", "  'a': 'b',"), &Rules { build_scripts: None, ..r }).is_empty());
+        // 加的是代码、或者是构建 / 检查会跑的脚本：照样拦，原因分开说
+        let why = |diff: &str, r: &Rules| verdict(diff, r).into_iter().map(|b| b.text).collect::<Vec<_>>().join("；");
+        assert!(why(&d("scripts/place-shots.mjs", "  await rm(dir, { recursive: true });"), &r).contains("辅助脚本改了代码"));
+        assert!(why(&d("scripts/rules.mjs", "  'min': '0',"), &r).contains("构建 / 检查 / 部署会跑到的脚本"));
+        assert!(why(&d("scripts/place-shots.mjs", "  'a': 'b',"), &Rules { build_scripts: None, ..r }).contains("服务端代码不自动改"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
