@@ -233,12 +233,21 @@
   // 下一次自动运行：到点时间写成「19:17 这轮 / 今天 15:00 / 明天 14:36 / 周五 16:27 / 11月3日 09:00」。
   // 已经到点的任务要等调度的下一轮（上一次心跳 + 10 分钟）才起；重作业名额满了还会再滑一轮，标成「排队」
   const NEXT_TASK: Record<string, string> = { scan: '扫描', health: '体检', plan: '制定计划', report: '周报', review: '复盘', watch: '上线后检查' };
+  /** 调度每轮之间隔多久（秒，和 site_runner 的调度循环一致） */
+  const ROUND_SECS = 600;
   function whenNext(ts: number) {
     const now = Date.now();
+    const round = o?.next_round ?? 0;
     if (ts * 1000 <= now + 60_000) {
-      const round = o?.next_round ?? 0;
       if (round * 1000 <= now) return '马上';
       return `${hhmm(round)} 这轮${o && o.busy_heavy >= o.parallel_cap ? '排队' : ''}`;
+    }
+    // 一小时内到点的：任务要到点后的下一轮才开始，直接显示接走它的那一轮。
+    // 更远的照旧显示到点时刻：每轮处理要花几十秒，轮次会慢慢往后漂，一小时以外算不准
+    if (round * 1000 > now && ts < round + 3600) {
+      let r = round;
+      while (r < ts) r += ROUND_SECS;
+      ts = r;
     }
     const d = new Date(ts * 1000), t = new Date(); t.setHours(0, 0, 0, 0);
     const days = Math.floor((new Date(d).setHours(0, 0, 0, 0) - t.getTime()) / 86_400_000);
@@ -248,7 +257,7 @@
     if (days < 7) return `${'周' + '日一二三四五六'[d.getDay()]} ${hm}`;
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
-  const NEXT_TIP = '按上次运行时间推算的到点时刻；客户端要开着（托盘也行），调度每 10 分钟看一次，到点的在下一轮起。「排队」＝同时运行的作业已满，这一轮可能轮不到';
+  const NEXT_TIP = '调度每 10 分钟一轮，到点的任务在到点后的那一轮开始：一小时内的显示那一轮的时间，更远的显示按上次运行推算的到点时刻。客户端要开着（托盘也行）。「排队」＝同时运行的作业已满，这一轮可能轮不到';
   /** 没放在卡片上的那些规则（「还有 N 项」的悬停说明） */
   function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
