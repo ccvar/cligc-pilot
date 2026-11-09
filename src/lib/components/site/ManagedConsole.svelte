@@ -21,6 +21,7 @@
   import RunChart from './RunChart.svelte';
   import PlanSpark from './PlanSpark.svelte';
   import RecentShips from './RecentShips.svelte';
+  import ManagedSiteFilter from './ManagedSiteFilter.svelte';
   import NeedsView from './NeedsView.svelte';
   import DigestView from './DigestView.svelte';
   import { usd } from '$lib/state/growth.svelte.js';
@@ -110,9 +111,36 @@
   let logDay = $state('');
   let logEl = $state<HTMLElement | null>(null);
   const dayOf = (ts: number) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-  const feed = $derived(managed.activity.map((a, i) => ({ a, k: activityKeys[i] })).filter((x) => !logDay || dayOf(x.a.ts) === logDay));
-  // 例行运行（定时的扫描、体检、计划、周报、复盘）不进操作日志，每天只在小标题下给一行概览；失败的点开逐条看
-  const routineByDay = $derived(new Map(managed.routine.map((r) => [dayOf(r.ts), r])));
+  // 记录卡片右上角的「所有托管站点 ▾」：选了一个站点就只看它的记录（两个 tab、外部改动、例行概览一起筛）。不跨会话记住
+  let siteFilter = $state('');
+  const bySite = <T extends { site_id: string }>(v: T[]) => (siteFilter ? v.filter((x) => x.site_id === siteFilter) : v);
+  const shipsShown = $derived(bySite(managed.ships));
+  const extShown = $derived(bySite(managed.external));
+  const activityShown = $derived(managed.activity.map((a, i) => ({ a, k: activityKeys[i] })).filter((x) => !siteFilter || x.a.site_id === siteFilter));
+  const filterSites = $derived((o?.sites ?? []).map((s) => ({ id: s.id, name: s.name, domain: s.domain })));
+  // 下拉里每个站点后面的条数：按当前 tab 数（上线 tab 算上显示着的外部改动）
+  const filterCounts = $derived.by(() => {
+    const m = new Map<string, number>();
+    const add = (id: string) => m.set(id, (m.get(id) ?? 0) + 1);
+    if (histTab === 'ships') { for (const x of managed.ships) add(x.site_id); if (showExt) for (const x of managed.external) add(x.site_id); }
+    else for (const a of managed.activity) if (a.site_id) add(a.site_id);
+    return m;
+  });
+  const filterName = $derived(filterSites.find((s) => s.id === siteFilter)?.domain || filterSites.find((s) => s.id === siteFilter)?.name || '');
+  const feed = $derived(activityShown.filter((x) => !logDay || dayOf(x.a.ts) === logDay));
+  // 例行运行（定时的扫描、体检、计划、周报、复盘）不进操作日志，每天只在小标题下给一行概览；失败的点开逐条看。
+  // 按站点筛的时候按这个站点的那几次重算一遍
+  const ROUTINE_ORDER = ['health', 'plan', 'scan', 'report', 'review'];
+  const routineByDay = $derived(new Map(managed.routine.flatMap((r) => {
+    if (!siteFilter) return [[dayOf(r.ts), r] as const];
+    const runs = r.runs.filter((x) => x.site_id === siteFilter);
+    if (!runs.length) return [];
+    const n = new Map<string, number>();
+    for (const x of runs) n.set(x.task, (n.get(x.task) ?? 0) + 1);
+    const rank = (t: string) => { const i = ROUTINE_ORDER.indexOf(t); return i < 0 ? 99 : i; };
+    const counts = [...n.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+    return [[dayOf(r.ts), { ...r, runs, total: runs.length, sites: 1, counts, failed: runs.filter((x) => !x.ok).length }] as const];
+  })));
   let routineOpen = $state(new Set<string>());
   function toggleRoutine(day: string) {
     const s = new Set(routineOpen);
@@ -513,22 +541,22 @@
         <div class="card hist" bind:this={logEl}>
           <div class="hist-h">
             <div class="seg" role="tablist" aria-label="记录">
-              <button role="tab" class:on={histTab === 'ships'} aria-selected={histTab === 'ships'} onclick={() => setHist('ships')}><Icon name="rocket" size={12} />最近上线<span class="hc">{managed.ships.length}</span></button>
-              <button role="tab" class:on={histTab === 'log'} aria-selected={histTab === 'log'} onclick={() => setHist('log')}><Icon name="activity" size={12} />操作日志<span class="hc">{managed.activity.length}</span></button>
+              <button role="tab" class:on={histTab === 'ships'} aria-selected={histTab === 'ships'} onclick={() => setHist('ships')}><Icon name="rocket" size={12} />最近上线<span class="hc">{shipsShown.length}</span></button>
+              <button role="tab" class:on={histTab === 'log'} aria-selected={histTab === 'log'} onclick={() => setHist('log')}><Icon name="activity" size={12} />操作日志<span class="hc">{activityShown.length}</span></button>
             </div>
             {#if histTab === 'log' && logDay}<span class="day-chip">只看 {+logDay.slice(5, 7)}月{+logDay.slice(8, 10)}日 · {feed.length} 条<button class="x" aria-label="看全部" data-tip="看全部" onclick={() => (logDay = '')}>×</button></span>{/if}
             <span class="grow"></span>
             {#if histTab === 'ships'}
               <!-- 外部改动比上线多好几倍，可以整体收起：收起后上线条目上的「有外部改动」标记照旧 -->
-              <span class="sub">近 30 天，所有托管站点{#if managed.external.length}，<button class="link-btn ext-toggle" onclick={toggleExt} aria-pressed={showExt} data-tip={showExt ? '列表里只留 Pilot 的上线条目；上线条目上的「有外部改动」标记不受影响' : '把不经 Pilot 的提交和部署按时间混进列表'}>{showExt ? '收起' : '显示'} {managed.external.length} 条外部改动</button>{/if}</span>
+              <span class="sub">近 30 天，<ManagedSiteFilter sites={filterSites} counts={filterCounts} bind:value={siteFilter} />{#if extShown.length}，<button class="link-btn ext-toggle" onclick={toggleExt} aria-pressed={showExt} data-tip={showExt ? '列表里只留 Pilot 的上线条目；上线条目上的「有外部改动」标记不受影响' : '把不经 Pilot 的提交和部署按时间混进列表'}>{showExt ? '收起' : '显示'} {extShown.length} 条外部改动</button>{/if}</span>
             {:else}
-              <span class="sub">{managed.activity.length ? `最近 ${when(managed.activity[0].ts)}` : ''}</span>
+              <span class="sub">{#if activityShown.length}最近 {when(activityShown[0].a.ts)}，{/if}<ManagedSiteFilter sites={filterSites} counts={filterCounts} bind:value={siteFilter} /></span>
             {/if}
           </div>
           {#if histTab === 'ships'}
-            <RecentShips items={managed.ships} external={showExt ? managed.external : []} byDay />
+            <RecentShips items={shipsShown} external={showExt ? extShown : []} byDay empty={siteFilter ? `最近 30 天 ${filterName} 没有上线改动。` : undefined} />
           {:else}
-            {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if !feed.length}<p class="hint">这一天没有操作记录。</p>{/if}
+            {#if !managed.activity.length}<p class="hint">托管站点的计划、上线、检查、回滚、暂停都会记在这里。</p>{:else if siteFilter && !activityShown.length}<p class="hint">{filterName} 最近没有操作记录。</p>{:else if !feed.length}<p class="hint">{siteFilter ? `${filterName} 这一天没有操作记录。` : '这一天没有操作记录。'}</p>{/if}
             <div class="list feed">
               {#each feed.slice(0, logAll ? feed.length : LOG_LIMIT) as { a, k }, n (k)}
                 <!-- 每天一个小标题（条数按这一天全部的算），行尾今天的写「几分钟前」、更早的写时刻 -->
