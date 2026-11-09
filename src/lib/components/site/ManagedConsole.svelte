@@ -611,7 +611,8 @@
   .hist-h { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; }
   .hist-h .seg button { display: inline-flex; align-items: center; gap: 5px; }
   .hist-h .hc { font-size: 11px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
-  .hist-h .sub { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  /* 文字、站点下拉、外部改动按钮放在同一条中线上（下拉按钮有内边距和图标，按基线排会高低不齐） */
+  .hist-h .sub { display: inline-flex; align-items: center; font-size: 12px; line-height: 20px; color: var(--faint); white-space: nowrap; }
   .hist-h .ext-toggle { font-size: 12px; color: var(--dim); text-decoration-color: var(--border); text-underline-offset: 3px; }
   .hist-h .ext-toggle:hover { color: var(--text); }
   .hist-h .grow { flex: 1; }

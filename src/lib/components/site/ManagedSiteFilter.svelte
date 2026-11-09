@@ -90,8 +90,9 @@
 </div>
 
 <style>
-  .mf { position: relative; display: inline-flex; align-items: center; gap: 1px; min-width: 0; vertical-align: middle; }
-  .mf-trigger { display: inline-flex; align-items: center; gap: 5px; border: none; background: none; padding: 2px 6px; border-radius: 7px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer; white-space: nowrap; transition: background-color .12s, color .12s; }
+  .mf { position: relative; display: inline-flex; align-items: center; gap: 1px; min-width: 0; }
+  /* 左右负边距抵掉内边距：不悬停时和前后的文字挨着，悬停的底色才露出来 */
+  .mf-trigger { display: inline-flex; align-items: center; gap: 4px; height: 20px; border: none; background: none; padding: 0 5px; margin: 0 -3px; border-radius: 6px; font: inherit; font-size: 12px; line-height: 20px; color: var(--faint); cursor: pointer; white-space: nowrap; transition: background-color .12s, color .12s; }
   .mf-trigger:hover, .mf-trigger.open { background: var(--su-hover); color: var(--text); }
   .mf-trigger.on { color: var(--text); font-weight: 550; }
   .mf-trigger .chev { flex: none; transition: transform .16s cubic-bezier(.2, .7, .2, 1); }
