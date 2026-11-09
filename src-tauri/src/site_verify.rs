@@ -533,6 +533,10 @@ fn internal_links(html: &str, domain: &str) -> Vec<String> {
             continue;
         };
         let path = path_of(&abs).to_lowercase();
+        // /cdn-cgi/ 是 Cloudflare 自己加的地址（邮箱保护把 mailto 改写成 /cdn-cgi/l/email-protection#…，去掉 # 后请求就是 404），不是站点的页面
+        if path.starts_with("/cdn-cgi/") {
+            continue;
+        }
         if [".css", ".js", ".png", ".jpg", ".jpeg", ".webp", ".avif", ".svg", ".gif", ".ico", ".xml", ".txt", ".pdf", ".mp4"].iter().any(|e| path.split('?').next().unwrap_or("").ends_with(e)) {
             continue;
         }
@@ -890,6 +894,9 @@ mod tests {
         let text = visible_text(html);
         assert!(text.contains("遮挡转场要让前景物体") && !text.contains("TODO"), "{text}");
         assert_eq!(internal_links(html, "iosur.com"), vec!["https://iosur.com/zh/posts/b/".to_string(), "https://www.iosur.com/en/".to_string()]);
+        // Cloudflare 邮箱保护的链接不算站内链接（ieneo 新页面被报「打不开」）
+        let cf = r#"<a href="/cdn-cgi/l/email-protection#3f575a53">邮箱</a><a href="https://ieneo.com/cdn-cgi/l/email-protection#ab">邮箱</a><a href="/guides/a/">a</a>"#;
+        assert_eq!(internal_links(cf, "ieneo.com"), vec!["https://ieneo.com/guides/a/".to_string()]);
     }
 
     #[test]
