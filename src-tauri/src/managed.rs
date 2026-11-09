@@ -1433,6 +1433,15 @@ fn manifest_file(f: &str) -> bool {
         || name.contains(".config.")
 }
 
+/// 这次改动里所有代码文件（非页面文件、非依赖清单）新加行的正文字数，不设门槛：模板页的字数下限要把它算进去
+pub fn code_prose_units(diff: &str) -> usize {
+    split_diff(diff)
+        .iter()
+        .filter(|f| !f.deleted && content_code_ext(&f.file) && !is_page_file(&f.file) && !manifest_file(&f.file) && !test_file(f.file.rsplit('/').next().unwrap_or(&f.file)) && !f.file.contains(".pilot/"))
+        .flat_map(|f| f.added.iter().map(|l| text_units(&literal_prose(l))))
+        .sum()
+}
+
 /// 这次改动里新写进代码文件的正文：Go 文件、语言包 JSON 这类里新加行的字符串文字，加起来成段（≥ 200 字 / 词）的文件。
 /// 返回（文件路径，新加的正文），最多 5 个。页面文件（见 content_page_files）不算在这里。
 pub fn content_code_prose(diff: &str) -> Vec<(String, String)> {
@@ -1695,12 +1704,14 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 8;
+pub const RULES_V: u32 = 9;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let code = rules.code;
     let mut reasons: Vec<Block> = Vec::new();
+    // 模板站新页面的正文有一部分写在同一次改动的代码文件里（Go 的 austrac_en.go 这类）：算字数时一起算
+    let code_units: usize = code_prose_units(diff);
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "xml", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
     let (mut code_lines, mut code_files) = (0usize, 0usize);
@@ -1841,8 +1852,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                     } else if in_frontmatter && !data {
                         n += text_units(&frontmatter_prose(t));
                     } else if data || (!t.starts_with("```") && !t.starts_with("import ")) {
-                        n += text_units(&prose_of(t));
+                        n += text_units(&prose_of(&strip_template_tags(t)));
                     }
+                }
+                if template_page_file(file) {
+                    n += code_units;
                 }
                 if n < min_page {
                     reasons.push(block("thin", format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）")));
@@ -2113,6 +2127,18 @@ mod group_tests {
         let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
         assert!(managed_verdict(leak, true, 1500, "review", &[]).iter().any(|x| x.contains("待补图")));
         assert_eq!(text_units("Gate KYC 认证"), 4);
+        // 模板站（vibcg AUSTRAC 英文页）：模板里的正文 + 同一次新加的 Go 文件里的正文一起算；模板指令不算
+        let para = |i: usize| format!("Registered exchanges in Australia must enrol with AUSTRAC and keep records number {i} for seven years.");
+        let tpl: String = (0..14).map(|i| format!("+<p>{}</p>\n+<p>{{{{ .Updated }}}}</p>\n", para(i))).collect();
+        let go: String = (0..12).map(|i| format!("+\t\tBody: \"{}\",\n", para(i))).collect();
+        let page = format!("diff --git a/internal/webapp/templates/austrac-en.gohtml b/internal/webapp/templates/austrac-en.gohtml\nnew file mode 100644\n--- /dev/null\n+++ b/internal/webapp/templates/austrac-en.gohtml\n@@ -0,0 +1,28 @@\n{tpl}");
+        let gof = format!("diff --git a/internal/webapp/austrac_en.go b/internal/webapp/austrac_en.go\nnew file mode 100644\n--- /dev/null\n+++ b/internal/webapp/austrac_en.go\n@@ -0,0 +1,12 @@\n{go}");
+        let thin_of = |d: &str| managed_verdict(d, true, 300, "all", &[]).into_iter().filter(|x| x.contains("低于这个方案的下限")).collect::<Vec<_>>();
+        assert!(!thin_of(&page).is_empty(), "只有模板：偏短");
+        assert!(thin_of(&(page.clone() + &gof)).is_empty(), "{:?}", thin_of(&(page.clone() + &gof)));
+        // Markdown 页面不加代码文件的字数
+        let md = "diff --git a/src/content/a.md b/src/content/a.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/a.md\n@@ -0,0 +1 @@\n+只有一句话。\n";
+        assert!(!thin_of(&(md.to_string() + &gof)).is_empty());
     }
 
     #[test]
