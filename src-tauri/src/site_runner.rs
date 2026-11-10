@@ -290,6 +290,8 @@ pub fn task_label(task: &str) -> &'static str {
         "rollback" => "回滚",
         "recheck" => "重新检查",
         "batch" => "批量让 AI 改",
+        "content_check" => "试运行正文改动",
+        "content_apply" => "写入线上正文",
         _ => "运营任务",
     }
 }
@@ -394,6 +396,8 @@ fn steps_for(task: &str) -> &'static [(&'static str, &'static str)] {
         "plan" => &[("data", "拉取数据"), ("plan", "AI 制定计划")],
         "cycle" => &[("data", "拉取数据"), ("plan", "AI 制定计划"), ("work", "AI 改动并检查"), ("quality", "内容质检"), ("ship", "上线 / 等你确认"), ("verify", "线上验收")],
         "watch" => &[("watch", "上线后检查")],
+        "content_check" => &[("check", "试运行")],
+        "content_apply" => &[("check", "试运行"), ("apply", "写入线上"), ("verify", "线上验收"), ("indexnow", "提交 IndexNow")],
         _ => &[],
     }
 }
@@ -615,6 +619,8 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
                     "accept_many" => accept_many(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     "resolve" => resolve(&ctx, &site, &job, item_id.as_deref()).await,
                     "rollback" => rollback(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "content_check" => content_check(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
+                    "content_apply" => content_apply(&ctx, &site, &job, item_id.as_deref().unwrap_or_default()).await,
                     _ => Err("未知的运营任务".into()),
                 }
             })
@@ -1728,6 +1734,12 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
     let mut plan_brief = group_rules(ctx, site).map(|g| g.brief()).unwrap_or_default();
+    // 正文在线上数据库里的站点（content_skill）：先在你的站点文件夹里把要改的文档取进工作区，提交成改动前的样子，
+    // AI 只改这些 JSON；差异从这个提交算起，看改动时就是文档前后的对比
+    let mut base_sha = base_sha;
+    if let Some(brief) = fetch_content_docs(site, &site_dir, job, item, &wt, &mut base_sha).await {
+        plan_brief.push_str(&brief);
+    }
     if !item.replay.is_empty() {
         plan_brief.push_str(&format!("【上一版】这条你之前改过，但主分支后来也改了同一处（多半是同时改好的另一条先上线了），那一版合不进去。现在的工作区已经是最新的主分支：保留主分支上已有的改动，在它的基础上按上一版的意图重做，不要把别人刚改的改回去，也不要重复加。上一版的改动：\n```diff\n{}\n```\n\n", item.replay));
     }
@@ -1820,6 +1832,179 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
 #[allow(clippy::too_many_arguments)]
 /// 上线前有一项没过（构建 / 检查、孤立新页面、内容质检）：把原因交回 AI 在同一个分支上改一次并提交，
 /// 不推送、不上线；调用方随后再走一遍检查和判定。
+/// 正文在线上数据库里的站点：把这条任务要改的文档取进工作区的 .pilot/content/，提交，改 base_sha 指向这个提交。
+/// 返回写给 AI 的说明（没有生效的内容技能返回 None）。取不到的文档只记一行，不中断任务。
+async fn fetch_content_docs(site: &Site, site_dir: &Path, job: &Job, item: &QueueItem, wt: &Path, base_sha: &mut String) -> Option<String> {
+    if site.source != "local" {
+        return None;
+    }
+    let cs = crate::content_skill::active(site_dir)?;
+    let repo = crate::site_git::code_dir(site, None).ok()?;
+    let mut paths: Vec<String> = Vec::new();
+    for u in std::iter::once(&item.opp.page).chain(item.also.iter().map(|o| &o.page)).chain(item.opp.batch.iter()) {
+        let p = path_of(u);
+        if u.trim().is_empty() || !p.starts_with('/') || paths.contains(&p) || paths.len() >= 8 {
+            continue;
+        }
+        paths.push(p);
+    }
+    let _ = std::fs::create_dir_all(wt.join(crate::content_skill::CONTENT_DIR));
+    let mut got: Vec<String> = Vec::new();
+    for p in &paths {
+        let rel = crate::content_skill::file_for(p);
+        let abs = wt.join(&rel);
+        let (ok, out) = crate::content_skill::run(&repo, &cs.skill, &cs.get, &["{path}", "{file}"], &[("{path}", p), ("{file}", &abs.to_string_lossy())]).await;
+        if ok && abs.is_file() {
+            job.line(&format!("取出线上文档 {p} → {rel}"));
+            got.push(rel);
+        } else {
+            job.line(&format!("取不到 {p} 的线上文档：{}", out.lines().last().unwrap_or("没有输出")));
+        }
+    }
+    if !got.is_empty() {
+        let mut add = vec!["add", "-f", "--"];
+        add.extend(got.iter().map(String::as_str));
+        if crate::site_git::git_ok(wt, &add, "").await.is_ok() && crate::site_git::git_commit_ok(wt, &["commit", "-qm", "pilot: 取出线上文档（改动前）"]).await.is_ok() {
+            if let Ok(h) = crate::site_git::git_ok(wt, &["rev-parse", "HEAD"], "").await {
+                *base_sha = h.trim().to_string();
+                let b = base_sha.clone();
+                let _ = site_ops::update_item(site_dir, &item.id, now(), |i| i.base_sha = b.clone());
+            }
+        }
+    }
+    let list = if got.is_empty() { "（这次没有要改的已有文档）".to_string() } else { got.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join("、") };
+    Some(format!(
+        "【正文在线上数据库里】这个站点的文章正文不在仓库文件里，存在线上数据库，用仓库里的技能 `{skill}` 管理（{summary}）。\n\
+Pilot 已经把这次要改的文档从线上取出来放在工作区：{list}（每份就是线上那篇文档的完整 JSON）。\n\
+- 直接改这些 JSON 里的字段（标题、描述、正文等），字段名、格式和不该改的字段（网址、语言、类型这类）照原样，规矩看 `{skill}/SKILL.md`；\n\
+- 要新建页面：在 `{dir}/` 下新建一份 JSON，格式参照已取出的文档和技能里的说明（技能要求新文档先设草稿的就照做）；\n\
+- 不要运行技能里的脚本：取文档、校验、写入都由 Pilot 来做，你这里也没有接口密钥；不要写补丁脚本，也不要改仓库里的导入文件、种子数据（改了不会影响线上）；\n\
+- 改好照常 git add / git commit。Pilot 先用技能校验，再请站长确认后写入线上。\n\
+下面步骤里说的「找到源文件」，对这类改动就是改上面这些 JSON；构建照常跑一遍确认没坏。\n\n",
+        skill = cs.skill,
+        summary = if cs.summary.is_empty() { "改动要通过技能的命令写入" } else { cs.summary.as_str() },
+        dir = crate::content_skill::CONTENT_DIR,
+    ))
+}
+
+/// 内容技能的改动：找到这条的工作区（没了就按分支最新提交重建）和改到的文档
+async fn content_docs(site: &Site, site_dir: &Path, item: &QueueItem) -> Result<(crate::content_skill::ContentSkill, PathBuf, PathBuf, Vec<String>), String> {
+    let cs = crate::content_skill::active(site_dir).ok_or("这个站点没有确认过的内容技能（站点设置 → 内容技能）")?;
+    let repo = crate::site_git::code_dir(site, None)?;
+    if item.branch.is_empty() || item.head_sha.is_empty() {
+        return Err("这条改动没有分支，没有要写入的文档".into());
+    }
+    let wt = crate::sites::build_root(site_dir).join("work").join(&item.id);
+    let at_head = crate::site_git::git_ok(&wt, &["rev-parse", "HEAD"], "").await.map(|h| h.trim() == item.head_sha).unwrap_or(false);
+    if !at_head {
+        crate::site_git::worktree_at(&repo, &wt, &item.head_sha, None).await?;
+    }
+    let names = crate::site_git::git_ok(&wt, &["diff", "--name-only", "--diff-filter=AM", &item.base_sha, &item.head_sha], "").await?;
+    let docs = crate::content_skill::changed_docs(&names.lines().map(|l| l.trim().to_string()).collect::<Vec<_>>());
+    if docs.is_empty() {
+        return Err("这条改动里没有改到线上文档".into());
+    }
+    Ok((cs, repo, wt, docs))
+}
+
+/// 用技能逐份校验（不写入线上）；返回这一轮的记录和是否都通过
+async fn content_runs(cs: &crate::content_skill::ContentSkill, repo: &Path, wt: &Path, docs: &[String], head: &str, apply: bool, job: &Job) -> (Vec<crate::content_skill::Run>, bool) {
+    let (tpl, kind) = if apply { (&cs.apply, "apply") } else { (&cs.check, "check") };
+    let mut runs = Vec::new();
+    for d in docs {
+        let abs = wt.join(d);
+        let (ok, output) = crate::content_skill::run(repo, &cs.skill, tpl, &["{file}"], &[("{file}", &abs.to_string_lossy())]).await;
+        job.line(&format!("{} {d}：{}", if apply { "写入" } else { "试运行" }, if ok { "通过" } else { "没通过" }));
+        for l in output.lines().take(40) {
+            job.line(&format!("  {l}"));
+        }
+        runs.push(crate::content_skill::Run { at: now(), kind: kind.into(), file: d.clone(), head: head.into(), ok, output });
+        if !ok {
+            return (runs, false);
+        }
+    }
+    (runs, true)
+}
+
+/// 卡片上的「试运行」：用技能校验这条改动里的每份文档，不写入线上
+async fn content_check(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    job.step("check", "running", "");
+    let (cs, repo, wt, docs) = content_docs(site, &site_dir, &item).await.inspect_err(|e| job.step("check", "failed", e))?;
+    let (runs, ok) = content_runs(&cs, &repo, &wt, &docs, &item.head_sha, false, job).await;
+    site_ops::update_item(&site_dir, item_id, now(), |i| i.content_runs = runs.clone())?;
+    ctx.emit_queue(&site.id);
+    if ok {
+        job.step("check", "ok", &format!("{} 份文档", docs.len()));
+        Ok(format!("试运行通过：{} 份文档，可以写入线上", docs.len()))
+    } else {
+        let bad = runs.last().map(|r| r.file.clone()).unwrap_or_default();
+        job.step("check", "failed", &bad);
+        Err(format!("试运行没通过：{bad}，详情见卡片上的输出"))
+    }
+}
+
+/// 卡片上的「写入线上」：先再试运行一遍（线上文档这期间可能被改过），都通过才逐份写入；
+/// 写完照常线上验收。这条还改了站点代码的，正文写完留给你点「上线」合并发布。
+async fn content_apply(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
+    let site_dir = ctx.site_dir(&site.id);
+    let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    if item.status != "proposed" {
+        return Err("这条改动已经处理过了".into());
+    }
+    job.step("check", "running", "");
+    let (cs, repo, wt, docs) = content_docs(site, &site_dir, &item).await.inspect_err(|e| job.step("check", "failed", e))?;
+    let (mut runs, ok) = content_runs(&cs, &repo, &wt, &docs, &item.head_sha, false, job).await;
+    if !ok {
+        site_ops::update_item(&site_dir, item_id, now(), |i| i.content_runs = runs.clone())?;
+        ctx.emit_queue(&site.id);
+        job.step("check", "failed", "");
+        return Err("写入前的试运行没通过，没有写入任何文档；详情见卡片上的输出".into());
+    }
+    job.step("check", "ok", "");
+    job.step("apply", "running", "");
+    let (applied, ok) = content_runs(&cs, &repo, &wt, &docs, &item.head_sha, true, job).await;
+    let written: Vec<String> = applied.iter().filter(|r| r.ok).map(|r| r.file.clone()).collect();
+    runs.extend(applied);
+    site_ops::update_item(&site_dir, item_id, now(), |i| {
+        i.content_runs = runs.clone();
+        if ok {
+            i.content_applied_at = now();
+        }
+    })?;
+    ctx.emit_queue(&site.id);
+    if !ok {
+        job.step("apply", "failed", "");
+        let done = if written.is_empty() { "没有写入任何文档".to_string() } else { format!("已经写入了 {}", written.join("、")) };
+        return Err(format!("写入线上没成功（{done}）；详情见卡片上的输出"));
+    }
+    job.step("apply", "ok", &format!("{} 份文档", docs.len()));
+    log_item(ctx, site, "shipped", &item, &format!("正文已写入线上：{}", docs.join("、")));
+    // 还改了站点代码（.pilot/ 以外的文件）：正文已经生效，代码部分照常走「上线」
+    let names = crate::site_git::git_ok(&wt, &["diff", "--name-only", &item.base_sha, &item.head_sha], "").await.unwrap_or_default();
+    if names.lines().any(|l| !l.trim().is_empty() && !l.starts_with(".pilot/")) {
+        job.step("verify", "skipped", "还改了站点代码，点「上线」时一起验收");
+        job.step("indexnow", "skipped", "");
+        return Ok("正文已写入线上。这条还改了站点代码，点「上线」合并并发布".into());
+    }
+    let spec = spec_for(site, &item, false);
+    job.step("verify", "running", "");
+    let rep = crate::site_verify::run(&spec, job, true).await;
+    let mut attention = rep.soft.clone();
+    attention.extend(rep.hard.iter().cloned());
+    job.step("verify", if rep.hard.is_empty() { "ok" } else { "failed" }, &rep.hard.join("；"));
+    if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !rep.passed.is_empty() {
+        crate::indexnow::submit_step(site, &site_dir, &rep.passed, job).await;
+    } else {
+        job.step("indexnow", "skipped", "");
+    }
+    record_shipped(ctx, site, item_id, &Shipped { url: String::new(), checks: rep.checks.clone(), attention })?;
+    crate::site_git::remove_worktree(&repo, &wt).await;
+    let _ = crate::site_git::git(&repo, &["branch", "-D", &item.branch], "").await;
+    Ok(if rep.hard.is_empty() { "正文已写入线上，线上验收通过".into() } else { format!("正文已写入线上，但线上验收有问题要你核对：{}", rep.hard.join("；")) })
+}
+
 async fn fix_round(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, wt: &Path, msg: String, label: &str, commit: &str) -> Result<(), String> {
     let site_dir = ctx.site_dir(&site.id);
     // 一条任务里最多再跑三轮 AI（修构建、重写、补链接）：每轮前都看额度，别一条就把本周的 token 花光
@@ -2892,6 +3077,11 @@ fn downgrade_if_repeated(ctx: &Ctx, site: &Site, change: &str) {
 pub async fn accept(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, auto: bool) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    // 改的是线上数据库里的正文（content_skill）：合并发布不会让它生效，要先在卡片上试运行、写入线上
+    if item.block_kinds.iter().any(|k| k == "content_api") && item.content_applied_at == 0 {
+        job.step("merge", "failed", "");
+        return Err("这条改的是线上数据库里的正文：先在卡片上「试运行」，再「写入线上」".into());
+    }
     // 已经合并、上线那一步失败了：不用再合并，直接重新上线
     if item.status == "merged" && !item.merge_sha.is_empty() && site.deploy.mode != "none" {
         // 上线的是文件夹当前的样子：有改到一半的文件、不在主分支就先不上，不然会一起发到线上
@@ -3141,7 +3331,11 @@ fn mark_merged(ctx: &Ctx, site: &Site, item: &QueueItem, merge_sha: &str, auto: 
 pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let queue = site_ops::load_queue(&site_dir);
-    let items: Vec<QueueItem> = ids.split(',').filter_map(|id| queue.iter().find(|i| i.id == id && i.status == "proposed" && !i.branch.is_empty()).cloned()).collect();
+    // 改线上数据库正文、还没写入的（content_skill）不能跟着合并：合并发布不会让它生效
+    let items: Vec<QueueItem> = ids
+        .split(',')
+        .filter_map(|id| queue.iter().find(|i| i.id == id && i.status == "proposed" && !i.branch.is_empty() && !(i.block_kinds.iter().any(|k| k == "content_api") && i.content_applied_at == 0)).cloned())
+        .collect();
     if items.is_empty() {
         return Err("没有可以合并的改动（可能已经处理过了）".into());
     }
@@ -3591,6 +3785,14 @@ async fn health(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     }
     write_report(&site_dir, &format!("{}-health", today()), &md)?;
     let added = site_ops::enqueue(&site_dir, &tech.into_iter().cloned().collect::<Vec<_>>(), now(), COOLDOWN)?;
+    // 仓库自带的内容技能（正文在线上数据库里的站点）：技能有变化就重新识别，见 content_skill
+    if site.source == "local" {
+        if let Ok(((brain, model), _)) = models_for(site, &st.data_dir) {
+            if let Some(l) = crate::content_skill::refresh(&site_dir, &st.data_dir, &dir, &brain, &model, false).await {
+                job.line(&l);
+            }
+        }
+    }
     job.step("report", "ok", "");
     match built {
         Ok(_) => Ok(format!("体检完成，新增 {} 个技术问题", added.len())),

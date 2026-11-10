@@ -1704,7 +1704,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 9;
+pub const RULES_V: u32 = 10;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -1712,6 +1712,12 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let mut reasons: Vec<Block> = Vec::new();
     // 模板站新页面的正文有一部分写在同一次改动的代码文件里（Go 的 austrac_en.go 这类）：算字数时一起算
     let code_units: usize = code_prose_units(diff);
+    // 正文在线上数据库里的站点（content_skill）：改的是取出来的文档 JSON，上线不会改变线上内容，
+    // 一律留给你在卡片上试运行、确认写入（不进放行清单，「以后不拦」也放不了）
+    let docs: Vec<String> = split_diff(diff).into_iter().filter(|f| !f.deleted && f.file.starts_with(".pilot/content/") && f.file.ends_with(".json")).map(|f| f.file).collect();
+    if !docs.is_empty() {
+        reasons.push(block("content_api", format!("{}：改的是线上数据库里的正文，上线不会改变线上内容；要你在卡片上「试运行」通过后「写入线上」", docs.join("、"))));
+    }
     let content_ext = ["md", "mdx", "markdown", "html", "htm", "tmpl", "gohtml", "astro", "njk", "liquid", "hbs", "vue", "svelte", "json", "svg", "xml", "png", "jpg", "jpeg", "webp", "avif"];
     let (mut changed, mut new_lines) = (0usize, 0usize);
     let (mut code_lines, mut code_files) = (0usize, 0usize);
@@ -2426,6 +2432,15 @@ mod tests {
         // 构建读到的 JSON 不在 scripts/ 里：不算构建脚本，和以前一样
         assert!(!b.iter().any(|n| n == "fees.json"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edits_to_documents_from_the_content_api_always_wait_for_you() {
+        let d = "diff --git a/.pilot/content/en-posts-x.json b/.pilot/content/en-posts-x.json\n--- a/.pilot/content/en-posts-x.json\n+++ b/.pilot/content/en-posts-x.json\n@@ -1 +1 @@\n-  \"title\": \"旧\",\n+  \"title\": \"新\",\n";
+        let r = verdict(d, &Rules { tier: "open", code: "all", allow: &["content_api".to_string()], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] });
+        assert_eq!(r.iter().map(|b| b.kind).collect::<Vec<_>>(), vec!["content_api"], "放开档、点过放行也照样留给你");
+        // .pilot/ 下别的记录照旧不算改动
+        assert!(managed_verdict("diff --git a/.pilot/site.md b/.pilot/site.md\n--- a/.pilot/site.md\n+++ b/.pilot/site.md\n@@ -1 +1 @@\n-a\n+b\n", true, 0, "all", &[]).is_empty());
     }
 
     #[test]

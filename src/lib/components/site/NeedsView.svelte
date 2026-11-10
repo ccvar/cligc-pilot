@@ -13,7 +13,8 @@
   import { ago, full as fullTime } from './fmt';
   import { modelTarget } from '$lib/state/fleet.svelte.js';
   import { sites, openSite, authorizeDeploy } from '$lib/state/sites.svelte.js';
-  import { acceptItem, acceptItems, reshipItem, blockedCode, setContentCode, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf } from '$lib/state/ops.svelte.js';
+  import { acceptItem, acceptItems, reshipItem, blockedCode, setContentCode, dismissItem, workItem, redoItem, recheckItem, ackItem, rollbackItem, showDiff, sourceOf, needsContentApply, contentChecked, contentCheckItem, contentApplyItem } from '$lib/state/ops.svelte.js';
+  import ContentRuns from './ContentRuns.svelte';
   import { openConv } from '$lib/state/conversations';
   import { invoke } from '@tauri-apps/api/core';
   import { confirmDialog, say } from '$lib/state/app.svelte.js';
@@ -186,7 +187,8 @@
                       {#if conflicts.has(i.id)}<p class="why">和主分支有冲突：AI 这版是在旧代码上改的，主分支后来也改了同几处，合不进去。点「让 AI 在最新代码上重改」：先试着直接接上，接不上再让 AI 重做。合并上线以后有这种情况会自动处理。</p>
                       {:else if w}<p class="why {g.k === 'failed' ? 'err' : ''}">{g.k === 'proposed' ? '没自动上线：' : g.k === 'failed' ? '失败原因：' : '要你核对：'}{w}</p>{/if}
                       {#if g.k !== 'attention' && w}<OpsErrorHint text={w} siteId={x.site_id} />{/if}
-                      {#if g.k === 'proposed' && site && !conflicts.has(i.id)}{@const plan = managed.overview?.groups.find((p) => p.sites.includes(site.id))}{#if plan?.autonomy === 'auto'}{#each (i.block_kinds ?? []).filter((k) => !plan.allow_kinds?.includes(k)) as k (k)}<button class="link-btn allow" onclick={() => setBlockKind(site.id, k, true, plan.name)} data-tip={`托管方案「${plan.name}」以后遇到这类原因不再留给你确认；别的原因照样拦`}><Icon name="check" size={11} />「{BLOCK_KIND_LABEL[k] ?? k}」以后不拦</button>{/each}{/if}{#if plan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, plan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「拦截等级」判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}{/if}
+                      {#if g.k === 'proposed' && site && !conflicts.has(i.id)}{@const plan = managed.overview?.groups.find((p) => p.sites.includes(site.id))}{#if plan?.autonomy === 'auto'}{#each (i.block_kinds ?? []).filter((k) => k in BLOCK_KIND_LABEL && !plan.allow_kinds?.includes(k)) as k (k)}<button class="link-btn allow" onclick={() => setBlockKind(site.id, k, true, plan.name)} data-tip={`托管方案「${plan.name}」以后遇到这类原因不再留给你确认；别的原因照样拦`}><Icon name="check" size={11} />「{BLOCK_KIND_LABEL[k] ?? k}」以后不拦</button>{/each}{/if}{#if plan}{#each blockedCode(i.verdict, site.ops.content_code) as f (f)}<button class="link-btn allow" onclick={() => setContentCode(site, f, true, plan)} data-tip="这个站点的页面内容（标题、描述、文章）写在这个代码文件里的话：放行后按托管方案的「拦截等级」判断，不再一律留给你确认"><Icon name="check" size={11} />{f} 是页面内容，以后按方案规则判断</button>{/each}{/if}{/if}
+                      {#if (i.block_kinds ?? []).includes('content_api')}<ContentRuns item={i} />{/if}
                       <WhyChips change={i.opp.change} source={sourceOf(i.opp)} kind={i.opp.kind} target={i.opp.target} />
                       {#if i.opp.page || i.new_pages?.length}<span class="mono url">{i.opp.page || i.new_pages?.[0]}</span>{/if}
                       <div class="acts">
@@ -196,6 +198,10 @@
                           {#if i.status === 'proposed'}
                             {#if i.head_sha}<button class="btn tiny" onclick={() => showDiff(site.id, i)}><Icon name="diff" size={11} />看改动</button>{/if}
                             {#if conflicts.has(i.id)}<button class="btn tiny primary" onclick={() => redoItem(site.id, i)} data-tip="先试着用 git 把这一版直接接到最新的主分支上（不花钱）；接不上再让 AI 照着这一版在最新代码上重做。好了照常检查，再按方案规则上线或留给你确认"><Icon name="sparkles" size={11} />让 AI 在最新代码上重改</button>
+                            {:else if needsContentApply(i)}
+                              <!-- 改的是线上数据库里的正文：先试运行（只校验），通过了再写入线上 -->
+                              <button class="btn tiny" class:primary={!contentChecked(i)} onclick={() => contentCheckItem(site, i)} data-tip="用站点仓库里的内容技能校验改好的文档，不写入线上"><Icon name="check" size={11} />试运行</button>
+                              <button class="btn tiny" class:primary={contentChecked(i)} onclick={() => contentApplyItem(site, i)} disabled={!contentChecked(i)} data-tip={contentChecked(i) ? '把改好的文档写入线上数据库（马上生效），写完照常线上验收' : '先试运行通过才能写入'}><Icon name="rocket" size={11} />写入线上</button>
                             {:else}<button class="btn tiny primary" onclick={() => acceptItem(site, i)}><Icon name={i.branch ? 'rocket' : 'check'} size={11} />{i.branch ? '上线' : '标记已处理'}</button>{/if}
                           {:else if i.status === 'merged'}
                             <button class="btn tiny primary" onclick={() => reshipItem(site, i)} data-tip="改动已经在主分支里，不再合并，直接用主分支最新的代码重新构建上线"><Icon name="rocket" size={11} />重新上线</button>

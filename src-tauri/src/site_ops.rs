@@ -710,6 +710,12 @@ pub struct QueueItem {
     /// 内容质检没过后，AI 已经按原因重写过一次（只重写一次）。
     #[serde(default)]
     pub jev_rewritten: bool,
+    /// 正文在线上数据库里的改动（content_skill）：试运行和写入的记录（最近一次）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_runs: Vec<crate::content_skill::Run>,
+    /// 正文写入线上的时间（0＝还没写）
+    #[serde(default)]
+    pub content_applied_at: u64,
     /// 不能自动上线的原因里，可以在卡片上点「这类以后不拦」的类型（见 managed::BLOCK_KINDS）。
     #[serde(default)]
     pub block_kinds: Vec<String>,

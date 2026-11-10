@@ -67,6 +67,7 @@ mod window_memory;
 mod site_github;
 mod site_jobs;
 mod tray;
+mod content_skill;
 mod site_make;
 mod site_migrate;
 mod migrate_extract;
@@ -5168,6 +5169,11 @@ pub fn run() {
             ops_cmds::queue_work_many,
             ops_cmds::queue_ack,
             ops_cmds::queue_accept,
+            ops_cmds::queue_content_check,
+            ops_cmds::queue_content_apply,
+            ops_cmds::site_content_skill,
+            ops_cmds::site_content_skill_detect,
+            ops_cmds::site_content_skill_confirm,
             ops_cmds::queue_accept_many,
             ops_cmds::site_content_code,
             ops_cmds::queue_rollback,

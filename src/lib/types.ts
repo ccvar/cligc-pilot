@@ -414,8 +414,13 @@ export interface OpsItem {
   pr_url: string;
   change_kind: string;
   verdict: string;
-  /** 不能自动上线的原因里，可以点「这类以后不拦」的类型（money / html / env / package / size / leak / thin / orphan / jev） */
+  /** 不能自动上线的原因里，可以点「这类以后不拦」的类型（money / html / env / package / size / leak / thin / orphan / jev）；
+   *  content_api＝改的是线上数据库里的正文，要试运行、写入线上，不能放行 */
   block_kinds?: string[];
+  /** 正文在线上数据库里的改动：最近一次试运行 / 写入的记录 */
+  content_runs?: ContentRun[];
+  /** 正文写入线上的时间（0＝还没写） */
+  content_applied_at?: number;
   /** 托管自动上线前判断模型（Jev）的内容质检结果 */
   quality?: PageQuality[];
   merge_sha: string;
@@ -701,3 +706,8 @@ export interface ApiKeys { pagespeed: boolean; serper: boolean }
 
 /** 站点概览「站点健康」里一格的状态（在线 / 推广链接 / 速度 / 体检各自报上来） */
 export interface HealthSum { tone: 'ok' | 'warn' | 'err' | 'none'; status: string; sub: string; checked: number }
+
+/** 内容技能的一次运行（试运行 check / 写入 apply），见后端 content_skill::Run */
+export interface ContentRun { at: number; kind: 'check' | 'apply' | 'get'; file: string; head: string; ok: boolean; output: string }
+/** 站点仓库自带的内容技能（正文在线上数据库里的站点），见后端 content_skill::ContentSkill */
+export interface ContentSkill { skill: string; sig: string; external: boolean; get: string; check: string; apply: string; summary: string; detected_at: number; confirmed: boolean; error: string }

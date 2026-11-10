@@ -109,6 +109,26 @@ export async function recheckItem(siteId: string, item: OpsItem) {
   try { await invoke('queue_recheck', { id: siteId, itemId: item.id }); }
   catch (e) { say(String(e), 'err'); }
 }
+// ---- 正文在线上数据库里的改动（站点仓库自带的内容技能，见后端 content_skill）----
+/** 这条改的是线上数据库里的正文、还没写入：卡片上不给「上线」，给「试运行」和「写入线上」 */
+export const needsContentApply = (i: OpsItem) => i.status === 'proposed' && (i.block_kinds ?? []).includes('content_api') && !i.content_applied_at;
+/** 最近一次试运行都通过、而且是现在这一版 */
+export const contentChecked = (i: OpsItem) => {
+  const runs = (i.content_runs ?? []).filter((r) => r.kind === 'check');
+  return runs.length > 0 && runs.every((r) => r.ok && r.head === i.head_sha);
+};
+export async function contentCheckItem(site: Site, item: OpsItem) {
+  try { await invoke('queue_content_check', { id: site.id, itemId: item.id }); say(`${site.name} 开始试运行：用站点的内容技能校验改好的文档，不写入线上`); }
+  catch (e) { say(String(e), 'err'); }
+}
+export async function contentApplyItem(site: Site, item: OpsItem) {
+  const docs = [...new Set((item.content_runs ?? []).filter((r) => r.kind === 'check').map((r) => r.file))];
+  const list = docs.length ? `\n\n${docs.map((d) => `· ${d}`).join('\n')}` : '';
+  if (!(await confirmDialog(`把这条改好的文档写入 ${site.domain || site.name} 的线上数据库？写入会马上在网站上生效。${list}\n\nPilot 会先再试运行一遍，没通过就一份也不写；写完照常线上验收。`, { title: '写入线上', kind: 'warning', confirmText: '写入线上' }))) return;
+  try { await invoke('queue_content_apply', { id: site.id, itemId: item.id }); say(`${site.name} 开始写入线上，进度在站点的作业里`); }
+  catch (e) { say(String(e), 'err'); }
+}
+
 export async function acceptItem(site: Site, item: OpsItem) {
   const what = item.branch
     ? site.source === 'github' ? `合并 PR #${item.pr_number}` : `把本地分支 ${item.branch} 压缩合并进 ${site.default_branch}`

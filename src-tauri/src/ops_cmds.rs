@@ -122,6 +122,61 @@ pub fn queue_recheck(app: tauri::AppHandle, id: String, item_id: String) -> Resu
     site_runner::start(ctx(&app), &id, "recheck", "manual", Some(item_id))
 }
 
+/// 正文在线上数据库里的改动：试运行（只校验，不写入）
+#[tauri::command]
+pub fn queue_content_check(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
+    site_runner::start(ctx(&app), &id, "content_check", "manual", Some(item_id))
+}
+
+/// 正文在线上数据库里的改动：写入线上（先再试运行一遍）
+#[tauri::command]
+pub fn queue_content_apply(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
+    site_runner::start(ctx(&app), &id, "content_apply", "manual", Some(item_id))
+}
+
+/// 站点的内容技能（识别结果）。仓库里有技能、还没识别过：返回只带技能目录的一份（detected_at＝0），界面上给「识别」按钮。
+/// 没有技能就是 None。
+#[tauri::command]
+pub fn site_content_skill(state: tauri::State<'_, AppState>, id: String) -> Result<Option<crate::content_skill::ContentSkill>, String> {
+    let site = state.sites.get(&id)?;
+    if let Some(c) = crate::content_skill::load(&state.sites.data_dir(&id)) {
+        return Ok(Some(c));
+    }
+    if site.source != "local" {
+        return Ok(None);
+    }
+    let Ok(repo) = crate::site_git::code_dir(&site, None) else { return Ok(None) };
+    Ok(crate::content_skill::find_skills(&repo).into_iter().next().map(|(skill, _)| crate::content_skill::ContentSkill { skill, ..Default::default() }))
+}
+
+/// 重新识别内容技能（站点设置里的按钮）
+#[tauri::command]
+pub async fn site_content_skill_detect(state: tauri::State<'_, AppState>, id: String) -> Result<Option<crate::content_skill::ContentSkill>, String> {
+    let site = state.sites.get(&id)?;
+    if site.source != "local" {
+        return Err("只有本地文件夹来源的站点能用内容技能（技能的密钥在你的站点文件夹里）".into());
+    }
+    let dir = state.sites.data_dir(&id);
+    let repo = crate::site_git::code_dir(&site, None)?;
+    let ((brain, model), _) = site_runner::models_for(&site, &state.data_dir)?;
+    crate::content_skill::refresh(&dir, &state.data_dir, &repo, &brain, &model, true).await;
+    Ok(crate::content_skill::load(&dir))
+}
+
+/// 确认 / 取消内容技能：确认后运营任务按它取文档、改 JSON、写入线上
+#[tauri::command]
+pub fn site_content_skill_confirm(state: tauri::State<'_, AppState>, id: String, on: bool) -> Result<crate::content_skill::ContentSkill, String> {
+    state.sites.get(&id)?;
+    let dir = state.sites.data_dir(&id);
+    let mut c = crate::content_skill::load(&dir).ok_or("还没有识别过内容技能")?;
+    if on && !(c.external && c.error.is_empty() && !c.get.is_empty()) {
+        return Err("这个技能没识别出能用的命令，确认不了".into());
+    }
+    c.confirmed = on;
+    crate::content_skill::save(&dir, &c)?;
+    Ok(c)
+}
+
 #[tauri::command]
 pub fn queue_accept(app: tauri::AppHandle, id: String, item_id: String) -> Result<String, String> {
     site_runner::start(ctx(&app), &id, "accept", "manual", Some(item_id))

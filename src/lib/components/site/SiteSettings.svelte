@@ -7,6 +7,7 @@
   import VpsAuth from './VpsAuth.svelte';
   import SiteConfigCard from './SiteConfigCard.svelte';
   import SiteDynamicSettings from './SiteDynamicSettings.svelte';
+  import SiteContentSkill from './SiteContentSkill.svelte';
   import { isPagesDirect, isVpsManaged } from '$lib/state/dynamic.svelte.js';
   import SiteVpsCard from './SiteVpsCard.svelte';
   import { app, say } from '$lib/state/app.svelte.js';
@@ -174,6 +175,9 @@
     {/if}
 
     <div class="wide"><SiteConfigCard {site} /></div>
+
+    <!-- 仓库自带内容技能、正文在线上数据库里的站点：运营任务按技能取文档、试运行、写入（没有技能不显示） -->
+    <SiteContentSkill {site} />
 
     <!-- 第三行「功能」：表单和评论，平时一行。只有用得上的站点才显示（Pilot 上传到 Pages，或 Pilot 托管的服务器）；
          Workers / 绑定 GitHub 的 Pages / 自带发布脚本的服务器用不了，改版中的站点在改版进度里配，都不放这张卡 -->
