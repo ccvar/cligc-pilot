@@ -1,6 +1,6 @@
 [package]
 name = "cligc-pilot"
-version = "0.4.0"
+version = "0.5.0"
 description = "Cligc Pilot desktop client"
 authors = ["cligc"]
 license = "PolyForm-Noncommercial-1.0.0"
