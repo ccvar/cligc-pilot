@@ -83,7 +83,45 @@ struct Fetched {
     challenged: bool,
 }
 
+/// 打开一页；静态站的「页面已移动」跳转页（`<meta http-equiv="refresh">`）和 301 一样跟过去，查跳到的那一页。
+/// 合并、改网址的任务给旧地址生成的就是这种页面（Astro 的 redirects、Hugo 的 aliases、手写的跳转页）：
+/// 它本来就带 noindex、canonical 指向新地址、没有描述，当成正文页查就全是误报
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
+    let mut f = fetch_once(client, url).await?;
+    for _ in 0..3 {
+        let from = if f.final_url.is_empty() { url.to_string() } else { f.final_url.clone() };
+        let Some(to) = (200..300).contains(&f.status).then(|| meta_refresh(&f.body, &from)).flatten() else { break };
+        f = fetch_once(client, &to).await?;
+    }
+    Ok(f)
+}
+
+/// 跳转页指向的同站地址：等待不超过 5 秒、指向别的页面。跨站的、指向自己的（定时刷新）不算跳转
+fn meta_refresh(html: &str, from: &str) -> Option<String> {
+    let tag = tags(html, "meta").into_iter().find(|t| attr(t, "http-equiv").eq_ignore_ascii_case("refresh"))?;
+    let content = decode(&attr(tag, "content"));
+    let (delay, rest) = content.split_once(';').unwrap_or((content.as_str(), ""));
+    if delay.trim().parse::<f64>().ok()? > 5.0 {
+        return None;
+    }
+    let rest = rest.trim();
+    let target = if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("url=") { &rest[4..] } else { return None };
+    let target = target.trim().trim_matches(|c| c == '\'' || c == '"').trim();
+    let (scheme, after) = from.split_once("://")?;
+    let host = after.split('/').next().unwrap_or("");
+    let abs = if target.starts_with("http://") || target.starts_with("https://") {
+        target.to_string()
+    } else if target.starts_with('/') && !target.starts_with("//") {
+        format!("{scheme}://{host}{target}")
+    } else {
+        return None;
+    };
+    let bare = |h: &str| h.trim_start_matches("www.").to_ascii_lowercase();
+    let to_host = abs.split_once("://").map(|(_, r)| r.split('/').next().unwrap_or("")).unwrap_or("");
+    (bare(to_host) == bare(host) && !same_page(&abs, from)).then_some(abs)
+}
+
+async fn fetch_once(client: &reqwest::Client, url: &str) -> Result<Fetched, String> {
     // 带一个随机参数绕开缓存，看到的是刚上线的版本
     let sep = if url.contains('?') { '&' } else { '?' };
     let busted = format!("{url}{sep}_pv={}", crate::now_secs());
@@ -869,6 +907,28 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn moved_pages_are_followed_like_a_301() {
+        // cexqa：合并重复问答后旧地址生成的跳转页
+        let stub = r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>页面已移动 - CEXQA</title><meta name="robots" content="noindex, follow"><link rel="canonical" href="https://cexqa.com/qa/eth-withdraw-network-fee/"><meta http-equiv="refresh" content="0; url=https://cexqa.com/qa/eth-withdraw-network-fee/"></head></html>"#;
+        let from = "https://cexqa.com/qa/eth-withdraw-l2-arbitrum-base/";
+        assert_eq!(meta_refresh(stub, from).as_deref(), Some("https://cexqa.com/qa/eth-withdraw-network-fee/"));
+        // 相对地址、带引号、大小写
+        assert_eq!(meta_refresh(r#"<META HTTP-EQUIV="Refresh" CONTENT="0;URL='/new/'">"#, "https://www.a.com/old/").as_deref(), Some("https://www.a.com/new/"));
+        assert_eq!(meta_refresh(r#"<meta http-equiv="refresh" content="0; url=https://a.com/new">"#, "https://www.a.com/old/").as_deref(), Some("https://a.com/new"));
+        // 不算跳转：跨站、指向自己的定时刷新、等很久、没有地址、协议相对地址
+        for (html, why) in [
+            (r#"<meta http-equiv="refresh" content="0; url=https://evil.com/">"#, "跨站"),
+            (r#"<meta http-equiv="refresh" content="0; url=/old/">"#, "自己"),
+            (r#"<meta http-equiv="refresh" content="60; url=/new/">"#, "太久"),
+            (r#"<meta http-equiv="refresh" content="300">"#, "没地址"),
+            (r#"<meta http-equiv="refresh" content="0; url=//evil.com/">"#, "协议相对"),
+            (r#"<meta name="description" content="0; url=/new/">"#, "不是 refresh"),
+        ] {
+            assert_eq!(meta_refresh(html, "https://a.com/old/"), None, "{why}");
+        }
+    }
+
     use super::*;
 
     #[test]
