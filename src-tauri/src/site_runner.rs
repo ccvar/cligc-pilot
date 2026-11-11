@@ -1730,6 +1730,7 @@ async fn implement(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, level: u
         // 重做是新的一轮：上一版用掉的「修一次」机会（修构建、补链接、质检重写）重新给
         i.build_fixed = false;
         i.links_fixed = false;
+        i.dead_links_fixed = false;
         i.jev_rewritten = false;
     })?;
     let checks = if site.build.checks.is_empty() { String::new() } else { format!("和检查（{}）", site.build.checks.join("、")) };
@@ -2240,6 +2241,35 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         } else if !lonely.is_empty() {
             reasons.push(format!("新页面 {} 没有任何站内链接指向它（会成孤立页）{}，留给你确认", lonely.join("、"), if item.links_fixed { "，AI 补过一次还是没有" } else { "" }));
             kinds.push("orphan".into());
+        }
+    }
+    // 这次新加的站内链接要指得到构建产物里的页面（gategas：链到 /guides/fake-sites/，真实地址是 /safety/fake-sites/）：
+    // 打不开的交回 AI 改一次，告诉它产物里同名的页面；还不对留给你确认。只查静态构建（产物里有首页）
+    if built.is_ok() && out_dir.join("index.html").is_file() {
+        let links = crate::managed::added_links(&diff, &site.domain);
+        let dead = if links.is_empty() {
+            Vec::new()
+        } else {
+            let redirects = std::fs::read_to_string(out_dir.join("_redirects")).unwrap_or_default();
+            crate::site_make::dead_links(&links, &built_files(&out_dir), &redirects)
+        };
+        let show = dead.iter().map(|(l, same)| if same.is_empty() { l.clone() } else { format!("{l}（网站里有 {}）", same.join("、")) }).collect::<Vec<_>>().join("、");
+        if !dead.is_empty() && level >= 5 && !hold && !item.dead_links_fixed && !job.canceled() {
+            job.line(&format!("新加的站内链接在构建出来的网站里打不开：{show}，交回 AI 改链接"));
+            site_ops::update_item(&site_dir, &item.id, now(), |i| i.dead_links_fixed = true)?;
+            let msg = format!(
+                "你刚才在当前分支上为「{title}」加的这些站内链接，在构建出来的网站里没有对应的页面，上线后会是 404：{show}。\n\
+请把它们改成网站里真实存在的页面地址（括号里是网站里同名的页面，多半就是你想链的那个，确认主题对得上再用）；\n\
+网站里确实没有合适的页面，就去掉链接、保留文字。只改这些链接，不要改别的内容，不要改依赖、构建和部署配置。\n",
+                title = item.opp.title,
+            );
+            fix_round(ctx, site, job, item, &wt, msg, "改打不开的站内链接", "ops: fix dead links").await?;
+            return Box::pin(verify_and_ship(ctx, site, job, item, level, cb, &wt, &base_sha, &branch)).await;
+        }
+        if !dead.is_empty() {
+            reasons.push(format!("新加的站内链接打不开：{show}{}，留给你确认", if item.dead_links_fixed { "，AI 改过一次还是不对" } else { "" }));
+        } else if !links.is_empty() {
+            job.line(&format!("新加的 {} 个站内链接在构建出来的网站里都打得开", links.len()));
         }
     }
     let mut verdict = if let Err(e) = &built {

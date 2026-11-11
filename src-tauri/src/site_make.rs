@@ -664,6 +664,72 @@ pub fn inbound_links(out: &Path) -> std::collections::HashMap<String, usize> {
     sources.into_iter().map(|(k, v)| (k, v.len())).collect()
 }
 
+/// 这次新加的站内链接里打不开的：构建产物里没有这个页面或文件，`_redirects` 里也没有跳转接住。
+/// 只查上一级目录在产物里存在的（/guides/x/ 要有 guides/ 目录）：/go/binance 这类 Worker / 函数现算的地址产物里本来就没有，
+/// 站点根下的一级地址也可能是 Worker 路由，都不查。返回（链接，产物里同名的页面——多半就是想链的那个）
+pub fn dead_links(links: &[String], files: &[String], redirects: &str) -> Vec<(String, Vec<String>)> {
+    let set: std::collections::HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
+    let mut dirs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for f in files {
+        let mut at = f.as_str();
+        while let Some((d, _)) = at.rsplit_once('/') {
+            dirs.insert(d);
+            at = d;
+        }
+    }
+    let froms: Vec<&str> = redirects.lines().map(str::trim).filter(|t| !t.is_empty() && !t.starts_with('#')).filter_map(|t| t.split_whitespace().next()).collect();
+    // 产物里的页面 → 网址路径（a/b/index.html → /a/b/，a/b.html → /a/b）
+    let page = |f: &str| f.strip_suffix("/index.html").map(|d| format!("/{d}/")).or_else(|| f.strip_suffix(".html").map(|d| format!("/{d}")));
+    let mut out = Vec::new();
+    for link in links {
+        let raw = pct_decode(link);
+        let t = raw.trim_start_matches('/').trim_end_matches('/');
+        if t.is_empty() || t.starts_with("cdn-cgi") {
+            continue;
+        }
+        let Some((parent, last)) = t.rsplit_once('/') else { continue };
+        if !dirs.contains(parent) {
+            continue;
+        }
+        let t = t.strip_suffix("/index.html").or_else(|| t.strip_suffix(".html")).unwrap_or(t);
+        if [t.to_string(), format!("{t}/index.html"), format!("{t}.html")].iter().any(|c| set.contains(c.as_str())) {
+            continue;
+        }
+        let covered = froms.iter().any(|fr| match fr.strip_suffix('*') {
+            Some(pre) => link.starts_with(pre),
+            None => norm_path(fr) == norm_path(link),
+        });
+        if covered {
+            continue;
+        }
+        let last = last.strip_suffix(".html").unwrap_or(last);
+        let mut same: Vec<String> = files.iter().filter_map(|f| page(f)).filter(|p| p.trim_end_matches('/').rsplit('/').next() == Some(last)).collect();
+        same.sort_by_key(|s| s.len());
+        same.truncate(3);
+        out.push((link.clone(), same));
+    }
+    out
+}
+
+/// 网址里的 %XX 还原成文字（中文路径的链接常是编码过的，产物里的文件名是原文）
+fn pct_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = ((b[i + 1] as char).to_digit(16), (b[i + 2] as char).to_digit(16)) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
 /// 规范化网址路径用于比较：去掉 index.html / .html 和末尾斜杠。
 pub fn norm_path(p: &str) -> String {
     let p = p.split(['#', '?']).next().unwrap_or("");
@@ -1172,6 +1238,15 @@ pub fn readiness(out: &Path) -> Vec<Check> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dead_links_are_checked_against_the_built_site() {
+        let files: Vec<String> = ["index.html", "safety/fake-sites/index.html", "hans/safety/fake-sites/index.html", "guides/kyc/index.html", "guides/old.html", "images/a.webp", "指南/入门/index.html"].iter().map(|s| s.to_string()).collect();
+        let links: Vec<String> = ["/guides/fake-sites/", "/guides/kyc/", "/guides/kyc", "/guides/old.html", "/guides/old", "/images/a.webp", "/go/binance", "/pricing/", "/", "/cdn-cgi/l/email-protection", "/%E6%8C%87%E5%8D%97/%E5%85%A5%E9%97%A8/", "/guides/moved/", "/guides/legacy/x/"].iter().map(|s| s.to_string()).collect();
+        let dead = dead_links(&links, &files, "/guides/moved/ /guides/kyc/ 301\n/guides/legacy/* /guides/:splat 301\n");
+        // gategas：/guides/fake-sites/ 打不开，告诉 AI 网站里同名的页面
+        assert_eq!(dead, vec![("/guides/fake-sites/".to_string(), vec!["/safety/fake-sites/".to_string(), "/hans/safety/fake-sites/".to_string()])]);
+    }
 
     #[test]
     fn page_facts_take_the_newest_date_on_the_page() {

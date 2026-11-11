@@ -1444,6 +1444,39 @@ pub fn code_prose_units(diff: &str) -> usize {
 
 /// 这次改动里新写进代码文件的正文：Go 文件、语言包 JSON 这类里新加行的字符串文字，加起来成段（≥ 200 字 / 词）的文件。
 /// 返回（文件路径，新加的正文），最多 5 个。页面文件（见 content_page_files）不算在这里。
+/// 这次改动里新加的站内链接：Markdown 的 ](/x/)、HTML 的 href="/x/"，写全了本站域名的也算。返回网址路径（去掉 # 和 ?）
+pub fn added_links(diff: &str, domain: &str) -> Vec<String> {
+    let hosts = [format!("https://{domain}"), format!("https://www.{domain}"), format!("http://{domain}"), format!("http://www.{domain}")];
+    let mut out: Vec<String> = Vec::new();
+    for f in split_diff(diff) {
+        if f.deleted || f.file.starts_with(".pilot/") || f.file.contains("/.pilot/") {
+            continue;
+        }
+        for l in net_added(&f) {
+            for start in ["](", "href=\"", "href='"] {
+                let mut rest = l.as_str();
+                while let Some(i) = rest.find(start) {
+                    rest = &rest[i + start.len()..];
+                    let end = rest.find(|c: char| c == ')' || c == '"' || c == '\'' || c.is_whitespace()).unwrap_or(rest.len());
+                    let mut h = &rest[..end];
+                    for host in &hosts {
+                        if let Some(p) = h.strip_prefix(host.as_str()) {
+                            h = if p.is_empty() { "/" } else { p };
+                        }
+                    }
+                    if h.starts_with('/') && !h.starts_with("//") {
+                        let p = h.split(['#', '?']).next().unwrap_or("").to_string();
+                        if !p.is_empty() && !out.contains(&p) {
+                            out.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 这次改动里新建的文件
 pub fn new_files(diff: &str) -> Vec<String> {
     split_diff(diff).into_iter().filter(|f| f.new_file).map(|f| f.file).collect()
@@ -1923,7 +1956,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 13;
+pub const RULES_V: u32 = 14;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2612,6 +2645,12 @@ mod tests {
         let g: &'static [String] = Box::leak(outs.into_boxed_slice());
         assert!(verdict(&diff, &r(g)).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn links_added_in_this_change() {
+        let d = "diff --git a/src/content/guides-src/us.md b/src/content/guides-src/us.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/guides-src/us.md\n@@ -0,0 +1,3 @@\n+相关的辨识方式见 [假冒网站怎么辨认](/guides/fake-sites/)，还有 [KYC](/guides/kyc/#steps \"标题\") 和 [外站](https://binance.com/x)。\n+<a href=\"https://www.gategas.com/tools/check/?a=1\">工具</a> <a href='//cdn.x.com/a.js'>x</a> [首页](https://gategas.com)\n";
+        assert_eq!(added_links(d, "gategas.com"), vec!["/guides/fake-sites/", "/guides/kyc/", "/", "/tools/check/"]);
     }
 
     #[test]

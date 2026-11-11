@@ -725,6 +725,9 @@ pub struct QueueItem {
     /// 全托管时新页面没有站内链接指向它，已经交回 AI 补过一次链接（只补一次）。
     #[serde(default)]
     pub links_fixed: bool,
+    /// 全托管时这次新加的站内链接在构建产物里打不开，已经交回 AI 改过一次（只改一次）。
+    #[serde(default)]
+    pub dead_links_fixed: bool,
     /// 新页面有没有被 Google 编入索引（上线 3 天后开始用 URL 检查查，见 index_check）：
     /// 空＝还没查 | indexed | not_indexed（查过、还没编入）| error（查不了，比如没接 Search Console）
     #[serde(default)]
