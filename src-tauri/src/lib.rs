@@ -4847,6 +4847,12 @@ pub fn run() {
     // GUI 进程的 PATH / 代理是裸的，必须最先修复，否则找不到 claude/node 且直连被墙。
     path_env::fix();
     apply_system_proxy_to_process();
+    // 运营任务（改、构建、上线、验收）是一整串很大的异步任务，tokio 默认 2 MB 的工作线程栈不够用，debug 版本里更明显
+    // （2026-11-12 tailcan 上线后验收时 dev 版崩了：tokio-rt-worker has overflowed its stack）。自己建运行时，给 16 MB
+    let rt: &'static tokio::runtime::Runtime = Box::leak(Box::new(
+        tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 * 1024 * 1024).build().expect("tokio runtime"),
+    ));
+    tauri::async_runtime::set(rt.handle().clone());
 
     tauri::Builder::default()
         .plugin(sftp_drop::plugin())
