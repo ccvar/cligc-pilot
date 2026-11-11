@@ -167,8 +167,7 @@ pub fn plan_pages(files: &[(String, bool)], code: &[(String, String)]) -> Vec<Pl
 /// （一次改好几页的任务里，别的页面答不上目标页的问题是正常的），其它四项每页都查。
 /// 每页一次请求（几个问题一起问）；任何一页调用失败就整体返回 Err，调用方按原规则走。
 pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, page_url: &str, target: &str, repo: &Path, pages: &[Planned], before: &HashMap<String, String>) -> Result<Vec<PageQuality>, String> {
-    let names: Vec<(String, bool)> = pages.iter().map(|p| (p.file.clone(), p.new_file)).collect();
-    let target_file = target_page(page_url, &names);
+    let target_file = target_page(page_url, &target_candidates(pages));
     let mut out = Vec::new();
     for p in pages {
         let file = &p.file;
@@ -199,6 +198,13 @@ pub async fn check_pages(jev: &Jev, site: &Site, positioning: &str, page_url: &s
         out.push(q);
     }
     Ok(out)
+}
+
+/// 能当「任务针对的那一页」去问目标搜索词的：页面文件，和新写的代码文件（整页正文写在 Go / JSON 里）。
+/// 已有的代码文件（seo.go 里给所有 ETF 页加一段描述写法这类）是很多页面共用的模板片段，不是哪一页的正文：
+/// 拿它问「有没有回答目标搜索问题」答不上是必然的，任务带的搜索词还常常是另一只股票页的。其它四项照查
+pub fn target_candidates(pages: &[Planned]) -> Vec<(String, bool)> {
+    pages.iter().filter(|p| !p.synthetic || p.new_file).map(|p| (p.file.clone(), p.new_file)).collect()
 }
 
 /// 改动里哪个文件是任务针对的页面：只改了一页就是它；改了几页时，拿网址路径的各段和文件路径的尾部对
@@ -422,6 +428,21 @@ mod tests {
         assert_eq!((p.len(), p[0].extra.as_str(), p[1].synthetic), (2, "", true));
         // 没有代码正文：和以前一样
         assert_eq!(plan_pages(&files(&["a.md"]), &[]), vec![Planned { file: "a.md".into(), new_file: false, extra: String::new(), synthetic: false }]);
+    }
+
+    #[test]
+    fn shared_code_files_are_not_asked_the_target_query() {
+        // stocknas：只改了已有的 internal/web/seo.go（所有 ETF 页共用的描述写法），任务网址 /en/stock/SGOV、搜索词是 SOXL 的
+        let mut p = plan_pages(&[], &[("internal/web/seo.go".to_string(), "x".to_string())]);
+        p[0].new_file = false;
+        assert!(target_candidates(&p).is_empty());
+        assert_eq!(target_page("https://stocknas.com/en/stock/SGOV", &target_candidates(&p)), None);
+        // 新写的代码文件（整页正文在 austrac_en.go 里）照问
+        p[0].new_file = true;
+        assert_eq!(target_page("https://vibcg.com/en/austrac", &target_candidates(&p)).as_deref(), Some("internal/web/seo.go"));
+        // 页面文件照问
+        let p = plan_pages(&[("src/content/a.md".to_string(), false)], &[]);
+        assert_eq!(target_candidates(&p).len(), 1);
     }
 
     #[test]

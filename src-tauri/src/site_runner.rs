@@ -2280,8 +2280,13 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         let files = crate::managed::content_page_files(&diff);
         // 正文写在代码文件里的站点（Go 模板 + 内容 .go、语言包 JSON）：代码文件里新写的正文也要判
         let code = crate::managed::content_code_prose(&diff);
-        let pages = crate::jev_checks::plan_pages(&files, &code);
-        let names: Vec<(String, bool)> = pages.iter().map(|p| (p.file.clone(), p.new_file)).collect();
+        let mut pages = crate::jev_checks::plan_pages(&files, &code);
+        // 代码文件按这次是不是新建的来记：改已有的共用代码（seo.go 这类）不拿目标搜索词问（见 target_candidates）
+        let created = crate::managed::new_files(&diff);
+        for p in pages.iter_mut().filter(|p| p.synthetic) {
+            p.new_file = created.contains(&p.file);
+        }
+        let names = crate::jev_checks::target_candidates(&pages);
         if pages.is_empty() {
             job.step("quality", "skipped", "只改了标题、描述、数据或代码，没有成段的页面正文");
         } else {
@@ -2295,7 +2300,9 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                 }
             }
             // 「有没有回答目标搜索问题」只问任务针对的那一页；一次改几页时别的页面答不上是正常的
-            if pages.len() > 1 {
+            if names.is_empty() {
+                job.line("改的都是很多页面共用的代码（不是哪一页的正文），目标搜索词这次不判，只查信息量、相关度、来源和遗留说明文字");
+            } else if pages.len() > 1 {
                 match crate::jev_checks::target_page(&item.opp.page, &names) {
                     Some(t) => job.line(&format!("改了 {} 个页面，目标搜索词只用来判 {t}，其它页面查信息量、相关度、来源和遗留说明文字", pages.len())),
                     None => job.line(&format!("改了 {} 个页面，没有一页和任务网址 {} 对得上，目标搜索词这次不判，只查信息量、相关度、来源和遗留说明文字", pages.len(), item.opp.page)),
