@@ -1576,12 +1576,226 @@ fn data_file(path: &str) -> bool {
         && !matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin")
 }
 
-/// 去掉一行里的字符串字面量，返回（剩下的代码部分，字符串内容）。模板字符串里有 `${` 返回 None（是代码）。
+/// 去掉反引号字符串里只插一个变量名的 `${B}`（辅助脚本拼网址用的），插表达式、调用的原样留着。
+/// 只给构建和上线都不跑的辅助脚本用：会上线的数据文件里插值照样算代码
+fn drop_var_interp(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(i) = rest.find("${") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find('}') {
+            Some(n) if n > 0 && !after[..n].starts_with(|c: char| c.is_ascii_digit()) && after[..n].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') => rest = &after[n + 1..],
+            _ => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 翻译文件：放在 i18n / locales 这类目录里、文件名是语言代码（en.toml、active.zh-CN.toml、zh_Hans.yml、en-US.json）
+fn locale_file(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    if matches!(first, ".github" | "node_modules" | "deploy" | "migrations" | "scripts" | "bin" | "worker" | "workers" | "functions") {
+        return false;
+    }
+    let Some((stem, ext)) = name.rsplit_once('.') else { return false };
+    let lang = stem.rsplit('.').next().unwrap_or(stem);
+    let mut parts = lang.split(['-', '_']);
+    let head_ok = parts.next().is_some_and(|h| (2..=3).contains(&h.len()) && h.chars().all(|c| c.is_ascii_lowercase()));
+    let lang_ok = head_ok && parts.all(|x| (2..=4).contains(&x.len()) && x.chars().all(|c| c.is_ascii_alphanumeric()));
+    matches!(ext, "toml" | "yaml" | "yml" | "json")
+        && lang_ok
+        && p.split('/').rev().skip(1).any(|d| matches!(d.to_ascii_lowercase().as_str(), "i18n" | "l10n" | "locales" | "locale" | "lang" | "langs" | "translations" | "messages"))
+}
+
+/// 行首的一个字符串（"…" 或 '…'），返回（内容，剩下的部分）。三引号（多行字符串）不算。
+fn quoted(s: &str) -> Option<(String, &str)> {
+    let q = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    if s.starts_with("\"\"\"") || s.starts_with("\'\'\'") {
+        return None;
+    }
+    let mut out = String::new();
+    let mut it = s.char_indices().skip(1);
+    while let Some((i, c)) = it.next() {
+        if c == '\\' && q == '"' {
+            out.push(it.next()?.1);
+        } else if c == q {
+            return Some((out, &s[i + c.len_utf8()..]));
+        } else {
+            out.push(c);
+        }
+    }
+    None
+}
+
+/// 「键 = …」/「键: …」的键：裸键（字母数字 _ -）或带引号的键，点分键（funding.title、a."b.c"）也算
+fn locale_key(t: &str) -> Option<(String, &str)> {
+    let (mut key, mut rest) = (String::new(), t);
+    loop {
+        if rest.starts_with('"') || rest.starts_with('\'') {
+            let (k, r) = quoted(rest)?;
+            key.push_str(&k);
+            rest = r;
+        } else {
+            let n = rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());
+            if n == 0 {
+                return None;
+            }
+            key.push_str(&rest[..n]);
+            rest = &rest[n..];
+        }
+        match rest.trim_start().strip_prefix('.') {
+            Some(r) => {
+                key.push('.');
+                rest = r.trim_start();
+            }
+            None => return Some((key, rest)),
+        }
+    }
+}
+
+/// 翻译文件里的一行：结构行（空行、注释、[分节]、下一层的开头、JSON 的括号）返回 Some(None)，
+/// 「键 = 文字」返回 Some(Some((键, 文字)))；别的写法（数字、布尔、数组、多行字符串、YAML 锚点和标签）返回 None，按配置拦
+fn locale_kv(file: &str, line: &str) -> Option<Option<(String, String)>> {
+    let t = line.trim();
+    if t.is_empty() {
+        return Some(None);
+    }
+    let end_ok = |tail: &str| {
+        let tail = tail.trim();
+        tail.is_empty() || tail.starts_with('#')
+    };
+    match file.rsplit('.').next().unwrap_or("") {
+        "toml" => {
+            if t.starts_with('#') {
+                return Some(None);
+            }
+            if t.starts_with('[') {
+                let inner = t.trim_start_matches('[').trim_end_matches(']');
+                return (t.ends_with(']') && !inner.is_empty() && inner.chars().all(|c| c.is_alphanumeric() || "_-. \"".contains(c))).then_some(None);
+            }
+            let (key, rest) = locale_key(t)?;
+            let (val, tail) = quoted(rest.trim_start().strip_prefix('=')?.trim_start())?;
+            end_ok(tail).then_some(Some((key, val)))
+        }
+        "yaml" | "yml" => {
+            if t.starts_with('#') || t == "---" {
+                return Some(None);
+            }
+            let (key, rest) = locale_key(t)?;
+            let v = rest.trim_start().strip_prefix(':')?.trim();
+            if v.is_empty() || v.starts_with('#') {
+                return Some(None);
+            }
+            if v.starts_with('"') || v.starts_with('\'') {
+                let (val, tail) = quoted(v)?;
+                return end_ok(tail).then_some(Some((key, val)));
+            }
+            let plain = v.split(" #").next().unwrap_or(v).trim();
+            let bad = plain.starts_with(|c: char| "!&*|>{[%@`-?:,".contains(c))
+                || matches!(plain.to_ascii_lowercase().as_str(), "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~")
+                || plain.parse::<f64>().is_ok();
+            (!bad).then_some(Some((key, plain.to_string())))
+        }
+        "json" => {
+            if matches!(t.trim_end_matches(','), "{" | "}") {
+                return Some(None);
+            }
+            let (key, rest) = quoted(t)?;
+            let rest = rest.trim_start().strip_prefix(':')?.trim();
+            if rest == "{" {
+                return Some(None);
+            }
+            let (val, tail) = quoted(rest)?;
+            matches!(tail.trim(), "" | ",").then_some(Some((key, val)))
+        }
+        _ => None,
+    }
+}
+
+/// 文字里的占位符：Go / C 的 %s %d %.2f %[1]s，模板的 {{ .Name }}，{name} / {0}；排好序方便比较
+fn placeholders(s: &str) -> Vec<String> {
+    let b: Vec<char> = s.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == '%' {
+            if b.get(i + 1) == Some(&'%') {
+                i += 2;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < b.len() && (b[j].is_ascii_digit() || "-+#.[]*".contains(b[j])) {
+                j += 1;
+            }
+            if j < b.len() && b[j].is_ascii_alphabetic() {
+                out.push(b[i..=j].iter().collect());
+                i = j + 1;
+                continue;
+            }
+        } else if b[i] == '{' {
+            let close = if b.get(i + 1) == Some(&'{') { "}}" } else { "}" };
+            let rest: String = b[i..].iter().collect();
+            if let Some(n) = rest.find(close) {
+                let ph = &rest[..n + close.len()];
+                let inner = ph.trim_matches(|c| c == '{' || c == '}').trim();
+                if !inner.is_empty() && inner.chars().all(|c| c.is_alphanumeric() || "_. $|:".contains(c)) {
+                    out.push(ph.split_whitespace().collect());
+                    i += ph.chars().count();
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.sort();
+    out
+}
+
+/// 翻译文件里会改坏页面的写法：同一个键的占位符变了（%s 少一个，页面上就是 %!s(MISSING)），
+/// 或者条目被删了（模板里还在用的话，页面上露出键名或空白）
+fn locale_problem(file: &str, f: &FileDiff) -> Option<String> {
+    let kv = |ls: &[String]| -> Vec<(String, String)> { ls.iter().filter_map(|l| locale_kv(file, l).flatten()).collect() };
+    let (old, new) = (kv(&f.removed), kv(&f.added));
+    let mut seen: Vec<&str> = Vec::new();
+    for (k, _) in &old {
+        if seen.contains(&k.as_str()) {
+            continue;
+        }
+        seen.push(k);
+        let was: Vec<&String> = old.iter().filter(|x| &x.0 == k).map(|x| &x.1).collect();
+        let now: Vec<&String> = new.iter().filter(|x| &x.0 == k).map(|x| &x.1).collect();
+        if now.len() < was.len() {
+            return Some(format!("删掉了翻译条目 {k}（模板里还在用的话，页面上会露出键名或空白）"));
+        }
+        for (a, b) in was.iter().zip(&now) {
+            let (pa, pb) = (placeholders(a), placeholders(b));
+            if pa != pb {
+                let show = |p: &[String]| if p.is_empty() { "没有".to_string() } else { p.join(" ") };
+                return Some(format!("{k} 的占位符从「{}」变成「{}」（对不上的话页面上会显示乱码）", show(&pa), show(&pb)));
+            }
+        }
+    }
+    None
+}
+
+/// 去掉一行里的字符串字面量，返回（剩下的代码部分，字符串内容）。模板字符串里有 `${`、
+/// 或者是带标签的模板串（run`x`）返回 None（是代码）。
 fn split_strings(line: &str) -> Option<(String, String)> {
     let (mut code, mut text) = (String::new(), String::new());
     let mut chars = line.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\'' || c == '"' || c == '`' {
+            // run`x`、obj.tag`x`：带标签的模板串是函数调用
+            if c == '`' && code.trim_end().ends_with(|e: char| e.is_alphanumeric() || "_$)]".contains(e)) {
+                return None;
+            }
             let mut closed = false;
             while let Some(d) = chars.next() {
                 if d == '\\' {
@@ -1704,7 +1918,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 10;
+pub const RULES_V: u32 = 11;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -1732,19 +1946,24 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         }
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
         let idle = rules.build_scripts.is_some_and(|b| idle_script(file, b));
-        if idle && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l)) {
+        // 截图清单里用 `${B}/support/...` 拼帮助中心网址的行也算数据（只插变量名，见 drop_var_interp）
+        if idle && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l) || data_line(&drop_var_interp(l))) {
             changed += f.added.len().min(f.removed.len()) + f.removed.len();
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
         }
         let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
+        // 翻译文件（Go 站的 internal/i18n/locales/en.toml、locales/zh-CN.json 这类）：只改了「键 = 文字」的行，
+        // 就是页面上的标题、描述、正文，按内容算；占位符变了、删了条目、文字里写脚本，照样留给你确认
+        let locale = !f.deleted && locale_file(file) && f.added.iter().chain(&f.removed).all(|l| locale_kv(file, l).is_some());
+        let data = data || locale;
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
         // 构建 / 检查 / 部署会跑到的脚本（不管放在哪个目录）：构建时在本机执行，任何等级都不自动改
         let in_build_chain = rules.build_scripts.is_some_and(|b| b.iter().any(|s| file.rsplit('/').next() == Some(s.as_str())));
         let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, rules.content_code) || (code == "all" && !edge_runtime(file)));
-        let forbidden = (hard_forbidden(file) && !allowed) || in_build_chain;
+        let forbidden = (hard_forbidden(file) && !allowed && !locale) || in_build_chain;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
             // 原因写准：构建会跑到的脚本、辅助脚本改了代码、其它一律不改的文件，分开说
@@ -1771,13 +1990,19 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         } else if !data && !content_ext.iter().any(|e| file.ends_with(&format!(".{e}"))) {
             reasons.push(block("", format!("{file}：不是页面内容文件")));
         }
+        if locale {
+            if let Some(why) = locale_problem(file, &f) {
+                reasons.push(block("", format!("{file}：{why}，留给你确认")));
+            }
+        }
         // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查。
         // SVG 和 XML（sitemap、RSS / Atom 订阅源）是发布出去的内容，没有东西执行它们，但里面一样能写 <script>
-        if is_page_file(file) || file.ends_with(".svg") || file.ends_with(".xml") {
+        if is_page_file(file) || file.ends_with(".svg") || file.ends_with(".xml") || locale {
             let mut seen: Vec<&str> = Vec::new();
             for l in net_added(&f) {
                 let t = l.trim_start();
-                let markdown = [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
+                // 翻译文字和 Markdown 一样：里面出现 <script> 就算插脚本
+                let markdown = locale || [".md", ".mdx", ".markdown"].iter().any(|e| file.ends_with(e));
                 let why = page_risky(l, markdown).or_else(|| if file.ends_with(".mdx") && (t.starts_with("import ") || t.starts_with("export ")) { risky_code(l) } else { None });
                 let Some(why) = why else { continue };
                 let kind = risky_kind(why);
@@ -1839,7 +2064,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         let page = is_page_file(file) || data || jsonish;
         if page {
             // 页面文件看整行；数据文件只看字符串里的文字
-            let texts: Vec<String> = f.added.iter().map(|a| if data || jsonish { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
+            let texts: Vec<String> = f.added.iter().map(|a| if locale { locale_kv(file, a).flatten().map(|kv| kv.1).unwrap_or_default() } else if data || jsonish { split_strings(a).map(|x| x.1).unwrap_or_default() } else { a.clone() }).collect();
             if !rules.lets("leak") {
                 for t in &texts {
                     if let Some(m) = leak_marker(t) {
@@ -1847,7 +2072,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                     }
                 }
             }
-            if f.new_file && !jsonish && rules.min_page > 0 && !rules.lets("thin") {
+            if f.new_file && !jsonish && !locale && rules.min_page > 0 && !rules.lets("thin") {
                 let min_page = rules.min_page;
                 let mut n = 0;
                 let mut in_frontmatter = false;
@@ -2385,6 +2610,29 @@ mod tests {
     }
 
     #[test]
+    fn locale_files_with_only_text_count_as_content() {
+        let d = |file: &str, body: &str| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -156,3 +156,3 @@\n{body}\n");
+        let why = |diff: &str| managed_verdict(diff, true, 0, "all", &[]).join("；");
+        // iepto：Go 站在 internal/i18n/locales/en.toml 里改标题和描述：放行
+        let iepto = "-\"funding.title\" = \"Funding rate comparison: Binance, OKX and Bybit\"\n+\"funding.title\" = \"Binance vs OKX vs Bybit funding rates, annualised | IEPTO\"\n-\"funding.desc\"  = \"Compare the latest settled funding rates, 100% gross.\"\n+\"funding.desc\"  = \"Latest settled funding rates side by side, 50% annualised.\"";
+        assert_eq!(why(&d("internal/i18n/locales/en.toml", iepto)), "");
+        // go-i18n 的分节写法、YAML、JSON
+        assert_eq!(why(&d("locales/active.zh-CN.toml", "+[funding_title]\n+other = \"资金费率对比\" # 标题")), "");
+        assert_eq!(why(&d("config/locales/en.yml", "-  title: Old title\n+  title: \"New title\"")), "");
+        assert_eq!(why(&d("internal/i18n/messages/en.json", "-  \"title\": \"Old\",\n+  \"title\": \"New\",")), "");
+        assert_eq!(why(&d("internal/i18n/locales/en.toml", "-\"x.tldr\" = \"At %s, the gap is %[2]s.\"\n+\"x.tldr\" = \"The gap is %[2]s at %s.\"")), "");
+        // 占位符对不上、删了条目、文字里写脚本：拦
+        assert!(why(&d("internal/i18n/locales/en.toml", "-\"x.tldr\" = \"At %s, the gap is %s.\"\n+\"x.tldr\" = \"The gap is %s.\"")).contains("占位符"));
+        assert!(why(&d("config/locales/en.yml", "-  hi: \"Hi {name}\"\n+  hi: \"Hello {user}\"")).contains("占位符"));
+        assert!(why(&d("internal/i18n/locales/en.toml", "-\"x.tldr\" = \"Old\"")).contains("删掉了翻译条目"));
+        assert!(why(&d("internal/i18n/locales/en.toml", "+\"x.note\" = \"<script>alert(1)</script>\"")).contains("插入脚本"));
+        // 不是翻译文件、或者写了文字以外的东西：照旧按配置拦
+        for (file, body) in [("internal/config/app.toml", "+port = \"8080\""), ("internal/i18n/locales/en.toml", "+\"x\" = \"\"\"\n+multi\n+\"\"\""), ("internal/i18n/locales/en.toml", "+limit = 5"), ("config/locales/en.yml", "+  on: yes"), ("internal/i18n/locales/settings.toml", "+\"a\" = \"b\""), ("scripts/locales/en.toml", "+\"a\" = \"b\"")] {
+            assert!(why(&d(file, body)).contains("服务端代码不自动改") || why(&d(file, body)).contains("不是页面内容文件"), "{file} {body}: {}", why(&d(file, body)));
+        }
+    }
+
+    #[test]
     fn idle_helper_scripts_with_only_data_pass() {
         let dir = std::env::temp_dir().join(format!("pilot-build-scripts-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("scripts")).unwrap();
@@ -2402,6 +2650,11 @@ mod tests {
         assert!(why(&d("scripts/place-shots.mjs", "  await rm(dir, { recursive: true });"), &r).contains("辅助脚本改了代码"));
         assert!(why(&d("scripts/rules.mjs", "  'min': '0',"), &r).contains("构建 / 检查 / 部署会跑到的脚本"));
         assert!(why(&d("scripts/place-shots.mjs", "  'a': 'b',"), &Rules { build_scripts: None, ..r }).contains("服务端代码不自动改"));
+        // cligx：截图清单里用 `${B}` 拼帮助中心网址的一行：放行；插表达式、调用、带标签的模板串照样拦
+        assert!(verdict(&d("scripts/shots.config.mjs", "  { id: 'binance-withdraw-reactivate-faq', url: `${B}/support/faq/detail/360038583951`, alt: '币安帮助中心', caption: '如何解禁提现' },"), &r).is_empty());
+        for bad in ["  { url: `${B + x}/a` },", "  { url: `${f()}` },", "  { url: `${B}${await x}` },", "  { url: run`x` },", "  { url: `${B` },"] {
+            assert!(why(&d("scripts/shots.config.mjs", bad), &r).contains("辅助脚本改了代码"), "{bad}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
