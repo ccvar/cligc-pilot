@@ -1499,10 +1499,23 @@ pub fn content_code_prose(diff: &str) -> Vec<(String, String)> {
         .filter(|f| !f.deleted && content_code_ext(&f.file) && !is_page_file(&f.file) && !manifest_file(&f.file) && !f.file.starts_with(".pilot/") && !f.file.contains("/.pilot/"))
         .filter_map(|f| {
             let text = f.added.iter().map(|l| literal_prose(l)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
-            (text_units(&text) >= 200).then_some((f.file, text))
+            if text_units(&text) < 200 {
+                return None;
+            }
+            // 数据里给数字配的出处（evidence: [网址, 原文] 这类）：网址不像句子，literal_prose 不要它；
+            // 不带上的话判断模型只看到一堆数字，必然说「没写来源」
+            let mut links: Vec<String> = f.added.iter().flat_map(|l| literal_urls(l)).collect();
+            links.dedup();
+            let text = if links.is_empty() { text } else { format!("{text}\n来源链接：\n{}", links.join("\n")) };
+            Some((f.file, text))
         })
         .take(5)
         .collect()
+}
+
+/// 一行代码里整个字符串就是网址的（`"https://…"`）：数据文件里写出处的地方
+fn literal_urls(line: &str) -> Vec<String> {
+    line.split(['"', '\'', '`']).map(str::trim).filter(|t| (t.starts_with("https://") || t.starts_with("http://")) && !t.contains(char::is_whitespace) && t.len() > 10).map(String::from).collect()
 }
 
 /// 页面源文件 → （标题，正文纯文字）：去掉代码块、import 行和 HTML 标签；标题从 frontmatter 的 title: 取，
@@ -2778,6 +2791,12 @@ mod tests {
         let got = content_code_prose(&diff);
         assert_eq!(got.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), vec!["internal/webapp/region_content.go"]);
         assert!(got[0].1.starts_with("第 0 段：香港证监会"));
+        assert!(!got[0].1.contains("来源链接"));
+        // 数据文件里给数字配的出处网址要跟着正文给判断模型看（cpsbee 亚马逊各国规则表：evidence 里的官方链接被丢掉，判成「数字没来源」）
+        let mut rows = long.clone();
+        rows.extend(["          [", "            \"https://affiliate-program.amazon.co.uk/help/operating/policies\",", "            \"(x) 24 hours elapse from that click\"", "          ],", "  \"note\": \"see https://x.com for more\","]);
+        let got = content_code_prose(&d("data/platform-guides.json", &rows));
+        assert!(got[0].1.ends_with("来源链接：\nhttps://affiliate-program.amazon.co.uk/help/operating/policies"), "{}", got[0].1);
         assert!(template_page_file("internal/webapp/templates/region-regulation.gohtml") && template_page_file("views/templates/page.html") && !template_page_file("src/content/a.md"));
     }
 
