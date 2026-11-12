@@ -822,6 +822,89 @@ async fn undeployed(dir: &std::path::Path, dirty: bool, head: &str, history: &[c
     o.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).any(|f| crate::site_git::changed_since(dir, f, r.ts))
 }
 
+/// VPS 站点在 Pilot 外面发布过（站点自己的发布脚本、别的会话）：服务器不报当前是哪一版，Pilot 只认得自己的上线记录。
+/// 拿上次上线之后这几次提交改过的静态文件（样式、脚本、图片），和线上同一个文件逐字节比：都是最新提交的样子，就是已经上线了。
+/// 没改静态文件、取不到、对不上：判断不了，照旧算没上线（只在有证据时放过）。结果按（文件夹，提交）记 10 分钟
+async fn vps_serves_head(dir: &std::path::Path, domain: &str, last: &str, head: &str) -> bool {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, bool)>>> = std::sync::OnceLock::new();
+    let seen = SEEN.get_or_init(Default::default);
+    let key = format!("{}|{last}|{head}", dir.display());
+    let now = crate::now_secs();
+    if let Some((at, v)) = seen.lock().unwrap().get(&key).copied() {
+        if now < at + 600 {
+            return v;
+        }
+    }
+    let v = vps_serves_head_now(dir, domain, last, head).await;
+    seen.lock().unwrap().insert(key, (now, v));
+    v
+}
+
+async fn vps_serves_head_now(dir: &std::path::Path, domain: &str, last: &str, head: &str) -> bool {
+    let domain = domain.trim();
+    if domain.is_empty() || last.is_empty() || head.is_empty() {
+        return false;
+    }
+    let Ok(names) = crate::site_git::git_ok(dir, &["diff", "--name-only", &format!("{last}..{head}")], "").await else { return false };
+    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15)).user_agent("Mozilla/5.0 (compatible; CligcPilot/1.0)").build() else { return false };
+    let mut checked = 0;
+    for f in names.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let urls = static_urls(f);
+        if urls.is_empty() {
+            continue;
+        }
+        // 删掉的文件、这几次提交改完又改回去的文件：说明不了什么
+        let Some(new) = show_bytes(dir, head, f).await else { continue };
+        if show_bytes(dir, last, f).await.as_deref() == Some(new.as_slice()) {
+            continue;
+        }
+        let mut matched = false;
+        for u in &urls {
+            let url = format!("https://{domain}{u}?_pv={}", crate::now_secs());
+            let Ok(r) = client.get(&url).send().await else { continue };
+            if r.status().is_success() && r.bytes().await.is_ok_and(|b| b.as_ref() == new.as_slice()) {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return false;
+        }
+        checked += 1;
+        if checked >= 6 {
+            break;
+        }
+    }
+    checked > 0
+}
+
+/// 仓库里的静态文件在线上的地址：…/static/x → /static/x；public/x → /x；根目录的 static/x 两种都试
+fn static_urls(path: &str) -> Vec<String> {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "css" | "js" | "mjs" | "svg" | "png" | "jpg" | "jpeg" | "webp" | "avif" | "gif" | "ico" | "woff2" | "webmanifest") {
+        return Vec::new();
+    }
+    let mut v: Vec<String> = Vec::new();
+    if let Some(rest) = path.strip_prefix("static/") {
+        v.push(format!("/{rest}"));
+        v.push(format!("/static/{rest}"));
+    } else if let Some(i) = path.find("/static/") {
+        v.push(path[i..].to_string());
+    }
+    if let Some(rest) = path.strip_prefix("public/") {
+        v.push(format!("/{rest}"));
+    } else if let Some(i) = path.find("/public/") {
+        v.push(format!("/{}", &path[i + "/public/".len()..]));
+    }
+    v
+}
+
+/// 某个提交里一个文件的原始内容（图片这类二进制也行）
+async fn show_bytes(dir: &std::path::Path, rev: &str, path: &str) -> Option<Vec<u8>> {
+    let o = tokio::process::Command::new("git").arg("-C").arg(dir).arg("show").arg(format!("{rev}:{path}")).output().await.ok()?;
+    o.status.success().then_some(o.stdout)
+}
+
 /// 最新提交的时间和未提交文件的修改时间里较晚的那个（秒）
 async fn changed_at(dir: &std::path::Path, dirty: bool) -> u64 {
     let mut t = crate::site_git::git_ok(dir, &["log", "-1", "--format=%ct"], "").await.ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
@@ -866,7 +949,15 @@ pub async fn site_status(state: tauri::State<'_, AppState>, id: String) -> Resul
     // 只有构建脚本自动重写的数据文件变了（上次在这里构建时写的）不算没上线的改动
     let real_dirty = dirty && !crate::site_runner::dirty_files(&site, &dir).await.is_some_and(|(_, generated)| generated);
     // 推送到 GitHub 就上线的站点在 Pilot 里没有上线记录：有没提交的改动或没推的提交才算没上线
-    let undeployed = git && if git_deploys(&site) { real_dirty || crate::site_git::ahead_of_origin(&dir, &site.default_branch).await } else { undeployed(&dir, real_dirty, &head, &history, since).await };
+    let mut undeployed = git && if git_deploys(&site) { real_dirty || crate::site_git::ahead_of_origin(&dir, &site.default_branch).await } else { undeployed(&dir, real_dirty, &head, &history, since).await };
+    // VPS 站点在外面发布过：线上的静态文件已经是最新提交的样子，就不算没上线（见 vps_serves_head）
+    if undeployed && !real_dirty && site.deploy.mode == "vps" {
+        if let Some(last) = history.iter().find(|r| r.ok && r.trigger != "files") {
+            if !head.is_empty() && head != last.commit && vps_serves_head(&dir, &site.domain, &last.commit, &head).await {
+                undeployed = false;
+            }
+        }
+    }
     let changed_at = if undeployed { changed_at(&dir, real_dirty).await } else { 0 };
     Ok(SiteStatus {
         code_dir: dir.to_string_lossy().into_owned(),
@@ -950,8 +1041,13 @@ pub async fn undeployed_sites(state: tauri::State<'_, AppState>) -> Result<Vec<P
             // 只查看上去没上线的站点；查不到（没网、没权限）就还按没上线算
             let pilot_until = history.iter().map(|r| r.ts + r.duration).max().unwrap_or(0);
             let prev_time = if site.source == "local" { crate::site_git::parent_time(std::path::Path::new(&site.local_dir)).await } else { 0 };
-            let deps = if site.deploy.mode == "vps" { Vec::new() } else { cf_deployments(&state, &site).await.unwrap_or_default() };
-            if !deployed_outside(&deps, &head, head_time, prev_time, pilot_until) {
+            let outside = if site.deploy.mode == "vps" {
+                // 服务器不报版本：拿改过的静态文件和线上比（见 vps_serves_head）
+                site.source == "local" && vps_serves_head(std::path::Path::new(&site.local_dir), &site.domain, &last.commit, &head).await
+            } else {
+                deployed_outside(&cf_deployments(&state, &site).await.unwrap_or_default(), &head, head_time, prev_time, pilot_until)
+            };
+            if !outside {
                 out.push(PendingDeploy { id: site.id.clone(), name: site.name.clone(), subject });
             }
         }
@@ -1500,6 +1596,32 @@ mod work_dir_tests {
         let _ = std::fs::remove_dir_all(&base);
         let _ = std::fs::remove_dir_all(&elsewhere);
         let _ = std::fs::remove_dir_all(store.build_dir("s1"));
+    }
+}
+
+#[cfg(test)]
+mod static_url_tests {
+    #[test]
+    fn repo_static_files_map_to_their_live_address() {
+        // oaneo：Go 站把静态文件放在 internal/web/static/ 下，线上是 /static/…
+        assert_eq!(super::static_urls("internal/web/static/css/site.css"), vec!["/static/css/site.css"]);
+        assert_eq!(super::static_urls("public/og/a.png"), vec!["/og/a.png"]);
+        assert_eq!(super::static_urls("static/js/x.js"), vec!["/js/x.js", "/static/js/x.js"]);
+        assert_eq!(super::static_urls("web/public/favicon.ico"), vec!["/favicon.ico"]);
+        // 模板、Go 代码、正文、不在静态目录里的样式：线上没有原样的文件，不拿来比
+        for p in ["internal/web/templates/layout.html", "internal/web/web.go", "content/a.md", "src/styles/a.css"] {
+            assert!(super::static_urls(p).is_empty(), "{p}");
+        }
+    }
+
+    /// 拿真实站点跑一遍：VPS_DIR=~/work/oaneo.com VPS_DOMAIN=oaneo.com VPS_LAST=<上次上线的提交> VPS_EXPECT=1
+    #[tokio::test]
+    #[ignore]
+    async fn vps_serves_head_real() {
+        let (dir, domain, last) = (std::env::var("VPS_DIR").unwrap(), std::env::var("VPS_DOMAIN").unwrap(), std::env::var("VPS_LAST").unwrap());
+        let dir = std::path::PathBuf::from(dir);
+        let head = crate::site_git::head_sha(&dir).await;
+        assert_eq!(super::vps_serves_head_now(&dir, &domain, &last, &head).await, std::env::var("VPS_EXPECT").as_deref() == Ok("1"));
     }
 }
 
