@@ -912,9 +912,20 @@ pub fn import_package(line: &str) -> Option<String> {
     if local || spec.is_empty() {
         return None;
     }
+    // Node 自带模块 `node:fs` 和 `fs` 是同一个
+    let spec = spec.strip_prefix("node:").unwrap_or(spec);
     let mut parts = spec.split('/');
     let first = parts.next()?;
     Some(if first.starts_with('@') { format!("{first}/{}", parts.next().unwrap_or_default()) } else { first.to_string() })
+}
+
+/// 站点代码里本来就在 import 的包（`git grep` 出来的 import 行）：Node 自带模块（`node:fs`）不在 package.json 里，
+/// 站点已经在用就不算新引入
+pub fn imported_packages(lines: &str) -> Vec<String> {
+    let mut out: Vec<String> = lines.lines().filter_map(import_package).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// 站点 package.json 里声明的依赖包名（dependencies / devDependencies）。
@@ -1956,7 +1967,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 14;
+pub const RULES_V: u32 = 15;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2064,7 +2075,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             let mut seen: Vec<&str> = Vec::new();
             for l in net_added(&f) {
                 let Some(why) = risky_code(l) else { continue };
-                // import 的是站点本来就装了的依赖（比如 Next 站里 import next/link）：不是新引入的外部包
+                // import 的是站点本来就装了、或者代码里本来就在用的包（Next 站里 import next/link、布局里已经 import 过的 node:fs）：不是新引入的外部包
                 if why == "引入了外部包" && import_package(l).is_some_and(|p| rules.deps.contains(&p)) {
                     continue;
                 }
@@ -2493,6 +2504,15 @@ mod sitemap_tests {
         let v: Vec<String> = verdict(d, &r).into_iter().map(|b| b.text).collect();
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].contains("fs"), "{v:?}");
+        // 站点别的文件里本来就 import 过 node:fs（firstmahj 的 BaseLayout 判断分享图在不在）：新文件里再用不算新包
+        assert_eq!(import_package("import { existsSync } from 'node:fs';").as_deref(), Some("fs"));
+        let used = imported_packages("import { existsSync } from 'node:fs';\nimport BaseLayout from './BaseLayout.astro';\nimport sitemap from '@astrojs/sitemap';\n");
+        assert_eq!(used, vec!["@astrojs/sitemap".to_string(), "fs".to_string()]);
+        let d = "diff --git a/src/layouts/ArticleLayout.astro b/src/layouts/ArticleLayout.astro\n--- a/src/layouts/ArticleLayout.astro\n+++ b/src/layouts/ArticleLayout.astro\n@@ -1 +1,2 @@\n+import { existsSync } from 'node:fs';\n+import { exec } from 'node:child_process';\n";
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &used };
+        let v: Vec<String> = verdict(d, &r).into_iter().map(|b| b.text).collect();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("执行命令"), "{v:?}");
     }
     #[test]
     fn feeds_and_manifests_are_published_content() {

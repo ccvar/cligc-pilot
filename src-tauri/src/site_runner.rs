@@ -2196,7 +2196,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     let commands: Vec<String> = std::iter::once(site.build.build.clone()).chain(site.build.checks.iter().cloned()).collect();
     let scripts = crate::managed::build_scripts(&site.app_dir(&wt), &commands);
     rules.build_scripts = scripts.as_deref();
-    let deps = crate::managed::declared_deps(&site.app_dir(&wt));
+    let mut deps = crate::managed::declared_deps(&site.app_dir(&wt));
+    // 改动前的代码里本来就 import 过的包（Node 自带的 node:fs 这类不在 package.json 里）
+    if let Ok(o) = crate::site_git::git(&wt, &["grep", "-h", "-E", "^[[:space:]]*import[[:space:]]", &base_sha, "--"], "").await {
+        deps.extend(crate::managed::imported_packages(&o.stdout));
+    }
     rules.deps = &deps;
     let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
     // 能在卡片上点「这类以后不拦」的拦截类型
