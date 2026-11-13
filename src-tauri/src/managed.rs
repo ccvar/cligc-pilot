@@ -1076,7 +1076,7 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
     let raw = std::fs::read_to_string(app_dir.join("package.json")).ok()?;
     let pkg: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let scripts = pkg["scripts"].as_object().cloned().unwrap_or_default();
-    let ext = |t: &str| ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| t.ends_with(&format!(".{e}")));
+    let ext = |t: &str| ["mjs", "js", "cjs", "ts", "mts", "py"].iter().any(|e| t.ends_with(&format!(".{e}")));
     let mut todo: Vec<String> = commands.to_vec();
     for k in ["prebuild", "build", "postbuild", "precheck", "check", "postcheck", "test", "lint", "predeploy", "deploy", "postdeploy"] {
         if let Some(v) = scripts.get(k).and_then(|v| v.as_str()) {
@@ -1138,8 +1138,47 @@ fn table_data(name: &str) -> bool {
 /// scripts/ 里构建、检查都不会跑到的脚本，和它们都没读到的数据文件（比如截图来源清单 .json / .tsv）
 fn idle_script(file: &str, build: &[String]) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
-    let helper = ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) || ((name.ends_with(".json") || table_data(name)) && !hard_forbidden(name));
+    let helper = ["mjs", "js", "cjs", "ts", "mts", "py"].iter().any(|e| name.ends_with(&format!(".{e}"))) || ((name.ends_with(".json") || table_data(name)) && !hard_forbidden(name));
     file.split('/').any(|s| s == "scripts") && helper && !build.iter().any(|b| b == name)
+}
+
+/// Python 一行里的元组括号换成方括号：前面紧挨着的是 `[` `,` `(` `:` 或行首的 `(` 是元组；
+/// 前面是名字或 `)` `]` 的是调用，原样留着（data_line 照样当代码拦）
+fn py_tuples(line: &str) -> String {
+    let mut out = String::new();
+    let (mut quote, mut prev, mut stack): (Option<char>, Option<char>, Vec<bool>) = (None, None, Vec::new());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' {
+                if let Some(e) = chars.next() {
+                    out.push(e);
+                }
+            } else if c == q {
+                quote = None;
+                prev = Some(c);
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                quote = Some(c);
+                out.push(c);
+            }
+            '(' => {
+                let tuple = prev.is_none_or(|p| matches!(p, '[' | ',' | '(' | ':'));
+                stack.push(tuple);
+                out.push(if tuple { '[' } else { '(' });
+            }
+            ')' => out.push(if stack.pop().unwrap_or(false) { ']' } else { ')' }),
+            _ => out.push(c),
+        }
+        if !c.is_whitespace() {
+            prev = Some(c);
+        }
+    }
+    out
 }
 
 fn generated_by_build(file: &str, generated: &[String]) -> bool {
@@ -1284,13 +1323,13 @@ pub fn money_atoms(line: &str) -> Vec<String> {
     out
 }
 
-/// 站内 /go/ 跳转链接去掉只标记来源页的参数（?src=文章名、utm_*）：跳到哪、带哪个推荐码由 /go/okx 决定，
-/// 每篇新文章换个 src 不是新的推荐链接。ref、code 这类参数照留
+/// 站内 /go/ 跳转链接只按「路径 + 带推荐码的参数」比：跳到哪家、用哪个推荐码由 /go/okx 和站点配置决定，
+/// 标来源页的 ?src=、选语言的 ?l=fr、utm_* 这些参数换了不是新的推荐链接。ref、code、invite 这类参数照留
 fn drop_tracking(atom: &str) -> String {
     let Some((path, query)) = atom.split_once('?').filter(|(p, _)| p.to_ascii_lowercase().contains("/go/")) else { return atom.to_string() };
     let keep: Vec<&str> = query.split('&').filter(|kv| {
         let k = kv.split('=').next().unwrap_or("").to_ascii_lowercase();
-        !(matches!(k.as_str(), "src" | "source" | "from") || k.starts_with("utm_"))
+        ["ref", "code", "invite", "aff", "promo", "coupon", "rebate", "kick"].iter().any(|w| k.contains(w))
     }).collect();
     if keep.is_empty() { path.to_string() } else { format!("{path}?{}", keep.join("&")) }
 }
@@ -1999,7 +2038,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 16;
+pub const RULES_V: u32 = 17;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2028,7 +2067,9 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
         let idle = rules.build_scripts.is_some_and(|b| idle_script(file, b));
         // 截图清单里用 `${B}/support/...` 拼帮助中心网址的行也算数据（只插变量名，见 drop_var_interp）
-        if idle && !f.deleted && (table_data(file) || f.added.iter().chain(&f.removed).all(|l| data_line(l) || data_line(&drop_var_interp(l)))) {
+        // Python 辅助脚本里的元组 `("图名", "说明", "网址", 1)` 是数据，不是调用（见 py_tuples）
+        let py = file.ends_with(".py");
+        if idle && !f.deleted && (table_data(file) || f.added.iter().chain(&f.removed).all(|l| data_line(l) || data_line(&drop_var_interp(l)) || (py && data_line(&py_tuples(l))))) {
             changed += f.added.len().min(f.removed.len()) + f.removed.len();
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
@@ -2529,6 +2570,9 @@ mod sitemap_tests {
         // scneo：站里本来就有 /go/okx?src=别的文章，新文章用 /go/okx?src=okx-withdraw-usdt 不是新推荐链接
         assert_eq!(money_atoms("先 [注册欧易](/go/okx?src=okx-withdraw-usdt)，再看教程"), vec!["/go/okx".to_string()]);
         assert_eq!(money_atoms("<a href=\"/go/okx?utm_source=a&ref=ABCD\">"), vec!["/go/okx?ref=ABCD".to_string()]);
+        // udneo：?l=fr 只选语言，推荐码由 Worker 按站点配置加
+        assert_eq!(money_atoms("via [Binance](/go/binance?l=fr) et"), vec!["/go/binance".to_string()]);
+        assert_eq!(money_atoms("[x](/go/okx?l=fr&code=ABCD)"), vec!["/go/okx?code=ABCD".to_string()]);
         assert_eq!(money_atoms("https://www.okx.com/join?ref=ABCD"), vec!["https://www.okx.com/join?ref=ABCD".to_string()]);
         let d = "diff --git a/src/content/posts/new.md b/src/content/posts/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/posts/new.md\n@@ -0,0 +1 @@\n+先 [注册欧易](/go/okx?src=new)。\n";
         let known = vec!["/go/okx".to_string()];
@@ -2766,7 +2810,15 @@ mod tests {
         }
         // scneo：截图脚本读的 pages.tsv 加三行（名称、网址、等待毫秒）：表格数据，放行；构建会读的表格照样拦
         assert!(verdict(&d("scripts/screenshots/pages.tsv", "nov-d-okx-help-withdraw-app\thttps://www.okx.com/zh-hans/help/how-do-i-make-a-withdrawal-app\t9000"), &r).is_empty());
+        // chainvar：Python 截图脚本里的一行元组数据：放行；调用、构建会跑的 Python 脚本照样拦
+        let py = "    \"learn/stablecoins\": [(\"tether-transparency\", \"Tether 官网的透明度页面\", \"https://tether.to/en/transparency/\", 1)],";
+        assert!(verdict(&d("scripts/insert-screenshots.py", py), &r).is_empty(), "{:?}", why(&d("scripts/insert-screenshots.py", py), &r));
+        for bad in ["    \"a\": [run(\"x\")],", "    \"a\": [(\"x\")()],", "    \"a\": [(os.system(\"rm\"))],", "import os"] {
+            assert!(why(&d("scripts/insert-screenshots.py", bad), &r).contains("辅助脚本改了代码"), "{bad}");
+        }
         let mut b2 = b.to_vec();
+        b2.push("insert-screenshots.py".into());
+        assert!(why(&d("scripts/insert-screenshots.py", py), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         b2.push("pages.tsv".into());
         assert!(why(&d("scripts/pages.tsv", "a\tb"), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3140,5 +3192,3 @@ mod tests {
         assert!(parse_plan("没有计划").is_err());
     }
 }
-
-
