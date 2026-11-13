@@ -1065,7 +1065,7 @@ pub fn build_outputs(app_dir: &Path) -> Vec<String> {
 
 /// 构建脚本提到的 JSON 就在 scripts/ 目录里：构建时会读到它，不算闲置的数据
 fn script_json(mention: &str, dirs: [&Path; 2]) -> Option<String> {
-    let name = mention.rsplit('/').next().filter(|n| n.len() > 5 && n.ends_with(".json"))?;
+    let name = mention.rsplit('/').next().filter(|n| n.len() > 5 && (n.ends_with(".json") || table_data(n)))?;
     dirs.iter().any(|d| d.ends_with("scripts") && d.join(name).is_file()).then(|| name.to_string())
 }
 
@@ -1130,10 +1130,15 @@ pub fn build_scripts(app_dir: &Path, commands: &[String]) -> Option<Vec<String>>
     Some(names)
 }
 
-/// scripts/ 里构建、检查都不会跑到的脚本，和它们都没读到的 JSON 数据（比如截图来源清单）
+/// 表格 / 清单数据文件（截图清单 pages.tsv 这类）：每行都是数据，没有代码
+fn table_data(name: &str) -> bool {
+    [".tsv", ".csv", ".txt"].iter().any(|e| name.ends_with(e))
+}
+
+/// scripts/ 里构建、检查都不会跑到的脚本，和它们都没读到的数据文件（比如截图来源清单 .json / .tsv）
 fn idle_script(file: &str, build: &[String]) -> bool {
     let name = file.rsplit('/').next().unwrap_or(file);
-    let helper = ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) || (name.ends_with(".json") && !hard_forbidden(name));
+    let helper = ["mjs", "js", "cjs", "ts", "mts"].iter().any(|e| name.ends_with(&format!(".{e}"))) || ((name.ends_with(".json") || table_data(name)) && !hard_forbidden(name));
     file.split('/').any(|s| s == "scripts") && helper && !build.iter().any(|b| b == name)
 }
 
@@ -1241,7 +1246,7 @@ pub fn money_atoms(line: &str) -> Vec<String> {
         let l = t.to_lowercase();
         // 带推荐词的外部链接算推荐链接，但帮助中心、常见问题这类说明页不算（带 ?ref= 的照样算，不管路径）
         if l.contains("?ref=") || l.contains("&ref=") || l.contains("/go/") || (l.starts_with("http") && MONEY_WORDS.iter().any(|w| l.contains(w)) && !info_page_url(&l)) {
-            out.push(t.trim_end_matches(['.', ';', ':', '!']).to_string());
+            out.push(drop_tracking(t.trim_end_matches(['.', ';', ':', '!'])));
         }
     }
     // data-ref-code="binance" 这类属性：属性名加值
@@ -1277,6 +1282,17 @@ pub fn money_atoms(line: &str) -> Vec<String> {
     }
     out.dedup();
     out
+}
+
+/// 站内 /go/ 跳转链接去掉只标记来源页的参数（?src=文章名、utm_*）：跳到哪、带哪个推荐码由 /go/okx 决定，
+/// 每篇新文章换个 src 不是新的推荐链接。ref、code 这类参数照留
+fn drop_tracking(atom: &str) -> String {
+    let Some((path, query)) = atom.split_once('?').filter(|(p, _)| p.to_ascii_lowercase().contains("/go/")) else { return atom.to_string() };
+    let keep: Vec<&str> = query.split('&').filter(|kv| {
+        let k = kv.split('=').next().unwrap_or("").to_ascii_lowercase();
+        !(matches!(k.as_str(), "src" | "source" | "from") || k.starts_with("utm_"))
+    }).collect();
+    if keep.is_empty() { path.to_string() } else { format!("{path}?{}", keep.join("&")) }
 }
 
 /// 推荐 / 邀请 / 返佣相关的内容：改动里删改了带这些标记的行（见 `money_atoms`），按拦截等级判断要不要拦。
@@ -1498,7 +1514,10 @@ pub fn content_code_prose(diff: &str) -> Vec<(String, String)> {
         .into_iter()
         .filter(|f| !f.deleted && content_code_ext(&f.file) && !is_page_file(&f.file) && !manifest_file(&f.file) && !f.file.starts_with(".pilot/") && !f.file.contains("/.pilot/"))
         .filter_map(|f| {
-            let text = f.added.iter().map(|l| literal_prose(l)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n");
+            // 删掉的行里本来就有的字符串不算新写的：压成一行的 JSON（search-index.json）改一条，
+            // 差异里整行都是「新加」，不去掉的话全站文章摘要都会被当成这次新写的正文
+            let old: std::collections::HashSet<String> = f.removed.iter().flat_map(|l| literal_prose(l).lines().map(String::from).collect::<Vec<_>>()).collect();
+            let text = f.added.iter().flat_map(|l| literal_prose(l).lines().map(String::from).collect::<Vec<_>>()).filter(|t| !t.is_empty() && !old.contains(t)).collect::<Vec<_>>().join("\n");
             if text_units(&text) < 200 {
                 return None;
             }
@@ -1980,7 +1999,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 15;
+pub const RULES_V: u32 = 16;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2009,7 +2028,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
         let idle = rules.build_scripts.is_some_and(|b| idle_script(file, b));
         // 截图清单里用 `${B}/support/...` 拼帮助中心网址的行也算数据（只插变量名，见 drop_var_interp）
-        if idle && !f.deleted && f.added.iter().chain(&f.removed).all(|l| data_line(l) || data_line(&drop_var_interp(l))) {
+        if idle && !f.deleted && (table_data(file) || f.added.iter().chain(&f.removed).all(|l| data_line(l) || data_line(&drop_var_interp(l)))) {
             changed += f.added.len().min(f.removed.len()) + f.removed.len();
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
@@ -2506,6 +2525,19 @@ mod sitemap_tests {
         assert!(has_script(&diff(&[script, script], &[script])));
     }
     #[test]
+    fn go_links_with_another_source_tag_are_not_new_referrals() {
+        // scneo：站里本来就有 /go/okx?src=别的文章，新文章用 /go/okx?src=okx-withdraw-usdt 不是新推荐链接
+        assert_eq!(money_atoms("先 [注册欧易](/go/okx?src=okx-withdraw-usdt)，再看教程"), vec!["/go/okx".to_string()]);
+        assert_eq!(money_atoms("<a href=\"/go/okx?utm_source=a&ref=ABCD\">"), vec!["/go/okx?ref=ABCD".to_string()]);
+        assert_eq!(money_atoms("https://www.okx.com/join?ref=ABCD"), vec!["https://www.okx.com/join?ref=ABCD".to_string()]);
+        let d = "diff --git a/src/content/posts/new.md b/src/content/posts/new.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/posts/new.md\n@@ -0,0 +1 @@\n+先 [注册欧易](/go/okx?src=new)。\n";
+        let known = vec!["/go/okx".to_string()];
+        let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &known, generated: &[], build_scripts: None, deps: &[] };
+        assert!(!verdict(d, &r).iter().any(|b| b.text.contains("推荐")), "{:?}", verdict(d, &r).into_iter().map(|b| b.text).collect::<Vec<_>>());
+        let r = Rules { known: &[], ..r };
+        assert!(verdict(d, &r).iter().any(|b| b.text.contains("推荐")));
+    }
+    #[test]
     fn imports_of_declared_deps_and_type_imports_are_not_new_packages() {
         assert_eq!(import_package("import type { Metadata } from \"next\";"), None);
         assert_eq!(import_package("import Link from 'next/link';").as_deref(), Some("next"));
@@ -2732,6 +2764,11 @@ mod tests {
         for bad in ["  { url: `${B + x}/a` },", "  { url: `${f()}` },", "  { url: `${B}${await x}` },", "  { url: run`x` },", "  { url: `${B` },"] {
             assert!(why(&d("scripts/shots.config.mjs", bad), &r).contains("辅助脚本改了代码"), "{bad}");
         }
+        // scneo：截图脚本读的 pages.tsv 加三行（名称、网址、等待毫秒）：表格数据，放行；构建会读的表格照样拦
+        assert!(verdict(&d("scripts/screenshots/pages.tsv", "nov-d-okx-help-withdraw-app\thttps://www.okx.com/zh-hans/help/how-do-i-make-a-withdrawal-app\t9000"), &r).is_empty());
+        let mut b2 = b.to_vec();
+        b2.push("pages.tsv".into());
+        assert!(why(&d("scripts/pages.tsv", "a\tb"), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2797,6 +2834,13 @@ mod tests {
         rows.extend(["          [", "            \"https://affiliate-program.amazon.co.uk/help/operating/policies\",", "            \"(x) 24 hours elapse from that click\"", "          ],", "  \"note\": \"see https://x.com for more\","]);
         let got = content_code_prose(&d("data/platform-guides.json", &rows));
         assert!(got[0].1.ends_with("来源链接：\nhttps://affiliate-program.amazon.co.uk/help/operating/policies"), "{}", got[0].1);
+        // 压成一行的搜索索引改了一条：只有改的那条算新写的（ubneo search-index.json 被当成全站摘要来质检）
+        let entries: Vec<String> = (0..12).map(|i| format!("{{\"title\":\"Post {i} about sending USDT cheaply across networks\",\"excerpt\":\"第 {i} 篇：比较 TRC20、BEP20 和 Solana 网络的提现手续费，按到账速度和费用选网络，转账前先核对地址和网络。\"}}")).collect();
+        let mut changed = entries.clone();
+        changed[3] = "{\"title\":\"Cheapest network to send USDT in 2026\",\"excerpt\":\"Updated fee table.\"}".to_string();
+        let idx = |e: &[String]| format!("[{}]", e.join(","));
+        let diff = format!("diff --git a/public/en/search-index.json b/public/en/search-index.json\n--- a/public/en/search-index.json\n+++ b/public/en/search-index.json\n@@ -1 +1 @@\n-{}\n+{}\n", idx(&entries), idx(&changed));
+        assert!(content_code_prose(&diff).is_empty(), "{:?}", content_code_prose(&diff));
         assert!(template_page_file("internal/webapp/templates/region-regulation.gohtml") && template_page_file("views/templates/page.html") && !template_page_file("src/content/a.md"));
     }
 
