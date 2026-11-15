@@ -373,6 +373,8 @@ impl Job {
             .env("CI", "1")
             .env("FORCE_COLOR", "0")
             .env("NO_COLOR", "1")
+            // 不写 __pycache__：仓库里误提交了 .pyc 的站点，Pilot 跑一次构建 / 发布就会把它改写成「未提交的改动」
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .kill_on_drop(true);
         for (k, v) in env {
             if v == UNSET_ENV {

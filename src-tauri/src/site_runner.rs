@@ -4784,19 +4784,31 @@ pub async fn dirty_files(site: &Site, dir: &Path) -> Option<(Vec<String>, bool)>
     let o = crate::site_git::git(dir, &["-c", "core.quotepath=off", "diff", "--name-only", "HEAD"], "").await.ok().filter(|o| o.ok)?;
     let files: Vec<String> = o.stdout.lines().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect();
     let outs = crate::managed::build_outputs(&site.app_dir(dir));
-    let generated = !files.is_empty() && files.iter().all(|f| outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str())));
+    let generated = !files.is_empty() && files.iter().all(|f| regenerated(&outs, f));
     Some((files, generated))
+}
+
+/// 跑一次就会被重写、还原了也不丢东西的文件：构建脚本自动生成的数据文件（managed::build_outputs），
+/// 和 Python 的字节码缓存（`__pycache__/*.pyc`）。后者被误提交进仓库时，发布脚本里跑一次 Python 就会改写它
+/// （dexgc 的 deploy/__pycache__/remote-release.cpython-313.pyc：Pilot 自己上线一次，文件夹就「有未提交的改动」，
+/// 后面的条目全卡在「站点文件夹没准备好」）
+fn regenerated(outs: &[String], f: &str) -> bool {
+    bytecode_cache(f) || outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str()))
+}
+
+fn bytecode_cache(f: &str) -> bool {
+    f.ends_with(".pyc") || f.ends_with(".pyo") || f.starts_with("__pycache__/") || f.contains("/__pycache__/")
 }
 
 /// 分支上相对 base 改过的、构建脚本自动生成的数据文件（见 managed::build_outputs）：还原成 base 的版本（base 没有的就移出版本库），
 /// 单独提交一次。返回还原了哪些文件（相对仓库根目录）。
 async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
     let outs = crate::managed::build_outputs(&site.app_dir(wt));
-    if outs.is_empty() {
+    let Ok(changed) = crate::site_git::git_ok(wt, &["diff", "--name-only", base, "HEAD"], "").await else { return Vec::new() };
+    let files: Vec<String> = changed.lines().map(str::trim).filter(|f| !f.is_empty() && regenerated(&outs, f)).map(str::to_string).collect();
+    if files.is_empty() {
         return Vec::new();
     }
-    let Ok(changed) = crate::site_git::git_ok(wt, &["diff", "--name-only", base, "HEAD"], "").await else { return Vec::new() };
-    let files: Vec<String> = changed.lines().map(str::trim).filter(|f| !f.is_empty() && outs.iter().any(|g| f.rsplit('/').next() == Some(g.as_str()))).map(str::to_string).collect();
     let mut done = Vec::new();
     for f in &files {
         let at_base = crate::site_git::git(wt, &["cat-file", "-e", &format!("{base}:{f}")], "").await.is_ok_and(|o| o.ok);
@@ -5249,6 +5261,12 @@ mod dirty_advice_tests {
     fn files_already_live_are_not_offered_for_undo() {
         let (a, b) = ("a.css".to_string(), "b.css".to_string());
         assert_eq!(dirty_advice(&[a.clone()], &[]), "有未提交的改动（a.css），提交或撤销都行");
+        // Python 字节码缓存和构建脚本重写的数据文件一样，还原了不丢东西
+        let outs = vec!["fees.json".to_string()];
+        assert!(super::regenerated(&outs, "deploy/__pycache__/remote-release.cpython-313.pyc"));
+        assert!(super::regenerated(&outs, "__pycache__/x.cpython-312.pyc") && super::regenerated(&outs, "a/b.pyc"));
+        assert!(super::regenerated(&outs, "data/fees.json"));
+        assert!(!super::regenerated(&outs, "deploy/remote-release.py") && !super::regenerated(&outs, "src/pycache_notes.md"));
         let all = dirty_advice(&[a.clone()], &[a.clone()]);
         assert!(all.contains("这些改动已经上线了") && all.contains("别撤销") && !all.contains("提交或撤销"), "{all}");
         let some = dirty_advice(&[a.clone(), b], &[a]);
