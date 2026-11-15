@@ -248,6 +248,16 @@ async fn score_page(jev: &Jev, site: &Site, positioning: &str, target: &str, fil
     score_text(jev, site, positioning, target, file, &title, &text).await
 }
 
+/// 正文里有模板数据位（managed::template_slots 换出来的〔…〕）时告诉判断模型那是建站时填进去的具体值，
+/// 不然它会把〔Name〕当成没写完
+fn page_state(file: &str, title: &str, text: &str) -> Value {
+    let mut page = json!({ "path": file, "title": title, "text": text });
+    if text.contains('〔') {
+        page["data_slots"] = json!("这是建站模板：正文里〔…〕的地方在生成页面时按本站数据填入具体值（名称、数量、网络、日期、列表等），读者看到的是这些具体值。判断信息量时把〔…〕当作已经填好的具体信息。");
+    }
+    page
+}
+
 /// 给一页的标题和正文打分；几乎没有正文返回 None。
 async fn score_text(jev: &Jev, site: &Site, positioning: &str, target: &str, file: &str, title: &str, text: &str) -> Result<Option<PageQuality>, String> {
     if crate::managed::text_units(text) < 100 {
@@ -256,7 +266,7 @@ async fn score_text(jev: &Jev, site: &Site, positioning: &str, target: &str, fil
     let state = json!({
         "site": site_state(site, positioning),
         "target_query": target,
-        "page": { "path": file, "title": title, "text": text },
+        "page": page_state(file, title, text),
     });
     let a = jev.ask(state, quality_questions(!target.trim().is_empty())).await?;
     let mut q = PageQuality {
@@ -513,6 +523,11 @@ mod tests {
         assert_eq!(title, "如何开户");
         assert_eq!(body, "## 第一步\n打开官网，点注册。\n最后完成验证。\n");
         assert_eq!(crate::managed::page_prose(&"字".repeat(50), 10).1.chars().count(), 10);
+        // 数据驱动的模板页：数据位留着，并告诉判断模型这些地方会填具体值
+        let (_, body) = crate::managed::page_prose("<p>{{$c.Symbol}} 在 {{len .Exchanges}} 家交易所上线{{if .X}}：{{end}}</p>", 1000);
+        assert_eq!(body, "〔Symbol〕 在 〔Exchanges 数〕 家交易所上线 ：\n");
+        assert!(page_state("t.html", "", &body)["data_slots"].is_string());
+        assert!(page_state("a.md", "", "普通正文").get("data_slots").is_none());
     }
 
     #[test]

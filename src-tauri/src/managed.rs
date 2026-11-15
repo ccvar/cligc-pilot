@@ -1409,6 +1409,49 @@ fn strip_template_tags(line: &str) -> String {
     }
 }
 
+/// 给质检看的模板正文：输出数据的指令（`{{ .Name }}`、`{{ len .Exchanges }}`、`{{ phrases $q.Q }}`）换成
+/// 〔Name〕〔Exchanges 数〕这样的数据位，控制指令（if / range / end / 赋值 / 注释 / `{% … %}`）去掉。
+/// 直接去掉的话，数据驱动的模板页（币种页、交易所页）里交易所名、网络、数量、日期全成了空白，
+/// 判断模型看到的是「在   家交易所上线」这种断句，必然判「空话多、具体信息少」
+pub fn template_slots(line: &str) -> String {
+    const CONTROL: &[&str] = &["if", "else", "end", "range", "with", "define", "block", "template", "break", "continue", "for", "endfor", "endif", "set", "include", "extends", "macro", "endmacro", "raw", "endraw", "import", "from"];
+    let mut out = String::new();
+    let mut rest = line;
+    loop {
+        let open = [rest.find("{{"), rest.find("{%")].into_iter().flatten().min();
+        let Some(i) = open else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..i]);
+        let curly = rest[i..].starts_with("{{");
+        let close = if curly { "}}" } else { "%}" };
+        let Some(j) = rest[i + 2..].find(close) else { return out };
+        let inner = rest[i + 2..i + 2 + j].trim().trim_start_matches('-').trim_end_matches('-').trim();
+        rest = &rest[i + 2 + j + 2..];
+        let first = inner.split('|').next().unwrap_or("").trim();
+        let words: Vec<&str> = first.split_whitespace().collect();
+        let control = !curly || inner.starts_with("/*") || inner.starts_with('#') || inner.contains(":=") || words.get(1) == Some(&"=") || words.first().is_some_and(|w| CONTROL.contains(w));
+        if control || words.is_empty() {
+            out.push(' ');
+            continue;
+        }
+        if let Some(lit) = words[0].strip_prefix('"') {
+            out.push_str(lit.trim_end_matches('"'));
+            continue;
+        }
+        let field = words.iter().rev().map(|w| w.trim_matches(['(', ')'])).find(|w| w.starts_with('.') || w.starts_with('$')).or(words.last().copied()).unwrap_or("");
+        let mut name = field.rsplit('.').next().unwrap_or("").trim_start_matches('$').to_string();
+        if name.is_empty() {
+            name = "数据".into();
+        }
+        if words[0] == "len" {
+            name.push_str(" 数");
+        }
+        out.push_str(&format!("〔{name}〕"));
+    }
+}
+
 /// 去掉 frontmatter 分隔、HTML / JSX 标签、代码围栏后的正文文字。
 fn prose_of(line: &str) -> String {
     let mut out = String::new();
@@ -1612,7 +1655,7 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
         if in_code || t.starts_with("import ") || t.starts_with("export ") {
             continue;
         }
-        let text = prose_of(&strip_template_tags(t));
+        let text = prose_of(&template_slots(t));
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -2038,7 +2081,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 17;
+pub const RULES_V: u32 = 18;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2872,6 +2915,13 @@ mod tests {
         assert_eq!(literal_prose("  \"fees.desc\": \"Maker fees start at {0} and taker at {1}, so a \\\"$10,000\\\" order costs {2}.\","), "Maker fees start at {0} and taker at {1}, so a \"$10,000\" order costs {2}.");
         // 模板里的指令不算正文
         assert_eq!(strip_template_tags("<p>{{ .Lede }} 本页最后更新：{{ .Updated | date }}</p>").trim(), "<p>  本页最后更新： </p>");
+        // 给质检看的：输出数据的指令留成数据位，控制指令去掉
+        assert_eq!(template_slots("<p>{{ .Lede }} 本页最后更新：{{ .Updated | date }}</p>"), "<p>〔Lede〕 本页最后更新：〔Updated〕</p>");
+        assert_eq!(
+            template_slots("本站 {{.AsOf}} 查到：{{$c.Symbol}}/{{.Quote}} 在 {{len .Exchanges}} 家上线：{{range $j, $e := .Exchanges}}{{if $j}}、{{end}}<a href=\"/exchange/{{$e.ID}}/\">{{$e.Name}}</a>{{end}}。"),
+            "本站 〔AsOf〕 查到：〔Symbol〕/〔Quote〕 在 〔Exchanges 数〕 家上线：  、 <a href=\"/exchange/〔ID〕/\">〔Name〕</a> 。"
+        );
+        assert_eq!(template_slots("<h3>{{phrases $q.Q}}</h3>{{- else -}}{{/* 注释 */}}{% if x %}{{ item.title }}{{ \"原样\" }}"), "<h3>〔Q〕</h3>   〔title〕原样");
 
         let d = |file: &str, lines: &[&str]| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1,{} @@\n{}\n", lines.len(), lines.iter().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
         let long: Vec<String> = (0..12).map(|i| format!("\t\t\tP{i}: \"第 {i} 段：香港证监会持牌的虚拟资产交易平台名单按官网核对，入金前请自己再打开一次官方名录确认平台状态没有变化。\",")).collect();
