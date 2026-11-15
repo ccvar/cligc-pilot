@@ -12,6 +12,7 @@ use crate::conns::{ConnStore, Connection};
 use crate::site_jobs::Job;
 use crate::sites::Site;
 
+/// 构建 / 检查 / 上传这些步骤多久没有任何输出就算卡住（总时长另有上限，见 site_jobs::Job::exec）
 const STEP_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]

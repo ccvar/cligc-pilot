@@ -357,7 +357,9 @@ impl Job {
         self.exec(&prog, &args, dir, env, timeout).await
     }
 
-    /// 直接跑一个程序（不经 shell，参数原样传递）。
+    /// 直接跑一个程序（不经 shell，参数原样传递）。`timeout` 是「多久没有任何输出」就停：
+    /// 一直在打进度的命令不因为跑得久被停（excxh 的发布脚本本地测试 + 构建 7102 页 + 服务器上再汇总、构建、校验，
+    /// 一次要二十多分钟，原来按总时长 20 分钟一刀切，卡在服务器上校验的半路被停）；总时长另有 `TOTAL_CAP` 兜底。
     pub async fn exec(&self, prog: &str, args: &[String], dir: &Path, env: &[(String, String)], timeout: Duration) -> Result<(), String> {
         if self.canceled() {
             return Err("已取消".into());
@@ -403,27 +405,42 @@ impl Job {
                 t.pop_front();
             }
         };
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
+        let idle = tokio::time::sleep(timeout);
+        tokio::pin!(idle);
+        let cap = TOTAL_CAP.max(timeout);
+        let total = tokio::time::sleep(cap);
+        tokio::pin!(total);
         let (mut out_done, mut err_done) = (false, false);
         let status = loop {
-            tokio::select! {
-                l = out.next_line(), if !out_done => match l {
-                    Ok(Some(l)) => push(l, &tail),
-                    _ => out_done = true,
-                },
-                l = err.next_line(), if !err_done => match l {
-                    Ok(Some(l)) => push(l, &tail),
-                    _ => err_done = true,
-                },
-                s = child.wait(), if out_done && err_done => break s,
-                _ = &mut deadline => {
-                    crate::agent::kill_tree(child.id());
-                    let _ = child.kill().await;
-                    self.pid.store(0, Ordering::SeqCst);
-                    return Err(format!("超过 {} 分钟没有结束，已停止", timeout.as_secs() / 60));
+            let why = tokio::select! {
+                l = out.next_line(), if !out_done => {
+                    match l {
+                        Ok(Some(l)) => {
+                            push(l, &tail);
+                            idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                        }
+                        _ => out_done = true,
+                    }
+                    continue;
                 }
-            }
+                l = err.next_line(), if !err_done => {
+                    match l {
+                        Ok(Some(l)) => {
+                            push(l, &tail);
+                            idle.as_mut().reset(tokio::time::Instant::now() + timeout);
+                        }
+                        _ => err_done = true,
+                    }
+                    continue;
+                }
+                s = child.wait(), if out_done && err_done => break s,
+                _ = &mut idle => format!("超过 {}没有任何输出，像是卡住了，已停止", span(timeout)),
+                _ = &mut total => format!("跑了 {}还没结束，已停止", span(cap)),
+            };
+            crate::agent::kill_tree(child.id());
+            let _ = child.kill().await;
+            self.pid.store(0, Ordering::SeqCst);
+            return Err(why);
         };
         self.pid.store(0, Ordering::SeqCst);
         if self.canceled() {
@@ -436,6 +453,21 @@ impl Job {
             let t: Vec<String> = tail.lock().unwrap().iter().cloned().collect();
             Err(format!("退出码 {}\n{}", status.code().unwrap_or(-1), t.join("\n")))
         }
+    }
+}
+
+/// 一条命令总共最多跑多久（不管有没有输出）
+const TOTAL_CAP: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// 时长说成人话：整小时说小时，满一分钟说分钟，不到一分钟说秒
+fn span(d: Duration) -> String {
+    let s = d.as_secs();
+    if s >= 3600 && s % 3600 == 0 {
+        format!("{} 小时", s / 3600)
+    } else if s >= 60 {
+        format!("{} 分钟", s / 60)
+    } else {
+        format!("{s} 秒")
     }
 }
 
@@ -506,6 +538,21 @@ mod tests {
         job.finish(&Ok(()));
         assert_eq!(jobs.snapshot("s1").unwrap().status, "ok");
         assert!(jobs.start(None, "s1", "deploy", "部署", &[]).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_silence_stops_a_command_not_running_long() {
+        let jobs = Jobs::default();
+        let dir = tempfile::tempdir().unwrap();
+        let job = jobs.start(None, "s1", "deploy", "部署", &[]).unwrap();
+        // 一直在打进度：总时长超过「没输出」的时限也照样跑完
+        job.shell("for i in 1 2 3 4 5 6; do echo step $i; sleep 0.4; done", dir.path(), &[], Duration::from_secs(1)).await.unwrap();
+        // 不出声超过时限：停
+        let e = job.shell("echo start; sleep 5", dir.path(), &[], Duration::from_secs(1)).await.unwrap_err();
+        assert!(e.contains("1 秒没有任何输出"), "{e}");
+        assert_eq!(span(Duration::from_secs(20 * 60)), "20 分钟");
+        assert_eq!(span(TOTAL_CAP), "2 小时");
     }
 
     #[test]
