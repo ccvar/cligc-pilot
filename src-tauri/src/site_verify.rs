@@ -59,6 +59,8 @@ pub struct Report {
     pub soft: Vec<String>,
     /// 首页本身打不开（多半是整站或 CDN 的问题，不是某条改动的）
     pub home_down: bool,
+    /// 首页连不上的同时，几个大网站也连不上：是这台电脑的网络（或代理）断了，不是网站的事，这次验收不算数
+    pub offline: bool,
     /// 严重失败看起来是部署没到位（构建产物里有这个页面，线上却打不开）：值得重新上传一次
     pub deploy_issue: bool,
     /// 打开正常、没有页面级问题的网址（可以提交 IndexNow）
@@ -154,6 +156,24 @@ pub async fn snippets_live(urls: &[String], snippets: &[String]) -> Option<bool>
         }
     }
     (!text.is_empty()).then(|| snippets.iter().any(|s| page_has(&text, s)))
+}
+
+/// 对照用的网址：首页连不上时打开它们，看是网站的问题还是本机网络的问题
+const PROBES: &[&str] = &["https://www.cloudflare.com/cdn-cgi/trace", "https://www.gstatic.com/generate_204", "https://www.bing.com/"];
+
+/// 本机能不能上网：对照网址有一个能打开（任何 HTTP 状态都算连上了）就算能
+async fn online(client: &reqwest::Client) -> bool {
+    for u in PROBES {
+        if client.get(*u).timeout(Duration::from_secs(10)).send().await.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// 首页没打开的原因是连不上（不是 404 / 500 这类网站自己回的错误）
+fn unreachable(err: &str) -> bool {
+    matches!(err, "打不开" | "超时")
 }
 
 fn client() -> reqwest::Client {
@@ -283,6 +303,10 @@ pub async fn run(spec: &Spec, job: &Job, patient: bool) -> Report {
                 let msg = if i == 0 { format!("首页 {}", last[i]) } else { format!("{} {}", path_of(u), last[i]) };
                 if i == 0 {
                     rep.home_down = true;
+                    if unreachable(&last[0]) && !online(&client).await {
+                        rep.offline = true;
+                        job.line("首页连不上，对照的几个大网站也连不上：是本机网络或代理断了，这次验收不算数");
+                    }
                 }
                 if last[i].contains("404") && spec.built.iter().any(|b| same_page(b, u)) {
                     rep.deploy_issue = true;
@@ -907,6 +931,12 @@ pub fn reported_pages(reply: &str, domain: &str) -> (Vec<String>, Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_connection_failures_ask_whether_we_are_offline() {
+        assert!(unreachable("打不开") && unreachable("超时"));
+        assert!(!unreachable("HTTP 404") && !unreachable("HTTP 522"));
+    }
+
     #[test]
     fn moved_pages_are_followed_like_a_301() {
         // cexqa：合并重复问答后旧地址生成的跳转页

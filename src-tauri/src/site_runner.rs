@@ -4299,6 +4299,15 @@ async fn watch(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
         let rep = crate::site_verify::run(&spec, job, true).await;
         let stage = i.watch_stage;
         let when = if stage == 0 { "上线 1 小时后" } else { "上线 24 小时后" };
+        // 本机网络断了（首页和对照的大网站都连不上）：没复查成，不算失败次数、不通知，1 小时后再查
+        if rep.offline {
+            site_ops::update_item(&site_dir, &i.id, now(), |x| {
+                x.watched = "本机网络不通，没复查成，1 小时后再查".into();
+                x.watch_due = now() + 3600;
+            })?;
+            out.push(format!("{} 没复查成：本机网络不通", i.opp.title));
+            continue;
+        }
         if !rep.hard.is_empty() {
             // 上线之后域名被别的东西抢走了：不是这条改动的问题，不回滚；隔几小时再查，域名处理好了接着走复查
             if let Some(why) = crate::launch_cmds::domain_taken(&ctx.state().conns, site, &rep).await {
