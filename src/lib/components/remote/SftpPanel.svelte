@@ -34,7 +34,7 @@
     <div class="files-drop-overlay"><b>松开上传</b><small title={sftp.sftpDropTarget?.remoteDir}>到 {sftp.sftpDropTarget?.remoteDir || v.sftpPath || '当前目录'}</small></div>
   {/if}
   <div class="files-bar">
-    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={sftpUp} disabled={v.sftpBusy || !v.sftpPath || v.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={sftpUp} disabled={!v.sftpPath || v.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
     {#if v.sftpPathEdit}
       <input class="tin fpath" bind:this={v.sftpPathEl} bind:value={v.sftpPathDraft} spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="/"
         onblur={() => (v.sftpPathEdit = false)}
@@ -45,7 +45,7 @@
       <div class="fcrumbs" bind:this={v.crumbEl}>
         {#each v.sftpCrumbs as c, i (c.path)}
           {#if i > 0}<span class="fcrumb-sep">›</span>{/if}
-          <button class="fcrumb" class:cur={c.path === v.sftpPath} disabled={v.sftpBusy} onclick={() => crumb(c.path)}>{c.name}</button>
+          <button class="fcrumb" class:cur={c.path === v.sftpPath} onclick={() => crumb(c.path)}>{c.name}</button>
         {/each}
         <button class="fcrumb-blank" aria-label="直接输入路径" data-tip="点这里可直接输入路径" onclick={startPathEdit}></button>
       </div>

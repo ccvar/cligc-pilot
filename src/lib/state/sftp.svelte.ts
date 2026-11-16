@@ -42,6 +42,8 @@ export class SftpView {
   sftpSel = $state('');
   sftpBusy = $state(false);
   sftpErr = $state('');
+  /** 第几次换目录：只有最后一次的结果算数（前一次还没读完又点了别的，旧的读完了不去动忙闲、报错） */
+  navSeq = 0;
   // 树 → 扁平行（只把展开着的目录的孩子摊进来）。
   sftpRows = $derived.by(() => {
     const out: SftpRow[] = [];
@@ -292,16 +294,20 @@ function rememberDir(connId: string, path: string) {
   try { localStorage.setItem(LAST_KEY, JSON.stringify({ ...lastDirs(), [connId]: path })); } catch { /* */ }
 }
 /** 换树根（path 为空＝去 home）。 */
+/** 换目录随时都能点：后台刷新、上一个目录还在读的时候也不挡（原来那几秒里面包屑和「上一级」是灰的，点了没反应）。
+ *  连点几次以最后一次为准。 */
 export async function sftpGo(path: string, v: SftpView | undefined = sftp.cur) {
   if (!v) return;
+  const seq = ++v.navSeq;
   v.sftpBusy = true; v.sftpErr = '';
   try {
     const p = path || await invoke<string>('sftp_home', { connId: v.connId });
+    if (seq !== v.navSeq) return;
     v.sftpPath = p; v.sftpPathDraft = p; v.sftpSel = '';
     v.sftpOpenDirs = new Set();
-    if (await loadDir(p, true, false, v)) rememberDir(v.connId, p);
-  } catch (e) { v.sftpErr = friendly(e); }
-  finally { v.sftpBusy = false; }
+    if (await loadDir(p, true, false, v) && seq === v.navSeq) rememberDir(v.connId, p);
+  } catch (e) { if (seq === v.navSeq) v.sftpErr = friendly(e); }
+  finally { if (seq === v.navSeq) v.sftpBusy = false; }
 }
 /** 断开连接后丢掉这台的文件列表：下次打开再重新读（不然一刷新又把连接悄悄连回去） */
 export function forgetSftpView(connId: string) {
@@ -329,6 +335,7 @@ export function ensureSftpView(connId: string) {
 }
 export function sftpUp() {
   if (!sftp.sftpPath || sftp.sftpPath === '/') return;
+  // 面包屑和「上一级」都直接作用在当前面板上，后台刷新时也能点
   void sftpGo(parentOf(sftp.sftpPath));
 }
 export function startPathEdit() { const v = sftp.cur; if (!v) return; v.sftpPathDraft = v.sftpPath; v.sftpPathEdit = true; }
@@ -342,10 +349,12 @@ export function commitPath() {
 /** 刷新：重读当前展开着的每一层，**保留展开状态**（sftpGo 是「换根」，会把整棵树收起来）。 */
 export async function sftpRefresh(v: SftpView | undefined = sftp.cur) {
   if (!v || !v.sftpPath || v.sftpBusy) return;
+  const seq = v.navSeq;
   v.sftpBusy = true; v.sftpErr = '';
   try {
     const dirs = [v.sftpPath, ...v.sftpOpenDirs];
     const ok = await Promise.all(dirs.map((d) => loadDir(d, true, true, v))); // 没了的目录下面统一收掉，不用一个个弹错
+    if (seq !== v.navSeq) return; // 刷新途中换了目录：这棵树已经不是刚才那棵了
     // 远端已经不在了的目录：连同展开态一起丢掉，别在树里留幽灵行
     const gone = dirs.filter((_, i) => !ok[i] && dirs[i] !== v.sftpPath);
     if (gone.length) {
@@ -354,7 +363,7 @@ export async function sftpRefresh(v: SftpView | undefined = sftp.cur) {
       for (const d of gone) { n.delete(d); delete kids[d]; }
       v.sftpOpenDirs = n; v.sftpKids = kids;
     }
-  } finally { v.sftpBusy = false; }
+  } finally { if (seq === v.navSeq) v.sftpBusy = false; }
 }
 export async function toggleDir(r: SftpRow) {
   const v = sftp.cur;
