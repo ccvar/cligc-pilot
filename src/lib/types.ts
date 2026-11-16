@@ -546,6 +546,12 @@ export interface ManagedConfig {
   last_digest: string;
   /** 调度同时最多起几个重作业（要构建站点或跑 AI 的）；0＝按这台电脑自动算 */
   parallel_jobs: number;
+  /** 托管的 AI 回合同时最多跑几个（所有站点合计）；0＝1 个 */
+  ai_parallel: number;
+  /** 托管每 5 小时最多开几轮 AI（所有站点合计，手动点的也算进去）；0＝不限 */
+  ai_per_window: number;
+  /** 运营时段「起-止」本地整点（如 0-8、22-6）；空＝全天。每个站点每天固定在这段里的某个时刻跑，各站错开 */
+  ops_hours: string;
   groups: ManagedGroup[];
 }
 /** 托管方案：一组站点 + 这组站点自己的托管规则。 */
@@ -614,6 +620,8 @@ export interface ManagedSite {
   deploy_blocked?: string;
   /** 下一次自动运行的任务和到点时间（秒）；托管停着为空 / 0 */
   next_task: string; next_at: number;
+  /** 下一次要用 AI、但额度用完了或这 5 小时托管的 AI 轮数满了：「等额度」，next_at 已推到能开的时候 */
+  next_wait?: string;
   budget: { changes_used: number; changes_limit: number; tokens_used: number; tokens_limit: number };
   /** 这个月的 AI 用量和花费、上线了几条 */
   cost: AiCost; shipped_month: number;
@@ -626,6 +634,8 @@ export interface ManagedOverview {
   next_round: number;
   /** 同时最多起几个重作业：现在生效的值、不设时按这台电脑算出来的值、正在跑的重作业数 */
   parallel_cap: number; parallel_auto: number; busy_heavy: number;
+  /** 托管的 AI：同时最多几个、正在跑几个；最近 5 小时开了几轮、满了的话什么时候能再开（0＝没满）；模型额度用完、什么时候恢复（0＝没有） */
+  ai_parallel?: number; ai_running?: number; ai_window_used?: number; ai_window_free_at?: number; ai_limited_until?: number;
 }
 /** AI 用量：tokens＝折算 token；usd＝能按官方价估出金额的部分（API 连接）；sub_tokens＝走订阅额度的；unpriced_tokens＝按量计费但认不出价格的 */
 export interface AiCost { tokens: number; usd: number; sub_tokens: number; unpriced_tokens: number; rough: boolean; turns: number }

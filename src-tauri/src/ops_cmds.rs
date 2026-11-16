@@ -347,7 +347,7 @@ pub fn ops_overview(state: tauri::State<'_, AppState>, id: String) -> Result<Ops
     let cfg = crate::managed::load(&state.data_dir);
     for t in site_runner::TASKS {
         let sched = site_runner::schedule_of(&site, t, cfg.group_of(&id));
-        let n = site_runner::next_due(&sched, st.last.get(*t).copied().unwrap_or(0).max(site.created_at)).unwrap_or(0);
+        let n = site_runner::next_due_at(&sched, st.last.get(*t).copied().unwrap_or(0).max(site.created_at), site_runner::slot_of(&id, &cfg.ops_hours)).unwrap_or(0);
         next.insert(t.to_string(), n);
     }
     Ok(OpsOverview { budget: site_runner::budget(&site, &dir, &state.convos), state: st, next })

@@ -281,7 +281,7 @@
     if (days < 7) return `${'周' + '日一二三四五六'[d.getDay()]} ${hm}`;
     return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   }
-  const NEXT_TIP = '调度在每个整 10 分钟（:00、:10、:20…）跑一轮，任务在到点后的第一轮开始，这里显示的就是那一轮的时间。客户端要开着（托盘也行）。「排队」＝同时运行的作业已满，这一轮可能轮不到';
+  const NEXT_TIP = '每个站点每天固定在运营时段里的某个时刻跑，各站错开。调度在每个整 10 分钟（:00、:10、:20…）跑一轮，任务在到点后的第一轮开始，这里显示的就是那一轮的时间。客户端要开着（托盘也行）。「排队」＝同时运行的作业已满，这一轮可能轮不到；「等额度」＝模型额度用完了、或这 5 小时托管的 AI 轮数满了，到能开的时候再跑';
   /** 没放在卡片上的那些规则（「还有 N 项」的悬停说明） */
   function hiddenRules(g: ManagedGroup) {
     const acts = (g.actions ?? []).length === 5 ? '全部（标题描述、内容、内链、新页面、技术问题）' : (g.actions ?? []).map((a) => ACT_LABEL[a] ?? a).join('、') || '无';
@@ -304,7 +304,7 @@
   const ACT_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.key, a.label]));
   // 托管设置（全局）：只比较这三项
   let digestSetOpen = $state(false);
-  const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour || (d.parallel_jobs || 0) !== (o.config.parallel_jobs || 0)));
+  const dirty = $derived(!!d && !!o && (d.digest !== o.config.digest || d.digest_hour !== o.config.digest_hour || (d.parallel_jobs || 0) !== (o.config.parallel_jobs || 0) || (d.ai_parallel || 0) !== (o.config.ai_parallel || 0) || Number(d.ai_per_window ?? 0) !== Number(o.config.ai_per_window ?? 0) || (d.ops_hours ?? '').trim() !== (o.config.ops_hours ?? '')));
 
   const KIND: Record<string, { l: string; c: string; i: string }> = {
     shipped: { l: '已上线', c: 'ok', i: 'rocket' }, planned: { l: '计划', c: 'run', i: 'checks' }, proposed: { l: '待你确认', c: 'warn', i: 'bell' }, rolled_back: { l: '已回滚', c: 'err', i: 'undo' },
@@ -391,7 +391,7 @@
       {#if d}
         {@const setOpen = digestSetOpen || dirty}
         <div class="card">
-          <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />托管设置 <span class="sub">日报{o?.config.digest ? `每天 ${o.config.digest_hour} 点后` : '已关闭'} · 同时 {o?.parallel_cap ?? '…'} 个作业 · 所有托管方案共用</span>
+          <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />托管设置 <span class="sub">日报{o?.config.digest ? `每天 ${o.config.digest_hour} 点后` : '已关闭'} · 同时 {o?.parallel_cap ?? '…'} 个作业 · AI 同时 {o?.ai_parallel ?? 1} 个{o?.config.ai_per_window ? `、每 5 小时最多 ${o.config.ai_per_window} 轮` : ''} · {o?.config.ops_hours ? `运营时段 ${o.config.ops_hours} 点` : '全天错开'} · 所有托管方案共用</span>
             <svg class="chev" class:up={setOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
           {#if setOpen}
           <div class="row">
@@ -401,7 +401,17 @@
           <div class="row">
             <span class="faint" style="font-size:12px">同时运行的作业数</span><input class="tin" type="number" min="0" max="8" style="width:70px" placeholder={String(o?.parallel_auto ?? '')} bind:value={d.parallel_jobs} /><span class="faint" style="font-size:12px">{d.parallel_jobs ? `最多 8；现在正在跑 ${o?.busy_heavy ?? 0} 个` : `空或 0＝按这台电脑自动算，现在是 ${o?.parallel_auto ?? '…'} 个；正在跑 ${o?.busy_heavy ?? 0} 个`}</span>
           </div>
-          <p class="hint">只限要构建站点或跑 AI 的作业（扫描、体检、计划、上线）；周报、复盘、上线后检查不占名额。开多了主要是撞模型的限流，总花费不变。</p>
+          <p class="hint">只限要构建站点或跑 AI 的作业（扫描、体检、计划、上线）；周报、复盘、上线后检查不占名额。</p>
+          <div class="row">
+            <span class="faint" style="font-size:12px">AI 同时跑</span><input class="tin" type="number" min="0" max="8" style="width:70px" placeholder="1" bind:value={d.ai_parallel} /><span class="faint" style="font-size:12px">个</span>
+            <span class="faint" style="font-size:12px;margin-left:12px">每 5 小时最多</span><input class="tin" type="number" min="0" style="width:70px" placeholder="不限" bind:value={d.ai_per_window} /><span class="faint" style="font-size:12px">轮 AI{#if o}（最近 5 小时跑了 {o.ai_window_used ?? 0} 轮{#if o.ai_running}，正在跑 {o.ai_running} 个{/if}）{/if}</span>
+          </div>
+          <p class="hint">所有托管站点合计。订阅额度按总量算，几个站一起跑只是把一天的用量挤进同一个 5 小时窗口，还和你自己的对话抢额度；构建、检查不受这里限制，照样并行。一轮＝一条 AI 会话（改一条、修一次构建、制定一次计划）；到数了自动的就等窗口滚过去再接着做，你手动点的照跑。空或 0＝不限。</p>
+          {#if (o?.ai_limited_until ?? 0) * 1000 > Date.now()}<p class="hint" style="color:var(--warn)">模型额度用完了，{hhmm(o?.ai_limited_until ?? 0)} 恢复；这之前托管不开新的 AI（有备用模型的方案改用备用模型），到点自动接着做。</p>{/if}
+          <div class="row">
+            <span class="faint" style="font-size:12px">运营时段</span><input class="tin" style="width:90px" placeholder="全天" bind:value={d.ops_hours} /><span class="faint" style="font-size:12px">点，写成「起-止」，如 0-8、22-6</span>
+          </div>
+          <p class="hint">每个站点每天的体检、扫描、计划固定在这段里的某个时刻跑，各站错开，不再挤在同一轮。电脑这段时间要开着（不能睡眠）；关着的话开机后补跑，又会挤到一起。</p>
           <p class="hint">托管需要客户端在运行（关掉窗口后托盘常驻即可）；电脑关机期间不会运营，开机后补跑一次。</p>
           {/if}
         </div>
@@ -497,7 +507,7 @@
                     <button class="btn tiny" onclick={() => toggleProgress(id)}>收起结果</button>
                   {/if}
                   <span class="grow"></span>
-                  {#if on && s?.next_at}<span class="next-t" data-tip={NEXT_TIP}><Icon name="clock" size={11} />下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}</span>{/if}
+                  {#if on && s?.next_at}<span class="next-t" data-tip={NEXT_TIP}><Icon name="clock" size={11} />下次 {whenNext(s.next_at)} {NEXT_TASK[s.next_task] ?? s.next_task}{s.next_wait ? `（${s.next_wait}）` : ''}</span>{/if}
                   <!-- 不常用的：立即执行、移到别的方案、退出托管，收进悬停才出现的菜单 -->
                   <span class="more-wrap gs-more" class:on={siteMenu === id}>
                     <button class="ic-btn ic-sm" onclick={() => (siteMenu = siteMenu === id ? '' : id)} aria-label="这个站点的操作" aria-haspopup="menu" aria-expanded={siteMenu === id} data-tip={siteMenu === id ? null : '立即执行、移到别的方案'}><Icon name="more" size={15} /></button>

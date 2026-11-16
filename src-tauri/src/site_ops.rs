@@ -445,7 +445,17 @@ const TRANSIENT: [&str; 7] = ["上次 Pilot 退出或重启时", "作业超时�
 
 /// 失败的原因和任务本身无关、Pilot 会自己重做一次：这时候还不用提醒你。
 pub fn retries_by_itself(i: &QueueItem) -> bool {
-    !i.auto_retried && TRANSIENT.iter().any(|k| i.note.starts_with(k))
+    ai_limited(i) || (!i.auto_retried && TRANSIENT.iter().any(|k| i.note.starts_with(k)))
+}
+
+/// 模型额度用完（订阅 5 小时窗口触顶、限流）时的说明开头；这样停下的条目到点自动接着做，不算失败
+pub const AI_LIMIT: &str = "模型额度用完了：";
+/// 托管这 5 小时开的 AI 轮数到了托管设置里的上限：剩下的等窗口滚过去再做
+pub const AI_WINDOW_FULL: &str = "这 5 小时托管的 AI 轮数用满了：";
+
+/// AI 已经提交到分支、后面因为额度用完停下的：不进「需要你」，额度恢复后自动重新检查
+pub fn ai_limited(i: &QueueItem) -> bool {
+    i.status == "failed" && i.note.starts_with(AI_LIMIT)
 }
 
 /// 托管方案里失败的、原因和这条任务本身无关的放回排队，按方案节奏自动重做，不用你手动点：
@@ -475,7 +485,8 @@ pub fn requeue_retryable(site_dir: &Path, now: u64, repo_ok: impl Fn() -> bool) 
 /// 作业真的起来了调用方再标 auto_retried（每条只自动查一次；站点正忙起不了就下个 tick 再来）
 /// `env_ok`：站点自己的构建现在没有已知问题（见 site_runner::site_build_broken）。这时因为环境问题卡住的条目也接着查；
 /// 环境还是坏的，重新检查会再把站点标回去，不会反复跑。
-pub fn peek_recheckable(site_dir: &Path, env_ok: bool) -> Option<String> {
+/// `ai_ok`：这个站点现在能开 AI 回合（额度没用完）。这时因为额度停下的条目也接着查，不限次数
+pub fn peek_recheckable(site_dir: &Path, env_ok: bool, ai_ok: bool) -> Option<String> {
     const RECHECK: [&str; 6] = ["上次 Pilot 退出或重启时", "作业超时被停止时", "Pilot 内部出错时", "模型这一轮没有完成：", "git push ", "git fetch "];
     load_queue(site_dir)
         .into_iter()
@@ -484,7 +495,7 @@ pub fn peek_recheckable(site_dir: &Path, env_ok: bool) -> Option<String> {
                 && !i.head_sha.is_empty()
                 && !i.branch.is_empty()
                 && i.merge_sha.is_empty()
-                && ((!i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k))) || (env_ok && env_blocked(i)))
+                && ((!i.auto_retried && RECHECK.iter().any(|k| i.note.starts_with(k))) || (env_ok && env_blocked(i)) || (ai_ok && ai_limited(i)))
         })
         .map(|i| i.id)
 }
@@ -767,7 +778,7 @@ pub struct QueueItem {
 
 /// 这一条要不要人来处理：待确认、失败，或者上线了但线上验收有待核对的问题。
 pub fn needs_you(i: &QueueItem) -> bool {
-    (matches!(i.status.as_str(), "proposed" | "failed") && !env_blocked(i)) || (i.status == "deployed" && !i.attention.is_empty()) || deploy_stuck(i)
+    (matches!(i.status.as_str(), "proposed" | "failed") && !env_blocked(i) && !ai_limited(i)) || (i.status == "deployed" && !i.attention.is_empty()) || deploy_stuck(i)
 }
 
 /// 构建 / 检查没过、改动前的代码在同样环境里也不过：站点自己的环境问题，不是 AI 改坏的。
@@ -1493,8 +1504,8 @@ mod tests {
         assert!(needs_you(&ai));
         save_queue(t.path(), &[env, ai]).unwrap();
         // 站点还坏着：不查；修好了：接着查（自动重试过也照样查，环境还坏会再标回去）
-        assert_eq!(peek_recheckable(t.path(), false), None);
-        assert_eq!(peek_recheckable(t.path(), true).as_deref(), Some("e"));
+        assert_eq!(peek_recheckable(t.path(), false, true), None);
+        assert_eq!(peek_recheckable(t.path(), true, true).as_deref(), Some("e"));
     }
 
     #[test]
@@ -1508,9 +1519,9 @@ mod tests {
         let q = load_queue(t.path());
         assert_eq!(q.iter().map(|i| i.status.as_str()).collect::<Vec<_>>(), vec!["open", "open", "failed", "failed", "failed"], "正文里提到「连接」「超时」的不算瞬时失败");
         // 已经提交到分支的中断条目：不放回排队，交给自动「重新检查」（作业起来后调用方标 auto_retried）
-        assert_eq!(peek_recheckable(t.path(), true).as_deref(), Some("d"));
+        assert_eq!(peek_recheckable(t.path(), true, true).as_deref(), Some("d"));
         update_item(t.path(), "d", 2, |i| i.auto_retried = true).unwrap();
-        assert_eq!(peek_recheckable(t.path(), true), None);
+        assert_eq!(peek_recheckable(t.path(), true, true), None);
         assert!(q[0].retry_note.contains("中断"));
         // 再失败就不重试了
         update_item(t.path(), "a", 2, |i| { i.status = "failed".into(); i.note = "上次 Pilot 退出或重启时…".into(); }).unwrap();

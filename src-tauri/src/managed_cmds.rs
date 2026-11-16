@@ -19,10 +19,21 @@ pub fn save_managed_config(state: tauri::State<'_, AppState>, config: ManagedCon
     if config.parallel_jobs as usize > crate::site_runner::PARALLEL_JOBS_MAX {
         return Err(format!("同时运行的作业数最多 {}", crate::site_runner::PARALLEL_JOBS_MAX));
     }
+    if config.ai_parallel as usize > crate::site_runner::PARALLEL_JOBS_MAX {
+        return Err(format!("同时跑的 AI 最多 {}", crate::site_runner::PARALLEL_JOBS_MAX));
+    }
+    let hours = config.ops_hours.trim().replace(' ', "").replace(['－', '—', '~', '～', '到'], "-");
+    let hours = if hours.is_empty() || crate::site_runner::ops_window(&hours) == (0, crate::site_runner::DAY) { String::new() } else { hours };
+    if !config.ops_hours.trim().is_empty() && hours.is_empty() && !matches!(config.ops_hours.trim(), "0-24" | "全天") {
+        return Err("运营时段写成「起-止」的整点，比如 0-8、22-6；空＝全天".into());
+    }
     let mut c = managed::load(&state.data_dir);
     c.digest = config.digest;
     c.digest_hour = config.digest_hour;
     c.parallel_jobs = config.parallel_jobs;
+    c.ai_parallel = config.ai_parallel;
+    c.ai_per_window = config.ai_per_window;
+    c.ops_hours = hours;
     managed::save(&state.data_dir, &c)?;
     Ok(c)
 }
@@ -254,6 +265,8 @@ pub struct ManagedSite {
     /// 下一次自动运行的任务（scan / health / plan / report / review / watch）和到点时间；托管停着就是空 / 0。
     pub next_task: String,
     pub next_at: u64,
+    /// 下一次是要用 AI 的任务、但额度用完了或这 5 小时托管的 AI 轮数满了：next_at 已经推到能开的时候，这里写「等额度」
+    pub next_wait: String,
     /// 这个月（本地时间 1 号起）的 AI 用量和花费、上线了几条
     pub cost: crate::usage::Cost,
     pub shipped_month: usize,
@@ -280,6 +293,13 @@ pub struct ManagedOverview {
     pub parallel_cap: usize,
     pub parallel_auto: usize,
     pub busy_heavy: usize,
+    /// 托管的 AI：同时最多几个、正在跑几个；最近 5 小时开了几轮、轮数满了的话什么时候能再开（0＝没满）；
+    /// 模型额度用完、到什么时候恢复（0＝没有）
+    pub ai_parallel: usize,
+    pub ai_running: usize,
+    pub ai_window_used: usize,
+    pub ai_window_free_at: u64,
+    pub ai_limited_until: u64,
 }
 
 /// 本地时间这个月 1 号零点
@@ -294,6 +314,7 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
     let since_week = crate::now_secs().saturating_sub(7 * 86_400);
     let since_day = crate::now_secs().saturating_sub(86_400);
     let cfg = sync(&state);
+    let window = crate::site_runner::ai_window(&state.convos, &cfg);
     let mut shipped_today = 0;
     let mut waiting_total = 0;
     let month = month_start();
@@ -326,7 +347,16 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
             // 正在跑的运营任务（ops:scan 这类）：算下次时当作已经开始了
             let job = state.site_jobs.snapshot(&s.id).filter(|j| j.status == "running");
             let busy = job.as_ref().and_then(|j| j.kind.strip_prefix("ops:").map(|t| (t, j.started_at)));
-            let (next_task, next_at) = if running { crate::site_runner::next_run(&s, &dir, group, busy).unwrap_or_default() } else { Default::default() };
+            let (next_task, mut next_at) = if running { crate::site_runner::next_run(&s, &dir, group, busy, &cfg.ops_hours).unwrap_or_default() } else { Default::default() };
+            // 要用 AI 的任务：额度用完了、或这 5 小时托管的 AI 轮数满了，调度会等到能开的时候再起
+            let mut next_wait = String::new();
+            if next_at > 0 && matches!(next_task.as_str(), "scan" | "plan") {
+                let until = crate::site_runner::site_ai_limited(&s, &state.data_dir).unwrap_or(0).max(window.1);
+                if until > next_at.max(crate::now_secs()) {
+                    next_at = until;
+                    next_wait = "等额度".into();
+                }
+            }
             let conn_id = crate::site_cmds::site_conn_id(&s.id);
             crate::usage::backfill_site(&dir, &convs.iter().filter(|c| c.origin == "ops" && c.conn_id == conn_id).collect::<Vec<_>>());
             let cost = crate::usage::site_cost(&dir, month);
@@ -346,14 +376,14 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 stage_manual: !stg.manual.is_empty(),
                 group_id: group.map(|g| g.id.clone()).unwrap_or_default(),
                 active: group.is_some_and(|g| g.active_for(&s.id)),
-                failed: q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i)).count(),
+                failed: q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i) && !crate::site_ops::ai_limited(i)).count(),
                 failed_why: {
-                    let mut f: Vec<&crate::site_ops::QueueItem> = q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i)).collect();
+                    let mut f: Vec<&crate::site_ops::QueueItem> = q.iter().filter(|i| i.status == "failed" && !crate::site_ops::env_blocked(i) && !crate::site_ops::ai_limited(i)).collect();
                     f.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                     f.iter().take(3).map(|i| (i.opp.title.clone(), i.note.lines().next().unwrap_or("").to_string())).collect()
                 },
                 // 因为站点自己构建不过卡住、等修好再接着查的也算排着
-                queued: q.iter().filter(|i| i.status == "open" || crate::site_ops::env_blocked(i)).count(),
+                queued: q.iter().filter(|i| i.status == "open" || crate::site_ops::env_blocked(i) || crate::site_ops::ai_limited(i)).count(),
                 plan_date: plan.as_ref().and_then(|p| p["date"].as_str().map(str::to_string)).unwrap_or_default(),
                 plan_count: plan.as_ref().and_then(|p| p["tasks"].as_array().map(|a| a.len())).unwrap_or(0),
                 build_broken: crate::site_runner::site_build_broken(&s, &dir).unwrap_or_default(),
@@ -367,11 +397,13 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
                 waiting,
                 next_task,
                 next_at,
+                next_wait,
             }
         })
         .collect();
     let parallel_cap = crate::site_runner::parallel_jobs(&cfg);
     let parallel_auto = crate::site_runner::parallel_jobs(&managed::ManagedConfig { parallel_jobs: 0, ..cfg.clone() });
+    let ai_parallel = crate::site_runner::ai_parallel(&cfg);
     ManagedOverview {
         groups: cfg.groups.clone(),
         config: cfg,
@@ -386,6 +418,11 @@ pub fn managed_overview(state: tauri::State<'_, AppState>) -> ManagedOverview {
         parallel_cap,
         parallel_auto,
         busy_heavy: state.site_jobs.running_heavy(),
+        ai_parallel,
+        ai_running: crate::site_runner::ai_running(),
+        ai_window_used: window.0,
+        ai_window_free_at: window.1,
+        ai_limited_until: crate::site_runner::limited_until(),
     }
 }
 

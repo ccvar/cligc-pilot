@@ -337,9 +337,9 @@ export async function saveManaged() {
   managed.saving = true;
   try {
     // 「同时运行的作业数」清空就是 0（自动算）；数字框清空时绑定的值是 null
-    const c = await invoke<ManagedConfig>('save_managed_config', { config: { ...managed.draft, parallel_jobs: Number(managed.draft.parallel_jobs) || 0 } });
+    const c = await invoke<ManagedConfig>('save_managed_config', { config: { ...managed.draft, parallel_jobs: Number(managed.draft.parallel_jobs) || 0, ai_parallel: Number(managed.draft.ai_parallel) || 0, ai_per_window: Number(managed.draft.ai_per_window) || 0, ops_hours: String(managed.draft.ops_hours ?? '').trim() } });
     managed.draft = JSON.parse(JSON.stringify(c));
-    if (managed.overview) managed.overview = { ...managed.overview, config: c, parallel_cap: c.parallel_jobs || managed.overview.parallel_auto };
+    if (managed.overview) managed.overview = { ...managed.overview, config: c, parallel_cap: c.parallel_jobs || managed.overview.parallel_auto, ai_parallel: Math.max(1, c.ai_parallel || 1) };
     say('托管设置已保存');
   } catch (e) { say(String(e), 'err'); }
   finally { managed.saving = false; }

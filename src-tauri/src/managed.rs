@@ -42,6 +42,16 @@ pub struct ManagedConfig {
     /// 调度同时最多起几个重作业（要构建站点或跑 AI 的）。0＝按这台电脑的核数和内存自动算，见 site_runner::parallel_jobs
     #[serde(default)]
     pub parallel_jobs: u32,
+    /// 托管的 AI 回合同时最多跑几个（所有站点合计）。0＝1 个。订阅额度按总量算，并行跑只会把一天的用量挤进同一个 5 小时窗口
+    #[serde(default)]
+    pub ai_parallel: u32,
+    /// 托管每 5 小时最多开几轮 AI（一轮＝一条 AI 会话：交给 AI 改一条、修一次构建、制定一次计划；所有站点合计，
+    /// 你手动点的照样跑、但也算进去）。到数了自动的就等窗口滚过去再接着做，余下的订阅额度留给你自己用。0＝不限
+    #[serde(default = "default_ai_window")]
+    pub ai_per_window: u32,
+    /// 运营时段「起-止」（本地整点，如 "0-8"、"22-6"）：每个站点的体检、扫描、计划固定在这段里的某个时刻，各站错开。空＝全天
+    #[serde(default)]
+    pub ops_hours: String,
     /// 托管方案。上面的 brain / model / new_content / daily_changes / tokens_per_week 是老版本的全局规则，
     /// 只用于迁移和新建方案时的默认值。
     #[serde(default)]
@@ -76,6 +86,9 @@ fn default_tokens() -> u64 {
 }
 fn yes() -> bool {
     true
+}
+fn default_ai_window() -> u32 {
+    20
 }
 fn default_hour() -> u8 {
     9

@@ -18,7 +18,7 @@ use crate::site_jobs::Job;
 use crate::site_ops::{self, Opportunity, QueueItem};
 use crate::sites::Site;
 
-const DAY: u64 = 86_400;
+pub const DAY: u64 = 86_400;
 /// 同一个机会处理过后，多久之内不再重新入队。
 pub(crate) const COOLDOWN: u64 = 21 * DAY;
 
@@ -166,9 +166,13 @@ fn save_state(site_dir: &Path, s: &OpsState) {
     }
 }
 
-fn record_run(site_dir: &Path, rec: RunRecord) {
+/// `deferred`：这次因为额度用完 / 这 5 小时的 AI 轮数满了，该做的没做完：不更新「上次运行」，额度恢复后调度接着起它，
+/// 不然剩下的要等到下一个周期（扫描明天、计划下周）
+fn record_run(site_dir: &Path, rec: RunRecord, deferred: bool) {
     let mut s = load_state(site_dir);
-    s.last.insert(rec.task.clone(), rec.started);
+    if !deferred {
+        s.last.insert(rec.task.clone(), rec.started);
+    }
     s.runs.insert(0, rec);
     // 托管页的执行记录图要看 30 天：一个站点一天可能跑好几样（扫描、体检、计划…），多留一些
     s.runs.truncate(200);
@@ -214,7 +218,51 @@ pub fn next_due(schedule: &str, last: u64) -> Option<u64> {
     period(schedule).map(|p| last + p)
 }
 
+/// 运营时段（"起-止" 本地整点，"22-6" 跨午夜）的起点和长度（秒）。空、写错、"0-24" 都是全天
+pub fn ops_window(hours: &str) -> (u64, u64) {
+    let mut p = hours.split('-').map(|x| x.trim().parse::<u64>().ok());
+    match (p.next().flatten(), p.next().flatten(), p.next()) {
+        (Some(a), Some(b), None) if a < 24 && b <= 24 && a != b % 24 => (a * 3600, ((b + 24 - a) % 24) * 3600),
+        _ => (0, DAY),
+    }
+}
+
+/// 这个站点每天固定在哪个时刻跑（当天 0 点起的秒数）：在运营时段里按站点 id 均匀错开、对齐到整 10 分，
+/// 几十个站不会挤进同一轮。同一个站点的体检、计划、扫描用同一个时刻（同一轮按「先体检、再计划、再扫描」一个个起）
+pub fn slot_of(site_id: &str, hours: &str) -> u64 {
+    let (start, span) = ops_window(hours);
+    let h = site_id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3));
+    let steps = (span / 600).max(1);
+    (start + (h % steps) * 600) % DAY
+}
+
+/// t 所在那一天（本地）的 slot 时刻
+fn day_at(t: u64, slot: u64) -> u64 {
+    use chrono::TimeZone;
+    let Some(d) = chrono::Local.timestamp_opt(t as i64, 0).single() else { return t };
+    let tm = chrono::NaiveTime::from_num_seconds_from_midnight_opt(slot as u32, 0).unwrap_or_default();
+    chrono::Local.from_local_datetime(&d.date_naive().and_time(tm)).earliest().map(|x| x.timestamp() as u64).unwrap_or(t)
+}
+
+/// t 之后（含）第一次到 slot 的时刻
+fn at_slot(t: u64, slot: u64) -> u64 {
+    let a = day_at(t, slot);
+    if a >= t { a } else { day_at(t + DAY, slot) }
+}
+
+/// 按站点的固定时刻排的下一次到点：每天的任务上次之后至少隔 8 小时、落在这个站的时刻上（每天同一时刻）；
+/// 「每周几」的落在那一天的这个时刻。以前是「上次 + 周期」：第一次在几点跑，以后就永远在那个钟点，
+/// 几十个站全挤在开着电脑的那几个小时里，一天的 AI 用量压进一两个 5 小时额度窗口
+pub fn next_due_at(schedule: &str, last: u64, slot: u64) -> Option<u64> {
+    let base = next_due(schedule, last)?;
+    if schedule.starts_with("weekly:") {
+        return Some(day_at(base, slot));
+    }
+    Some(at_slot(base.saturating_sub(16 * 3600), slot))
+}
+
 /// 某个任务现在该不该跑（错过的任务在下次启动时补跑一次）。
+#[cfg(test)]
 pub fn due(schedule: &str, last: u64, now: u64) -> bool {
     next_due(schedule, last).is_some_and(|t| now >= t)
 }
@@ -248,8 +296,9 @@ pub fn schedule_of(site: &Site, task: &str, plan: Option<&crate::managed::Manage
 /// 时间是「到点」的时刻：调度每 10 分钟看一次、客户端要开着，实际会晚几分钟。
 /// `busy`：这个站点正在跑的运营任务和开始时间（任务做完才记「上次运行」，正在跑的这一次要当作已经开始了，
 /// 不然下次还显示它自己）。
-pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::ManagedGroup>, busy: Option<(&str, u64)>) -> Option<(String, u64)> {
+pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::ManagedGroup>, busy: Option<(&str, u64)>, hours: &str) -> Option<(String, u64)> {
     let state = load_state(site_dir);
+    let slot = slot_of(&site.id, hours);
     let has_data = !site.data.gsc_site.is_empty() || !site.data.ga4_property.is_empty() || !site.data.bing_site.is_empty();
     let watching = busy.is_some_and(|(t, _)| t == "watch");
     let mut best: Option<(String, u64)> = site_ops::load_queue(site_dir)
@@ -267,7 +316,7 @@ pub fn next_run(site: &Site, site_dir: &Path, plan: Option<&crate::managed::Mana
                 last = last.max(started);
             }
         }
-        let Some(at) = next_due(&schedule_of(site, task, plan), last) else { continue };
+        let Some(at) = next_due_at(&schedule_of(site, task, plan), last, slot) else { continue };
         if best.as_ref().is_none_or(|b| at < b.1) {
             best = Some((task.to_string(), at));
         }
@@ -549,6 +598,152 @@ fn clear_down(m: &(String, String)) {
     MODEL_DOWN.lock().unwrap().retain(|(x, _, _)| *x != k);
 }
 
+/// 订阅额度窗口：Claude 这类订阅按 5 小时重置
+pub const AI_WINDOW: u64 = 5 * 60 * 60;
+/// 额度用完了、报错里却没给恢复时间：先停这么久再试
+const LIMIT_UNKNOWN_SECS: u64 = 30 * 60;
+
+/// 模型额度用完了（订阅窗口触顶、限流）：（模型，到什么时候）。这期间托管不再用它开新的 AI 回合——
+/// 不然后面到点的任务一个个开会话、一个个失败。到点自动恢复；只记在内存里，重启后第一轮再撞上会重新记
+static MODEL_LIMIT: std::sync::Mutex<Vec<(String, u64)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn model_limited(m: &(String, String)) -> Option<u64> {
+    let k = model_key(m);
+    let mut v = MODEL_LIMIT.lock().unwrap();
+    v.retain(|(_, until)| *until > now());
+    v.iter().find(|(x, _)| *x == k).map(|(_, u)| *u)
+}
+
+/// 记下这个模型额度用完了；reset 是报错里给的恢复时间（秒，拿不到是 0）。返回到什么时候
+fn mark_limited(m: &(String, String), reset: i64) -> u64 {
+    let until = if reset > now() as i64 { reset as u64 + 60 } else { now() + LIMIT_UNKNOWN_SECS };
+    let k = model_key(m);
+    let mut v = MODEL_LIMIT.lock().unwrap();
+    v.retain(|(x, _)| *x != k);
+    v.push((k, until));
+    until
+}
+
+/// 额度用完的模型里最晚恢复的时间（托管页显示用；0＝没有）
+pub fn limited_until() -> u64 {
+    let mut v = MODEL_LIMIT.lock().unwrap();
+    v.retain(|(_, until)| *until > now());
+    v.iter().map(|(_, u)| *u).max().unwrap_or(0)
+}
+
+/// 「17:40」「明天 03:10」「11月20日 09:00」
+fn clock(t: u64) -> String {
+    use chrono::TimeZone;
+    let Some(d) = chrono::Local.timestamp_opt(t as i64, 0).single() else { return String::new() };
+    match (d.date_naive() - chrono::Local::now().date_naive()).num_days() {
+        0 => d.format("%H:%M").to_string(),
+        1 => d.format("明天 %H:%M").to_string(),
+        _ => d.format("%-m月%-d日 %H:%M").to_string(),
+    }
+}
+
+fn limit_err(until: u64) -> String {
+    format!("{}{} 恢复，到时候自动接着做", site_ops::AI_LIMIT, clock(until))
+}
+
+/// 这个站点现在开不了 AI：主模型额度用完、又没有还能用的备用模型时，返回恢复时间
+pub fn site_ai_limited(site: &Site, data_dir: &Path) -> Option<u64> {
+    let (primary, fallback) = models_for(site, data_dir).ok()?;
+    let p = model_limited(&primary)?;
+    match fallback {
+        Some(fb) => model_limited(&fb).map(|f| f.min(p)),
+        None => Some(p),
+    }
+}
+
+/// 托管同时最多跑几个 AI 回合（所有站点合计）
+pub fn ai_parallel(cfg: &crate::managed::ManagedConfig) -> usize {
+    (cfg.ai_parallel as usize).clamp(1, PARALLEL_JOBS_MAX)
+}
+
+/// 最近 5 小时托管开了几轮 AI（ops 会话，含你手动点的）；到了上限再给出什么时候能再开一轮（0＝没到上限）
+pub fn ai_window(convos: &crate::convo::ConvStore, cfg: &crate::managed::ManagedConfig) -> (usize, u64) {
+    let since = now().saturating_sub(AI_WINDOW);
+    let mut ts: Vec<u64> = convos.list().into_iter().filter(|c| c.origin == "ops" && c.created_at >= since).map(|c| c.created_at).collect();
+    ts.sort_unstable();
+    (ts.len(), window_free_at(&ts, cfg.ai_per_window as usize))
+}
+
+/// 已按时间排好的最近 5 小时的开始时间里，到了 cap 轮的话，最早什么时候能再开一轮
+fn window_free_at(ts: &[u64], cap: usize) -> u64 {
+    if cap > 0 && ts.len() >= cap { ts[ts.len() - cap] + AI_WINDOW } else { 0 }
+}
+
+/// 要用 AI 的事现在开不开：额度用完了、或（自动跑的）这 5 小时托管的 AI 轮数满了，返回（到什么时候，说明）。
+/// 你手动点的不受轮数限制
+fn ai_wait(st: &crate::AppState, site: &Site, scheduled: bool) -> Option<(u64, String)> {
+    if let Some(until) = site_ai_limited(site, &st.data_dir) {
+        return Some((until, limit_err(until)));
+    }
+    if !scheduled {
+        return None;
+    }
+    let cfg = crate::managed::load(&st.data_dir);
+    let (used, free_at) = ai_window(&st.convos, &cfg);
+    (free_at > 0).then(|| (free_at, format!("{}最近 5 小时已经跑了 {used} 轮（上限 {}），{} 后接着做，余下的额度留给你自己用", site_ops::AI_WINDOW_FULL, cfg.ai_per_window, clock(free_at))))
+}
+
+/// 正在跑的托管 AI 回合数
+static AI_RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn ai_running() -> usize {
+    AI_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// 占着一个 AI 名额，回合结束（不管成败、被停）就还回去
+struct AiSlot;
+
+impl Drop for AiSlot {
+    fn drop(&mut self) {
+        AI_RUNNING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// 等一个 AI 名额：托管同时只跑这么多个 AI 回合（所有站点合计）。订阅额度按总量算，几个站一起跑只是把用量挤进同一个窗口，
+/// 还会和你自己的对话抢。构建、检查这些不受它限制，照样并行
+async fn ai_slot(ctx: &Ctx, site: &Site) -> Result<AiSlot, String> {
+    use std::sync::atomic::Ordering::SeqCst;
+    let st = ctx.state();
+    let mut told = false;
+    loop {
+        let cap = ai_parallel(&crate::managed::load(&st.data_dir));
+        let cur = AI_RUNNING.load(SeqCst);
+        if cur < cap && AI_RUNNING.compare_exchange(cur, cur + 1, SeqCst, SeqCst).is_ok() {
+            return Ok(AiSlot);
+        }
+        if st.site_jobs.is_canceled(&site.id) {
+            return Err("已取消".into());
+        }
+        if !told {
+            st.site_jobs.line(&ctx.app, &site.id, &format!("别的站点的 AI 正在跑（托管同时最多跑 {cap} 个），排队等着"));
+            told = true;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// 这次运行因为额度停下、该做的没做完的站点（作业收尾时取走，见 record_run 的 deferred）
+static DEFERRED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn defer_run(site_id: &str) {
+    let mut v = DEFERRED.lock().unwrap();
+    if !v.iter().any(|x| x == site_id) {
+        v.push(site_id.to_string());
+    }
+}
+
+fn take_deferred(site_id: &str) -> bool {
+    let mut v = DEFERRED.lock().unwrap();
+    let had = v.iter().any(|x| x == site_id);
+    v.retain(|x| x != site_id);
+    had
+}
+
 fn model_label(m: &(String, String)) -> String {
     if m.1.is_empty() { format!("{} · 默认模型", m.0) } else { format!("{} · {}", m.0, m.1) }
 }
@@ -650,6 +845,7 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
         HOLD.lock().unwrap().retain(|s| s != &site.id);
         MANUAL.lock().unwrap().retain(|s| s != &site.id);
         job.finish(&res);
+        let deferred = take_deferred(&site.id) || r.as_ref().is_err_and(|e| e.contains(site_ops::AI_LIMIT));
         if matches!(task.as_str(), "scan" | "health" | "report" | "review" | "plan" | "cycle") {
             record_run(
                 &site_dir,
@@ -663,10 +859,12 @@ pub fn start_with_pick(ctx: Ctx, site_id: &str, task: &str, trigger: &str, item_
                     summary: r.clone().unwrap_or_default(),
                     error: r.clone().err().unwrap_or_default(),
                 },
+                deferred,
             );
         }
         if let Err(e) = &r {
-            if trigger == "schedule" {
+            // 额度用完停下的到点自动接着做，不提醒
+            if trigger == "schedule" && !e.contains(site_ops::AI_LIMIT) {
                 ctx.notify_failure(&format!("{} · {}失败", site.name, task_label(&task)), &brief(e));
             }
         }
@@ -875,6 +1073,14 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
             stopped = Some(why);
             break;
         }
+        // 额度用完了、或（自动跑的）这 5 小时托管的 AI 轮数满了：剩下的留着，到点自动接着做（不算失败、不提醒）
+        if let Some((_, why)) = ai_wait(&ctx.state(), site, trigger == "schedule") {
+            job.line(&why);
+            notes.push(why.clone());
+            defer_run(&site.id);
+            stopped = Some(why);
+            break;
+        }
         job.reset_from("work");
         job.step("work", "running", &item.opp.title);
         match process(ctx, site, job, &item, false).await {
@@ -885,6 +1091,20 @@ async fn work_queue(ctx: &Ctx, site: &Site, job: &Job, trigger: &str) -> (usize,
                     left -= 1;
                 }
                 notes.push(msg);
+            }
+            Err(e) if e.starts_with(site_ops::AI_LIMIT) => {
+                // 额度用完了：AI 还没提交的放回排队；已经提交到分支上的标成等额度，恢复后自动重新检查。都不算失败、不进「需要你」
+                job.line(&format!("「{}」：{e}", item.opp.title));
+                let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| {
+                    if i.status == "working" {
+                        i.status = if i.head_sha.is_empty() { "open" } else { "failed" }.into();
+                        i.note = e.clone();
+                    }
+                });
+                ctx.emit_queue(&site.id);
+                defer_run(&site.id);
+                stopped = Some(e);
+                break;
             }
             Err(e) => {
                 // 失败不重放：标记失败、写明原因，等你处理；继续下一个机会。
@@ -997,7 +1217,9 @@ async fn cycle(ctx: &Ctx, site: &Site, job: &Job) -> Result<String, String> {
     if let (Some(why), 0) = (&stopped, done) {
         job.step("work", "failed", why);
         job.step("ship", "skipped", "");
-        return Err(format!("{planned}，但{why}，没有开始改动。{BUDGET_HINT}"));
+        // 额度用完 / 这 5 小时的轮数满了：到点自动接着做，不是每周 token 的事
+        let hint = if why.starts_with(site_ops::AI_LIMIT) || why.starts_with(site_ops::AI_WINDOW_FULL) { "" } else { BUDGET_HINT };
+        return Err(format!("{planned}，但{why}，没有开始改动。{hint}"));
     }
     job.step("work", "ok", &format!("处理了 {done} 个"));
     let q = site_ops::load_queue(&site_dir);
@@ -1433,6 +1655,12 @@ fn group_effort(g: &crate::managed::ManagedGroup, model: &(String, String)) -> S
 async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String) -> Result<(String, crate::convo::Conversation), String> {
     let st = ctx.state();
     let (primary, fallback) = models_for(site, &st.data_dir)?;
+    // 主模型额度用完了：有还能用的备用模型就直接用它；没有就这次不开，到恢复时间自动接着做
+    if let Some(until) = model_limited(&primary) {
+        let Some(fb) = fallback.as_ref().filter(|fb| model_limited(fb).is_none()) else { return Err(limit_err(until)) };
+        st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 额度用完了（{} 恢复），这次直接用备用模型 {}", model_label(&primary), clock(until), model_label(fb)));
+        return run_conversation_with(ctx, site, perm, work_dir, message, fb).await;
+    }
     // 主模型刚因为余额 / 密钥这类原因失败过：这段时间直接用备用模型
     if let (Some(why), Some(fb)) = (model_down(&primary), fallback.as_ref()) {
         st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 现在用不了（{why}），这次直接用备用模型 {}", model_label(&primary), model_label(fb)));
@@ -1451,7 +1679,8 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
             if let Some(why) = persistent_failure(&e) {
                 mark_down(&primary, why);
             }
-            let Some(fb) = fallback else { return Err(e) };
+            // 备用模型额度也用完了：不换
+            let Some(fb) = fallback.filter(|fb| model_limited(fb).is_none()) else { return Err(e) };
             if let Some(why) = persistent_failure(&e) {
                 st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 用不了（{why}），改用备用模型 {}；{} 分钟内这个站点和其它站点都直接用备用模型", model_label(&primary), model_label(&fb), MODEL_DOWN_SECS / 60));
             }
@@ -1482,6 +1711,12 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
     if !work_dir.trim().is_empty() && crate::site_cmds::site_work_override(&st.sites, &site.id, work_dir).is_none() {
         return Err(format!("AI 的工作目录不对（{work_dir}），为了不改到你自己的代码目录，这次没有交给 AI"));
     }
+    let _slot = ai_slot(ctx, site).await?;
+    // 排队这段时间里别的站点可能刚撞上这个模型的额度
+    if let Some(until) = model_limited(model) {
+        return Err(limit_err(until));
+    }
+    let pair = model.clone();
     let conv_id = uuid::Uuid::new_v4().to_string();
     let _guard = UnattendedGuard::start(&conv_id, st.data_dir.join("permit").join("pending"));
     // 推理强度：临时选了模型就用那次选的（主模型失败换备用模型时不带过去）；托管站点用方案里给主 / 备用模型各自设的档位
@@ -1547,13 +1782,18 @@ async fn run_conversation_with(ctx: &Ctx, site: &Site, perm: &str, work_dir: &st
             return Err(STOPPED.into());
         }
         let e = if m.unfinished.is_empty() { &m.text } else { &m.unfinished };
-        // 一上来就失败、什么都没做的（余额不足、密钥不对这类）：会话从侧栏收起，失败原因在作业日志和下一条会话的开头
-        if persistent_failure(e).is_some() && conv.messages.iter().all(|m| m.tools.is_empty()) {
+        // 订阅额度用完 / 限流（余额不足、欠费不算，见 persistent_failure）：记下这个模型到什么时候恢复，这期间托管不再用它开回合
+        let limit = m.limit_reset.filter(|_| persistent_failure(e).is_none());
+        // 一上来就失败、什么都没做的（余额不足、密钥不对、额度用完这类）：会话从侧栏收起，失败原因在作业日志和下一条会话的开头
+        if (persistent_failure(e).is_some() || limit.is_some()) && conv.messages.iter().all(|m| m.tools.is_empty()) {
             if let Some(mut c) = st.convos.get(&conv_id) {
                 c.folded = true;
                 let _ = st.convos.upsert(c);
                 let _ = ctx.app.emit("conversations-changed", ());
             }
+        }
+        if let Some(reset) = limit {
+            return Err(limit_err(mark_limited(&pair, reset)));
         }
         return Err(format!("模型这一轮没有完成：{}", e.lines().next().unwrap_or("")));
     }
@@ -5066,10 +5306,16 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     // AI 已经提交到分支、后面推送 / 中断才失败的：自动「重新检查」接着用（每条一次），不用你点；
                     // 因为站点自己构建不过卡住的，站点修好了也接着查
                     let env_ok = st.sites.get(id).is_ok_and(|s| site_build_broken(&s, &dir).is_none());
-                    if let Some(item) = site_ops::peek_recheckable(&dir, env_ok) {
+                    let ai_ok = st.sites.get(id).is_ok_and(|s| site_ai_limited(&s, &st.data_dir).is_none());
+                    if let Some(item) = site_ops::peek_recheckable(&dir, env_ok, ai_ok) {
                         let env = site_ops::load_queue(&dir).iter().any(|i| i.id == item && site_ops::env_blocked(i));
                         if start(ctx.clone(), id, "recheck", "schedule", Some(item.clone())).is_ok() {
-                            let _ = site_ops::update_item(&dir, &item, now(), |i| i.auto_retried = true);
+                            // 因为额度停下的不占「只自动查一次」：额度恢复了就接着查
+                            let _ = site_ops::update_item(&dir, &item, now(), |i| {
+                                if !site_ops::ai_limited(i) {
+                                    i.auto_retried = true;
+                                }
+                            });
                             if let (Ok(site), Some(it)) = (st.sites.get(id), site_ops::load_queue(&dir).into_iter().find(|i| i.id == item)) {
                                 log_item(&ctx, &site, "planned", &it, if env { "站点的构建已经没有已知问题，接着检查这条之前卡住的改动" } else { "AI 的改动还在分支上，自动重新检查一次" });
                             }
@@ -5137,6 +5383,8 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             // 周报、复盘、上线后检查这类轻作业不占名额：满了也照常起，不然两个几秒钟的周报就把别的站的扫描挡到下一轮
             let mut busy = st.site_jobs.running_heavy();
             let cap = parallel_jobs(&mcfg);
+            // 这 5 小时托管的 AI 轮数满了：要用 AI 的任务（制定计划、扫描后交给 AI 改）先不起
+            let window_full = ai_window(&st.convos, &mcfg).1 > 0;
             for site in st.sites.list() {
                 if st.site_jobs.running(&site.id) {
                     continue;
@@ -5160,6 +5408,7 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     }
                 }
                 let state = load_state(&st.sites.data_dir(&site.id));
+                let slot = slot_of(&site.id, &mcfg.ops_hours);
                 for task in TASKS {
                     // 从没跑过的任务以站点导入时间为起点：刚导入的站点不会立刻在后台跑起构建，第一次在一个周期后。
                     let last = state.last.get(*task).copied().unwrap_or(0).max(site.created_at);
@@ -5170,7 +5419,11 @@ pub fn start_scheduler(app: tauri::AppHandle) {
                     if needs_data && !has_data {
                         continue;
                     }
-                    if due(&schedule_of(&site, task, mcfg.group_of(&site.id)), last, now()) {
+                    if next_due_at(&schedule_of(&site, task, mcfg.group_of(&site.id)), last, slot).is_some_and(|t| now() >= t) {
+                        // 要用 AI 的：额度用完了、或这 5 小时的轮数满了，到能开的时候再起（不跳过它去起后面的，保持顺序）
+                        if matches!(*task, "scan" | "plan") && (window_full || site_ai_limited(&site, &st.data_dir).is_some()) {
+                            break;
+                        }
                         let heavy = !light_task(task);
                         // 重作业满了：这个站下一轮再说。不跳过它去起排在后面的轻任务，保持「先体检、再计划、再扫描」的顺序
                         if heavy && busy >= cap {
@@ -5386,6 +5639,34 @@ mod tests {
 
     use super::*;
     use crate::site_data::Row;
+
+    #[test]
+    fn each_site_runs_at_its_own_time_of_day() {
+        assert_eq!(ops_window(""), (0, DAY));
+        assert_eq!(ops_window("0-24"), (0, DAY));
+        assert_eq!(ops_window("0-8"), (0, 8 * 3600));
+        assert_eq!(ops_window("22-6"), (22 * 3600, 8 * 3600), "跨午夜");
+        assert_eq!(ops_window("8-8"), (0, DAY), "写错当全天");
+        // 几十个站点错开：不会都落在同一个 10 分钟
+        let slots: std::collections::BTreeSet<u64> = (0..60).map(|i| slot_of(&format!("site-{i}"), "")).collect();
+        assert!(slots.len() > 40, "{}", slots.len());
+        for i in 0..60 {
+            let s = slot_of(&format!("site-{i}"), "22-6");
+            assert!(s >= 22 * 3600 || s < 6 * 3600, "落在运营时段里：{s}");
+            assert_eq!(s % 600, 0, "对齐到整 10 分");
+        }
+        // 每天的任务：上次之后至少隔 8 小时、落在这个站点的时刻上
+        use chrono::TimeZone;
+        let t = |h: u32, m: u32| chrono::Local.with_ymd_and_hms(2026, 3, 10, h, m, 0).unwrap().timestamp() as u64;
+        let slot = 3 * 3600;
+        assert_eq!(next_due_at("daily", t(16, 10), slot), Some(t(3, 0) + DAY), "下午跑过的，明天凌晨 3 点");
+        assert_eq!(next_due_at("daily", t(3, 5), slot), Some(t(3, 0) + DAY), "每天同一时刻");
+        assert_eq!(next_due_at("daily", t(0, 30), slot), Some(t(3, 0) + DAY), "间隔不到 8 小时的不在当天再跑");
+        assert_eq!(next_due_at("off", 0, slot), None);
+        assert_eq!(window_free_at(&[10, 20, 30], 3), 10 + AI_WINDOW, "满了：最早那轮滚出窗口就能再开");
+        assert_eq!(window_free_at(&[10, 20], 3), 0);
+        assert_eq!(window_free_at(&[10, 20, 30], 0), 0, "0＝不限");
+    }
 
     #[test]
     fn schedules_are_due_after_their_period() {
