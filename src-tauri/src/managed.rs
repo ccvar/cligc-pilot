@@ -1453,6 +1453,17 @@ pub fn template_slots(line: &str) -> String {
             out.push_str(lit.trim_end_matches('"'));
             continue;
         }
+        // 自定义函数只带字面参数（{{fee "binance" "spot_maker"}}、{{checked "binance"}}）：函数名和参数一起写出来。
+        // 原来只留最后一个词，成了〔"spot_maker"〕〔"binance"〕，「最近核对：〔"binance"〕」在判断模型看来就是没写日期
+        let has_field = words.iter().any(|w| {
+            let w = w.trim_matches(['(', ')']);
+            w.starts_with('.') || w.starts_with('$')
+        });
+        if !has_field && words.len() > 1 {
+            let call = words.iter().map(|w| w.trim_matches(['(', ')', '"', '\''])).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ");
+            out.push_str(&format!("〔{call}〕"));
+            continue;
+        }
         let field = words.iter().rev().map(|w| w.trim_matches(['(', ')'])).find(|w| w.starts_with('.') || w.starts_with('$')).or(words.last().copied()).unwrap_or("");
         let mut name = field.rsplit('.').next().unwrap_or("").trim_start_matches('$').to_string();
         if name.is_empty() {
@@ -1635,10 +1646,33 @@ fn literal_urls(line: &str) -> Vec<String> {
 /// 页面源文件 → （标题，正文纯文字）：去掉代码块、import 行和 HTML 标签；标题从 frontmatter 的 title: 取，
 /// frontmatter 里其它字段的文字（answer、steps、faqs 这类，见 `frontmatter_prose`）也算正文。
 /// 正文截到 `max_chars` 个字符（判断模型单个问题有上下文上限）。
+/// 没有开头那行 `---`、直接以几行「字段: 值」开头、再用一行 `---` 和正文隔开的 frontmatter（coingree 这类 Go 站点的写法）。
+/// 是就返回 true。原来认不出：title、published、order 这几行和那行 `---` 都算进正文，标题是空的，
+/// 判断模型看到的开头像是写给编辑的元数据
+fn bare_front(src: &str) -> bool {
+    let mut keys = 0;
+    for line in src.lines().take(40) {
+        let t = line.trim();
+        if t == "---" {
+            return keys > 0;
+        }
+        if t.is_empty() || (keys > 0 && (line.starts_with([' ', '\t']) || t.starts_with("- "))) {
+            continue;
+        }
+        let key = t.split_once(':').map(|(k, _)| k).filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        if key.is_none() {
+            return false;
+        }
+        keys += 1;
+    }
+    false
+}
+
 pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
     let mut title = String::new();
     let mut body = String::new();
-    let (mut in_front, mut in_code, mut first) = (false, false, true);
+    let bare = bare_front(src);
+    let (mut in_front, mut in_code, mut first) = (bare, false, !bare);
     for line in src.lines() {
         let t = line.trim();
         if first && t == "---" {
@@ -1651,7 +1685,7 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
             if t == "---" {
                 in_front = false;
             } else if let Some(v) = t.strip_prefix("title:") {
-                title = v.trim().trim_matches(['"', '\'']).to_string();
+                title = template_slots(v.trim().trim_matches(['"', '\'']));
             } else if !t.starts_with("description:") {
                 let text = frontmatter_prose(t);
                 if !text.trim().is_empty() {
@@ -2094,7 +2128,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 19;
+pub const RULES_V: u32 = 20;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2934,6 +2968,11 @@ mod tests {
             template_slots("本站 {{.AsOf}} 查到：{{$c.Symbol}}/{{.Quote}} 在 {{len .Exchanges}} 家上线：{{range $j, $e := .Exchanges}}{{if $j}}、{{end}}<a href=\"/exchange/{{$e.ID}}/\">{{$e.Name}}</a>{{end}}。"),
             "本站 〔AsOf〕 查到：〔Symbol〕/〔Quote〕 在 〔Exchanges 数〕 家上线：  、 <a href=\"/exchange/〔ID〕/\">〔Name〕</a> 。"
         );
+        assert_eq!(template_slots("费率 {{fee \"binance\" \"spot_maker\"}}，核对：{{checked \"binance\"}}（{{year}}）"), "费率 〔fee binance spot_maker〕，核对：〔checked binance〕（〔year〕）");
+        let (title, body) = page_prose("title: 币安和欧易哪个好（{{year}}）\ndescription: 对比\npublished: 2026-10-01\norder: 1\n---\n**结论**：两家都注册。\n", 1000);
+        assert_eq!(title, "币安和欧易哪个好（〔year〕）", "没有开头 --- 的 frontmatter 也认得出");
+        assert_eq!(body, "**结论**：两家都注册。\n");
+        assert_eq!(page_prose("Note: 这是正文第一段\n还是正文\n---\n后面", 1000).1.lines().next(), Some("Note: 这是正文第一段"), "正文里出现冒号不当 frontmatter");
         assert_eq!(template_slots("<h3>{{phrases $q.Q}}</h3>{{- else -}}{{/* 注释 */}}{% if x %}{{ item.title }}{{ \"原样\" }}"), "<h3>〔Q〕</h3>   〔title〕原样");
 
         let d = |file: &str, lines: &[&str]| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1,{} @@\n{}\n", lines.len(), lines.iter().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
