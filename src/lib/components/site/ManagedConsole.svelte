@@ -325,28 +325,38 @@
     {#if d}
       {@const setOpen = digestSetOpen || dirty}
       <div class="card">
-        <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />托管设置 <span class="sub">日报{o?.config.digest ? `每天 ${o.config.digest_hour} 点后` : '已关闭'} · 同时 {o?.parallel_cap ?? '…'} 个作业 · AI 同时 {o?.ai_parallel ?? 1} 个{o?.config.ai_per_window ? `、每 5 小时最多 ${o.config.ai_per_window} 轮` : ''} · {o?.config.ops_hours ? `运营时段 ${o.config.ops_hours} 点` : '全天错开'} · 所有托管方案共用</span>
+        <h3 style:margin-bottom={setOpen ? null : '0'}><button class="set-toggle" onclick={() => (digestSetOpen = !setOpen)} aria-expanded={setOpen}><Icon name="calendar" />托管设置 <span class="sub">日报{o?.config.digest ? `每天 ${o.config.digest_hour} 点后` : '已关闭'} · 同时 {o?.parallel_cap ?? '…'} 个作业 · AI 同时 {o?.ai_parallel ?? 1} 个{o?.config.ai_per_window ? `、每 5 小时最多 ${o.config.ai_per_window} 轮` : ''} · {o?.config.ops_hours ? `运营时段 ${o.config.ops_hours} 点` : '全天错开'}</span>
           <svg class="chev" class:up={setOpen} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></h3>
         {#if setOpen}
-        <div class="row">
-          <label class="check"><input type="checkbox" bind:checked={d.digest} /><span>每天发一份托管日报（系统通知 + 报告）</span></label>
-          {#if d.digest}<span class="faint" style="font-size:12px">时间</span><input class="tin" type="number" min="0" max="23" style="width:70px" bind:value={d.digest_hour} /><span class="faint" style="font-size:12px">点之后</span>{/if}
+        <div class="sets">
+          <div class="set">
+            <span class="sl">日报</span>
+            <div class="sc"><label class="check"><input type="checkbox" bind:checked={d.digest} /><span>每天发一份</span></label>{#if d.digest}<input class="tin num" type="number" min="0" max="23" aria-label="日报几点后发" bind:value={d.digest_hour} /><span class="u">点之后</span>{/if}</div>
+            <span class="sn">系统通知 + 报告</span>
+          </div>
+          <div class="set">
+            <span class="sl">同时运行的作业</span>
+            <div class="sc"><input class="tin num" type="number" min="0" max="8" aria-label="同时运行的作业数" placeholder={String(o?.parallel_auto ?? '')} bind:value={() => d.parallel_jobs || null, (v) => (d.parallel_jobs = Number(v) || 0)} /><span class="u">个</span></div>
+            <span class="sn">{d.parallel_jobs ? '' : `空＝按这台电脑算（${o?.parallel_auto ?? '…'} 个）· `}正在跑 {o?.busy_heavy ?? 0} 个 · 只算要构建或跑 AI 的</span>
+          </div>
+          <div class="set">
+            <span class="sl">AI 同时跑</span>
+            <div class="sc"><input class="tin num" type="number" min="0" max="8" aria-label="AI 同时跑几个" placeholder="1" bind:value={() => d.ai_parallel || null, (v) => (d.ai_parallel = Number(v) || 0)} /><span class="u">个</span></div>
+            <span class="sn">所有站点合计{#if o?.ai_running} · 正在跑 {o.ai_running} 个{/if} · 构建、检查照样并行</span>
+          </div>
+          <div class="set">
+            <span class="sl">每 5 小时最多</span>
+            <div class="sc"><input class="tin num" type="number" min="0" aria-label="每 5 小时最多几轮 AI" placeholder="不限" bind:value={() => d.ai_per_window || null, (v) => (d.ai_per_window = Number(v) || 0)} /><span class="u">轮 AI</span></div>
+            <span class="sn">最近 5 小时跑了 {o?.ai_window_used ?? 0} 轮 · 到数了自动的等窗口滚过去，手动点的照跑</span>
+          </div>
+          <div class="set">
+            <span class="sl">运营时段</span>
+            <div class="sc"><input class="tin hours" aria-label="运营时段" placeholder="全天" bind:value={d.ops_hours} /><span class="u">点</span></div>
+            <span class="sn">如 0-8、22-6 · 各站每天在这段里错开跑，电脑这段时间别睡眠</span>
+          </div>
         </div>
-        <div class="row">
-          <span class="faint" style="font-size:12px">同时运行的作业数</span><input class="tin" type="number" min="0" max="8" style="width:70px" placeholder={String(o?.parallel_auto ?? '')} bind:value={d.parallel_jobs} /><span class="faint" style="font-size:12px">{d.parallel_jobs ? `最多 8；现在正在跑 ${o?.busy_heavy ?? 0} 个` : `空或 0＝按这台电脑自动算，现在是 ${o?.parallel_auto ?? '…'} 个；正在跑 ${o?.busy_heavy ?? 0} 个`}</span>
-        </div>
-        <p class="hint">只限要构建站点或跑 AI 的作业（扫描、体检、计划、上线）；周报、复盘、上线后检查不占名额。</p>
-        <div class="row">
-          <span class="faint" style="font-size:12px">AI 同时跑</span><input class="tin" type="number" min="0" max="8" style="width:70px" placeholder="1" bind:value={d.ai_parallel} /><span class="faint" style="font-size:12px">个</span>
-          <span class="faint" style="font-size:12px;margin-left:12px">每 5 小时最多</span><input class="tin" type="number" min="0" style="width:70px" placeholder="不限" bind:value={d.ai_per_window} /><span class="faint" style="font-size:12px">轮 AI{#if o}（最近 5 小时跑了 {o.ai_window_used ?? 0} 轮{#if o.ai_running}，正在跑 {o.ai_running} 个{/if}）{/if}</span>
-        </div>
-        <p class="hint">所有托管站点合计。订阅额度按总量算，几个站一起跑只是把一天的用量挤进同一个 5 小时窗口，还和你自己的对话抢额度；构建、检查不受这里限制，照样并行。一轮＝一条 AI 会话（改一条、修一次构建、制定一次计划）；到数了自动的就等窗口滚过去再接着做，你手动点的照跑。空或 0＝不限。</p>
-        {#if (o?.ai_limited_until ?? 0) * 1000 > Date.now()}<p class="hint" style="color:var(--warn)">模型额度用完了，{hhmm(o?.ai_limited_until ?? 0)} 恢复；这之前托管不开新的 AI（有备用模型的方案改用备用模型），到点自动接着做。</p>{/if}
-        <div class="row">
-          <span class="faint" style="font-size:12px">运营时段</span><input class="tin" style="width:90px" placeholder="全天" bind:value={d.ops_hours} /><span class="faint" style="font-size:12px">点，写成「起-止」，如 0-8、22-6</span>
-        </div>
-        <p class="hint">每个站点每天的体检、扫描、计划固定在这段里的某个时刻跑，各站错开，不再挤在同一轮。电脑这段时间要开着（不能睡眠）；关着的话开机后补跑，又会挤到一起。</p>
-        <p class="hint">托管需要客户端在运行（关掉窗口后托盘常驻即可）；电脑关机期间不会运营，开机后补跑一次。</p>
+        {#if (o?.ai_limited_until ?? 0) * 1000 > Date.now()}<p class="set-note warn">模型额度用完了，{hhmm(o?.ai_limited_until ?? 0)} 恢复。这之前托管不开新的 AI（有备用模型的方案改用备用），到点自动接着做。</p>{/if}
+        <p class="set-note">所有托管方案共用。一轮＝一条 AI 会话（改一条、修一次构建、制定一次计划）。托管要客户端开着（托盘常驻即可），关机期间不运营，开机后补跑。</p>
         {/if}
       </div>
       {#if dirty}<div class="savebar"><span>托管设置有未保存的修改</span><span class="grow"></span><button class="btn small ghost" onclick={() => o && (managed.draft = JSON.parse(JSON.stringify(o.config)))}>撤销</button><button class="btn small primary" onclick={saveManaged} disabled={managed.saving}>保存</button></div>{/if}
@@ -424,8 +434,8 @@
         <p class="hint">日报几点生成、要不要发，在「托管方案」页顶部的「托管设置」里改。</p>
     {:else}
       <BackgroundNotice />
-      {@render settingsCard()}
       {#if groups.length}<RunChart daily={managed.daily} digests={managed.digests} onpick={pickDay} />{/if}
+      {@render settingsCard()}
       {#each groups as g (g.id)}
         {@const gOff = g.sites.length > 0 && g.sites.every((x) => g.stopped.includes(x))}
         {@const gOpen = grpOpen[g.id] ?? !gOff}
@@ -777,6 +787,21 @@
   .md :global(ul) { padding-left: 18px; margin: 6px 0; }
   /* 和旁边「新增方案」小按钮一样高 */
   .page-head .more-wrap > .ic-btn { width: 24px; height: 24px; border-radius: 7px; } /* 和页头的 24px 按钮同高 */
+  .sets { display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); column-gap: 16px; row-gap: 10px; align-items: center; margin-top: 6px; }
+  .set { display: contents; }
+  .set .sl { font-size: 13px; color: var(--dim); white-space: nowrap; }
+  .set .sc { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .set .sc .check { margin-right: 4px; }
+  .set .u { font-size: 12px; color: var(--faint); }
+  .set .sn { font-size: 12px; line-height: 1.5; color: var(--faint); }
+  .tin.num { width: 64px; }
+  .tin.hours { width: 84px; }
+  .set-note { margin: 12px 0 0; font-size: 12px; line-height: 1.6; color: var(--faint); }
+  .set-note.warn { color: var(--warn); }
+  @media (max-width: 760px) {
+    .sets { grid-template-columns: max-content minmax(0, 1fr); row-gap: 4px; }
+    .set .sn { grid-column: 1 / -1; margin-bottom: 8px; }
+  }
   .set-toggle { flex: 1; width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
   .set-toggle .chev { margin-left: auto; flex: none; color: var(--faint); transition: transform .16s; }
   .set-toggle .chev.up { transform: rotate(180deg); }
