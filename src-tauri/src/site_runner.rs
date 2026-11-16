@@ -2328,6 +2328,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if !reverted.is_empty() {
         job.line(&format!("还原了构建时自动生成的数据文件，不算这次的改动：{}", reverted.join("、")));
     }
+    let stray = strip_scratch(&wt, &base_sha).await;
+    if !stray.is_empty() {
+        job.line(&format!("去掉了 AI 留下的临时文件，不跟着上线：{}", stray.iter().map(|d| format!("{d}/")).collect::<Vec<_>>().join("、")));
+    }
     let head_sha = crate::site_git::head_sha(&wt).await;
     // 先记下 AI 的提交：之后推送、开 PR 这些失败了，自动重试走「重新检查」接着用，不会把分支重置、整条重做
     let _ = site_ops::update_item(&site_dir, &item.id, now(), |i| i.head_sha = head_sha.clone());
@@ -5042,6 +5046,39 @@ fn bytecode_cache(f: &str) -> bool {
 
 /// 分支上相对 base 改过的、构建脚本自动生成的数据文件（见 managed::build_outputs）：还原成 base 的版本（base 没有的就移出版本库），
 /// 单独提交一次。返回还原了哪些文件（相对仓库根目录）。
+/// 像是临时目录的顶层目录：隐藏目录（.tmpshots/ 这类）或 tmp / temp / scratch。根目录下的单个文件（.gitignore）不算
+fn scratch_dir(f: &str) -> Option<&str> {
+    let (top, _) = f.split_once('/')?;
+    (top.starts_with('.') || matches!(top.to_ascii_lowercase().as_str(), "tmp" | "temp" | "scratch")).then_some(top)
+}
+
+/// AI 核对时截的图、写的草稿放在新建的临时目录里没删，被收尾时的「没提交的改动由 Pilot 提交」一起带进分支
+/// （coingree 的 .tmpshots/ 两张共 550 KB 的截图）：从分支上删掉，别跟着合进主分支。改动前就有的目录
+/// （.github、.vitepress、Pilot 自己的 .pilot/ 这类）是站点自己的，不动。返回删掉的目录
+async fn strip_scratch(wt: &Path, base: &str) -> Vec<String> {
+    let Ok(added) = crate::site_git::git_ok(wt, &["diff", "--name-only", "--diff-filter=A", base, "HEAD"], "").await else { return Vec::new() };
+    let mut dirs: Vec<String> = Vec::new();
+    for f in added.lines().map(str::trim) {
+        let Some(top) = scratch_dir(f) else { continue };
+        if dirs.iter().any(|d| d == top) {
+            continue;
+        }
+        let existed = crate::site_git::git(wt, &["cat-file", "-e", &format!("{base}:{top}")], "").await.is_ok_and(|o| o.ok);
+        if !existed {
+            dirs.push(top.to_string());
+        }
+    }
+    if dirs.is_empty() {
+        return dirs;
+    }
+    let mut args = vec!["rm", "-q", "-r", "--"];
+    args.extend(dirs.iter().map(String::as_str));
+    if !crate::site_git::git(wt, &args, "").await.is_ok_and(|o| o.ok) || crate::site_git::git_commit_ok(wt, &["commit", "-qm", "去掉 AI 留下的临时文件"]).await.is_err() {
+        return Vec::new();
+    }
+    dirs
+}
+
 async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
     let outs = crate::managed::build_outputs(&site.app_dir(wt));
     let Ok(changed) = crate::site_git::git_ok(wt, &["diff", "--name-only", base, "HEAD"], "").await else { return Vec::new() };
@@ -5639,6 +5676,15 @@ mod tests {
 
     use super::*;
     use crate::site_data::Row;
+
+    #[test]
+    fn scratch_dirs_are_hidden_or_tmp_top_level_dirs() {
+        assert_eq!(scratch_dir(".tmpshots/bn.png"), Some(".tmpshots"));
+        assert_eq!(scratch_dir("tmp/a.md"), Some("tmp"));
+        assert_eq!(scratch_dir(".gitignore"), None, "根目录的文件不算");
+        assert_eq!(scratch_dir("internal/web/.cache/x"), None, "只看顶层");
+        assert_eq!(scratch_dir("internal/web/guides/a.md"), None);
+    }
 
     #[test]
     fn each_site_runs_at_its_own_time_of_day() {
