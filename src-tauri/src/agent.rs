@@ -256,7 +256,11 @@ pub(crate) fn detect_usage_limit(material: &str) -> Option<i64> {
         || low.contains("(429")
         || low.contains(" 429")
         || low.contains("status 429")
-        || low.contains("429 ");
+        || low.contains("429 ")
+        // claude 订阅新的说法：「You've hit your session limit · resets 12:10am (Asia/Taipei)」，还有 weekly limit 这类
+        || (low.contains("hit your") && low.contains("limit"))
+        || low.contains("session limit")
+        || low.contains("weekly limit");
     if !hit {
         return None;
     }
@@ -274,7 +278,50 @@ pub(crate) fn detect_usage_limit(material: &str) -> Option<i64> {
             }
         }
     }
-    Some(0)
+    Some(resets_clock(&low, chrono::Local::now()).unwrap_or(0))
+}
+
+/// 「resets 12:10am (Asia/Taipei)」「resets 3pm」「resets at 3:30 PM」：取出几点几分，算成之后第一次到这个钟点的时间（本机时区）。
+/// 括号里的时区不看（订阅按账号所在地，和这台电脑一般是同一个时区）；读不出返回 None
+fn resets_clock(low: &str, now: chrono::DateTime<chrono::Local>) -> Option<i64> {
+    use chrono::TimeZone;
+    let i = low.find("resets")?;
+    let rest = low[i + "resets".len()..].trim_start();
+    let rest = rest.strip_prefix("at").unwrap_or(rest).trim_start();
+    let num = |s: &str| -> (String, usize) {
+        let d: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let n = d.len();
+        (d, n)
+    };
+    let (h, n) = num(rest);
+    let mut h: u32 = h.parse().ok()?;
+    let mut r = &rest[n..];
+    let mut m = 0;
+    if let Some(x) = r.strip_prefix(':') {
+        let (mm, n) = num(x);
+        m = mm.parse().ok()?;
+        r = &x[n..];
+    }
+    let r = r.trim_start();
+    if r.starts_with("pm") || r.starts_with("p.m") {
+        if h < 12 {
+            h += 12;
+        }
+    } else if (r.starts_with("am") || r.starts_with("a.m")) && h == 12 {
+        h = 0;
+    }
+    if h > 23 || m > 59 {
+        return None;
+    }
+    let mut d = now.date_naive();
+    for _ in 0..2 {
+        let t = chrono::Local.from_local_datetime(&d.and_hms_opt(h, m, 0)?).earliest()?;
+        if t > now {
+            return Some(t.timestamp());
+        }
+        d = d.succ_opt()?;
+    }
+    None
 }
 
 /// 一轮的 token 用量。input+cache_read+cache_create ≈ 模型这轮读入的整段上下文（＝当前会话大小）。
@@ -3882,6 +3929,16 @@ mod tests {
         ); // 毫秒级归一
         assert_eq!(detect_usage_limit("HTTP 429 Too Many Requests"), Some(0));
         assert_eq!(detect_usage_limit("You've hit your usage limit."), Some(0));
+        let reset = detect_usage_limit("You've hit your session limit · resets 12:10am (Asia/Taipei)").unwrap();
+        assert!(reset > 0 && reset - (chrono::Local::now().timestamp()) <= 86_400, "认得新说法，读出恢复时间");
+        assert!(detect_usage_limit("You've hit your weekly limit").is_some());
+        use chrono::TimeZone;
+        let now = chrono::Local.with_ymd_and_hms(2026, 3, 10, 21, 31, 0).unwrap();
+        let at = |h, m| chrono::Local.with_ymd_and_hms(2026, 3, 10, h, m, 0).unwrap().timestamp();
+        assert_eq!(resets_clock("resets 12:10am (asia/taipei)", now), Some(at(0, 10) + 86_400), "过了午夜的");
+        assert_eq!(resets_clock("resets 11pm", now), Some(at(23, 0)));
+        assert_eq!(resets_clock("resets at 10:30 pm", now), Some(at(22, 30)));
+        assert_eq!(resets_clock("resets soon", now), None);
         assert_eq!(
             detect_usage_limit("insufficient_quota: upgrade your plan"),
             Some(0)

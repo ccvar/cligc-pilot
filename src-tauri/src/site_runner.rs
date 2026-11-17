@@ -570,6 +570,10 @@ pub fn persistent_failure(e: &str) -> Option<&'static str> {
     if ["not logged in", "please run /login", "claude login", "未登录"].iter().any(|k| l.contains(k)) {
         return Some("客户端没登录");
     }
+    // Anthropic：「This organization can't receive replies from Claude right now…Verification Portal」——组织要管理员先去验证
+    if ["can't receive replies", "cannot receive replies", "verification portal", "organization has been disabled", "organization is disabled"].iter().any(|k| l.contains(k)) {
+        return Some("API 账号所在的组织要先完成验证");
+    }
     // 只认明确说模型不存在的：「MCP server not found」这类含 model 字样的别的错误不算（会把主模型全局停 30 分钟）
     let about_model = l.contains("model") && !l.contains("mcp") && !l.contains("server") && !l.contains("file") && !l.contains("tool");
     if ["unknown model", "模型不存在", "model not found", "model_not_found", "no such model"].iter().any(|k| l.contains(k)) || (about_model && ["not found", "does not exist", "not available"].iter().any(|k| l.contains(k))) {
@@ -651,9 +655,30 @@ pub fn site_ai_limited(site: &Site, data_dir: &Path) -> Option<u64> {
     let (primary, fallback) = models_for(site, data_dir).ok()?;
     let p = model_limited(&primary)?;
     match fallback {
-        Some(fb) => model_limited(&fb).map(|f| f.min(p)),
-        None => Some(p),
+        // 备用模型也用不了（余额、密钥、组织要验证）：等主模型恢复
+        Some(fb) if model_down(&fb).is_none() => model_limited(&fb).map(|f| f.min(p)),
+        _ => Some(p),
     }
+}
+
+/// 这个模型现在能用：额度没用完，也没有短时间好不了的问题
+fn usable(m: &(String, String)) -> bool {
+    model_limited(m).is_none() && model_down(m).is_none()
+}
+
+/// 用备用模型跑一轮：它也因为短时间好不了的原因失败（余额、密钥、组织要验证）就记下来，这段时间不再换它
+async fn run_fallback(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, message: String, fb: &(String, String)) -> Result<(String, crate::convo::Conversation), String> {
+    let r = run_conversation_with(ctx, site, perm, work_dir, message, fb).await;
+    match &r {
+        Ok(_) => clear_down(fb),
+        Err(e) => {
+            if let Some(why) = persistent_failure(e) {
+                mark_down(fb, why);
+                ctx.state().site_jobs.line(&ctx.app, &site.id, &format!("备用模型 {} 用不了（{why}），{} 分钟内不再换它", model_label(fb), MODEL_DOWN_SECS / 60));
+            }
+        }
+    }
+    r
 }
 
 /// 托管同时最多跑几个 AI 回合（所有站点合计）
@@ -1657,14 +1682,18 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
     let (primary, fallback) = models_for(site, &st.data_dir)?;
     // 主模型额度用完了：有还能用的备用模型就直接用它；没有就这次不开，到恢复时间自动接着做
     if let Some(until) = model_limited(&primary) {
-        let Some(fb) = fallback.as_ref().filter(|fb| model_limited(fb).is_none()) else { return Err(limit_err(until)) };
+        let Some(fb) = fallback.as_ref().filter(|fb| usable(fb)) else { return Err(limit_err(until)) };
         st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 额度用完了（{} 恢复），这次直接用备用模型 {}", model_label(&primary), clock(until), model_label(fb)));
-        return run_conversation_with(ctx, site, perm, work_dir, message, fb).await;
+        // 备用模型也没跑成：按额度用完算（到点自动接着做），不算这条任务失败
+        return match run_fallback(ctx, site, perm, work_dir, message, fb).await {
+            Err(e) if !st.site_jobs.is_canceled(&site.id) && !e.starts_with(STOPPED) => Err(limit_err(until)),
+            r => r,
+        };
     }
-    // 主模型刚因为余额 / 密钥这类原因失败过：这段时间直接用备用模型
-    if let (Some(why), Some(fb)) = (model_down(&primary), fallback.as_ref()) {
+    // 主模型刚因为余额 / 密钥这类原因失败过：这段时间直接用备用模型（备用也用不了就还是试主模型）
+    if let (Some(why), Some(fb)) = (model_down(&primary), fallback.as_ref().filter(|fb| usable(fb))) {
         st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 现在用不了（{why}），这次直接用备用模型 {}", model_label(&primary), model_label(fb)));
-        return run_conversation_with(ctx, site, perm, work_dir, message, fb).await;
+        return run_fallback(ctx, site, perm, work_dir, message, fb).await;
     }
     match run_conversation_with(ctx, site, perm, work_dir, message.clone(), &primary).await {
         Ok(r) => {
@@ -1679,8 +1708,8 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
             if let Some(why) = persistent_failure(&e) {
                 mark_down(&primary, why);
             }
-            // 备用模型额度也用完了：不换
-            let Some(fb) = fallback.filter(|fb| model_limited(fb).is_none()) else { return Err(e) };
+            // 备用模型额度也用完了、或者短时间用不了：不换
+            let Some(fb) = fallback.filter(|fb| usable(fb)) else { return Err(e) };
             if let Some(why) = persistent_failure(&e) {
                 st.site_jobs.line(&ctx.app, &site.id, &format!("主模型 {} 用不了（{why}），改用备用模型 {}；{} 分钟内这个站点和其它站点都直接用备用模型", model_label(&primary), model_label(&fb), MODEL_DOWN_SECS / 60));
             }
@@ -1694,7 +1723,11 @@ async fn run_conversation(ctx: &Ctx, site: &Site, perm: &str, work_dir: &str, me
                 ..Default::default()
             });
             let note = format!("\n\n（上一次由另一个模型执行时中断了：{}。工作区里可能已有部分改动，先查看现状再继续。）", e.lines().next().unwrap_or(""));
-            run_conversation_with(ctx, site, perm, work_dir, format!("{message}{note}"), &fb).await
+            match run_fallback(ctx, site, perm, work_dir, format!("{message}{note}"), &fb).await {
+                // 主模型是额度用完、备用模型也没跑成：按额度用完算（到点自动接着做），不算这条任务失败
+                Err(_) if e.starts_with(site_ops::AI_LIMIT) && !st.site_jobs.is_canceled(&site.id) => Err(e),
+                r => r,
+            }
         }
     }
 }

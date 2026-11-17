@@ -181,6 +181,8 @@ export function opsErrorHint(text: string): { text: string; billing: string; set
     return { text: '这个站点用的模型服务余额不够了：到服务商后台充值后再让 AI 改，或者换个模型重试。站点和托管方案用哪个模型，在「设置 → API 服务」和托管方案里改。', billing, settings: true };
   if (/invalid[ _-]?(x-)?api[ _-]?key|incorrect api key|authentication[_ ]error|unauthorized|\b401\b|密钥(无效|错误)/i.test(text))
     return { text: '模型服务不认这个 API 密钥（填错或过期了）：到「设置 → API 服务」里检查密钥，或者换个模型重试。', billing: '', settings: true };
+  if (/can't receive replies|cannot receive replies|verification portal/i.test(text))
+    return { text: '这个 API 账号所在的 Anthropic 组织要先完成验证（报错里有验证页面的链接，要组织管理员去做）：验证好之前换个模型重试；托管方案的备用模型用的是它的话，先清空或换掉。', billing: '', settings: true };
   if (/not logged in|please run \/login|claude login|未登录/i.test(text))
     return { text: '本机的客户端还没登录：到「设置」里登录后再让 AI 改，或者换个模型重试。', billing: '', settings: true };
   if (/model.{0,40}(not found|does not exist|not available|unsupported)|unknown model|模型不存在/i.test(text))
