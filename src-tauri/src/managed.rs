@@ -1535,6 +1535,16 @@ fn frontmatter_prose(line: &str) -> String {
 
 /// 这次改动里值得做内容质检的页面文件：新页面，或者正文加了不少（≥ 200 字）的已有页面。删掉的不算。
 /// 返回（文件路径，是不是新文件），最多 5 个。
+/// 交给判断模型（Jev）质检的内容：成段正文的页面文件、代码 / 数据文件里新写的正文。
+/// 构建脚本生成的文件（build_outputs）不是 AI 写的：czneo 的字体清单 serif-fonts.json 里有一长串标题用字，
+/// 原来被当成「写在 JSON 里的正文」，判成空话多、和定位无关，还交回 AI 重写了一次。
+pub fn quality_inputs(diff: &str, generated: &[String]) -> (Vec<(String, bool)>, Vec<(String, String)>) {
+    let by_script = |f: &str| generated_by_build(f, generated);
+    let files = content_page_files(diff).into_iter().filter(|(f, _)| !by_script(f)).collect();
+    let code = content_code_prose(diff).into_iter().filter(|(f, _)| !by_script(f)).collect();
+    (files, code)
+}
+
 pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
     split_diff(diff)
         .into_iter()
@@ -2160,7 +2170,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 22;
+pub const RULES_V: u32 = 23;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2738,6 +2748,15 @@ mod sitemap_tests {
         let bad = rss.replace("+      <title>OKX vs Binance for Beginners: Fees, KYC and Which to Pick (2026)</title>", "+      <description><![CDATA[<script src=\"https://evil.example/x.js\"></script>]]></description>");
         assert!(verdict(&bad, &r).iter().any(|b| b.text.contains("rss.xml") && b.text.contains("脚本")));
     }
+    #[test]
+    fn generated_manifest_is_not_prose_for_jev() {
+        let chars: String = "交易所人脸识别一直失败怎么办币安欧易不匹配与次数上限排查".repeat(12);
+        let diff = format!("diff --git a/src/config/serif-fonts.json b/src/config/serif-fonts.json\n--- a/src/config/serif-fonts.json\n+++ b/src/config/serif-fonts.json\n@@ -1 +1 @@\n-  \"text\": \"旧\",\n+  \"text\": \"{chars}\",\n");
+        assert_eq!(content_code_prose(&diff).len(), 1, "不排除的话会被当成正文");
+        let (files, code) = quality_inputs(&diff, &["serif-fonts.json".to_string()]);
+        assert!(files.is_empty() && code.is_empty());
+    }
+
     #[test]
     fn redirect_rules_are_judged_by_content() {
         let r = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };

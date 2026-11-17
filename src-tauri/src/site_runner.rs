@@ -2588,9 +2588,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     } else if verdict != "auto" {
         job.step("quality", "skipped", "已经有别的原因要留给你确认");
     } else if let Some(jev) = crate::typesafe::client() {
-        let files = crate::managed::content_page_files(&diff);
+        // 构建脚本生成的文件不是 AI 写的正文：czneo 的字体清单 serif-fonts.json 里有一长串标题用字，
+        // 原来被当成「写在 JSON 里的正文」交给 Jev，判成空话多、和定位无关，还交回 AI 重写了一次
         // 正文写在代码文件里的站点（Go 模板 + 内容 .go、语言包 JSON）：代码文件里新写的正文也要判
-        let code = crate::managed::content_code_prose(&diff);
+        let (files, code) = crate::managed::quality_inputs(&diff, &generated);
         let mut pages = crate::jev_checks::plan_pages(&files, &code);
         // 代码文件按这次是不是新建的来记：改已有的共用代码（seo.go 这类）不拿目标搜索词问（见 target_candidates）
         let created = crate::managed::new_files(&diff);
