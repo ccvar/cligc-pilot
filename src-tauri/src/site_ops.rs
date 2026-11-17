@@ -748,6 +748,10 @@ pub struct QueueItem {
     pub index_note: String,
     #[serde(default)]
     pub index_checked: u64,
+    /// 没编入的提醒挂过没有（index_check）：page＝按这一篇提醒过 | site＝挂过「全站都没编入」那张 | 空＝没提醒过。
+    /// 你点「没问题」清掉提醒后，靠它不再挂回来
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub index_warned: String,
     /// 上次失败的原因，重做时交给 AI。
     #[serde(default)]
     pub retry_note: String,

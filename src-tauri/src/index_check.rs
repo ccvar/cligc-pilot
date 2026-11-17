@@ -1,6 +1,8 @@
 //! 新页面收录确认：AI 写的新页面上线后，Google 不一定会收。上线 3 天起，每隔 2 天用 Search Console 的
 //! URL 检查（URL Inspection API，每个资源每天约 2000 次免费额度）查一次有没有编入索引，查到 21 天为止。
 //! 上线满 14 天还没编入，就在这条改动上记一笔「要你核对」（进「需要你 → 上线后待核对」），写明卡在哪一步。
+//! 站里查过的新页面一篇都没编入（新站、Google 来得少）：不再一篇篇提醒，只挂一张「全站都没编入」的，之后同站的新页面不再提醒，
+//! 等有页面被收录了再按篇提醒。每条只提醒一次（点了「没问题」不会再挂回来）；后来编入了，提醒自动消掉。
 
 
 const DAY: u64 = 86_400;
@@ -41,17 +43,90 @@ pub async fn check_site(state: &crate::AppState, site: &crate::sites::Site) -> b
     };
     for i in items {
         let (state_, note) = inspect_all(&token, &d.gsc_site, &i.new_pages).await;
-        let age = now.saturating_sub(i.deployed_at);
         let _ = crate::site_ops::update_item(&dir, &i.id, now, |x| {
             x.index_state = state_.clone();
             x.index_note = note.clone();
             x.index_checked = now;
-            if state_ == "not_indexed" && age >= WARN_AFTER && x.attention.is_empty() {
-                x.attention = format!("新页面上线 {} 天了，Google 还没编入索引（{note}）：可以在 Search Console 里对它「请求编入索引」，或补充内容、从更多页面链过来", age / DAY);
+        });
+    }
+    for c in warnings(&crate::site_ops::load_queue(&dir), now) {
+        let _ = crate::site_ops::update_item(&dir, &c.id, now, |x| {
+            if let Some(a) = &c.attention {
+                x.attention = a.clone();
+            }
+            if let Some(w) = &c.warned {
+                x.index_warned = w.clone();
             }
         });
     }
     true
+}
+
+const PAGE_WARN: &str = "新页面上线 ";
+const SITE_WARN: &str = "这个站新上线的页面 Google 都还没编入";
+
+#[derive(Debug, PartialEq)]
+struct Change {
+    id: String,
+    /// Some("")＝清掉之前挂的收录提醒
+    attention: Option<String>,
+    warned: Option<String>,
+}
+
+fn ours(attention: &str) -> bool {
+    attention.starts_with(PAGE_WARN) || attention.starts_with(SITE_WARN)
+}
+
+/// 查完一轮后，收录提醒该怎么挂（只看队列，不联网）
+fn warnings(q: &[crate::site_ops::QueueItem], now: u64) -> Vec<Change> {
+    let mut out = Vec::new();
+    // 编入了：之前挂的提醒消掉
+    for i in q.iter().filter(|i| i.index_state == "indexed" && ours(&i.attention)) {
+        out.push(Change { id: i.id.clone(), attention: Some(String::new()), warned: None });
+    }
+    let live = |i: &&crate::site_ops::QueueItem| i.status == "deployed" && !i.new_pages.is_empty();
+    let pending: Vec<&crate::site_ops::QueueItem> = q.iter().filter(live).filter(|i| i.index_state == "not_indexed").collect();
+    let mut late: Vec<&crate::site_ops::QueueItem> = pending.iter().copied().filter(|i| now.saturating_sub(i.deployed_at) >= WARN_AFTER && i.index_warned.is_empty()).collect();
+    if late.is_empty() {
+        return out;
+    }
+    late.sort_by_key(|i| std::cmp::Reverse(i.deployed_at));
+    // 查过的新页面一篇都没编入、至少两篇：是站的问题，不是哪一篇的
+    let site_wide = pending.len() >= 2 && !q.iter().any(|i| i.index_state == "indexed");
+    if !site_wide {
+        for i in late {
+            let age = now.saturating_sub(i.deployed_at) / DAY;
+            let attention = (i.attention.is_empty()).then(|| format!("{PAGE_WARN}{age} 天了，Google 还没编入索引（{}）：可以在 Search Console 里对它「请求编入索引」，或补充内容、从更多页面链过来", i.index_note));
+            out.push(Change { id: i.id.clone(), attention, warned: Some("page".into()) });
+        }
+        return out;
+    }
+    let told = q.iter().any(|i| i.index_warned == "site" && i.index_state != "indexed");
+    if told {
+        // 全站那张挂过了：新到期的不再提醒
+        for i in late {
+            out.push(Change { id: i.id.clone(), attention: None, warned: Some("site".into()) });
+        }
+        return out;
+    }
+    let mut paths: Vec<String> = pending.iter().map(|i| path_of(&i.new_pages[0])).collect();
+    let more = if paths.len() > 5 { format!(" 等 {} 个", paths.len()) } else { String::new() };
+    paths.truncate(5);
+    let text = format!(
+        "{SITE_WARN}：查过的 {} 个新页面一个都还没编入（{}{more}），Search Console 说「{}」。多半是站点还新、Google 来得少，不是哪一篇写得有问题：可以在 Search Console 里对它们「请求编入索引」，再从已有展现的页面多链过来、争取一些外部链接。之后这个站的新页面不再一篇篇提醒，等有页面被收录了再按篇提醒",
+        pending.len(),
+        paths.join("、"),
+        late[0].index_note.split_once('：').map(|(_, c)| c).unwrap_or("没编入"),
+    );
+    for (n, i) in late.iter().enumerate() {
+        let attention = if n == 0 { Some(text.clone()) } else { None };
+        out.push(Change { id: i.id.clone(), attention, warned: Some("site".into()) });
+    }
+    // 之前按篇挂的、还没点掉的，合进这一张
+    for i in pending.iter().filter(|i| i.index_warned == "page" && i.attention.starts_with(PAGE_WARN)) {
+        out.push(Change { id: i.id.clone(), attention: Some(String::new()), warned: Some("site".into()) });
+    }
+    out
 }
 
 /// 一条改动的几个新页面：都编入了才算 indexed；有没编入的，给出第一个没编入页面的覆盖状态
@@ -110,5 +185,65 @@ mod tests {
         assert!(due(&mk(5 * DAY, 2 * DAY, "not_indexed"), now));
         assert!(!due(&mk(5 * DAY, 0, "indexed"), now), "已经编入了");
         assert!(!due(&mk(22 * DAY, 0, ""), now), "过了 21 天不再查");
+    }
+
+    fn item(id: &str, age_days: u64, state: &str, now: u64) -> crate::site_ops::QueueItem {
+        crate::site_ops::QueueItem {
+            id: id.into(),
+            status: "deployed".into(),
+            new_pages: vec![format!("https://x.com/{id}/")],
+            deployed_at: now - age_days * DAY,
+            index_state: state.into(),
+            index_note: if state == "not_indexed" { format!("/{id}/：已发现 - 尚未编入索引") } else { String::new() },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn one_page_not_indexed_is_warned_once() {
+        let now = 100 * DAY;
+        let mut q = vec![item("a", 15, "not_indexed", now), item("b", 20, "indexed", now)];
+        let c = warnings(&q, now);
+        assert_eq!(c.len(), 1);
+        assert!(c[0].attention.as_deref().unwrap().starts_with("新页面上线 15 天了"));
+        // 点了「没问题」：清了提醒、记着提醒过，下一轮不再挂回来
+        q[0].index_warned = "page".into();
+        assert!(warnings(&q, now + 2 * DAY).is_empty());
+        assert!(warnings(&[item("a", 10, "not_indexed", now)], now).is_empty(), "不满 14 天不提醒");
+    }
+
+    #[test]
+    fn site_with_nothing_indexed_gets_one_site_wide_warning() {
+        let now = 100 * DAY;
+        // gateraw：三篇新页面都没编入，最早那篇满 15 天
+        let mut q = vec![item("rebate", 15, "not_indexed", now), item("sg", 9, "not_indexed", now), item("hk", 8, "not_indexed", now)];
+        let c = warnings(&q, now);
+        assert_eq!(c.len(), 1);
+        let a = c[0].attention.as_deref().unwrap();
+        assert!(a.starts_with(SITE_WARN) && a.contains("3 个新页面") && a.contains("/rebate/、/sg/、/hk/") && a.contains("已发现 - 尚未编入索引"), "{a}");
+        q[0].index_warned = "site".into();
+        q[0].attention.clear();
+        // 之后另外两篇到期：不再提醒
+        let later = now + 7 * DAY;
+        let c = warnings(&q, later);
+        assert!(c.iter().all(|x| x.attention.is_none()), "{c:?}");
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn page_warnings_fold_into_the_site_warning_and_clear_when_indexed() {
+        let now = 100 * DAY;
+        let mut a = item("a", 20, "not_indexed", now);
+        a.index_warned = "page".into();
+        a.attention = "新页面上线 14 天了，Google 还没编入索引".into();
+        let q = vec![a, item("b", 15, "not_indexed", now)];
+        let c = warnings(&q, now);
+        assert!(c.iter().any(|x| x.id == "b" && x.attention.as_deref().is_some_and(|t| t.starts_with(SITE_WARN))));
+        assert!(c.iter().any(|x| x.id == "a" && x.attention.as_deref() == Some("")), "按篇那张合进全站那张");
+        // 后来编入了：提醒消掉
+        let mut b = item("b", 16, "indexed", now);
+        b.attention = format!("{SITE_WARN}：……");
+        let c = warnings(&[b], now);
+        assert_eq!(c, vec![Change { id: "b".into(), attention: Some(String::new()), warned: None }]);
     }
 }
