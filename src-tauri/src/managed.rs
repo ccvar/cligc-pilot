@@ -790,7 +790,9 @@ fn short(l: &str) -> String {
 }
 
 /// 一行规则：`来源 目标 [状态码]`，空行和注释返回 Ok(None)。能自动上线的只有：站内精确地址（可以带 `:lang` 这种
-/// 占位段，不能带 `*` 通配、查询串）301 / 302 / 307 / 308 跳到站内路径。改写（200）、代理、跳外站、带条件参数的不行。
+/// 占位段，不能带查询串）301 / 302 / 307 / 308 跳到站内路径；或者整个目录搬家 `/旧目录/* /新目录/:splat`
+/// （来源只能在末尾带一个 `/*`、不带占位段，目标只能在末尾带 `:splat`；盖没盖住已有页面、新目录有没有页面，构建完对照产物查）。
+/// 改写（200）、代理、跳外站、带条件参数的不行。
 fn parse_redirect(line: &str) -> Result<Option<Redirect>, String> {
     let t = line.trim();
     if t.is_empty() || t.starts_with('#') {
@@ -808,10 +810,12 @@ fn parse_redirect(line: &str) -> Result<Option<Redirect>, String> {
     if !matches!(status, 301 | 302 | 307 | 308) {
         return Err(format!("「{}」不是跳转（{status} 是改写 / 代理，会把别的内容当成这个地址）", short(t)));
     }
-    if !from.starts_with('/') || from.contains('*') || from.contains('?') {
+    let dir = from.strip_suffix("/*").filter(|d| !d.contains('*') && !d.contains(':'));
+    if !from.starts_with('/') || (from.contains('*') && dir.is_none()) || from.contains('?') {
         return Err(format!("「{}」的来源不是站内的精确地址", short(t)));
     }
-    if !to.starts_with('/') || to.starts_with("//") || to.contains("://") || to.contains('*') || to.contains(":splat") {
+    let splat = to.strip_suffix(":splat").is_some_and(|d| d.ends_with('/') && !d.contains(':'));
+    if !to.starts_with('/') || to.starts_with("//") || to.contains("://") || to.contains('*') || (to.contains(":splat") && !(splat && dir.is_some())) {
         return Err(format!("「{}」的目标不是站内路径", short(t)));
     }
     Ok(Some(Redirect { from: from.to_string(), to: to.to_string(), status }))
@@ -862,6 +866,25 @@ pub fn redirect_problems(rules: &[Redirect], built: &[String]) -> Vec<String> {
     let exists = |p: &str| { let k = url_key(p); keys.iter().any(|b| *b == k || b.strip_suffix(".html").is_some_and(|s| s == k)) };
     let mut out = Vec::new();
     for r in rules {
+        // 整个目录搬家：旧目录下不能有构建出来的页面（会被盖住），新目录下要有页面
+        if let Some(dir) = r.from.strip_suffix("/*") {
+            let d = url_key(dir);
+            let under = |k: &String| *k == d || k.starts_with(&format!("{}/", d.trim_end_matches('/')));
+            if let Some(b) = keys.iter().find(|k| under(k)) {
+                out.push(format!("跳转来源 {} 会盖住已有页面 {b}", r.from));
+            }
+            match r.to.strip_suffix(":splat") {
+                Some(t) => {
+                    let t = url_key(t);
+                    if !keys.iter().any(|k| k.starts_with(&format!("{}/", t.trim_end_matches('/')))) {
+                        out.push(format!("跳转目标目录 {t}/ 在构建产物里没有页面"));
+                    }
+                }
+                None if !exists(&r.to) && !rules.iter().any(|o| o.from == r.to) => out.push(format!("跳转目标 {} 在构建产物里没有这个页面", r.to)),
+                None => {}
+            }
+            continue;
+        }
         if r.to.contains(':') {
             out.push(format!("跳转目标 {} 带占位符，查不了页面存不存在", r.to));
         } else if !exists(&r.to) && !rules.iter().any(|o| o.from == r.to) {
@@ -2137,7 +2160,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 21;
+pub const RULES_V: u32 = 22;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2729,7 +2752,10 @@ mod sitemap_tests {
         for (bad, why) in [
             ("-/vi/about /vi/gioi-thieu/ 301\n+/vi/about /vi/about-us/ 301\n", "删掉或改了已有"),
             ("+/feed/ /feed.xml 200\n", "改写"),
-            ("+/old/* /new/:splat 301\n", "精确地址"),
+            ("+/old/*/x /new/:splat 301\n", "精确地址"),
+            ("+/old/:lang/* /new/:splat 301\n", "精确地址"),
+            ("+/old /new/:splat 301\n", "站内路径"),
+            ("+/old/* /new/:splat/x 301\n", "站内路径"),
             ("+/promo https://evil.example/ 301\n", "站内路径"),
             ("+/promo //evil.example/ 301\n", "站内路径"),
             ("+/a /b 301!\n", "强制标记"),
@@ -2751,6 +2777,15 @@ mod sitemap_tests {
         // 目标是另一条新规则的来源（链式）、目标带占位符
         assert!(redirect_problems(&[Redirect { from: "/a".into(), to: "/b".into(), status: 301 }, Redirect { from: "/b".into(), to: "/".into(), status: 301 }], &built).is_empty());
         assert!(redirect_problems(&[Redirect { from: "/a/:x".into(), to: "/b/:x".into(), status: 301 }], &built)[0].contains("占位符"));
+        // 整个目录搬家（biannex：没有语言前缀的 /guides/* → /zh-hans/guides/:splat）：旧目录下没有页面、新目录下有页面才放行
+        let wild = diff("+/guides/* /zh-hans/guides/:splat 301\n+/zh/* /zh-hans/:splat 301\n");
+        assert!(texts(&wild).is_empty(), "{:?}", texts(&wild));
+        let built2: Vec<String> = ["index.html", "zh-hans/index.html", "zh-hans/guides/okx-register/index.html", "en/guides/a/index.html"].iter().map(|s| s.to_string()).collect();
+        assert!(redirect_problems(&redirects_added(&wild), &built2).is_empty(), "{:?}", redirect_problems(&redirects_added(&wild), &built2));
+        let p = redirect_problems(&[Redirect { from: "/en/*".into(), to: "/zh-hans/:splat".into(), status: 301 }], &built2);
+        assert!(p.len() == 1 && p[0].contains("盖住已有页面 /en/guides/a"), "{p:?}");
+        assert!(redirect_problems(&[Redirect { from: "/*".into(), to: "/zh-hans/:splat".into(), status: 301 }], &built2)[0].contains("盖住"), "根目录通配会盖住全站");
+        assert!(redirect_problems(&[Redirect { from: "/x/*".into(), to: "/fr/:splat".into(), status: 301 }], &built2)[0].contains("没有页面"));
         // 构建产物里的 _redirects 接住的网址
         let dir = std::env::temp_dir().join(format!("pilot-redir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

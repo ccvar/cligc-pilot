@@ -2489,7 +2489,7 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         let files = built_files(&out_dir);
         let problems = crate::managed::redirect_problems(&redirects, &files);
         if problems.is_empty() {
-            let olds: Vec<String> = redirects.iter().filter(|r| !r.from.contains(':')).map(|r| format!("https://{}{}", site.domain, r.from)).filter(|u| !item.pages.contains(u)).take(10).collect();
+            let olds: Vec<String> = redirects.iter().filter(|r| !r.from.contains(':') && !r.from.contains('*')).map(|r| format!("https://{}{}", site.domain, r.from)).filter(|u| !item.pages.contains(u)).take(10).collect();
             job.line(&format!("新加了 {} 条跳转规则，目标都在构建产物里、没盖住已有页面；上线后打开旧地址验收：{}", redirects.len(), olds.iter().map(|u| path_of(u)).collect::<Vec<_>>().join("、")));
             if !olds.is_empty() {
                 site_ops::update_item(&site_dir, &item.id, now(), |i| i.pages.extend(olds.clone()))?;
