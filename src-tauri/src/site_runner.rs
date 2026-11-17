@@ -3324,8 +3324,9 @@ async fn verify_failed(ctx: &Ctx, site: &Site, job: &Job, item_id: &str, reason:
     }
     if let Some((_, sha)) = reverted.last() {
         let spec = reverted.iter().fold(crate::site_verify::Spec { domain: site.domain.clone(), ..Default::default() }, |a, (r, _)| join_specs(a, spec_for(site, r, true)));
-        if let Err(e) = ship(ctx, site, job, spec, sha, "rollback").await {
-            job.line(&format!("一并回退后重新上线没成功：{e}"));
+        match ship(ctx, site, job, spec, sha, "rollback").await {
+            Ok(_) => push_local(site, job).await,
+            Err(e) => job.line(&format!("一并回退后重新上线没成功：{e}")),
         }
     }
     log_item(ctx, site, "rolled_back", &item, &format!("上线后验收没通过（{why}），已自动回滚"));
@@ -3558,6 +3559,7 @@ async fn merge_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Resu
             if let Some(why) = local_not_ready(site, &main, &site_dir).await {
                 return Err(format!("{why}。{FOLDER_WAIT}"));
             }
+            sync_before_merge(site, &main, job).await?;
             if let Err(e) = crate::site_git::git_ok(&main, &["merge", "--squash", &item.branch], "").await {
                 // 上面确认过没有未提交的改动，这里恢复的只是这次合并带进来的内容
                 let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
@@ -3623,8 +3625,43 @@ pub async fn push_after(site: &Site, main: &Path, job: &Job) {
     match crate::site_git::push_origin(main, &site.default_branch).await {
         Ok(true) => job.line("已推送到 GitHub"),
         Ok(false) => {}
-        Err(e) => job.line(&format!("推送到 GitHub 没成功（不影响上线，可以之后自己推）：{}", e.lines().last().unwrap_or(&e))),
+        Err(e) => job.line(&format!("推送到 GitHub 没成功：{}。GitHub 上如果有自动部署（比如每天定时构建），会按 GitHub 上的旧代码上线、把这次的改动盖掉，请尽快把本地主分支推上去", e.lines().last().unwrap_or(&e))),
     }
+}
+
+/// 本地文件夹站点合并 / 回退之前，先把 GitHub 上多出来的提交合进本地主分支（见 site_git::sync_origin）。
+/// 连不上 GitHub 照旧做；合并冲突就不做这次合并，不然推不上去，线上改动迟早被远端的自动部署盖掉。
+async fn sync_before_merge(site: &Site, main: &Path, job: &Job) -> Result<(), String> {
+    match crate::site_git::sync_origin(main, &site.default_branch).await {
+        Ok(0) => Ok(()),
+        Ok(n) => {
+            job.line(&format!("GitHub 上的 {} 有 {n} 个本地没有的提交，先合进本地（不然推不上去，GitHub 的自动部署会按旧代码把这次上线盖掉）", site.default_branch));
+            Ok(())
+        }
+        Err(crate::site_git::SyncError::Offline(e)) => {
+            job.line(&format!("没能读到 GitHub 上的最新提交，先按本地的代码做：{}", e.lines().last().unwrap_or(&e)));
+            Ok(())
+        }
+        Err(crate::site_git::SyncError::Conflict(e)) => Err(format!(
+            "GitHub 上的 {} 有本地没有的提交，和本地改到了同一处，合不进来（{}）。请先在站点文件夹里把 GitHub 上的提交合进本地主分支，再重新上线",
+            site.default_branch,
+            e.lines().last().unwrap_or(&e)
+        )),
+    }
+}
+
+/// 本地文件夹站点：回退上线成功后再推到 GitHub（revert_item 只提交不推）
+async fn push_local(site: &Site, job: &Job) {
+    if site.source != "github" {
+        if let Ok(main) = crate::site_git::code_dir(site, None) {
+            push_after(site, &main, job).await;
+        }
+    }
+}
+
+/// 上线在上传之前就停了（装依赖 / 构建 / 检查没过）：线上还是原来的样子
+fn stopped_before_upload(e: &str) -> bool {
+    ["安装依赖失败", "构建失败", "检查没通过"].iter().any(|p| e.starts_with(p))
 }
 
 /// 合并完记下合并提交和上线前的数据快照（之后对比效果用）。
@@ -3740,6 +3777,7 @@ pub async fn accept_many(ctx: &Ctx, site: &Site, job: &Job, ids: &str) -> Result
                 pause_site(ctx, site, &format!("回退后重新上线失败：{re}"));
                 return Err(format!("{e}；回退后重新上线也失败了：{re}。已暂停这个站点的托管，请尽快检查线上"));
             }
+            push_local(site, job).await;
             // 一起上线失败算一次：每类改动只判一次降档，而且在给这批条目记回滚次数之前判
             // （不然同一批里两条同类的，第二条会把第一条刚记的算成「之前又失败过一次」）
             let mut kinds: Vec<&str> = merged.iter().map(|(i, _)| i.opp.change.as_str()).collect();
@@ -3961,14 +3999,35 @@ pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resul
         return Err("只有已合并的改动可以回滚".into());
     }
     let revert_sha = revert_item(ctx, site, job, &item).await?;
+    let local = site.source != "github";
     if site.deploy.mode != "none" {
         match ship(ctx, site, job, spec_for(site, &item, true), &revert_sha, "rollback").await {
-            Err(e) if e.starts_with(crate::site_verify::DOMAIN_TAKEN) => return Ok(format!("已回滚并上传到 Cloudflare 项目。{e}")),
+            Err(e) if e.starts_with(crate::site_verify::DOMAIN_TAKEN) => {
+                push_local(site, job).await;
+                return Ok(format!("已回滚并上传到 Cloudflare 项目。{e}"));
+            }
+            // 回退后的代码构建不过（比如后来的改动链到了这次新加的页面）：线上没动，把本地的回退提交撤掉，
+            // 不然主分支一直构建不过，之后每次上线都失败
+            Err(e) if local && stopped_before_upload(&e) => {
+                let main = crate::site_git::code_dir(site, None)?;
+                if crate::site_git::head_sha(&main).await == revert_sha {
+                    let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD~1"], "").await;
+                    job.line("回退后的代码构建不过，线上没动；已撤掉本地的回退提交，主分支恢复原样");
+                }
+                let site_dir = ctx.site_dir(&site.id);
+                let _ = site_ops::update_item(&site_dir, item_id, now(), |i| {
+                    i.status = item.status.clone();
+                    i.note = item.note.clone();
+                });
+                ctx.emit_queue(&site.id);
+                return Err(e);
+            }
             r => {
                 r?;
             }
         }
     }
+    push_local(site, job).await;
     Ok("已回滚并重新上线".into())
 }
 
@@ -3998,13 +4057,14 @@ async fn revert_item(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem) -> Res
             if let Some(why) = local_not_ready(site, &main, &ctx.site_dir(&site.id)).await {
                 return Err(format!("{why}。请先处理好再回滚"));
             }
+            sync_before_merge(site, &main, job).await?;
             if let Err(e) = crate::site_git::git_commit_ok(&main, &["revert", "--no-edit", &item.merge_sha]).await {
                 // 回退冲突（这些文件后来又被别的改动改过）：把主分支恢复原样，不能留着冲突标记让之后每次合并都失败
                 let _ = crate::site_git::git(&main, &["revert", "--abort"], "").await;
                 let _ = crate::site_git::git(&main, &["reset", "-q", "--hard", "HEAD"], "").await;
                 return Err(if e.contains("CONFLICT") || e.contains("conflict") { "这些文件后来又被别的改动改过，回退会冲突，没有动主分支".into() } else { e });
             }
-            push_after(site, &main, job).await;
+            // 先不推：回退后的代码要先构建上线成功（见 rollback），构建不过就撤掉这个回退提交
             crate::site_git::head_sha(&main).await
         }
     };

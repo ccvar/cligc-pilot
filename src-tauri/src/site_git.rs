@@ -17,10 +17,50 @@ pub struct GitOut {
 /// SSH 远端不弹密码框（BatchMode），没配好就直接失败。
 pub async fn push_origin(main: &Path, branch: &str) -> Result<bool, String> {
     if git(main, &["remote", "get-url", "origin"], "").await.map(|o| o.ok).unwrap_or(false) {
-        git_ok(main, &["-c", "core.sshCommand=ssh -o BatchMode=yes", "push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")], "").await.map(|_| true)
+        let refspec = format!("HEAD:refs/heads/{branch}");
+        let args = ["-c", "core.sshCommand=ssh -o BatchMode=yes", "push", "-q", "origin", refspec.as_str()];
+        let push = || git_ok(main, &args, "");
+        match push().await {
+            // 远端有本地没有的提交：先合进来再推一次（合不进来就把原来的错误报上去）
+            Err(e) if e.contains("rejected") || e.contains("fetch first") || e.contains("non-fast-forward") => match sync_origin(main, branch).await {
+                Ok(n) if n > 0 => push().await.map(|_| true),
+                _ => Err(e),
+            },
+            r => r.map(|_| true),
+        }
     } else {
         Ok(false)
     }
+}
+
+/// 把 GitHub 上这个分支有、本地没有的提交合进本地（本地文件夹站点在合并、回退之前调）。
+/// 远端常有自己的提交（比如 GitHub Actions 每天把更新的数据提交回仓库），本地不跟上就推不上去，
+/// 而远端的自动部署又按远端的代码上线，会把 Pilot 刚上线的改动盖掉（cexgc 2026-11 连着四条被盖掉）。
+/// 返回合进来几个提交；没有 origin 返回 0。
+pub async fn sync_origin(main: &Path, branch: &str) -> Result<usize, SyncError> {
+    if !git(main, &["remote", "get-url", "origin"], "").await.map(|o| o.ok).unwrap_or(false) {
+        return Ok(0);
+    }
+    git_ok(main, &["-c", "core.sshCommand=ssh -o BatchMode=yes", "fetch", "-q", "origin", branch], "").await.map_err(SyncError::Offline)?;
+    let remote = format!("origin/{branch}");
+    let n = git_ok(main, &["rev-list", "--count", &format!("HEAD..{remote}")], "").await.map_err(SyncError::Offline)?.trim().parse::<usize>().unwrap_or(0);
+    if n == 0 {
+        return Ok(0);
+    }
+    if let Err(e) = git_commit_ok(main, &["merge", "--no-edit", "-q", &remote]).await {
+        let _ = git(main, &["merge", "--abort"], "").await;
+        let _ = git(main, &["reset", "-q", "--hard", "HEAD"], "").await;
+        return Err(SyncError::Conflict(e));
+    }
+    Ok(n)
+}
+
+#[derive(Debug)]
+pub enum SyncError {
+    /// 连不上 GitHub / 拿不到远端状态：不影响本地，照旧
+    Offline(String),
+    /// 远端和本地改了同一处，合不进来：主分支已恢复原样
+    Conflict(String),
 }
 
 /// 本地有还没推到 origin 这个分支的提交（只看本地记的远端状态，不联网）。没有这个远端分支时返回 false。
@@ -480,6 +520,63 @@ mod tests {
         let head = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
         let remote = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse", "main"]).output().unwrap().stdout).unwrap();
         assert_eq!(head, remote);
+    }
+
+    /// cexgc：GitHub Actions 每天把提现费提交回 origin/main，本地 main 和远端分叉，Pilot 推不上去，
+    /// 夜里的自动部署按远端旧代码上线、盖掉 Pilot 的改动。合并前先把远端多出来的提交合进来，推送被拒也先合再推。
+    #[tokio::test]
+    async fn remote_commits_are_merged_before_pushing() {
+        let t = tempfile::tempdir().unwrap();
+        let (repo, bare, bot) = (t.path().join("repo"), t.path().join("bare.git"), t.path().join("bot"));
+        let run = |d: &Path, a: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(d).args(a).output().unwrap().status.success(), "{a:?}");
+        let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+        std::fs::create_dir_all(&repo).unwrap();
+        run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("fees.json"), "1").unwrap();
+        std::fs::write(repo.join("page.md"), "a").unwrap();
+        run(&repo, &["add", "-A"]);
+        run(&repo, &[&id[..], &["commit", "-qm", "init"]].concat());
+        run(t.path(), &["init", "-q", "--bare", "bare.git"]);
+        run(&repo, &["remote", "add", "origin", &bare.to_string_lossy()]);
+        assert!(push_origin(&repo, "main").await.unwrap());
+        assert_eq!(sync_origin(&repo, "main").await.unwrap(), 0, "远端没有新提交");
+        // 远端：机器人提交了新数据
+        run(t.path(), &["clone", "-q", &bare.to_string_lossy(), "bot"]);
+        std::fs::write(bot.join("fees.json"), "2").unwrap();
+        run(&bot, &[&id[..], &["commit", "-qam", "Update withdrawal fees"]].concat());
+        run(&bot, &["push", "-q", "origin", "main"]);
+        // 本地：Pilot 合并了一条改动
+        std::fs::write(repo.join("page.md"), "b").unwrap();
+        run(&repo, &[&id[..], &["commit", "-qam", "ops: improve"]].concat());
+        assert_eq!(sync_origin(&repo, "main").await.unwrap(), 1);
+        assert_eq!(std::fs::read_to_string(repo.join("fees.json")).unwrap(), "2");
+        assert_eq!(std::fs::read_to_string(repo.join("page.md")).unwrap(), "b");
+        assert!(push_origin(&repo, "main").await.unwrap());
+        // 推送被拒（远端又有新提交）：先合进来再推
+        run(&bot, &["pull", "-q", "--no-rebase", "origin", "main"]);
+        std::fs::write(bot.join("fees.json"), "3").unwrap();
+        run(&bot, &[&id[..], &["commit", "-qam", "Update withdrawal fees"]].concat());
+        run(&bot, &["push", "-q", "origin", "main"]);
+        std::fs::write(repo.join("page.md"), "c").unwrap();
+        run(&repo, &[&id[..], &["commit", "-qam", "ops: improve 2"]].concat());
+        assert!(push_origin(&repo, "main").await.unwrap());
+        let head = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+        let remote = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&bare).args(["rev-parse", "main"]).output().unwrap().stdout).unwrap();
+        assert_eq!(head, remote);
+        assert_eq!(std::fs::read_to_string(repo.join("fees.json")).unwrap(), "3");
+        // 两边改了同一处：合不进来，本地原样
+        run(&bot, &["pull", "-q", "--no-rebase", "origin", "main"]);
+        std::fs::write(bot.join("page.md"), "remote").unwrap();
+        run(&bot, &[&id[..], &["commit", "-qam", "edit on github"]].concat());
+        run(&bot, &["push", "-q", "origin", "main"]);
+        std::fs::write(repo.join("page.md"), "local").unwrap();
+        run(&repo, &[&id[..], &["commit", "-qam", "ops: improve 3"]].concat());
+        let before = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+        assert!(matches!(sync_origin(&repo, "main").await, Err(SyncError::Conflict(_))));
+        let after = String::from_utf8(std::process::Command::new("git").arg("-C").arg(&repo).args(["rev-parse", "HEAD"]).output().unwrap().stdout).unwrap();
+        assert_eq!(before, after);
+        assert_eq!(std::fs::read_to_string(repo.join("page.md")).unwrap(), "local");
+        assert!(is_clean(&repo).await);
     }
 
     use super::*;
