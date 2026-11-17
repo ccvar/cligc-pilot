@@ -60,17 +60,37 @@ pub fn tooltip(running: &[(String, String)]) -> String {
     lines.join("\n")
 }
 
-/// 作业状态有变化时调：更新悬停提示；有作业在跑且还没在动就开始呼吸。调用很频繁（每条日志都会），所以先比一下
+/// 拿托盘句柄、用完丢掉，都放到主线程上做。
+/// tray-icon 里的托盘是 Rc（引用计数不是原子的），Tauri 却允许在任何线程 `tray_by_id` 拿一份拷贝：
+/// 原来每条作业日志、每帧呼吸都在后台线程拿一份再丢掉，几个作业同时写日志时计数会被并发改乱，
+/// 提前归零就在后台线程关掉了菜单栏图标，macOS 规定这只能在主线程做，直接让应用闪退（0.6.12 那次）。
+/// 已经在主线程时 run_on_main_thread 会当场执行，不会卡住。
+fn on_tray(app: &AppHandle, f: impl FnOnce(&tauri::tray::TrayIcon) + Send + 'static) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(tray) = h.tray_by_id(TRAY_ID) {
+            f(&tray);
+        }
+    });
+}
+
+/// 作业状态有变化时调：更新悬停提示；有作业在跑且还没在动就开始呼吸。调用很频繁（每条日志都会），所以先比一下。
+/// 可以在任何线程调：碰托盘的部分都交给主线程（见 on_tray）。
 pub fn refresh(app: &AppHandle) {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let jobs = running(app);
     let tip = tooltip(&jobs);
-    {
+    let changed = {
         let mut last = LAST_TIP.lock().unwrap();
-        if *last != tip {
+        let changed = *last != tip;
+        if changed {
             *last = tip.clone();
-            let _ = tray.set_tooltip(Some(&tip));
         }
+        changed
+    };
+    if changed {
+        on_tray(app, move |tray| {
+            let _ = tray.set_tooltip(Some(&tip));
+        });
     }
     if jobs.is_empty() || GLYPHS.get().is_none() {
         return;
@@ -83,14 +103,19 @@ pub fn refresh(app: &AppHandle) {
         let Some((base, frames)) = GLYPHS.get() else { return };
         let mut i = 0usize;
         loop {
-            let Some(tray) = app.tray_by_id(TRAY_ID) else { break };
             if app.state::<crate::AppState>().site_jobs.running_titles().is_empty() {
-                let _ = tray.set_icon(Some(base.clone()));
-                let _ = tray.set_icon_as_template(true);
+                let img = base.clone();
+                on_tray(&app, move |tray| {
+                    let _ = tray.set_icon(Some(img));
+                    let _ = tray.set_icon_as_template(true);
+                });
                 break;
             }
-            let _ = tray.set_icon(Some(frames[i % FRAMES].clone()));
-            let _ = tray.set_icon_as_template(true);
+            let img = frames[i % FRAMES].clone();
+            on_tray(&app, move |tray| {
+                let _ = tray.set_icon(Some(img));
+                let _ = tray.set_icon_as_template(true);
+            });
             i += 1;
             tokio::time::sleep(std::time::Duration::from_millis(FRAME_MS)).await;
         }
