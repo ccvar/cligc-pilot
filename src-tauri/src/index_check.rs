@@ -49,7 +49,9 @@ pub async fn check_site(state: &crate::AppState, site: &crate::sites::Site) -> b
             x.index_checked = now;
         });
     }
-    for c in warnings(&crate::site_ops::load_queue(&dir), now) {
+    // 这个站在 Google 搜索里有展现的页面数（Search Console 最近的页面数据）：多的话站本身是被收录的，没编入的是这几篇自己的事
+    let shown: Vec<crate::site_data::Row> = crate::site_data::read_json(&crate::site_data::cache_dir(&dir), "gsc_pages.json");
+    for c in warnings(&crate::site_ops::load_queue(&dir), now, shown.len()) {
         let _ = crate::site_ops::update_item(&dir, &c.id, now, |x| {
             if let Some(a) = &c.attention {
                 x.attention = a.clone();
@@ -77,8 +79,22 @@ fn ours(attention: &str) -> bool {
     attention.starts_with(PAGE_WARN) || attention.starts_with(SITE_WARN)
 }
 
-/// 查完一轮后，收录提醒该怎么挂（只看队列，不联网）
-fn warnings(q: &[crate::site_ops::QueueItem], now: u64) -> Vec<Change> {
+/// 站里在 Google 有展现的页面少于这么多，才算「站还新、Google 来得少」
+const FEW_SHOWN: usize = 10;
+
+/// 没编入的这一篇该怎么办：「已抓取 - 尚未编入索引」是 Google 来看过、决定先不收，多半是和站内已有页面讲的是同一件事
+/// 或者内容单薄，光「请求编入索引」不管用
+fn page_advice(note: &str) -> &'static str {
+    if note.contains("已抓取") || note.to_ascii_lowercase().contains("crawled") {
+        "Google 抓过了、决定先不收：常见原因是站内已有页面讲的是同一件事（Google 只收一篇），或内容单薄。看看站里有没有回答同一个问题的页面，合并、互相链接或把角度拉开，比「请求编入索引」管用"
+    } else {
+        "可以在 Search Console 里对它「请求编入索引」，或补充内容、从更多页面链过来"
+    }
+}
+
+/// 查完一轮后，收录提醒该怎么挂（只看队列和 Search Console 的页面数，不联网）。
+/// `shown`：这个站在 Google 搜索里有展现的页面数
+fn warnings(q: &[crate::site_ops::QueueItem], now: u64, shown: usize) -> Vec<Change> {
     let mut out = Vec::new();
     // 编入了：之前挂的提醒消掉
     for i in q.iter().filter(|i| i.index_state == "indexed" && ours(&i.attention)) {
@@ -86,17 +102,24 @@ fn warnings(q: &[crate::site_ops::QueueItem], now: u64) -> Vec<Change> {
     }
     let live = |i: &&crate::site_ops::QueueItem| i.status == "deployed" && !i.new_pages.is_empty();
     let pending: Vec<&crate::site_ops::QueueItem> = q.iter().filter(live).filter(|i| i.index_state == "not_indexed").collect();
-    let mut late: Vec<&crate::site_ops::QueueItem> = pending.iter().copied().filter(|i| now.saturating_sub(i.deployed_at) >= WARN_AFTER && i.index_warned.is_empty()).collect();
+    // 查过的新页面一篇都没编入、至少两篇，而且站在 Google 里本来就没几页有展现：是站的问题，不是哪一篇的。
+    // 站里别的页面有展现（cexask 有 50 页），没编入的就是这几篇自己的事，按篇说
+    let site_wide = pending.len() >= 2 && !q.iter().any(|i| i.index_state == "indexed") && shown < FEW_SHOWN;
+    // 按篇提醒时，之前挂着的全站提醒（还没点掉的）也换成按篇的
+    let mut late: Vec<&crate::site_ops::QueueItem> = pending
+        .iter()
+        .copied()
+        .filter(|i| now.saturating_sub(i.deployed_at) >= WARN_AFTER && (i.index_warned.is_empty() || (!site_wide && i.attention.starts_with(SITE_WARN))))
+        .collect();
     if late.is_empty() {
         return out;
     }
     late.sort_by_key(|i| std::cmp::Reverse(i.deployed_at));
-    // 查过的新页面一篇都没编入、至少两篇：是站的问题，不是哪一篇的
-    let site_wide = pending.len() >= 2 && !q.iter().any(|i| i.index_state == "indexed");
     if !site_wide {
         for i in late {
             let age = now.saturating_sub(i.deployed_at) / DAY;
-            let attention = (i.attention.is_empty()).then(|| format!("{PAGE_WARN}{age} 天了，Google 还没编入索引（{}）：可以在 Search Console 里对它「请求编入索引」，或补充内容、从更多页面链过来", i.index_note));
+            // 之前挂的全站提醒（站后来有了展现、判断变了）换成按篇的
+            let attention = (i.attention.is_empty() || i.attention.starts_with(SITE_WARN)).then(|| format!("{PAGE_WARN}{age} 天了，Google 还没编入索引（{}）：{}", i.index_note, page_advice(&i.index_note)));
             out.push(Change { id: i.id.clone(), attention, warned: Some("page".into()) });
         }
         return out;
@@ -203,13 +226,13 @@ mod tests {
     fn one_page_not_indexed_is_warned_once() {
         let now = 100 * DAY;
         let mut q = vec![item("a", 15, "not_indexed", now), item("b", 20, "indexed", now)];
-        let c = warnings(&q, now);
+        let c = warnings(&q, now, 3);
         assert_eq!(c.len(), 1);
         assert!(c[0].attention.as_deref().unwrap().starts_with("新页面上线 15 天了"));
         // 点了「没问题」：清了提醒、记着提醒过，下一轮不再挂回来
         q[0].index_warned = "page".into();
-        assert!(warnings(&q, now + 2 * DAY).is_empty());
-        assert!(warnings(&[item("a", 10, "not_indexed", now)], now).is_empty(), "不满 14 天不提醒");
+        assert!(warnings(&q, now + 2 * DAY, 3).is_empty());
+        assert!(warnings(&[item("a", 10, "not_indexed", now)], now, 3).is_empty(), "不满 14 天不提醒");
     }
 
     #[test]
@@ -217,7 +240,7 @@ mod tests {
         let now = 100 * DAY;
         // gateraw：三篇新页面都没编入，最早那篇满 15 天
         let mut q = vec![item("rebate", 15, "not_indexed", now), item("sg", 9, "not_indexed", now), item("hk", 8, "not_indexed", now)];
-        let c = warnings(&q, now);
+        let c = warnings(&q, now, 3);
         assert_eq!(c.len(), 1);
         let a = c[0].attention.as_deref().unwrap();
         assert!(a.starts_with(SITE_WARN) && a.contains("3 个新页面") && a.contains("/rebate/、/sg/、/hk/") && a.contains("已发现 - 尚未编入索引"), "{a}");
@@ -225,9 +248,26 @@ mod tests {
         q[0].attention.clear();
         // 之后另外两篇到期：不再提醒
         let later = now + 7 * DAY;
-        let c = warnings(&q, later);
+        let c = warnings(&q, later, 3);
         assert!(c.iter().all(|x| x.attention.is_none()), "{c:?}");
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn site_that_shows_in_google_gets_page_warnings() {
+        let now = 100 * DAY;
+        // cexask：站里 50 个页面有展现，只是 Pilot 新写的两篇没编入；一篇已抓取未编入（多半和已有页面撞题）
+        let mut a = item("receive", 24, "not_indexed", now);
+        a.index_note = "/receive/：已抓取 - 尚未编入索引".into();
+        a.index_warned = "site".into();
+        a.attention = format!("{SITE_WARN}：……");
+        let q = vec![a, item("limits", 15, "not_indexed", now)];
+        let c = warnings(&q, now, 50);
+        assert_eq!(c.len(), 2, "{c:?}");
+        let receive = c.iter().find(|x| x.id == "receive").unwrap().attention.as_deref().unwrap();
+        assert!(receive.starts_with(PAGE_WARN) && receive.contains("同一件事"), "全站提醒换成按篇的：{receive}");
+        let limits = c.iter().find(|x| x.id == "limits").unwrap().attention.as_deref().unwrap();
+        assert!(limits.contains("请求编入索引"), "{limits}");
     }
 
     #[test]
@@ -237,13 +277,13 @@ mod tests {
         a.index_warned = "page".into();
         a.attention = "新页面上线 14 天了，Google 还没编入索引".into();
         let q = vec![a, item("b", 15, "not_indexed", now)];
-        let c = warnings(&q, now);
+        let c = warnings(&q, now, 3);
         assert!(c.iter().any(|x| x.id == "b" && x.attention.as_deref().is_some_and(|t| t.starts_with(SITE_WARN))));
         assert!(c.iter().any(|x| x.id == "a" && x.attention.as_deref() == Some("")), "按篇那张合进全站那张");
         // 后来编入了：提醒消掉
         let mut b = item("b", 16, "indexed", now);
         b.attention = format!("{SITE_WARN}：……");
-        let c = warnings(&[b], now);
+        let c = warnings(&[b], now, 3);
         assert_eq!(c, vec![Change { id: "b".into(), attention: Some(String::new()), warned: None }]);
     }
 }
