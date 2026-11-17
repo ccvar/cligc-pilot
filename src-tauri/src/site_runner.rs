@@ -5179,8 +5179,28 @@ async fn revert_generated(site: &Site, wt: &Path, base: &str) -> Vec<String> {
     if files.is_empty() {
         return Vec::new();
     }
+    // 新加 / 删掉的文件（字体子集这类带内容哈希的资源）
+    let status = crate::site_git::git_ok(wt, &["diff", "--name-status", "--no-renames", base, "HEAD"], "").await.unwrap_or_default();
+    let (mut added, mut deleted) = (Vec::new(), Vec::new());
+    for l in status.lines() {
+        match l.split_once('\t') {
+            Some(("A", f)) => added.push(f.trim().to_string()),
+            Some(("D", f)) => deleted.push(f.trim().to_string()),
+            _ => {}
+        }
+    }
     let mut done = Vec::new();
     for f in &files {
+        // 清单点名了这次新加 / 删掉的资源文件：清单和资源是同一次生成的（czneo 字体子集），一起留着；
+        // 只还原清单会让它指向已经删掉的旧字体
+        if !added.is_empty() || !deleted.is_empty() {
+            let d = crate::site_git::git_ok(wt, &["diff", base, "HEAD", "--", f], "").await.unwrap_or_default();
+            let pick = |p: char| d.lines().filter(|l| l.starts_with(p) && !l.starts_with(&format!("{p}{p}{p}"))).map(|l| &l[1..]).collect::<Vec<_>>().join("\n");
+            let (a, r) = (pick('+'), pick('-'));
+            if added.iter().any(|x| crate::managed::manifest_asset(x, true, false, &a, &r)) || deleted.iter().any(|x| crate::managed::manifest_asset(x, false, true, &a, &r)) {
+                continue;
+            }
+        }
         let at_base = crate::site_git::git(wt, &["cat-file", "-e", &format!("{base}:{f}")], "").await.is_ok_and(|o| o.ok);
         let ok = if at_base {
             crate::site_git::git(wt, &["checkout", base, "--", f], "").await.is_ok_and(|o| o.ok)
@@ -5733,6 +5753,39 @@ mod tests {
         assert_eq!(revert_generated(&site, &repo, &base).await, vec!["src/data/fees.json"]);
         let diff = g::git_ok(&repo, &["diff", "--name-only", &base, "HEAD"], "").await.unwrap();
         assert_eq!(diff.trim(), "src/pages/a.md");
+    }
+
+    /// czneo：标题用了新字，构建前的字体子集脚本重新生成一份带内容哈希的 woff2、删掉旧的，清单跟着换文件名。
+    /// 清单和字体一起留在改动里（原来只还原清单，清单指向已经删掉的旧字体），上线判定也不拦这几个文件。
+    #[tokio::test]
+    async fn font_subset_and_its_manifest_stay_together() {
+        use crate::site_git as g;
+        let t = tempfile::tempdir().unwrap();
+        let repo = t.path().to_path_buf();
+        let w = |p: &str, c: &str| { let f = repo.join(p); std::fs::create_dir_all(f.parent().unwrap()).unwrap(); std::fs::write(f, c).unwrap(); };
+        g::git_ok(&repo, &["init", "-q", "-b", "main"], "").await.unwrap();
+        w("package.json", r#"{"scripts":{"build":"node scripts/subset-serif.mjs && astro build"}}"#);
+        w("scripts/subset-serif.mjs", "const MANIFEST = path.join(ROOT, 'src/config/serif-fonts.json');");
+        w("src/config/serif-fonts.json", "{\n  \"file\": \"serif-cjk-2.6f8d16772b.woff2\"\n}\n");
+        w("public/fonts/serif-cjk-2.6f8d16772b.woff2", "old font");
+        w("src/content/a.md", "title: old");
+        g::git_ok(&repo, &["add", "-A"], "").await.unwrap();
+        g::git_commit_ok(&repo, &["commit", "-qm", "base"]).await.unwrap();
+        let base = g::head_sha(&repo).await;
+        std::fs::remove_file(repo.join("public/fonts/serif-cjk-2.6f8d16772b.woff2")).unwrap();
+        w("public/fonts/serif-cjk-2.de547c22aa.woff2", "new font");
+        w("src/config/serif-fonts.json", "{\n  \"file\": \"serif-cjk-2.de547c22aa.woff2\"\n}\n");
+        w("src/content/a.md", "title: new");
+        g::git_ok(&repo, &["add", "-A"], "").await.unwrap();
+        g::git_commit_ok(&repo, &["commit", "-qm", "ai"]).await.unwrap();
+        let site: Site = serde_json::from_value(serde_json::json!({"id": "s", "name": "s", "source": "local", "created_at": 0, "updated_at": 0})).unwrap();
+        assert!(revert_generated(&site, &repo, &base).await.is_empty(), "清单点名了新字体，不还原");
+        let diff = g::git_ok(&repo, &["diff", base.as_str(), "HEAD"], "").await.unwrap();
+        let outs = crate::managed::build_outputs(&repo);
+        assert_eq!(outs, vec!["serif-fonts.json"]);
+        let rules = crate::managed::Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &outs, build_scripts: None, deps: &[] };
+        let why: Vec<String> = crate::managed::verdict(&diff, &rules).into_iter().map(|b| b.text).collect();
+        assert!(why.iter().all(|w| !w.contains("woff2")), "{why:?}");
     }
 
     #[test]

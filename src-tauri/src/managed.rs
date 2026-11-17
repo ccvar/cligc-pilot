@@ -1199,6 +1199,15 @@ fn generated_by_build(file: &str, generated: &[String]) -> bool {
     !hard_forbidden(file) && generated.iter().any(|g| g == name)
 }
 
+/// 构建脚本生成的清单（`serif-fonts.json` 这类，见 build_outputs）里点名的资源文件：新加的、新清单里写着它；删掉的、旧清单里写着它。
+/// 它们和清单是同一次生成的结果：czneo 标题用了新字，字体子集重新生成一份带内容哈希的 woff2、删掉旧的，清单跟着换文件名。
+/// 只认字体和图片，代码文件不算。`added` / `removed` 是清单这次加上 / 删掉的行。
+pub fn manifest_asset(file: &str, new_file: bool, deleted: bool, added: &str, removed: &str) -> bool {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let asset = ["woff2", "woff", "ttf", "otf", "eot", "png", "jpg", "jpeg", "webp", "avif", "gif", "ico"].iter().any(|e| name.ends_with(&format!(".{e}")));
+    asset && name.len() > 5 && !hard_forbidden(file) && ((new_file && added.contains(name)) || (deleted && removed.contains(name)))
+}
+
 /// frontmatter 里改了网址（slug / permalink / url / aliases / redirect_from 的旧行被删）或把页面改成不可见
 /// （draft → true、published → false、noindex → true）：返回那个键
 fn url_or_unpublish_change(removed: &[String], added: &[String]) -> Option<&'static str> {
@@ -1723,7 +1732,7 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
 }
 
 /// 一个文件在差异里的改动。
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct FileDiff {
     file: String,
     new_file: bool,
@@ -2128,7 +2137,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 20;
+pub const RULES_V: u32 = 21;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2147,11 +2156,15 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let (mut code_lines, mut code_files) = (0usize, 0usize);
     // 已有文件里删掉 / 加上的推荐内容（文件，行），最后整份比较
     let (mut money_out, mut money_in): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
-    for f in split_diff(diff) {
+    let files = split_diff(diff);
+    // 生成的清单这次加上 / 删掉的行：清单里点名的字体、图片和清单一起算构建生成的（见 manifest_asset）
+    let manifest = |pick: fn(&FileDiff) -> &Vec<String>| files.iter().filter(|f| generated_by_build(&f.file, rules.generated)).flat_map(|f| pick(f).iter().cloned()).collect::<Vec<_>>().join("\n");
+    let (m_added, m_removed) = (manifest(|f| &f.added), manifest(|f| &f.removed));
+    for f in files.iter().cloned() {
         let file = &f.file;
         // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动；
         // .pilot/ 是 Pilot 自己的记录（待办、站点说明），不上线
-        if generated_by_build(file, rules.generated) || file.starts_with(".pilot/") || file.contains("/.pilot/") {
+        if generated_by_build(file, rules.generated) || manifest_asset(file, f.new_file, f.deleted, &m_added, &m_removed) || file.starts_with(".pilot/") || file.contains("/.pilot/") {
             continue;
         }
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
