@@ -2061,7 +2061,7 @@ fn placeholders(s: &str) -> Vec<String> {
 
 /// 翻译文件里会改坏页面的写法：同一个键的占位符变了（%s 少一个，页面上就是 %!s(MISSING)），
 /// 或者条目被删了（模板里还在用的话，页面上露出键名或空白）
-fn locale_problem(file: &str, f: &FileDiff) -> Option<String> {
+fn locale_problem(file: &str, f: &FileDiff, renamed: &[String]) -> Option<String> {
     let kv = |ls: &[String]| -> Vec<(String, String)> { ls.iter().filter_map(|l| locale_kv(file, l).flatten()).collect() };
     let (old, new) = (kv(&f.removed), kv(&f.added));
     let mut seen: Vec<&str> = Vec::new();
@@ -2072,7 +2072,7 @@ fn locale_problem(file: &str, f: &FileDiff) -> Option<String> {
         seen.push(k);
         let was: Vec<&String> = old.iter().filter(|x| &x.0 == k).map(|x| &x.1).collect();
         let now: Vec<&String> = new.iter().filter(|x| &x.0 == k).map(|x| &x.1).collect();
-        if now.len() < was.len() {
+        if now.len() < was.len() && !renamed.contains(k) {
             return Some(format!("删掉了翻译条目 {k}（模板里还在用的话，页面上会露出键名或空白）"));
         }
         for (a, b) in was.iter().zip(&now) {
@@ -2084,6 +2084,49 @@ fn locale_problem(file: &str, f: &FileDiff) -> Option<String> {
         }
     }
     None
+}
+
+/// 一行里双引号 / 反引号字符串的内容（处理 \" 和 \\ 转义）
+fn quoted_strings(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '"' && c != '`' {
+            continue;
+        }
+        let mut s = String::new();
+        let mut closed = false;
+        while let Some(d) = chars.next() {
+            if d == '\\' && c == '"' {
+                if let Some(e) = chars.next() {
+                    s.push(e);
+                }
+            } else if d == c {
+                closed = true;
+                break;
+            } else {
+                s.push(d);
+            }
+        }
+        if closed {
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// 用原文当翻译键的站点（stocknas：locales/id.json 的键就是代码里的英文标题）改了代码里的英文原文：
+/// 这次从代码文件里删掉、没再加回来的整句文字（带空格的才算，`x.tldr` 这类键名可能是拼出来用的）。
+/// 翻译文件里同名的键跟着换成新原文是改名，不是「删了还在用的条目」；就算别处还用这句原文，缺翻译也只是显示英文原文
+fn renamed_source_texts(files: &[FileDiff]) -> Vec<String> {
+    let mut gone: Vec<String> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    for f in files.iter().filter(|f| !locale_file(&f.file)) {
+        gone.extend(f.removed.iter().flat_map(|l| quoted_strings(l)).filter(|t| t.trim().contains(' ')));
+        kept.extend(f.added.iter().flat_map(|l| quoted_strings(l)));
+    }
+    gone.retain(|t| !kept.contains(t));
+    gone
 }
 
 /// 去掉一行里的字符串字面量，返回（剩下的代码部分，字符串内容）。模板字符串里有 `${`、
@@ -2219,7 +2262,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 24;
+pub const RULES_V: u32 = 25;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2239,6 +2282,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     // 已有文件里删掉 / 加上的推荐内容（文件，行），最后整份比较
     let (mut money_out, mut money_in): (Vec<(String, String)>, Vec<(String, String)>) = (Vec::new(), Vec::new());
     let files = split_diff(diff);
+    let renamed = renamed_source_texts(&files);
     // 生成的清单这次加上 / 删掉的行：清单里点名的字体、图片和清单一起算构建生成的（见 manifest_asset）
     let manifest = |pick: fn(&FileDiff) -> &Vec<String>| files.iter().filter(|f| generated_by_build(&f.file, rules.generated)).flat_map(|f| pick(f).iter().cloned()).collect::<Vec<_>>().join("\n");
     let (m_added, m_removed) = (manifest(|f| &f.added), manifest(|f| &f.removed));
@@ -2298,7 +2342,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             reasons.push(block("", format!("{file}：不是页面内容文件")));
         }
         if locale {
-            if let Some(why) = locale_problem(file, &f) {
+            if let Some(why) = locale_problem(file, &f, &renamed) {
                 reasons.push(block("", format!("{file}：{why}，留给你确认")));
             }
         }
@@ -3005,6 +3049,12 @@ mod tests {
         assert!(why(&d("internal/i18n/locales/en.toml", "-\"x.tldr\" = \"At %s, the gap is %s.\"\n+\"x.tldr\" = \"The gap is %s.\"")).contains("占位符"));
         assert!(why(&d("config/locales/en.yml", "-  hi: \"Hi {name}\"\n+  hi: \"Hello {user}\"")).contains("占位符"));
         assert!(why(&d("internal/i18n/locales/en.toml", "-\"x.tldr\" = \"Old\"")).contains("删掉了翻译条目"));
+        // stocknas：翻译键就是代码里的英文原文。改了 guides.go 里的英文描述，id.json 的键跟着换：是改名，不拦
+        let go = d("internal/web/guides.go", "-\t\t\t\"en\":      \"Bybit web sign-up and the three KYC levels.\",\n+\t\t\t\"en\":      \"How to sign up for Bybit: details you need.\",");
+        let id = d("internal/web/locales/id.json", "- \"Bybit web sign-up and the three KYC levels.\": \"Pendaftaran Bybit di web.\",\n+ \"How to sign up for Bybit: details you need.\": \"Pendaftaran Bybit di web.\",");
+        assert!(!why(&format!("{go}\n{id}")).contains("删掉了翻译条目"), "{}", why(&format!("{go}\n{id}")));
+        // 代码里的原文没动、只删了翻译：照旧拦
+        assert!(why(&id).contains("删掉了翻译条目"));
         assert!(why(&d("internal/i18n/locales/en.toml", "+\"x.note\" = \"<script>alert(1)</script>\"")).contains("插入脚本"));
         // 不是翻译文件、或者写了文字以外的东西：照旧按配置拦
         for (file, body) in [("internal/config/app.toml", "+port = \"8080\""), ("internal/i18n/locales/en.toml", "+\"x\" = \"\"\"\n+multi\n+\"\"\""), ("internal/i18n/locales/en.toml", "+limit = 5"), ("config/locales/en.yml", "+  on: yes"), ("internal/i18n/locales/settings.toml", "+\"a\" = \"b\""), ("scripts/locales/en.toml", "+\"a\" = \"b\"")] {
