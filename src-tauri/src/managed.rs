@@ -385,8 +385,9 @@ impl ManagedGroup {
         }
         if self.min_page_chars > 0 {
             out.push_str(&format!(
-                "【页面厚度】新页面正文不少于 {} 字（不算标题、导航和代码）；不同类型参考：完整教程 / 指南 2000–4000 字并配真实截图，对比 / 评测 2500 字以上并有对比表，单个问题解答 1200–2000 字，术语 / 概念解释 800–1500 字。长度跟着把问题讲完整走，不为凑字数加内容；撑不起的选题换掉或并进已有页面。\n\n",
-                self.min_page_chars
+                "【页面厚度】新页面正文不少于 {} 字（不算标题、导航和代码）；不同类型参考：完整教程 / 指南 2000–4000 字并配真实截图，对比 / 评测 2500 字以上并有对比表，单个问题解答 1200–2000 字，术语 / 概念解释 800–1500 字。长度跟着把问题讲完整走，不为凑字数加内容；撑不起的选题换掉或并进已有页面。英文等不用汉字的语种按词算，下限约 {} 词。\n\n",
+                self.min_page_chars,
+                word_floor(self.min_page_chars as usize)
             ));
         }
         let allowed: Vec<&str> = ACTIONS.iter().filter(|a| self.allows(a)).map(|a| action_label(a)).collect();
@@ -1422,9 +1423,22 @@ pub fn leak_marker(text: &str) -> Option<&'static str> {
 
 /// 文字量：汉字按字、其它按词（粗算，只用于判断「新页面是不是太薄」）。
 pub fn text_units(s: &str) -> usize {
+    let (cjk, words) = text_parts(s);
+    cjk + words
+}
+
+/// 文字量拆开算：（汉字 / 假名 / 谚文的字数，其它语言的词数）
+pub fn text_parts(s: &str) -> (usize, usize) {
     let cjk = s.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c) || ('\u{3040}'..='\u{30ff}').contains(c) || ('\u{ac00}'..='\u{d7af}').contains(c)).count();
     let words = s.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() >= 2).count();
-    cjk + words
+    (cjk, words)
+}
+
+/// 正文下限按「字」定（中文）。英文等不用汉字的页面按词算，一个英文词大约顶 1.6–1.7 个汉字，
+/// 下限折成 3/5（1500 字 ≈ 900 词）。原来直接拿 1500 去比英文词数：stocknas 杠杆 ETF 指南的英文版 1483 词被判「偏薄」，
+/// 同一篇的中文版却过了；多语种站的英文版几乎每篇都会卡在这里。
+pub fn word_floor(min_zi: usize) -> usize {
+    min_zi * 3 / 5
 }
 
 
@@ -1609,43 +1623,78 @@ fn manifest_file(f: &str) -> bool {
 }
 
 /// 这次改动里所有代码文件（非页面文件、非依赖清单）新加行的正文字数，不设门槛：模板页的字数下限要把它算进去
-pub fn code_prose_units(diff: &str) -> usize {
+pub fn code_prose_units(diff: &str) -> (usize, usize) {
     split_diff(diff)
         .iter()
         .filter(|f| !f.deleted && content_code_ext(&f.file) && !is_page_file(&f.file) && !manifest_file(&f.file) && !test_file(f.file.rsplit('/').next().unwrap_or(&f.file)) && !f.file.contains(".pilot/"))
-        .flat_map(|f| f.added.iter().map(|l| text_units(&literal_prose(l))))
-        .sum()
+        .flat_map(|f| f.added.iter().map(|l| text_parts(&literal_prose(l))))
+        .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
 }
 
 /// 这次改动里新写进代码文件的正文：Go 文件、语言包 JSON 这类里新加行的字符串文字，加起来成段（≥ 200 字 / 词）的文件。
 /// 返回（文件路径，新加的正文），最多 5 个。页面文件（见 content_page_files）不算在这里。
 /// 这次改动里新加的站内链接：Markdown 的 ](/x/)、HTML 的 href="/x/"，写全了本站域名的也算。返回网址路径（去掉 # 和 ?）
 pub fn added_links(diff: &str, domain: &str) -> Vec<String> {
-    let hosts = [format!("https://{domain}"), format!("https://www.{domain}"), format!("http://{domain}"), format!("http://www.{domain}")];
     let mut out: Vec<String> = Vec::new();
+    for (_, l) in added_link_lines(diff) {
+        for p in site_links_in(&l, domain) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// 这次改动里新加的、可能带站内链接的行：（文件，行）
+fn added_link_lines(diff: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
     for f in split_diff(diff) {
         if f.deleted || f.file.starts_with(".pilot/") || f.file.contains("/.pilot/") {
             continue;
         }
-        for l in net_added(&f) {
-            for start in ["](", "href=\"", "href='"] {
-                let mut rest = l.as_str();
-                while let Some(i) = rest.find(start) {
-                    rest = &rest[i + start.len()..];
-                    let end = rest.find(|c: char| c == ')' || c == '"' || c == '\'' || c.is_whitespace()).unwrap_or(rest.len());
-                    let mut h = &rest[..end];
-                    for host in &hosts {
-                        if let Some(p) = h.strip_prefix(host.as_str()) {
-                            h = if p.is_empty() { "/" } else { p };
-                        }
-                    }
-                    if h.starts_with('/') && !h.starts_with("//") {
-                        let p = h.split(['#', '?']).next().unwrap_or("").to_string();
-                        if !p.is_empty() && !out.contains(&p) {
-                            out.push(p);
-                        }
-                    }
+        out.extend(net_added(&f).into_iter().map(|l| (f.file.clone(), l.clone())));
+    }
+    out
+}
+
+/// 一行里指向本站的链接路径（Markdown 的 ](/x/)、HTML 的 href="/x/"，写全了本站域名的也算；去掉 # 和 ?）
+fn site_links_in(l: &str, domain: &str) -> Vec<String> {
+    let hosts = [format!("https://{domain}"), format!("https://www.{domain}"), format!("http://{domain}"), format!("http://www.{domain}")];
+    let mut out = Vec::new();
+    for start in ["](", "href=\"", "href='"] {
+        let mut rest = l;
+        while let Some(i) = rest.find(start) {
+            rest = &rest[i + start.len()..];
+            let end = rest.find(|c: char| c == ')' || c == '"' || c == '\'' || c.is_whitespace()).unwrap_or(rest.len());
+            let mut h = &rest[..end];
+            for host in &hosts {
+                if let Some(p) = h.strip_prefix(host.as_str()) {
+                    h = if p.is_empty() { "/" } else { p };
                 }
+            }
+            if h.starts_with('/') && !h.starts_with("//") {
+                let p = h.split(['#', '?']).next().unwrap_or("").to_string();
+                if !p.is_empty() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 打不开的链接这次加在哪些地方：（文件，那一行的开头一段）。
+/// clidm 互转 USDT 教程两处链到草稿页 /guides/okx-register/，交回 AI 时只给了网址，AI 删了「延伸阅读」里那处、正文里那处没看到，又卡回你这里。
+pub fn link_spots(diff: &str, domain: &str, dead: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (file, l) in added_link_lines(diff) {
+        if site_links_in(&l, domain).iter().any(|p| dead.contains(p)) {
+            let t = l.trim();
+            let cut: String = t.chars().take(80).collect();
+            let line = if cut.len() < t.len() { format!("{cut}…") } else { cut };
+            if !out.iter().any(|(f, x)| *f == file && *x == line) {
+                out.push((file, line));
             }
         }
     }
@@ -2170,14 +2219,14 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 23;
+pub const RULES_V: u32 = 24;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let code = rules.code;
     let mut reasons: Vec<Block> = Vec::new();
     // 模板站新页面的正文有一部分写在同一次改动的代码文件里（Go 的 austrac_en.go 这类）：算字数时一起算
-    let code_units: usize = code_prose_units(diff);
+    let code_parts = code_prose_units(diff);
     // 正文在线上数据库里的站点（content_skill）：改的是取出来的文档 JSON，上线不会改变线上内容，
     // 一律留给你在卡片上试运行、确认写入（不进放行清单，「以后不拦」也放不了）
     let docs: Vec<String> = split_diff(diff).into_iter().filter(|f| !f.deleted && f.file.starts_with(".pilot/content/") && f.file.ends_with(".json")).map(|f| f.file).collect();
@@ -2331,24 +2380,34 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
                 }
             }
             if f.new_file && !jsonish && !locale && rules.min_page > 0 && !rules.lets("thin") {
-                let min_page = rules.min_page;
-                let mut n = 0;
+                let (mut cjk, mut words) = (0, 0);
                 let mut in_frontmatter = false;
+                let mut add = |(c, w): (usize, usize)| {
+                    cjk += c;
+                    words += w;
+                };
                 for t in &texts {
                     let t = t.trim();
                     if !data && t == "---" {
                         in_frontmatter = !in_frontmatter;
                     } else if in_frontmatter && !data {
-                        n += text_units(&frontmatter_prose(t));
+                        add(text_parts(&frontmatter_prose(t)));
                     } else if data || (!t.starts_with("```") && !t.starts_with("import ")) {
-                        n += text_units(&prose_of(&strip_template_tags(t)));
+                        add(text_parts(&prose_of(&strip_template_tags(t))));
                     }
                 }
                 if template_page_file(file) {
-                    n += code_units;
+                    add(code_parts);
                 }
-                if n < min_page {
-                    reasons.push(block("thin", format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {min_page} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）")));
+                let n = cjk + words;
+                // 词比汉字多：英文等不用汉字的页面，按词数比折算后的下限
+                if words > cjk {
+                    let floor = word_floor(rules.min_page);
+                    if n < floor {
+                        reasons.push(block("thin", format!("{file}：新页面正文约 {n} 词，低于这个方案的下限 {floor} 词（{} 字折成英文等按词算的语种），可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）", rules.min_page)));
+                    }
+                } else if n < rules.min_page {
+                    reasons.push(block("thin", format!("{file}：新页面正文约 {n} 字，低于这个方案的下限 {} 字，可能讲不完整、容易被当成低质页面，留给你确认（术语解释这类短页可以直接放行）", rules.min_page)));
                 }
             }
         }
@@ -2616,13 +2675,18 @@ mod group_tests {
         let leak = "diff --git a/src/content/c.md b/src/content/c.md\n--- a/src/content/c.md\n+++ b/src/content/c.md\n@@ -1 +1 @@\n-旧\n+步骤三（待补图）点击确认\n";
         assert!(managed_verdict(leak, true, 1500, "review", &[]).iter().any(|x| x.contains("待补图")));
         assert_eq!(text_units("Gate KYC 认证"), 4);
+        // 英文页按词比折算后的下限（1500 字 → 900 词）：stocknas 英文版 1483 词不算薄，600 词还算
+        let en = |n: usize| format!("diff --git a/web/guides/x.en.html b/web/guides/x.en.html\nnew file mode 100644\n--- /dev/null\n+++ b/web/guides/x.en.html\n@@ -0,0 +1 @@\n+<p>{}</p>\n", "word ".repeat(n));
+        assert!(managed_verdict(&en(1483), true, 1500, "review", &[]).is_empty());
+        let r = managed_verdict(&en(600), true, 1500, "review", &[]);
+        assert!(r.iter().any(|x| x.contains("约 600 词，低于这个方案的下限 900 词")), "{r:?}");
         // 模板站（vibcg AUSTRAC 英文页）：模板里的正文 + 同一次新加的 Go 文件里的正文一起算；模板指令不算
         let para = |i: usize| format!("Registered exchanges in Australia must enrol with AUSTRAC and keep records number {i} for seven years.");
         let tpl: String = (0..14).map(|i| format!("+<p>{}</p>\n+<p>{{{{ .Updated }}}}</p>\n", para(i))).collect();
         let go: String = (0..12).map(|i| format!("+\t\tBody: \"{}\",\n", para(i))).collect();
         let page = format!("diff --git a/internal/webapp/templates/austrac-en.gohtml b/internal/webapp/templates/austrac-en.gohtml\nnew file mode 100644\n--- /dev/null\n+++ b/internal/webapp/templates/austrac-en.gohtml\n@@ -0,0 +1,28 @@\n{tpl}");
         let gof = format!("diff --git a/internal/webapp/austrac_en.go b/internal/webapp/austrac_en.go\nnew file mode 100644\n--- /dev/null\n+++ b/internal/webapp/austrac_en.go\n@@ -0,0 +1,12 @@\n{go}");
-        let thin_of = |d: &str| managed_verdict(d, true, 300, "all", &[]).into_iter().filter(|x| x.contains("低于这个方案的下限")).collect::<Vec<_>>();
+        let thin_of = |d: &str| managed_verdict(d, true, 450, "all", &[]).into_iter().filter(|x| x.contains("低于这个方案的下限")).collect::<Vec<_>>();
         assert!(!thin_of(&page).is_empty(), "只有模板：偏短");
         assert!(thin_of(&(page.clone() + &gof)).is_empty(), "{:?}", thin_of(&(page.clone() + &gof)));
         // Markdown 页面不加代码文件的字数
@@ -2917,6 +2981,12 @@ mod tests {
     fn links_added_in_this_change() {
         let d = "diff --git a/src/content/guides-src/us.md b/src/content/guides-src/us.md\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/guides-src/us.md\n@@ -0,0 +1,3 @@\n+相关的辨识方式见 [假冒网站怎么辨认](/guides/fake-sites/)，还有 [KYC](/guides/kyc/#steps \"标题\") 和 [外站](https://binance.com/x)。\n+<a href=\"https://www.gategas.com/tools/check/?a=1\">工具</a> <a href='//cdn.x.com/a.js'>x</a> [首页](https://gategas.com)\n";
         assert_eq!(added_links(d, "gategas.com"), vec!["/guides/fake-sites/", "/guides/kyc/", "/", "/tools/check/"]);
+        // clidm：同一个打不开的网址加在两处，交回 AI 时两处都列出来
+        let two = "diff --git a/src/content/guides/t.mdx b/src/content/guides/t.mdx\nnew file mode 100644\n--- /dev/null\n+++ b/src/content/guides/t.mdx\n@@ -0,0 +1,3 @@\n+欧易账户还没认证的，先看[欧易注册教程](/guides/okx-register/)。\n+正文里没有链接的一行\n+- [欧易注册](https://clidm.com/guides/okx-register/)\n";
+        let spots = link_spots(two, "clidm.com", &["/guides/okx-register/".to_string()]);
+        assert_eq!(spots.len(), 2, "{spots:?}");
+        assert!(spots.iter().all(|(f, _)| f == "src/content/guides/t.mdx"));
+        assert!(spots[0].1.starts_with("欧易账户还没认证的"));
     }
 
     #[test]

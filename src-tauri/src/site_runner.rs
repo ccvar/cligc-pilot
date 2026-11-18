@@ -2538,10 +2538,19 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         if !dead.is_empty() && level >= 5 && !hold && !item.dead_links_fixed && !job.canceled() {
             job.line(&format!("新加的站内链接在构建出来的网站里打不开：{show}，交回 AI 改链接"));
             site_ops::update_item(&site_dir, &item.id, now(), |i| i.dead_links_fixed = true)?;
+            // 每一处都列出来（文件 + 那一行）：同一个网址加在好几处时，只给网址 AI 常常只改掉一处
+            let paths: Vec<String> = dead.iter().map(|(l, _)| l.clone()).collect();
+            let spots = crate::managed::link_spots(&diff, &site.domain, &paths);
+            let at = if spots.is_empty() {
+                String::new()
+            } else {
+                format!("这些链接一共出现在 {} 处，每一处都要改：\n{}\n", spots.len(), spots.iter().map(|(f, l)| format!("- {f}：{l}")).collect::<Vec<_>>().join("\n"))
+            };
             let msg = format!(
                 "你刚才在当前分支上为「{title}」加的这些站内链接，在构建出来的网站里没有对应的页面，上线后会是 404：{show}。\n\
-请把它们改成网站里真实存在的页面地址（括号里是网站里同名的页面，多半就是你想链的那个，确认主题对得上再用）；\n\
-网站里确实没有合适的页面，就去掉链接、保留文字。只改这些链接，不要改别的内容，不要改依赖、构建和部署配置。\n",
+{at}请把它们改成网站里真实存在的页面地址（括号里是网站里同名的页面，多半就是你想链的那个，确认主题对得上再用）；\n\
+网站里确实没有合适的页面（比如还是草稿），就去掉链接、保留文字。改完在整个分支里搜一遍这些网址，确认一处都不剩。\n\
+只改这些链接，不要改别的内容，不要改依赖、构建和部署配置。\n",
                 title = item.opp.title,
             );
             fix_round(ctx, site, job, item, &wt, msg, "改打不开的站内链接", "ops: fix dead links").await?;
