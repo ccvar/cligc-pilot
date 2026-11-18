@@ -1086,10 +1086,10 @@ pub fn build_outputs(app_dir: &Path) -> Vec<String> {
                 continue;
             }
             let Ok(src) = std::fs::read_to_string(app_dir.join(tok)) else { continue };
-            // 只看引号里的字符串（文件路径），res.json() 这种代码不算
+            // 只看引号里的字符串（文件路径），res.json() 这种代码不算；而且要真写了它（见 script_writes）
             for word in src.split(['"', '\'', '`']).skip(1).step_by(2) {
                 let name = word.rsplit('/').next().unwrap_or(word);
-                if ["json", "csv", "txt", "xml"].iter().any(|e| name.ends_with(&format!(".{e}"))) && name.len() > 5 && !matches!(name, "package.json" | "tsconfig.json" | "package-lock.json") {
+                if ["json", "csv", "txt", "xml"].iter().any(|e| name.ends_with(&format!(".{e}"))) && name.len() > 5 && !matches!(name, "package.json" | "tsconfig.json" | "package-lock.json") && script_writes(&src, name) {
                     out.push(name.to_string());
                 }
             }
@@ -1098,6 +1098,72 @@ pub fn build_outputs(app_dir: &Path) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// 构建脚本真的写这个文件：写入类调用（writeFileSync、writeJson、自己定义的 save… 这类名字里带 write / save / output 的函数）
+/// 的参数里有这个文件名，或者有指向它的变量（`const OUT = new URL('../src/data/withdrawal-fees.json', …)`）。
+/// 只读它的不算：gategas 构建后跑的 figures.mjs 只 readFileSync('src/data/shots.json') 拿截图来源生成图说，
+/// 原来只要提到就当构建产物，AI 给新截图登记的来源和尺寸被「还原构建时自动生成的数据文件」删掉两次，构建一直失败。
+fn script_writes(src: &str, name: &str) -> bool {
+    let quoted = |l: &str| ['"', '\'', '`'].iter().any(|q| l.split(*q).skip(1).step_by(2).any(|w| w.rsplit('/').next() == Some(name)));
+    // 绑定了这个文件路径的变量名
+    let mut vars: Vec<String> = Vec::new();
+    for l in src.lines().filter(|l| quoted(l)) {
+        let t = l.trim_start();
+        for kw in ["const ", "let ", "var "] {
+            if let Some(rest) = t.strip_prefix(kw) {
+                let id: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect();
+                if !id.is_empty() && rest[id.len()..].trim_start().starts_with('=') {
+                    vars.push(id);
+                }
+            }
+        }
+    }
+    let word = |hay: &str, id: &str| hay.match_indices(id).any(|(i, _)| {
+        let before = hay[..i].chars().next_back();
+        let after = hay[i + id.len()..].chars().next();
+        !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.') && !after.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    });
+    let b = src.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        // 一个调用：名字 + 左括号
+        if b[i] == b'(' {
+            let head = &src[..i];
+            let callee: String = head.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$').collect::<Vec<_>>().into_iter().rev().collect();
+            let low = callee.to_ascii_lowercase();
+            if ["write", "save", "output"].iter().any(|w| low.contains(w)) {
+                let end = (i + 300).min(src.len());
+                let mut end = end;
+                while !src.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let args = &src[i..end];
+                // 到这个调用的右括号为止（括号配平；字符串里的括号忽略不了也无妨，只是多看几个字）
+                let mut depth = 0;
+                let mut stop = args.len();
+                for (j, c) in args.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                stop = j;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let args = &args[..stop];
+                if quoted(args) || vars.iter().any(|v| word(args, v)) {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    false
 }
 
 /// 构建脚本提到的 JSON 就在 scripts/ 目录里：构建时会读到它，不算闲置的数据
@@ -2262,7 +2328,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 25;
+pub const RULES_V: u32 = 26;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -3009,9 +3075,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pilot-build-out-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("scripts")).unwrap();
         std::fs::write(dir.join("package.json"), r#"{"scripts":{"prebuild":"node scripts/check.mjs && NODE_USE_ENV_PROXY=1 node scripts/sync-fees.mjs --soft","build":"astro build"}}"#).unwrap();
-        std::fs::write(dir.join("scripts/sync-fees.mjs"), "const OUT = new URL('../src/data/withdrawal-fees.json', import.meta.url);\nconst C = new URL(\"../src/data/fee-changes.json\", import.meta.url);\nreadFileSync('package.json');\nconst d = await res.json();").unwrap();
+        std::fs::write(dir.join("scripts/sync-fees.mjs"), "const OUT = new URL('../src/data/withdrawal-fees.json', import.meta.url);\nconst C = new URL(\"../src/data/fee-changes.json\", import.meta.url);\nreadFileSync('package.json');\nconst d = await res.json();\nwriteFileSync(OUT, JSON.stringify(d));\nwriteFileSync(\n  C,\n  JSON.stringify(log.slice(-400), null, 2) + '\\n',\n);").unwrap();
         let outs = build_outputs(&dir);
         assert_eq!(outs, vec!["fee-changes.json".to_string(), "withdrawal-fees.json".to_string()]);
+        // czneo：path.join 绑定的清单，fs.writeFileSync(MANIFEST, …)；直接写字面路径的也算
+        assert!(script_writes("const MANIFEST = path.join(ROOT, 'src/config/serif-fonts.json');\nfs.writeFileSync(MANIFEST, JSON.stringify(m));", "serif-fonts.json"));
+        assert!(script_writes("await save('public/data/rates.json', body);", "rates.json"));
+        // gategas：构建后的 figures.mjs 只读 shots.json、写的是别的文件：不算构建产物
+        let figures = "import { readFileSync, writeFileSync } from 'node:fs';\nconst shots = JSON.parse(readFileSync('src/data/shots.json', 'utf8'));\nconst diagrams = JSON.parse(readFileSync('src/data/diagrams.json', 'utf8'));\nfor (const p of files) { writeFileSync(p, out); }";
+        assert!(!script_writes(figures, "shots.json"));
+        assert!(!script_writes(figures, "diagrams.json"));
+        // 变量名只算整词：OUTPUT_DIR 不等于 OUT
+        assert!(!script_writes("const OUT = 'a/b/list.json';\nwriteFileSync(OUTPUT_DIR + '/x.html', s);", "list.json"));
         let rows: String = (0..450).map(|i| format!("-  \"a{i}\": 1,\n+  \"a{i}\": 2,\n")).collect();
         let diff = format!("diff --git a/site/src/data/withdrawal-fees.json b/site/src/data/withdrawal-fees.json\n--- a/site/src/data/withdrawal-fees.json\n+++ b/site/src/data/withdrawal-fees.json\n@@ -1 +1 @@\n{rows}");
         let r = |g: &'static [String]| Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: g, build_scripts: None, deps: &[] };

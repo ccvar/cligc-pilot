@@ -5775,7 +5775,7 @@ mod tests {
         let w = |p: &str, c: &str| { let f = repo.join(p); std::fs::create_dir_all(f.parent().unwrap()).unwrap(); std::fs::write(f, c).unwrap(); };
         g::git_ok(&repo, &["init", "-q", "-b", "main"], "").await.unwrap();
         w("package.json", r#"{"scripts":{"build":"node scripts/subset-serif.mjs && astro build"}}"#);
-        w("scripts/subset-serif.mjs", "const MANIFEST = path.join(ROOT, 'src/config/serif-fonts.json');");
+        w("scripts/subset-serif.mjs", "const MANIFEST = path.join(ROOT, 'src/config/serif-fonts.json');\nfs.writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\\n');");
         w("src/config/serif-fonts.json", "{\n  \"file\": \"serif-cjk-2.6f8d16772b.woff2\"\n}\n");
         w("public/fonts/serif-cjk-2.6f8d16772b.woff2", "old font");
         w("src/content/a.md", "title: old");
