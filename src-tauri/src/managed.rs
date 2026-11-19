@@ -1825,6 +1825,13 @@ fn bare_front(src: &str) -> bool {
     false
 }
 
+/// frontmatter 一行的字段名（`changes:`、列表项 `- q:` 里的 q）；不是「键: 值」的行返回 None
+fn front_key(line: &str) -> Option<&str> {
+    let t = line.trim().trim_start_matches("- ").trim();
+    let i = t.find(':')?;
+    (i > 0 && t[..i].chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).then(|| &t[..i])
+}
+
 pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
     let mut title = String::new();
     let mut body = String::new();
@@ -1846,6 +1853,13 @@ pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
             } else if !t.starts_with("description:") {
                 let text = frontmatter_prose(t);
                 if !text.trim().is_empty() {
+                    // 带上字段名：iepto 的 `changes: 2026-11-19 — Added …` 是页面上给读者看的更新记录，
+                    // 去掉字段名只剩「2026-11-19 — Added mobile app sign-up steps…」，像写给编辑的提交说明，
+                    // Jev 判「混进了写给编辑或 AI 的话」78%（带上字段名 43%–48%）
+                    if let Some(k) = front_key(t) {
+                        body.push_str(k);
+                        body.push_str(": ");
+                    }
                     body.push_str(text.trim());
                     body.push('\n');
                 }
@@ -2328,7 +2342,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 26;
+pub const RULES_V: u32 = 27;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -3235,6 +3249,9 @@ mod tests {
         assert_eq!(title, "币安和欧易哪个好（〔year〕）", "没有开头 --- 的 frontmatter 也认得出");
         assert_eq!(body, "**结论**：两家都注册。\n");
         assert_eq!(page_prose("Note: 这是正文第一段\n还是正文\n---\n后面", 1000).1.lines().next(), Some("Note: 这是正文第一段"), "正文里出现冒号不当 frontmatter");
+        // frontmatter 带上字段名：更新记录不会被当成写给编辑的话
+        let (_, b) = page_prose("---\ntitle: \"How to sign up\"\nauthor: IEPTO Editorial\nchanges: 2026-11-19 — Added mobile app sign-up steps\n---\nBody text here.\n", 1000);
+        assert!(b.contains("author: IEPTO Editorial\nchanges: 2026-11-19 — Added mobile app sign-up steps\n"), "{b}");
         assert_eq!(template_slots("<h3>{{phrases $q.Q}}</h3>{{- else -}}{{/* 注释 */}}{% if x %}{{ item.title }}{{ \"原样\" }}"), "<h3>〔Q〕</h3>   〔title〕原样");
 
         let d = |file: &str, lines: &[&str]| format!("diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n@@ -1 +1,{} @@\n{}\n", lines.len(), lines.iter().map(|l| format!("+{l}")).collect::<Vec<_>>().join("\n"));
