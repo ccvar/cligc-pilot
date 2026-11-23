@@ -2200,6 +2200,44 @@ async fn content_runs(cs: &crate::content_skill::ContentSkill, repo: &Path, wt: 
     (runs, true)
 }
 
+/// 线上文档写入前的原文存在哪：站点数据目录 content_backup/<条目>/，文件名同工作区里的文档
+fn doc_backup_dir(site_dir: &Path, item_id: &str) -> PathBuf {
+    site_dir.join("content_backup").join(item_id)
+}
+
+/// 把这次要写入的文档在改动前的样子存下来。改动前没有的（新文章）不存：写回去只能覆盖，删不掉新建的文档
+async fn backup_docs(wt: &Path, base: &str, docs: &[String], dir: &Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::create_dir_all(dir);
+    for d in docs {
+        if let Ok(old) = crate::site_git::git_ok(wt, &["show", &format!("{base}:{d}")], "").await {
+            let name = d.rsplit('/').next().unwrap_or(d);
+            let _ = std::fs::write(dir.join(name), old);
+        }
+    }
+}
+
+/// 把存下的原文用内容技能写回线上（每份先试运行再写入）；返回写回了几份。一份原文都没有（全是新文章）算失败
+async fn restore_docs(cs: &crate::content_skill::ContentSkill, repo: &Path, dir: &Path, job: &Job) -> Result<usize, String> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir).map(|r| r.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect()).unwrap_or_default();
+    files.sort();
+    if files.is_empty() {
+        return Err("没有存下的原文（新写的文章写不回去，要在后台手动下架）".into());
+    }
+    for f in &files {
+        let path = f.to_string_lossy().to_string();
+        for tpl in [&cs.check, &cs.apply] {
+            let (ok, out) = crate::content_skill::run(repo, &cs.skill, tpl, &["{file}"], &[("{file}", &path)]).await;
+            if !ok {
+                let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                return Err(format!("{name}：{}", out.lines().last().unwrap_or("")));
+            }
+        }
+        job.line(&format!("原文已写回：{}", f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+    }
+    Ok(files.len())
+}
+
 /// 卡片上的「试运行」：用技能校验这条改动里的每份文档，不写入线上
 async fn content_check(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
@@ -2237,6 +2275,8 @@ async fn content_apply(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resu
         return Err("写入前的试运行没通过，没有写入任何文档；详情见卡片上的输出".into());
     }
     job.step("check", "ok", "");
+    // 改动前的原文（派任务时刚从线上取下来的那一版）存进站点数据目录：验收没过、之后要回滚时写回去
+    backup_docs(&wt, &item.base_sha, &docs, &doc_backup_dir(&site_dir, item_id)).await;
     job.step("apply", "running", "");
     let (applied, ok) = content_runs(&cs, &repo, &wt, &docs, &item.head_sha, true, job).await;
     let written: Vec<String> = applied.iter().filter(|r| r.ok).map(|r| r.file.clone()).collect();
@@ -2268,7 +2308,31 @@ async fn content_apply(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Resu
     let mut attention = rep.soft.clone();
     attention.extend(rep.hard.iter().cloned());
     job.step("verify", if rep.hard.is_empty() { "ok" } else { "failed" }, &rep.hard.join("；"));
-    if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !rep.passed.is_empty() {
+    // 验收没过：把原文写回去（和合并上线验收没过回滚一样）；写不回去的照常记上线，问题挂在条目上要你看
+    if !rep.hard.is_empty() {
+        let why = rep.hard.join("；");
+        job.step("indexnow", "skipped", "");
+        match restore_docs(&cs, &repo, &doc_backup_dir(&site_dir, item_id), job).await {
+            Ok(n) => {
+                log_item(ctx, site, "rolled_back", &item, &format!("正文写入后线上验收没通过（{why}），已把 {n} 份原文写回去"));
+                downgrade_if_repeated(ctx, site, &item.opp.change);
+                site_ops::update_item(&site_dir, item_id, now(), |i| {
+                    i.status = "failed".into();
+                    i.verify_rollbacks += 1;
+                    i.content_applied_at = 0;
+                    i.retry_note = why.clone();
+                    i.auto_retried = false;
+                    i.note = format!("正文写入后线上验收没通过（{why}），已把原文写回线上。可以「让 AI 重新改」，AI 会拿到失败原因。");
+                })?;
+                ctx.emit_queue(&site.id);
+                ctx.notify(&format!("{} · 正文写入后验收没通过，已写回原文", site.name), &item.opp.title);
+                crate::site_git::remove_worktree(&repo, &wt).await;
+                let _ = crate::site_git::git(&repo, &["branch", "-D", &item.branch], "").await;
+                return Err(format!("正文写入后线上验收没通过（{why}），已把原文写回去"));
+            }
+            Err(e) => job.line(&format!("原文没能写回去：{e}")),
+        }
+    } else if !site.data.indexnow_key.is_empty() && !site.domain.is_empty() && !rep.passed.is_empty() {
         crate::indexnow::submit_step(site, &site_dir, &rep.passed, job).await;
     } else {
         job.step("indexnow", "skipped", "");
@@ -2493,7 +2557,14 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         deps.extend(crate::managed::imported_packages(&o.stdout));
     }
     rules.deps = &deps;
-    let blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
+    let mut blocks = if level >= 5 { crate::managed::verdict(&diff, &rules) } else { Vec::new() };
+    // 只改了线上文档（content_skill）、方案不是「稳妥」：「改的是线上正文」不算拦截原因，文档照别的规则判，
+    // 都过了就自动试运行、写入、验收（见下面上线那步）。content_api 照样记在条目上，自动写入没成功时卡片上还有按钮
+    let docs_auto = level >= 5 && crate::managed::content_auto(&diff, rules.tier);
+    let docs = diff.contains(" b/.pilot/content/");
+    if docs_auto {
+        blocks.retain(|b| b.kind != "content_api");
+    }
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
     let mut reasons: Vec<String> = if level >= 5 { blocks.into_iter().map(|b| b.text).collect() } else { cls.reasons.clone() };
@@ -2597,6 +2668,10 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
         if !fresh.is_empty() {
             verdict = format!("托管方案「{}」不允许写新页面，这次却新建了 {}，留给你确认", managed.name, fresh.join("、"));
         }
+    }
+    // 第 4 档的白名单不管线上文档：改了文档的留给你在卡片上试运行、写入
+    if verdict == "auto" && docs && !docs_auto {
+        verdict = "改的是线上数据库里的正文，要你在卡片上「试运行」通过后「写入线上」".into();
     }
     // 站点被标记为危险网站（Google 安全浏览、Cloudflare、Quad9）：先查清原因，期间自动上线暂停
     let unsafe_by = crate::safety::load(&site_dir).summary();
@@ -2740,6 +2815,9 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     if verdict == "auto" || !checks_ok || hold {
         kinds.clear();
     }
+    if docs && !kinds.iter().any(|k| k == "content_api") {
+        kinds.push("content_api".into());
+    }
     site_ops::update_item(&site_dir, &item.id, now(), |i| {
         i.status = status.into();
         i.head_sha = head_sha.clone();
@@ -2777,12 +2855,15 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     }
     // 第 4 档：白名单内自动合并上线；第 5 档：判定通过即自动上线，上线 1 小时后再检查一次页面。
     if level >= 4 && verdict == "auto" && !hold {
-        job.step("ship", "running", if level >= 5 { "全托管，自动合并上线" } else { "白名单内改动，自动合并上线" });
-        match accept(ctx, site, job, &item.id, true).await {
+        job.step("ship", "running", if docs { "全托管，自动写入线上正文" } else if level >= 5 { "全托管，自动合并上线" } else { "白名单内改动，自动合并上线" });
+        // 线上文档：用内容技能试运行、写入、验收（验收没过把原文写回去）；别的照常合并上线
+        let shipped = if docs { content_apply(ctx, site, job, &item.id).await } else { accept(ctx, site, job, &item.id, true).await };
+        match shipped {
             Ok(m) => {
                 // 真的上线了才记「已上线」、排 1 小时后的复查：没配部署的站点只是合并；验收失败后 AI 重做成功的，里面那一层已经记过
                 let fresh = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item.id);
-                if level >= 5 && fresh.as_ref().is_some_and(|i| i.status == "deployed" && i.retries == 0) {
+                // 写入线上正文的那一步自己记了「已上线」
+                if level >= 5 && !docs && fresh.as_ref().is_some_and(|i| i.status == "deployed" && i.retries == 0) {
                     site_ops::update_item(&site_dir, &item.id, now(), |i| i.watch_due = now() + 3600)?;
                     log_item(ctx, site, "shipped", item, &m);
                 }
@@ -4024,6 +4105,20 @@ pub async fn dismiss(ctx: &Ctx, site: &Site, item_id: &str) -> Result<(), String
 pub async fn rollback(ctx: &Ctx, site: &Site, job: &Job, item_id: &str) -> Result<String, String> {
     let site_dir = ctx.site_dir(&site.id);
     let item = site_ops::load_queue(&site_dir).into_iter().find(|i| i.id == item_id).ok_or("这条改动不存在")?;
+    // 写进线上数据库的正文：没有合并提交可回退，把写入前存下的原文写回去
+    if item.status == "deployed" && item.merge_sha.is_empty() && item.content_applied_at > 0 {
+        let cs = crate::content_skill::active(&site_dir).ok_or("这个站点的内容技能没有确认，写不回原文")?;
+        let repo = crate::site_git::code_dir(site, None)?;
+        job.step("revert", "running", "写回原文");
+        let n = restore_docs(&cs, &repo, &doc_backup_dir(&site_dir, item_id), job).await.inspect_err(|e| job.step("revert", "failed", e))?;
+        job.step("revert", "ok", &format!("{n} 份"));
+        site_ops::update_item(&site_dir, item_id, now(), |i| {
+            i.status = "rolled_back".into();
+            i.note = format!("已把 {n} 份原文写回线上");
+        })?;
+        ctx.emit_queue(&site.id);
+        return Ok(format!("已把 {n} 份原文写回线上"));
+    }
     if !matches!(item.status.as_str(), "merged" | "deployed") || item.merge_sha.is_empty() {
         return Err("只有已合并的改动可以回滚".into());
     }

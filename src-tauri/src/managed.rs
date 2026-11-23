@@ -1659,7 +1659,7 @@ pub fn quality_inputs(diff: &str, generated: &[String]) -> (Vec<(String, bool)>,
 pub fn content_page_files(diff: &str) -> Vec<(String, bool)> {
     split_diff(diff)
         .into_iter()
-        .filter(|f| !f.deleted && is_page_file(&f.file))
+        .filter(|f| !f.deleted && (is_page_file(&f.file) || content_doc(&f.file)))
         .filter(|f| f.new_file || f.added.iter().map(|l| text_units(&prose_of(l))).sum::<usize>() >= 200)
         .map(|f| (f.file, f.new_file))
         .take(5)
@@ -1864,6 +1864,9 @@ fn front_key(line: &str) -> Option<&str> {
 }
 
 pub fn page_prose(src: &str, max_chars: usize) -> (String, String) {
+    if let Some(r) = doc_prose(src, max_chars) {
+        return r;
+    }
     let mut title = String::new();
     let mut body = String::new();
     let bare = bare_front(src);
@@ -2380,7 +2383,63 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 28;
+pub const RULES_V: u32 = 29;
+
+/// 内容技能取进工作区的线上文档（`.pilot/content/*.json`，见 content_skill）
+pub fn content_doc(file: &str) -> bool {
+    file.starts_with(".pilot/content/") && file.ends_with(".json")
+}
+
+/// 线上文档的改动能不能自动试运行、写入：只改了文档（Pilot 自己的 .pilot/ 记录除外，没动站点代码），
+/// 方案的拦截等级不是「稳妥」。能的话 content_api 不算拦截原因，文档照常过别的规则
+pub fn content_auto(diff: &str, tier: &str) -> bool {
+    let files = split_diff(diff);
+    tier != "strict" && files.iter().any(|f| !f.deleted && content_doc(&f.file)) && files.iter().all(|f| f.file.starts_with(".pilot/") && !(f.deleted && content_doc(&f.file)))
+}
+
+/// 线上文档里一改页面就换地方或消失的字段：路径、slug、规范网址、语言、翻译组；status 改成 published 以外、robots 加了 noindex。
+/// 文档是 `get` 存下的 JSON，一行一个顶层字段（`  "path": "/zh/posts/x/",`）
+fn doc_key_change(removed: &[String], added: &[String]) -> Option<&'static str> {
+    let val = |lines: &[String], key: &str| lines.iter().find_map(|l| l.trim().strip_prefix(&format!("\"{key}\":")).map(|v| v.trim().trim_end_matches(',').trim().to_string()));
+    for key in ["path", "slug", "canonical_url", "lang", "translation_group", "status", "robots"] {
+        let (old, new) = (val(removed, key), val(added, key));
+        if old.is_none() && new.is_none() || old == new {
+            continue;
+        }
+        let new = new.unwrap_or_default();
+        let fine = match key {
+            "status" => new == "\"published\"",
+            "robots" => !new.to_lowercase().contains("noindex"),
+            _ => false,
+        };
+        if !fine {
+            return Some(key);
+        }
+    }
+    None
+}
+
+/// 线上文档（JSON）给质检的标题和正文：title 当标题，description、lead 带字段名，body_html 去掉标签按段落分行
+fn doc_prose(src: &str, max_chars: usize) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(src).ok()?;
+    let html = v.get("body_html")?.as_str()?;
+    let title = v.get("title").and_then(|t| t.as_str()).unwrap_or_default().to_string();
+    let mut body = String::new();
+    for k in ["description", "lead"] {
+        if let Some(t) = v.get(k).and_then(|t| t.as_str()).filter(|t| !t.trim().is_empty()) {
+            body.push_str(&format!("{k}: {}\n", t.trim()));
+        }
+    }
+    let mut html = html.to_string();
+    for b in ["</p>", "</h1>", "</h2>", "</h3>", "</h4>", "</li>", "</tr>", "<br>", "<br/>", "<br />", "</td>", "</th>", "</figcaption>", "</blockquote>"] {
+        html = html.replace(b, &format!("{b}\n"));
+    }
+    for line in prose_of(&html).lines().map(str::trim).filter(|l| !l.is_empty()) {
+        body.push_str(line);
+        body.push('\n');
+    }
+    Some((title, body.chars().take(max_chars).collect()))
+}
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2388,9 +2447,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
     let mut reasons: Vec<Block> = Vec::new();
     // 模板站新页面的正文有一部分写在同一次改动的代码文件里（Go 的 austrac_en.go 这类）：算字数时一起算
     let code_parts = code_prose_units(diff);
-    // 正文在线上数据库里的站点（content_skill）：改的是取出来的文档 JSON，上线不会改变线上内容，
-    // 一律留给你在卡片上试运行、确认写入（不进放行清单，「以后不拦」也放不了）
-    let docs: Vec<String> = split_diff(diff).into_iter().filter(|f| !f.deleted && f.file.starts_with(".pilot/content/") && f.file.ends_with(".json")).map(|f| f.file).collect();
+    // 正文在线上数据库里的站点（content_skill）：改的是取出来的文档 JSON，合并上线不会改变线上内容，要用内容技能写入。
+    // 这条 content_api 一直带着，是条目的标记（卡片上出「试运行」「写入线上」，合并时挡住）。只改了文档、方案不是「稳妥」时
+    // 调用方把它从拦截原因里拿掉（见 content_auto），文档照下面的规则判（推荐链接、内部说明、改网址 / 下架、质检），
+    // 都过了就自动试运行、写入、验收，验收没过把原文写回去
+    let docs: Vec<String> = split_diff(diff).into_iter().filter(|f| !f.deleted && content_doc(&f.file)).map(|f| f.file).collect();
     if !docs.is_empty() {
         reasons.push(block("content_api", format!("{}：改的是线上数据库里的正文，上线不会改变线上内容；要你在卡片上「试运行」通过后「写入线上」", docs.join("、"))));
     }
@@ -2408,7 +2469,8 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         let file = &f.file;
         // 构建脚本自动重写的数据文件（比如每次构建同步一遍提现手续费）：上线时构建还会再写一遍，不算这次的改动；
         // .pilot/ 是 Pilot 自己的记录（待办、站点说明），不上线
-        if generated_by_build(file, rules.generated) || manifest_asset(file, f.new_file, f.deleted, &m_added, &m_removed) || file.starts_with(".pilot/") || file.contains("/.pilot/") {
+        let doc = content_doc(file);
+        if generated_by_build(file, rules.generated) || manifest_asset(file, f.new_file, f.deleted, &m_added, &m_removed) || ((file.starts_with(".pilot/") || file.contains("/.pilot/")) && !doc) {
             continue;
         }
         // scripts/ 里构建和检查都不会跑的辅助脚本（比如放截图用的），只改了数据（说明文字、对照表）：不上线、也改不了及格线，按内容算
@@ -2468,7 +2530,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         }
         // 页面文件里内嵌的脚本 / 事件 / iframe；.mdx 的 import / export 行是构建期执行的代码，按代码查。
         // SVG 和 XML（sitemap、RSS / Atom 订阅源）是发布出去的内容，没有东西执行它们，但里面一样能写 <script>
-        if is_page_file(file) || file.ends_with(".svg") || file.ends_with(".xml") || locale {
+        if is_page_file(file) || file.ends_with(".svg") || file.ends_with(".xml") || locale || doc {
             let mut seen: Vec<&str> = Vec::new();
             for l in net_added(&f) {
                 let t = l.trim_start();
@@ -2489,6 +2551,11 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             if markdown {
                 if let Some(key) = url_or_unpublish_change(&f.removed, &f.added) {
                     reasons.push(block("", format!("{file}：改了 {key}（网址或发布状态），旧网址会失效或页面会消失，留给你确认")));
+                }
+            }
+            if doc {
+                if let Some(key) = doc_key_change(&f.removed, &f.added) {
+                    reasons.push(block("", format!("{file}：改了 {key}（网址、语言或发布状态），旧网址会失效或页面会消失，留给你确认")));
                 }
             }
         }
@@ -3267,7 +3334,36 @@ mod tests {
     fn edits_to_documents_from_the_content_api_always_wait_for_you() {
         let d = "diff --git a/.pilot/content/en-posts-x.json b/.pilot/content/en-posts-x.json\n--- a/.pilot/content/en-posts-x.json\n+++ b/.pilot/content/en-posts-x.json\n@@ -1 +1 @@\n-  \"title\": \"旧\",\n+  \"title\": \"新\",\n";
         let r = verdict(d, &Rules { tier: "open", code: "all", allow: &["content_api".to_string()], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] });
-        assert_eq!(r.iter().map(|b| b.kind).collect::<Vec<_>>(), vec!["content_api"], "放开档、点过放行也照样留给你");
+        assert_eq!(r.iter().map(|b| b.kind).collect::<Vec<_>>(), vec!["content_api"], "content_api 一直带着当标记，放不放行由 content_auto 决定");
+        // 只改了文档：标准 / 放开自动写入，稳妥留给你；还改了站点代码的留给你（正文写入和代码上线是两步）
+        assert!(content_auto(d, "standard") && content_auto(d, "open") && !content_auto(d, "strict"));
+        let media = "diff --git a/.pilot/media/a.png b/.pilot/media/a.png\nnew file mode 100644\nBinary files /dev/null and b/.pilot/media/a.png differ\n";
+        assert!(content_auto(&format!("{d}{media}"), "standard"), "blockvar：AI 截的图放在 .pilot/media/，不上线");
+        assert!(!content_auto(&format!("{d}diff --git a/web/x.html b/web/x.html\n--- a/web/x.html\n+++ b/web/x.html\n@@ -1 +1 @@\n-a\n+b\n"), "standard"));
+        assert!(!content_auto(media, "standard"), "没改文档的不算");
+        // 文档照别的规则判：推荐链接、内部说明、改网址 / 下架
+        let doc = |minus: &[&str], plus: &[&str]| {
+            let body: String = minus.iter().map(|l| format!("-{l}\n")).chain(plus.iter().map(|l| format!("+{l}\n"))).collect();
+            format!("diff --git a/.pilot/content/zh-posts-x.json b/.pilot/content/zh-posts-x.json\n--- a/.pilot/content/zh-posts-x.json\n+++ b/.pilot/content/zh-posts-x.json\n@@ -1 +1 @@\n{body}")
+        };
+        let std = Rules { tier: "standard", code: "all", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+        let others = |d: &str| verdict(d, &std).into_iter().filter(|b| b.kind != "content_api").map(|b| b.text).collect::<Vec<_>>();
+        assert!(others(&doc(&["  \"body_html\": \"<p>旧的</p>\","], &["  \"body_html\": \"<p>币安现货普通用户 0.1%</p>\","])).is_empty());
+        assert!(others(&doc(&["  \"body_html\": \"<p>旧的</p>\","], &["  \"body_html\": \"<p>去 <a href=\\\"https://accounts.binance.com/register?ref=ABC123\\\">注册</a></p>\","])).iter().any(|t| t.contains("推荐")));
+        assert!(others(&doc(&["  \"lead\": \"旧\","], &["  \"lead\": \"TODO 补数据\","])).iter().any(|t| t.contains("内部说明")));
+        assert!(others(&doc(&["  \"body_html\": \"<p>a</p>\","], &["  \"body_html\": \"<p>a</p><script>alert(1)</script>\","])).iter().any(|t| t.contains("页面里")));
+        assert!(others(&doc(&["  \"path\": \"/zh/posts/x/\","], &["  \"path\": \"/zh/posts/y/\","])).iter().any(|t| t.contains("改了 path")));
+        assert!(others(&doc(&["  \"status\": \"published\","], &["  \"status\": \"draft\","])).iter().any(|t| t.contains("改了 status")));
+        assert!(others(&doc(&["  \"status\": \"draft\","], &["  \"status\": \"published\","])).is_empty(), "把草稿发布出去是正常任务");
+        assert!(others(&doc(&["  \"robots\": \"index, follow\","], &["  \"robots\": \"noindex\","])).iter().any(|t| t.contains("改了 robots")));
+        assert!(others(&doc(&["  \"modified_at\": \"2026-10-09T03:34:44Z\","], &["  \"modified_at\": \"2026-11-23T00:00:00Z\","])).is_empty());
+        // 质检拿到的是标题和去掉标签的正文
+        let src = r#"{"title": "币安手续费是多少", "description": "现货 0.1%", "lead": "按官方费率页核对", "body_html": "<h2>现货</h2><p>挂单 0.1%</p><ul><li>BNB 抵扣</li></ul>", "path": "/zh/posts/x/"}"#;
+        let (title, text) = page_prose(src, 2000);
+        assert_eq!(title, "币安手续费是多少");
+        assert_eq!(text, "description: 现货 0.1%\nlead: 按官方费率页核对\n现货\n挂单 0.1%\nBNB 抵扣\n");
+        let big = doc(&["  \"body_html\": \"<p>旧</p>\","], &[&format!("  \"body_html\": \"<p>{}</p>\",", "币安手续费的算法".repeat(40))]);
+        assert_eq!(content_page_files(&big), vec![(".pilot/content/zh-posts-x.json".to_string(), false)], "改了大段正文的文档要质检");
         // .pilot/ 下别的记录照旧不算改动
         assert!(managed_verdict("diff --git a/.pilot/site.md b/.pilot/site.md\n--- a/.pilot/site.md\n+++ b/.pilot/site.md\n@@ -1 +1 @@\n-a\n+b\n", true, 0, "all", &[]).is_empty());
     }
