@@ -1451,6 +1451,37 @@ pub fn touches_money(line: &str) -> bool {
     !money_atoms(line).is_empty()
 }
 
+/// 新加的推荐原子里只有名字、不带值的字段 / 变量（`d.Referral`、`exchangeReferral`），连同名字的最后一段（`Referral`）。
+/// 这类名字要是改动前的站点里从来没有，就是这次新起的：后面挂不上站点已有的推荐码 / 链接，
+/// 新写的码和链接在自己那一行会单独算（见 `money_atoms`）。coingree 给「邀请码怎么填」一节起名 exchangeReferral 就是这样
+/// `d.Referral = exchangeReferral(...)` 记成 `d.Referral=exchangeReferral`：值也是带推荐词的名字（不是码），两个名字都要是新起的，
+/// 返回的是要查的全部名字。值是码（`refCode=ABC123`）的不算。
+pub fn bare_money_names(diff: &str) -> Vec<(String, Vec<String>)> {
+    let last = |n: &str| n.trim_start_matches('$').rsplit('.').next().unwrap_or("").to_string();
+    added_money_atoms(diff)
+        .into_iter()
+        .filter(|a| !a.contains(['/', ':', '?']) && a.is_ascii())
+        .filter_map(|a| {
+            let names: Vec<String> = match a.split_once('=') {
+                None => vec![last(&a)],
+                Some((n, v)) if MONEY_WORDS.iter().any(|w| v.to_lowercase().contains(w)) && v.chars().any(|c| c.is_ascii_lowercase()) => vec![last(n), v.to_string()],
+                Some(_) => return None,
+            };
+            names.iter().all(|n| n.len() > 2).then_some((a, names))
+        })
+        .collect()
+}
+
+/// 改动前的代码（`git grep -i` 出来的行）里有没有以 `last` 结尾的推荐字段 / 变量名。英文正文里的 Referral 不算（见 `money_atoms`）
+pub fn money_name_in(lines: &str, last: &str) -> bool {
+    lines.lines().any(|l| {
+        money_atoms(l).iter().any(|a| {
+            let (name, value) = a.split_once('=').unwrap_or((a, ""));
+            name.trim_start_matches('$').rsplit('.').next() == Some(last) || value == last
+        })
+    })
+}
+
 /// 改动里新加的推荐内容（链接、码、字段）：上线前查一下改动前的站点里有没有，已有的（比如换个位置再引用 refCode）不算新增。
 pub fn added_money_atoms(diff: &str) -> Vec<String> {
     let mut v: Vec<String> = split_diff(diff).iter().flat_map(|f| f.added.iter().flat_map(|a| money_atoms(a))).collect();
@@ -2313,8 +2344,15 @@ fn data_line(line: &str) -> bool {
     if let Some(rest) = code.strip_prefix("export const ").or_else(|| code.strip_prefix("const ")) {
         let Some((lhs, rhs)) = rest.split_once('=') else { return false };
         let ok_lhs = lhs.trim().chars().all(|c| c.is_alphanumeric() || "_$:[]<> ".contains(c));
-        return ok_lhs && matches!(rhs.trim(), "[" | "{" | "[];" | "{};");
+        // 一行写完的常量对象 / 数组（dzpto 的来源条目 `const OKX_FUNDING = { title: "…", url: "…" };`）：右边照数据行的规矩查
+        let rhs = rhs.trim();
+        return ok_lhs && (matches!(rhs, "[" | "{" | "[];" | "{};") || (rhs.starts_with(['{', '[']) && literal_code(rhs)));
     }
+    literal_code(code)
+}
+
+/// 去掉字符串之后剩下的部分只有对象键、括号、逗号和 true / false / null / 常量名：没有调用、赋值、箭头函数、模板串
+fn literal_code(code: &str) -> bool {
     if code.contains("=>") || code.contains('(') || code.contains('=') || code.contains('`') {
         return false;
     }
@@ -2342,7 +2380,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 27;
+pub const RULES_V: u32 = 28;
 
 /// 全托管的自动上线判定：返回不能自动上线的原因（空＝可以）。方案放行的类型（`Rules::lets`）不算在里面。
 pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
@@ -2391,8 +2429,10 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // 站点代码：数据文件里混了代码，或模板 / 组件 / 样式 / 前端脚本。
         // 服务端代码（Go 站把页面和标题写在 internal/*.go 里这类）：放进站点清单的照代码设置判断；
         // 「代码改动：全部」时不用放清单，构建、检查、上线后验收兜底（Worker / Functions / API 路由除外）
-        // 构建 / 检查 / 部署会跑到的脚本（不管放在哪个目录）：构建时在本机执行，任何等级都不自动改
-        let in_build_chain = rules.build_scripts.is_some_and(|b| b.iter().any(|s| file.rsplit('/').next() == Some(s.as_str())));
+        // 构建 / 检查 / 部署会跑到的脚本（不管放在哪个目录）：构建时在本机执行，任何等级都不自动改。
+        // 构建脚本 import 进来的内容数据模块（dzpto 的文章就写在 src/content/guides.js 里，生成 llms.txt 的脚本要读）
+        // 只改了数据行的不算：数据行里没有能执行的东西，按内容算。scripts/ 里的不算数据文件（见 data_file），照样拦
+        let in_build_chain = rules.build_scripts.is_some_and(|b| b.iter().any(|s| file.rsplit('/').next() == Some(s.as_str()))) && !data;
         let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, rules.content_code) || (code == "all" && !edge_runtime(file)));
         let forbidden = (hard_forbidden(file) && !allowed && !locale) || in_build_chain;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
@@ -3187,6 +3227,10 @@ mod tests {
         assert!(why(&d("scripts/insert-screenshots.py", py), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         b2.push("pages.tsv".into());
         assert!(why(&d("scripts/pages.tsv", "a\tb"), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
+        // dzpto：文章写在 src/content/hans/guides.js 里，生成 llms.txt 的构建脚本 import 它。只加数据行：按内容算；加代码照样拦
+        b2.push("guides.js".into());
+        assert!(verdict(&d("src/content/hans/guides.js", "    title: \"OKX 和币安手续费差多少\","), &Rules { build_scripts: Some(&b2), ..r }).is_empty());
+        assert!(why(&d("src/content/hans/guides.js", "    title: process.env.X,"), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3399,6 +3443,18 @@ mod tests {
         let known = vec!["bn.refCode".to_string()];
         assert!(verdict(&prose, &Rules { known: &known, ..rules("standard", &[]) }).is_empty());
         assert!(verdict(&moved, &rules("standard", &[])).is_empty());
+        // coingree：给「邀请码怎么填」一节新起的名字（d.Referral、exchangeReferral）只有名字、不带值，单独挑出来查改动前有没有；
+        // 改动前英文正文里的 Referral code 不算同名字段，模板里 .CTA.Referral 这种字段才算
+        let coined = d("internal/web/event.go", &["\td.FAQ = exchangeFAQ(l, name)"], &["\td.Referral = exchangeReferral(l, ex.ID, name)", "\tref.refCode = \"ABC123\""]);
+        let names = bare_money_names(&coined);
+        assert!(names.contains(&("d.Referral=exchangeReferral".to_string(), vec!["Referral".to_string(), "exchangeReferral".to_string()])), "{names:?}");
+        assert_eq!(bare_money_names(&d("a.html", &[], &["{{range $d.Referral}}"])), vec![("$d.Referral".to_string(), vec!["Referral".to_string()])]);
+        assert!(!names.iter().any(|(a, _)| a.contains("refCode")), "带值的字段不算只有名字");
+        assert!(!money_name_in("title: How to Sign Up for Binance: Referral Code\n<div class=\"referral-code\">", "Referral"));
+        assert!(money_name_in("<p>{{$d.CTA.Referral}}</p>", "Referral"));
+        assert!(money_name_in("\td.Referral = exchangeReferral(l)", "exchangeReferral"), "改动前就有这个函数");
+        let names: Vec<String> = names.into_iter().map(|(a, _)| a).collect();
+        assert!(verdict(&coined, &Rules { known: &names, ..rules("standard", &[]) }).iter().all(|b| b.text.contains("refCode")), "新起的名字放过，新写的码照样拦");
         // 换了邀请码：标准、放开都拦
         let swapped = d("src/content/a.md", &["邀请码：GATE8888"], &["邀请码：GATE9999"]);
         assert!(kinds(verdict(&swapped, &rules("standard", &[]))).iter().all(|k| *k == "money"));

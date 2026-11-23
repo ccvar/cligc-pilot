@@ -2463,6 +2463,20 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
                 known.push(a);
             }
         }
+        // 这次新起的推荐字段 / 变量名（改动前的代码里从没有过这个名字）：挂不上已有的推荐码，也不用拦
+        'names: for (a, names) in crate::managed::bare_money_names(&diff).into_iter().take(20) {
+            if known.contains(&a) {
+                continue;
+            }
+            for last in &names {
+                // 没找到时 git grep 退出码是 1、什么都不输出；出错（退出码 2）会写 stderr，那种照旧拦
+                let Ok(o) = crate::site_git::git(&wt, &["grep", "-h", "-i", "-F", "-e", last, &base_sha, "--"], "").await else { continue 'names };
+                if !(o.ok || o.stderr.trim().is_empty()) || crate::managed::money_name_in(&o.stdout, last) {
+                    continue 'names;
+                }
+            }
+            known.push(a);
+        }
     }
     // 构建脚本每次都会重写的数据文件（比如同步手续费）：AI 跑构建时顺手提交进来的，不算它的改动
     let generated = crate::managed::build_outputs(&site.app_dir(&wt));
@@ -2483,6 +2497,11 @@ async fn verify_and_ship(ctx: &Ctx, site: &Site, job: &Job, item: &QueueItem, le
     // 能在卡片上点「这类以后不拦」的拦截类型
     let mut kinds: Vec<String> = blocks.iter().filter(|b| !b.kind.is_empty()).map(|b| b.kind.to_string()).collect();
     let mut reasons: Vec<String> = if level >= 5 { blocks.into_iter().map(|b| b.text).collect() } else { cls.reasons.clone() };
+    // 正文在线上数据库、内容技能识别出来了但你还没确认：AI 取不到正文，只能另写脚本（blockvar 的 patch-*.py），
+    // 上线也不会改变页面。拦下来时把真正的原因说清楚
+    if !reasons.is_empty() && crate::content_skill::load(&site_dir).is_some_and(|c| c.external && !c.confirmed && !c.get.is_empty()) && !diff.contains(" b/.pilot/content/") {
+        reasons.push("这个站的正文存在线上数据库里，站点设置里的「内容技能」还没确认，AI 改不到线上正文，这次的改动上线也不会改变页面。先到站点设置 → 内容技能点确认，再让这条重做".to_string());
+    }
     // 新加的跳转规则对照构建产物：目标页面要存在、来源不能盖住已有页面。精确地址的旧网址加进验收页面，上线后真的打开一遍
     let redirects = if level >= 5 && built.is_ok() { crate::managed::redirects_added(&diff) } else { Vec::new() };
     if !redirects.is_empty() {
