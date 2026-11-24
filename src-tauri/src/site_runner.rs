@@ -2153,8 +2153,19 @@ Pilot 已经把这次要改的文档从线上取出来放在工作区：{list}�
 - 直接改这些 JSON 里的字段（标题、描述、正文等），字段名、格式和不该改的字段（网址、语言、类型这类）照原样，规矩看 `{skill}/SKILL.md`；\n\
 - 要新建页面：在 `{dir}/` 下新建一份 JSON，格式参照已取出的文档和技能里的说明（技能要求新文档先设草稿的就照做）；\n\
 - 不要运行技能里的脚本：取文档、校验、写入都由 Pilot 来做，你这里也没有接口密钥；不要写补丁脚本，也不要改仓库里的导入文件、种子数据（改了不会影响线上）；\n\
-- 改好照常 git add / git commit。Pilot 先用技能校验，再请站长确认后写入线上。\n\
+- {media}\n\
+- 改好照常 git add / git commit。Pilot 先用技能校验，再写入线上。\n\
 下面步骤里说的「找到源文件」，对这类改动就是改上面这些 JSON；构建照常跑一遍确认没坏。\n\n",
+        media = if cs.upload.is_empty() {
+            "这个站的内容技能不能上传图片：正文先不放截图，仓库里的图片目录也不要放（不会上线）；缺图照截图说明里「确实截不到时」的办法记一条待办".to_string()
+        } else {
+            format!(
+                "配截图：截图存到 `{m}/<有意义的文件名>.png`（不要放进仓库自己的图片目录，那里的图不会上线），文档里要放图的地方直接写这个相对路径，\
+比如正文 `<figure><img src=\"{m}/x.png\" alt=\"…\"><figcaption>…</figcaption></figure>`、封面这类图片字段写 `{m}/x.png`；\
+Pilot 写入前会用技能把图传上去、换成线上地址。图片压缩到合理大小，截图连同文档一起提交",
+                m = crate::content_skill::MEDIA_DIR
+            )
+        },
         skill = cs.skill,
         summary = if cs.summary.is_empty() { "改动要通过技能的命令写入" } else { cs.summary.as_str() },
         dir = crate::content_skill::CONTENT_DIR,
@@ -2185,8 +2196,21 @@ async fn content_docs(site: &Site, site_dir: &Path, item: &QueueItem) -> Result<
 async fn content_runs(cs: &crate::content_skill::ContentSkill, repo: &Path, wt: &Path, docs: &[String], head: &str, apply: bool, job: &Job) -> (Vec<crate::content_skill::Run>, bool) {
     let (tpl, kind) = if apply { (&cs.apply, "apply") } else { (&cs.check, "check") };
     let mut runs = Vec::new();
+    // 文档里引用的截图（.pilot/media/）先用技能传上去、换成线上地址，换好的另存在工作区旁边，交给校验和写入
+    let out_dir = wt.with_file_name(format!("{}.upload", wt.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
     for d in docs {
-        let abs = wt.join(d);
+        let abs = match crate::content_skill::with_media(cs, repo, wt, d, &out_dir).await {
+            Ok((f, log)) => {
+                log.iter().for_each(|l| job.line(l));
+                f
+            }
+            Err(e) => {
+                job.line(&format!("{} {d}：没通过", if apply { "写入" } else { "试运行" }));
+                job.line(&format!("  {e}"));
+                runs.push(crate::content_skill::Run { at: now(), kind: kind.into(), file: d.clone(), head: head.into(), ok: false, output: e });
+                return (runs, false);
+            }
+        };
         let (ok, output) = crate::content_skill::run(repo, &cs.skill, tpl, &["{file}"], &[("{file}", &abs.to_string_lossy())]).await;
         job.line(&format!("{} {d}：{}", if apply { "写入" } else { "试运行" }, if ok { "通过" } else { "没通过" }));
         for l in output.lines().take(40) {

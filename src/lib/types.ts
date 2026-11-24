@@ -720,4 +720,4 @@ export interface HealthSum { tone: 'ok' | 'warn' | 'err' | 'none'; status: strin
 /** 内容技能的一次运行（试运行 check / 写入 apply），见后端 content_skill::Run */
 export interface ContentRun { at: number; kind: 'check' | 'apply' | 'get'; file: string; head: string; ok: boolean; output: string }
 /** 站点仓库自带的内容技能（正文在线上数据库里的站点），见后端 content_skill::ContentSkill */
-export interface ContentSkill { skill: string; sig: string; external: boolean; get: string; check: string; apply: string; summary: string; detected_at: number; confirmed: boolean; error: string }
+export interface ContentSkill { skill: string; sig: string; external: boolean; get: string; check: string; apply: string; upload?: string; summary: string; detected_at: number; confirmed: boolean; error: string }

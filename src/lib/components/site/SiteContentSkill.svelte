@@ -29,7 +29,7 @@
   }
   async function confirm(on: boolean) {
     if (!cs) return;
-    if (on && !(await confirmDialog(`以后这个站点的运营任务按技能 ${cs.skill} 改正文：\n\n· Pilot 在你的站点文件夹里用「取文档」把要改的文章取出来，交给 AI 改；\n· 改好的文档在卡片上先「试运行」，你点「写入线上」才会写进线上数据库；\n· 只运行站点文件夹里本来就有的技能脚本，技能的密钥不交给 AI。\n\n三条命令在这张卡上，确认它们是对的再继续。`, { title: '按内容技能改正文', kind: 'info', confirmText: '确认使用' }))) return;
+    if (on && !(await confirmDialog(`以后这个站点的运营任务按技能 ${cs.skill} 改正文：\n\n· Pilot 在你的站点文件夹里用「取文档」把要改的文章取出来，交给 AI 改；\n· 改好的文档先「试运行」再「写入线上」（托管自动上线时，检查都过了就自动写入，验收没过把原文写回去；方案选「稳妥」时等你点）；文章里的截图写入前用「上传配图」传上去；\n· 只运行站点文件夹里本来就有的技能脚本，技能的密钥不交给 AI。\n\n命令都在这张卡上，确认它们是对的再继续。`, { title: '按内容技能改正文', kind: 'info', confirmText: '确认使用' }))) return;
     busy = true;
     try { cs = await invoke<ContentSkill>('site_content_skill_confirm', { id: site.id, on }); say(on ? '确认了：运营任务按内容技能改正文' : '不再按内容技能改正文'); }
     catch (e) { say(String(e), 'err'); }
@@ -56,8 +56,9 @@
         <dt>取文档</dt><dd class="mono small">{cs.get}</dd>
         <dt>试运行</dt><dd class="mono small">{cs.check}</dd>
         <dt>写入线上</dt><dd class="mono small">{cs.apply}</dd>
+        <dt>上传配图</dt><dd class="mono small">{cs.upload || '没有：文章里的截图传不上去，引用了截图的文档不写入'}</dd>
       </dl>
-      <p class="hint small">在你的站点文件夹里运行：<code>{'{path}'}</code> 是页面路径，<code>{'{file}'}</code> 是改好的文档。识别于 {ago(cs.detected_at)}。</p>
+      <p class="hint small">在你的站点文件夹里运行：<code>{'{path}'}</code> 是页面路径，<code>{'{file}'}</code> 是改好的文档（上传配图时是图片）。识别于 {ago(cs.detected_at)}。</p>
     {/if}
     <div class="row">
       {#if cs.external && !cs.error}
