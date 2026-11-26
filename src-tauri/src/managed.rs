@@ -1991,6 +1991,18 @@ fn data_file(path: &str) -> bool {
         && !matches!(first, ".github" | "worker" | "workers" | "functions" | "server" | "scripts" | "node_modules" | "cmd" | "internal" | "deploy" | "bin")
 }
 
+/// 内容目录里的 JSON（Go 站 embed 进二进制的 internal/site/content/guides.json 这类，文章的标题、段落、配图都在里面）：
+/// JSON 不会执行，只改了数据行就按内容算——放在 internal/ 这类服务端目录里也一样。依赖清单、配置文件不算
+fn content_json(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    let name = p.rsplit('/').next().unwrap_or(p);
+    let first = p.split('/').next().unwrap_or("");
+    name.ends_with(".json")
+        && !manifest_file(p)
+        && p.split('/').rev().skip(1).any(|seg| matches!(seg, "data" | "content" | "contents" | "posts" | "articles"))
+        && !matches!(first, ".github" | "node_modules" | "deploy")
+}
+
 /// 去掉反引号字符串里只插一个变量名的 `${B}`（辅助脚本拼网址用的），插表达式、调用的原样留着。
 /// 只给构建和上线都不跑的辅助脚本用：会上线的数据文件里插值照样算代码
 fn drop_var_interp(line: &str) -> String {
@@ -2383,7 +2395,7 @@ pub fn managed_verdict(diff: &str, allow_new_content: bool, min_page: usize, cod
 /// sitemap 条目里的一行：<url> 块里的标签（网址、更新时间、频率、优先级、多语言和图片链接）或空行。
 /// 上线判定 / 验收规则的版本：改了 verdict、classify、线上验收的判断（放宽或收紧）就加 1。
 /// 等你确认的条目记着当时用的版本，旧版本判出来的会被调度按新规则自动重判一次（site_runner 调度里）。
-pub const RULES_V: u32 = 29;
+pub const RULES_V: u32 = 30;
 
 /// 内容技能取进工作区的线上文档（`.pilot/content/*.json`，见 content_skill）
 pub fn content_doc(file: &str) -> bool {
@@ -2483,7 +2495,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
             new_lines += f.added.len().saturating_sub(f.removed.len());
             continue;
         }
-        let data = data_file(file) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
+        let data = (data_file(file) || content_json(file)) && f.added.iter().chain(&f.removed).all(|l| data_line(l));
         // 翻译文件（Go 站的 internal/i18n/locales/en.toml、locales/zh-CN.json 这类）：只改了「键 = 文字」的行，
         // 就是页面上的标题、描述、正文，按内容算；占位符变了、删了条目、文字里写脚本，照样留给你确认
         let locale = !f.deleted && locale_file(file) && f.added.iter().chain(&f.removed).all(|l| locale_kv(file, l).is_some());
@@ -2496,7 +2508,7 @@ pub fn verdict(diff: &str, rules: &Rules) -> Vec<Block> {
         // 只改了数据行的不算：数据行里没有能执行的东西，按内容算。scripts/ 里的不算数据文件（见 data_file），照样拦
         let in_build_chain = rules.build_scripts.is_some_and(|b| b.iter().any(|s| file.rsplit('/').next() == Some(s.as_str()))) && !data;
         let allowed = hard_forbidden(file) && !never_allow(file) && (listed(file, rules.content_code) || (code == "all" && !edge_runtime(file)));
-        let forbidden = (hard_forbidden(file) && !allowed && !locale) || in_build_chain;
+        let forbidden = (hard_forbidden(file) && !allowed && !data) || in_build_chain;
         let is_code = !data && !forbidden && (allowed || data_file(file) || site_code_file(file) || test_file(file.rsplit('/').next().unwrap_or(file)));
         if forbidden {
             // 原因写准：构建会跑到的脚本、辅助脚本改了代码、其它一律不改的文件，分开说
@@ -3299,6 +3311,28 @@ mod tests {
         assert!(verdict(&d("src/content/hans/guides.js", "    title: \"OKX 和币安手续费差多少\","), &Rules { build_scripts: Some(&b2), ..r }).is_empty());
         assert!(why(&d("src/content/hans/guides.js", "    title: process.env.X,"), &Rules { build_scripts: Some(&b2), ..r }).contains("构建 / 检查 / 部署会跑到的脚本"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn content_json_inside_server_dirs_counts_as_content() {
+        // excxg：Go 站的指南写在 internal/site/content/guides.json，embed 进二进制。扩写一篇：替换 57 行、新加 173 行，
+        // 原来按代码算「改动 444 行」超了上限；JSON 只改数据行按内容算：替换的行算改动，多出来的算新内容
+        let old: String = (0..57).map(|i| format!("-          \"旧段落 {i}\",\n")).collect();
+        let new: String = (0..173).map(|i| format!("+          \"新段落 {i}，[礼品卡提示已被兑换](/guides/gift-card/)\",\n")).collect();
+        let fig = "+          {\n+            \"src\": \"images/shots/steam-code-currency.webp\",\n+            \"width\": 1280,\n+            \"source_url\": \"https://help.steampowered.com/en/faqs/view/78E3\"\n+          },\n";
+        let d = |f: &str| format!("diff --git a/{f} b/{f}\n--- a/{f}\n+++ b/{f}\n@@ -1,57 +1,178 @@\n{old}{new}{fig}");
+        for code in ["all", "review"] {
+            let r = Rules { tier: "standard", code, allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+            let b = verdict(&d("internal/site/content/guides.json"), &r);
+            assert!(b.is_empty(), "代码设置 {code}：{:?}", b.iter().map(|b| &b.text).collect::<Vec<_>>());
+        }
+        let r = Rules { tier: "standard", code: "review", allow: &[], new_content: true, min_page: 0, content_code: &[], known: &[], generated: &[], build_scripts: None, deps: &[] };
+        // 内容目录外的 JSON（站点配置）、依赖清单照旧
+        assert!(!verdict(&d("internal/site/config/site.json"), &r).is_empty());
+        assert!(!verdict(&d("content/package.json"), &r).is_empty());
+        // 混了不是数据的行：照旧按代码算
+        let bad = format!("diff --git a/internal/site/content/guides.json b/internal/site/content/guides.json\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-  \"a\": 1,\n+  \"a\": require(\"x\"),\n");
+        assert!(!verdict(&bad, &r).is_empty());
     }
 
     #[test]
