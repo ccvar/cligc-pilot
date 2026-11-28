@@ -14,11 +14,22 @@
   const closed = $derived(sftp.closed.has(connId));
   $effect(() => { if (closed && workbench.termState[connId]?.on) { const id = connId; untrack(() => reopenSftpView(id)); } });
   const v = $derived(sftp.views[connId] ?? EMPTY_VIEW);
+  const rows = $derived(v.sftpRows);
+  const selectedRow = $derived(rows.find((row) => row.path === v.sftpSel));
+  const crumbs = $derived.by(() => {
+    const result = [{ name: '/', path: '/' }];
+    let path = '';
+    for (const name of v.sftpPath.split('/').filter(Boolean)) {
+      path += '/' + name;
+      result.push({ name, path });
+    }
+    return result;
+  });
   // 在这块面板里点、右键、拖文件进来、键盘操作：接下来的文件操作都作用在这台机器上
   const claim = () => { sftp.sftpConnId = connId; };
   $effect(() => { if (v.sftpPathEdit && v.sftpPathEl) { v.sftpPathEl.focus(); v.sftpPathEl.select(); } });
   // 路径深了就把尾巴（当前目录）滚进视野——面包屑是从左往右长的。
-  $effect(() => { void v.sftpCrumbs; if (v.crumbEl) v.crumbEl.scrollLeft = v.crumbEl.scrollWidth; });
+  $effect(() => { void crumbs; if (v.crumbEl) v.crumbEl.scrollLeft = v.crumbEl.scrollWidth; });
   // 面包屑直接作用在这块面板自己那台上，不经过「当前在操作哪台」
   const crumb = (path: string) => {
     if (v !== EMPTY_VIEW) void sftpGo(path, v);
@@ -34,31 +45,31 @@
     <div class="files-drop-overlay"><b>松开上传</b><small title={sftp.sftpDropTarget?.remoteDir}>到 {sftp.sftpDropTarget?.remoteDir || v.sftpPath || '当前目录'}</small></div>
   {/if}
   <div class="files-bar">
-    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={sftpUp} disabled={!v.sftpPath || v.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+    <button class="fbtn" aria-label="上一级" data-tip="上一级" onclick={() => sftpUp(v)} disabled={!v.sftpPath || v.sftpPath === '/'}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 12.5v-9M4.2 7.3 8 3.5l3.8 3.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
     {#if v.sftpPathEdit}
       <input class="tin fpath" bind:this={v.sftpPathEl} bind:value={v.sftpPathDraft} spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="/"
         onblur={() => (v.sftpPathEdit = false)}
-        onkeydown={(e) => { if (e.key === 'Enter') commitPath(); else if (e.key === 'Escape') v.sftpPathEdit = false; }} />
+        onkeydown={(e) => { if (e.key === 'Enter') commitPath(v); else if (e.key === 'Escape') v.sftpPathEdit = false; }} />
     {:else}
       <!-- 面包屑：点哪一段跳哪一层。尾巴上那块空白本身是个按钮 ——
            点它＝切成输入框直接敲路径（资源管理器那套），键盘也 Tab 得到。 -->
       <div class="fcrumbs" bind:this={v.crumbEl}>
-        {#each v.sftpCrumbs as c, i (c.path)}
+        {#each crumbs as c, i (c.path)}
           {#if i > 0}<span class="fcrumb-sep">›</span>{/if}
           <button class="fcrumb" class:cur={c.path === v.sftpPath} onclick={() => crumb(c.path)}>{c.name}</button>
         {/each}
-        <button class="fcrumb-blank" aria-label="直接输入路径" data-tip="点这里可直接输入路径" onclick={startPathEdit}></button>
+        <button class="fcrumb-blank" aria-label="直接输入路径" data-tip="点这里可直接输入路径" onclick={() => startPathEdit(v)}></button>
       </div>
     {/if}
-    <button class="fbtn" aria-label="刷新" data-tip="刷新" onclick={() => sftpRefresh()} disabled={v.sftpBusy}><RefreshIcon spinning={v.sftpBusy} /></button>
+    <button class="fbtn" aria-label="刷新" data-tip="刷新" onclick={() => sftpRefresh(v)} disabled={v.sftpBusy}><RefreshIcon spinning={v.sftpBusy} /></button>
     <button class="fbtn" aria-label="新建文件夹" data-tip="新建文件夹" onclick={() => openMkdir()} disabled={v.sftpBusy}><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M1.8 4.2A1.4 1.4 0 0 1 3.2 2.8h3l1.4 1.6h5.2a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4v-7.6z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7.4v3.4M6.3 9.1h3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg></button>
     <SftpTransfers records={sftp.sftpTransfers} busy={v.sftpBusy || !!sftp.sftpXfer || sftp.sftpNativeDragging}
-      canDownload={!sftp.fileRename && !!v.sftpSelectedRow && !isSftpDeleting(v.sftpSelectedRow.path)} selectedName={v.sftpSelectedRow?.name}
+      canDownload={!sftp.fileRename && !!selectedRow && !isSftpDeleting(selectedRow.path)} selectedName={selectedRow?.name}
       cancellableIds={sftp.sftpCancellableIds} onupload={() => sftpUpload()} ondownload={sftpDownloadSelected}
       oncancel={cancelSftpTransfer} onclear={clearSftpTransfers} onreveal={revealSftpTransfer} />
   </div>
   <!-- 出错就地给个重试：首次加载失败时 sftpPath 还是空的，刷新键（要有当前目录）帮不上忙 -->
-  {#if v.sftpErr}<button type="button" class="err-note files-err" onclick={retryOrRepairSftp} title={missingSshCredential(v.sftpErr) ? '打开连接设置并补录密码' : '点击重试'}>{v.sftpErr} · {missingSshCredential(v.sftpErr) ? '补录密码' : '点此重试'}</button>{/if}
+  {#if v.sftpErr}<button type="button" class="err-note files-err" onclick={() => retryOrRepairSftp(v)} title={missingSshCredential(v.sftpErr) ? '打开连接设置并补录密码' : '点击重试'}>{v.sftpErr} · {missingSshCredential(v.sftpErr) ? '补录密码' : '点此重试'}</button>{/if}
   <div class="fhead">
     <button class="fh fh-name" onclick={() => setSort('name')}>名称{#if sftp.sftpSort.key === 'name'}<span class="fh-ar" class:desc={!sftp.sftpSort.asc}>^</span>{/if}</button>
     <span class="fh fh-perm">{@render colGrip('perm')}权限</span>
@@ -73,12 +84,12 @@
         <span>已断开连接</span>
         <button class="files-reconnect" onclick={() => reopenSftpView(connId)}>重新连接</button>
       </div>
-    {:else if v.sftpBusy && !v.sftpRows.length}
+    {:else if v === EMPTY_VIEW || v.sftpNavigating || (v.sftpBusy && !rows.length)}
       <div class="files-empty">读取中…</div>
-    {:else if !v.sftpRows.length}
-      <div class="files-empty">{v.sftpErr ? '' : '空目录'}</div>
+    {:else if !rows.length}
+      {#if !v.sftpErr && v.sftpKids[v.sftpPath]}<div class="files-empty">空目录</div>{/if}
     {:else}
-      {#each v.sftpRows as r (r.path)}
+      {#each rows as r (r.path)}
         {@const deleting = isSftpDeleting(r.path)}
         {@const deleteTarget = isSftpDeleteTarget(r.path)}
         {@const renaming = sftp.fileRename?.connId === connId && sftp.fileRename?.path === r.path}
